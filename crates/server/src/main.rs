@@ -94,6 +94,10 @@ fn started(config: &Config, log: logging::Settings) {
         ws_send_queue: config.ws.send_queue,
         ws_idle_timeout_secs: config.ws.idle_timeout.as_secs(),
         block_summary_cache_mb: l.summary_cache_bytes >> 20,
+        data_dir: config.data_dir.as_ref().map(|d| d.display().to_string()),
+        backfill_enabled: config.backfill.enabled,
+        backfill_busy_percent: config.backfill.busy_percent,
+        backfill_fee_rate_depth: config.backfill.fee_rate_depth,
     });
     for n in &config.networks {
         logging::emit(&NetworkEnabled {
@@ -180,6 +184,8 @@ mod tests {
         let config = Config {
             listen: addr,
             web_dir: "missing".into(),
+            data_dir: None,
+            backfill: mempool_based::config::Backfill::default(),
             networks: Vec::new(),
             limits: Limits::default(),
             ws: WsLimits::default(),

@@ -175,10 +175,35 @@ impl Default for WsLimits {
     }
 }
 
+/// The block table's backfill (`docs/CONFIG.md`, "Block table").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backfill {
+    /// `BACKFILL_ENABLED`. Off pauses it: the next start resumes where the table says.
+    pub enabled: bool,
+    /// `BACKFILL_BUSY_PERCENT`, 1 to 100.
+    pub busy_percent: u32,
+    /// `BACKFILL_FEE_RATE_DEPTH`: blocks below the tip that get fee rates.
+    pub fee_rate_depth: u32,
+}
+
+impl Default for Backfill {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            busy_percent: 50,
+            // About a year of blocks.
+            fee_rate_depth: 52_560,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen: SocketAddr,
     pub web_dir: PathBuf,
+    /// `DATA_DIR`: where each network's SQLite file lives. `None` runs without a store.
+    pub data_dir: Option<PathBuf>,
+    pub backfill: Backfill,
     /// Enabled networks, in [`Network::ALL`] order.
     pub networks: Vec<NetworkConfig>,
     pub limits: Limits,
@@ -206,6 +231,25 @@ impl Config {
                 .map_err(|_| "LISTEN_ADDR is not a socket address".to_owned())?,
         };
         let web_dir = var("WEB_DIR").map_or_else(|| "web/dist".into(), PathBuf::from);
+        let data_dir = var("DATA_DIR").map(PathBuf::from);
+        let b = Backfill::default();
+        let backfill = Backfill {
+            enabled: match var("BACKFILL_ENABLED").as_deref() {
+                None | Some("true") => true,
+                Some("false") => false,
+                Some(_) => return Err("BACKFILL_ENABLED must be true or false".into()),
+            },
+            busy_percent: positive(&var, "BACKFILL_BUSY_PERCENT", b.busy_percent)
+                .ok()
+                .filter(|p| *p <= 100)
+                .ok_or("BACKFILL_BUSY_PERCENT must be a whole number from 1 to 100")?,
+            fee_rate_depth: match var("BACKFILL_FEE_RATE_DEPTH") {
+                None => b.fee_rate_depth,
+                Some(v) => v
+                    .parse()
+                    .map_err(|_| "BACKFILL_FEE_RATE_DEPTH must be a whole number of blocks")?,
+            },
+        };
 
         let mut networks = Vec::new();
         for network in Network::ALL {
@@ -296,6 +340,8 @@ impl Config {
         Ok(Self {
             listen,
             web_dir,
+            data_dir,
+            backfill,
             networks,
             limits,
             ws,
@@ -618,6 +664,33 @@ mod tests {
         vars.retain(|(k, _)| *k != "SIGNET_RPC_USER");
         vars.push(("SIGNET_RPC_USER", "a:b"));
         assert!(parse(&vars).unwrap_err().contains("SIGNET_RPC_USER"));
+        let c = parse(&[]).unwrap();
+        assert_eq!((c.data_dir, c.backfill), (None, Backfill::default()));
+        let c = parse(&[
+            ("DATA_DIR", "/var/lib/x"),
+            ("BACKFILL_ENABLED", "false"),
+            ("BACKFILL_BUSY_PERCENT", "100"),
+            ("BACKFILL_FEE_RATE_DEPTH", "0"),
+        ])
+        .unwrap();
+        assert_eq!(c.data_dir.unwrap(), PathBuf::from("/var/lib/x"));
+        assert_eq!(
+            c.backfill,
+            Backfill {
+                enabled: false,
+                busy_percent: 100,
+                fee_rate_depth: 0
+            }
+        );
+        for (k, bad) in [
+            ("BACKFILL_ENABLED", "yes"),
+            ("BACKFILL_BUSY_PERCENT", "0"),
+            ("BACKFILL_BUSY_PERCENT", "101"),
+            ("BACKFILL_FEE_RATE_DEPTH", "-1"),
+            ("BACKFILL_FEE_RATE_DEPTH", "1.5"),
+        ] {
+            assert!(parse(&[(k, bad)]).unwrap_err().contains(k), "{k}={bad}");
+        }
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");
     }

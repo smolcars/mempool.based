@@ -26,8 +26,9 @@ use tokio::sync::Semaphore;
 
 use crate::http::{self, Endpoint, Transport};
 use model::{
-    Block, BlockHeader, BlockStats, BlockTemplate, BlockchainInfo, ChainTip, ChunkPoint, Cluster,
-    MempoolEntry, MempoolInfo, MiningInfo, NetworkInfo, PrevoutSpend, RawMempool, SmartFee,
+    Block, BlockHeader, BlockStats, BlockTemplate, BlockTotals, BlockchainInfo, ChainTip,
+    ChunkPoint, Cluster, MempoolEntry, MempoolInfo, MiningInfo, NetworkInfo, PrevoutSpend,
+    RawMempool, SmartFee,
 };
 
 /// Longest node error message we keep.
@@ -313,6 +314,18 @@ impl Rpc {
     /// `getblockstats` with every stat. Past the tip: `Rpc { code: -8 }`.
     pub async fn block_stats(&self, block: BlockRef) -> Result<BlockStats, Error> {
         self.call("getblockstats", [block]).await
+    }
+
+    /// [`BlockTotals`] for each block, in one batch of at most [`MAX_BATCH`]. The node works
+    /// through a batch one call after another in one slot, so keep a batch's total time well
+    /// under the timeout. An unknown hash answers `Err(Rpc { code: -5 })` in its slot.
+    pub async fn block_totals(
+        &self,
+        hashes: &[BlockHash],
+    ) -> Result<Vec<Result<BlockTotals, Error>>, Error> {
+        const STATS: [&str; 3] = ["totalfee", "subsidy", "total_weight"];
+        self.batch("getblockstats", hashes.iter().map(|h| (h, STATS)))
+            .await
     }
 
     /// `getchaintips`.

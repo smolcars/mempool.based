@@ -18,7 +18,7 @@ The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch a
 
 Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Everything else is configured as in [`CONFIG.md`](CONFIG.md).
 
-It runs as uid and gid 65532, needs no capabilities, and writes nothing, so it runs with a read-only root filesystem. Its health check is the binary itself: `mempool-based healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
+It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns for the SQLite store, so it runs with a read-only root filesystem and a volume at `/data`. The image does not set `DATA_DIR`; without it the server keeps no store ([`CONFIG.md`](CONFIG.md)). Its health check is the binary itself: `mempool-based healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
 
 [`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
 
@@ -60,13 +60,13 @@ docker compose up -d --build
 
 `.env` and `rpc.cookie` are git-ignored. The node reads the RPC user and password from `rpc.cookie` (rbitcoin has no `--rpcuser`; `--rpc-cookie-file` takes `user:password` for HTTP Basic, with no newline). The server reads the same pair from `MAINNET_RPC_USER` and `MAINNET_RPC_PASSWORD`. The cookie is a file and not compose `content`, because compose cannot copy content into a container whose root filesystem is read-only.
 
-The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). The node keeps its chain in the `node-data` volume; the first mainnet sync takes as long as rbitcoin takes.
+The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). The node keeps its chain in the `node-data` volume; the first mainnet sync takes as long as rbitcoin takes. The server keeps its SQLite store in the `server-data` volume, with `DATA_DIR=/data` set by the compose file over anything in `.env`. A new volume starts empty and owned by the server's uid, and the block table's backfill fills it from the node, newest blocks first: about 21 hours for every block's totals on mainnet at the default pace, and 38 for the last year's fee rates ([`STORE.md`](STORE.md#backfill)). `BACKFILL_ENABLED=false` in `.env` pauses it; it resumes on the next start. Back the volume up as [`STORE.md`](STORE.md#backup-and-recovery) says, or drop it and let the backfill rebuild it.
 
 ### Hardening, and why
 
 | Choice | Applies to | Why |
 |---|---|---|
-| `read_only: true` | both | Nothing can be written outside the volumes, so a compromised process cannot drop files or alter its binary. The server writes nothing; the node writes only `/data` |
+| `read_only: true` | both | Nothing can be written outside the volumes, so a compromised process cannot drop files or alter its binary. Each writes only its own `/data` volume |
 | `cap_drop: [ALL]` | both | Neither binds a port below 1024 or needs any other privilege |
 | `no-new-privileges` | both | A setuid binary cannot raise privileges. Neither image has one; this keeps it so |
 | Non-root users | both | The server runs as 65532, the node as 10001, as their images set |

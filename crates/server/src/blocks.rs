@@ -1,0 +1,280 @@
+//! The block table for one network (`docs/STORE.md`, "blocks"): opens the store, follows each
+//! new tip, runs the backfill, and turns what they report into log events.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use bitcoin::BlockHash;
+use engine::blocks::{
+    self, Event, Facts, Header, NodeSource, Progress, Reorgs, Row, Source, SourceError,
+};
+use engine::store::{self, Store};
+use logging::events::{
+    BlockBackfillProgress, BlockRowsFailed, BlockRowsFollowed, BlockRowsRecovered,
+    BlockRowsReorged, StoreMigrationApplied, StoreOpenFailed, StoreReadTimedOut, StoreSlowWrite,
+};
+use node::esplora::Esplora;
+use node::rpc::{Limits, Rpc};
+use tokio::sync::watch;
+
+use crate::config::{Backfill, NetworkConfig};
+use crate::{Network, NetworkContext, summary};
+
+/// After the tip moved mid-read, follow again this soon unless the new tip is announced first.
+const FOLLOW_MOVED: Duration = Duration::from_secs(1);
+/// The block table's node calls wait at most this long: a `getblockstats` batch of 50 full
+/// blocks takes about 1.3 s of node time, a `getblock` about 2 s.
+const NODE_TIMEOUT: Duration = Duration::from_secs(30);
+/// First pause before following again after a failure; doubles up to [`FOLLOW_RETRY_MAX`].
+const FOLLOW_RETRY: Duration = Duration::from_secs(5);
+const FOLLOW_RETRY_MAX: Duration = Duration::from_secs(300);
+
+/// One network's block table, held in [`NetworkContext`].
+pub struct BlockTable {
+    pub store: Arc<Store>,
+    /// Where the backfill stands; stays at its default while the backfill is off.
+    pub progress: watch::Sender<Progress>,
+    /// The table's own node clients: one RPC slot, shared by follow and the backfill, never one
+    /// of the four shared ones. Each task makes one Esplora request at a time.
+    source: NodeSource,
+}
+
+impl BlockTable {
+    /// Opens `<dir>/<network>.sqlite`. On failure the network runs without a table, and says so.
+    pub fn open(dir: &Path, config: &NetworkConfig, esplora: &str) -> Option<Self> {
+        let network = config.network.name();
+        let observer = move |e: &store::Event| match e {
+            store::Event::MigrationApplied { name, elapsed } => {
+                logging::emit(&StoreMigrationApplied {
+                    network,
+                    migration: name,
+                    duration_ms: ms(*elapsed),
+                });
+            }
+            store::Event::SlowWrite {
+                elapsed,
+                queue_depth,
+            } => logging::emit(&StoreSlowWrite {
+                network,
+                duration_ms: ms(*elapsed),
+                queue_depth: *queue_depth,
+            }),
+            store::Event::ReadTimedOut { limit } => logging::emit(&StoreReadTimedOut {
+                network,
+                limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
+            }),
+        };
+        let options = store::Options {
+            observer: Arc::new(observer),
+            ..store::Options::default()
+        };
+        let store = match Store::open(dir, network, options) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                logging::emit(&StoreOpenFailed {
+                    network,
+                    error: e.to_string(),
+                });
+                return None;
+            }
+        };
+        let rpc = &config.rpc;
+        let limits = Limits {
+            timeout: NODE_TIMEOUT,
+            max_concurrent: 1,
+            ..Limits::default()
+        };
+        let source = NodeSource {
+            rpc: Rpc::with_limits(
+                &rpc.host,
+                rpc.port,
+                &rpc.user,
+                rpc.password.expose(),
+                limits,
+            )
+            .ok()?,
+            esplora: Esplora::new(esplora).ok()?,
+        };
+        Some(Self {
+            store,
+            progress: watch::Sender::new(Progress::default()),
+            source,
+        })
+    }
+}
+
+/// Starts following the tip and, unless it is off, the backfill.
+pub fn spawn(ctx: &Arc<NetworkContext>, backfill: Backfill) {
+    if ctx.blocks.is_none() {
+        return;
+    }
+    tokio::spawn(follow(Arc::clone(ctx), backfill));
+}
+
+/// The backfill, started once follow has checked the newest rows against the node: rows it
+/// wrote before that could sit above stale ones that follow would then never reach.
+fn start_backfill(ctx: &Arc<NetworkContext>, backfill: Backfill, reorgs: Reorgs) {
+    let Some(table) = &ctx.blocks else { return };
+    if !backfill.enabled {
+        return;
+    }
+    let network = ctx.config.network;
+    let options = blocks::Options {
+        busy_percent: backfill.busy_percent,
+        fee_rate_depth: backfill.fee_rate_depth,
+        observer: Arc::new(move |e| report(network, e)),
+        reorgs,
+    };
+    let (ctx, store, source) = (
+        Arc::clone(ctx),
+        Arc::clone(&table.store),
+        table.source.clone(),
+    );
+    tokio::spawn(async move {
+        if let Some(table) = &ctx.blocks {
+            blocks::backfill(store, source, options, &table.progress).await;
+        }
+    });
+}
+
+fn report(network: Network, e: &Event) {
+    let network = network.name();
+    match e {
+        Event::Progress(p) => logging::emit(&BlockBackfillProgress {
+            network,
+            tip: p.tip,
+            rows: p.rows,
+            rated: p.rated,
+            totals_done: p.totals_done,
+            rates_done: p.rates_done,
+            totals_written: p.totals_written,
+            rates_written: p.rates_written,
+            busy_ms: u64::try_from(p.busy.as_millis()).unwrap_or(u64::MAX),
+            bytes: p.bytes,
+        }),
+        Event::Failed {
+            tier,
+            error,
+            failures,
+        } => {
+            if failures.is_power_of_two() {
+                logging::emit(&BlockRowsFailed {
+                    network,
+                    task: tier,
+                    error: error.label(),
+                    failures: *failures,
+                });
+            }
+        }
+        Event::Recovered { failures } => logging::emit(&BlockRowsRecovered {
+            network,
+            task: "backfill",
+            failures: *failures,
+        }),
+    }
+}
+
+/// The node as [`blocks::follow`] reads it: the table's own clients, except that fee rates come
+/// from the summaries the server computes for every new block anyway.
+struct Live {
+    node: NodeSource,
+    ctx: Arc<NetworkContext>,
+}
+
+impl Source for Live {
+    async fn headers(&self, top: Option<u32>) -> Result<Vec<Header>, SourceError> {
+        self.node.headers(top).await
+    }
+
+    async fn rows(&self, headers: &[Header]) -> Result<Vec<Row>, SourceError> {
+        self.node.rows(headers).await
+    }
+
+    /// `None` when the summary failed: the backfill rates the block later.
+    async fn facts(&self, hash: BlockHash) -> Result<Option<Facts>, SourceError> {
+        Ok(summary::new_block_facts(&self.ctx, hash).await)
+    }
+}
+
+/// Follows once at start, then on every new tip; after a failure, again after a pause unless a
+/// new tip comes first. Starts the backfill after the first success.
+async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
+    let Some(table) = &ctx.blocks else { return };
+    let live = Live {
+        node: table.source.clone(),
+        ctx: Arc::clone(&ctx),
+    };
+    let reorgs = Reorgs::default();
+    let mut backfill = Some(backfill);
+    let network = ctx.config.network.name();
+    let mut tips = ctx.summaries.tips();
+    let mut failures = 0u32;
+    loop {
+        let started = Instant::now();
+        match blocks::follow(&table.store, &live, &reorgs).await {
+            Ok(f) => {
+                if let Some(b) = backfill.take() {
+                    start_backfill(&ctx, b, reorgs.clone());
+                }
+                if failures > 0 {
+                    logging::emit(&BlockRowsRecovered {
+                        network,
+                        task: "follow",
+                        failures,
+                    });
+                    failures = 0;
+                }
+                if let Some(fork_height) = f.fork {
+                    logging::emit(&BlockRowsReorged {
+                        network,
+                        fork_height,
+                        stale: f.stale,
+                    });
+                }
+                logging::emit(&BlockRowsFollowed {
+                    network,
+                    tip: f.tip,
+                    written: f.written,
+                    rated: f.rated,
+                    duration_ms: ms(started.elapsed()),
+                });
+            }
+            Err(blocks::Error::Moved) => {
+                tokio::select! {
+                    changed = tips.changed() => if changed.is_err() { return },
+                    () = tokio::time::sleep(FOLLOW_MOVED) => {}
+                }
+                continue;
+            }
+            Err(e) => {
+                failures += 1;
+                if failures.is_power_of_two() {
+                    logging::emit(&BlockRowsFailed {
+                        network,
+                        task: "follow",
+                        error: e.label(),
+                        failures,
+                    });
+                }
+            }
+        }
+        if failures == 0 {
+            if tips.changed().await.is_err() {
+                return;
+            }
+        } else {
+            let pause = FOLLOW_RETRY
+                .saturating_mul(1 << (failures - 1).min(16))
+                .min(FOLLOW_RETRY_MAX);
+            tokio::select! {
+                changed = tips.changed() => if changed.is_err() { return },
+                () = tokio::time::sleep(pause) => {}
+            }
+        }
+    }
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}

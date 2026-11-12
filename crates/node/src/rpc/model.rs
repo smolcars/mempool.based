@@ -129,6 +129,16 @@ pub struct BlockStats {
     pub utxo_size_inc_actual: i64,
 }
 
+/// `getblockstats` asked for `totalfee`, `subsidy` and `total_weight` only: the stats that need
+/// no UTXO work. The full set took about a second per recent mainnet block, this about 25 ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct BlockTotals {
+    pub totalfee: Amount,
+    pub subsidy: Amount,
+    /// Weight of every transaction but the coinbase.
+    pub total_weight: u64,
+}
+
 /// One entry of `getchaintips`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ChainTip {

@@ -55,7 +55,7 @@ pub struct NodeSource {
     pub esplora: Esplora,
 }
 
-fn rpc_err(e: rpc::Error) -> SourceError {
+pub(crate) fn rpc_err(e: rpc::Error) -> SourceError {
     match e {
         rpc::Error::Busy => SourceError::Busy,
         rpc::Error::ResponseTooBig => SourceError::TooBig,
@@ -63,7 +63,7 @@ fn rpc_err(e: rpc::Error) -> SourceError {
     }
 }
 
-fn esplora_err(e: node::esplora::Error) -> SourceError {
+pub(crate) fn esplora_err(e: node::esplora::Error) -> SourceError {
     match e {
         node::esplora::Error::ResponseTooBig => SourceError::TooBig,
         e => SourceError::Failed(e.to_string()),

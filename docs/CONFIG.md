@@ -10,7 +10,7 @@ The server reads its configuration from the environment once, at startup. Invali
 |---|---|---|
 | `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the `listening` event shows which |
 | `WEB_DIR` | `web/dist` | The built frontend. Nothing outside it is served |
-| `DATA_DIR` | `data` | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Not read yet: the first feature that stores data wires it in |
+| `DATA_DIR` | unset | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Unset, the server runs without a store: everything is asked of the node, and the block table below does not exist. A file that will not open is a `store_open_failed` event, and that network runs without one |
 
 ## Networks
 
@@ -71,6 +71,16 @@ The block summary routes ([`FRONTEND.md`](FRONTEND.md#block-summaries)) keep com
 | Variable | Default | Protects against |
 |---|---|---|
 | `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 20 bytes per transaction plus about 0.5 KB: 40 to 140 KB for today's mainnet blocks, so the default holds 230 to 800 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a `getblock` of up to 10 MB. At most 1,048,576 |
+
+### Block table
+
+The block table ([`STORE.md`](STORE.md#blocks)) needs `DATA_DIR`. Its newest 100 rows follow the tip whatever these say; the backfill fills the rest. The backfill has its own RPC client with one call in flight, outside the four the rest of the server shares, and a 30 s timeout.
+
+| Variable | Default | Protects against |
+|---|---|---|
+| `BACKFILL_ENABLED` | `true` | `false` pauses the backfill. The table is its progress, so the next start with `true` resumes where it stopped, redoing nothing |
+| `BACKFILL_BUSY_PERCENT` | `50` | Load on the node. The share of wall time, 1 to 100, the backfill keeps its one call busy: after a step that took `t` it waits `t × (100 − p) / p`. It also backs off from 5 s to 5 minutes, doubling, whenever the node is busy or failing. At 50, every mainnet block's totals are in after about 21 hours and a year's fee rates after about 38; the costs are in [`STORE.md`](STORE.md#backfill) |
+| `BACKFILL_FEE_RATE_DEPTH` | `52560` | How far back fee rates are filled, in blocks below the tip (52,560 is about a year). Each costs a `getblock` of up to 10 MB and 2 s of node time; `0` fills none. Rows deeper than this keep their totals and coinbase, and the block facts route computes their fee rates on demand |
 
 ### WebSocket
 

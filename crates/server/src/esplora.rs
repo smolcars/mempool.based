@@ -88,6 +88,8 @@ pub enum Source {
     Hot,
     /// A block summary from the summary cache (`crate::summary`): no upstream call.
     Cached,
+    /// Block facts from the block table (`crate::blocks`): no upstream call.
+    Stored,
 }
 
 /// What a request asks for, once its path and query have parsed.

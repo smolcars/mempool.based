@@ -58,7 +58,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, …), `trusted_proxy_header` if set | Configuration parsed, before listening. Never the RPC user or password |
+| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
 | `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr` | Once per enabled network at startup |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
@@ -80,7 +80,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 - `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
 - `duration_ms` runs until the response head is ready; streaming the body is not included. `bytes` is the body size when known up front.
 - `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), or for a WebSocket upgrade `client_sockets` (`WS_CLIENT_MAX_SOCKETS`) and `server_sockets` (`WS_MAX_SOCKETS`). A `413` is an oversized body.
-- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)) and for the block summary routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, or `cached` from the block summary cache), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
+- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)) and for the block summary routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
 - `client` only with `LOG_CLIENT_ADDR=true`.
 
 ### Node clients
@@ -126,3 +126,19 @@ Opening a socket is an `http_request` with route `/app/ws` (or the network's pre
 |---|---|---|---|
 | `difficulty_computed` | info | `network`, `height`, `next_retarget_height`, `difficulty_change`, `duration_ms` | The difficulty-adjustment answer ([`API.md`](API.md#difficulty-adjustment)) was recomputed for a new tip: once per block or reorg per network. `difficulty_change` is the expected change in percent at that moment; `duration_ms` is the node fetches |
 | `difficulty_refresh_failed` | warn | `network`, `height`, `error`, `failures` | It could not be recomputed for the tip at `height`, so the last answer is still served: at the 1st, 2nd, 4th, 8th… failure in a row. `error` is `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `tip_moved` (Esplora answered for another tip than the one being computed: a block or reorg in between; retried), `wrong_height` or `invalid_bits`. The next `difficulty_computed` is the recovery |
+
+### Store and block table
+
+The store is in [`STORE.md`](STORE.md); the block table's settings in [`CONFIG.md`](CONFIG.md#block-table).
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `store_open_failed` | error | `network`, `error` | The network's SQLite file would not open (unwritable `DATA_DIR`, a corrupt file, a file from a newer build). That network runs without a store |
+| `store_migration_applied` | info | `network`, `migration`, `duration_ms` | A schema migration ran while opening |
+| `store_slow_write` | warn | `network`, `duration_ms`, `queue_depth` | One write held the writer for a second or more, with `queue_depth` writes waiting |
+| `store_read_timed_out` | warn | `network`, `limit_ms` | A read ran past its limit and was stopped |
+| `block_rows_followed` | debug | `network`, `tip`, `written`, `rated`, `duration_ms` | The newest rows were checked against a new tip: rows added or replaced, rows given fee rates. Debug, since it is once per block |
+| `block_rows_reorged` | warn | `network`, `fork_height`, `stale` | Rows described blocks a reorg removed from the best chain; they were replaced or deleted |
+| `block_rows_failed` | warn | `network`, `task`, `error`, `failures` | Following the tip (`follow`) or a backfill step (`tip`, `totals`, `rates`) failed with `busy`, `too_big`, `node` or `store`, and will be retried after a pause. At the 1st, 2nd, 4th, 8th… failure in a row |
+| `block_rows_recovered` | info | `network`, `task`, `failures` | `follow` or `backfill` worked again after failures |
+| `block_backfill_progress` | info | `network`, `tip`, `rows`, `rated`, `totals_done`, `rates_done`, `totals_written`, `rates_written`, `busy_ms`, `bytes` | Every minute while the backfill works, and when it has caught up: rows in the table and how many are rated, whether each tier has reached its end, and since start the rows it added and rated, the time it spent working and the bytes it read. The rate is the difference between two lines |

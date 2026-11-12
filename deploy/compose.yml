@@ -37,10 +37,14 @@ services:
     image: ${SERVER_IMAGE:-mempool-based}
     build: ..
     env_file: .env
+    environment:
+      # The SQLite store, on the one writable volume; overrides a DATA_DIR in .env.
+      DATA_DIR: /data
     # The socket is 0660, owned by the node's uid and gid 10001.
     group_add: ["10001"]
     volumes:
       - esplora-socket:/run/esplora:ro
+      - server-data:/data
     # Loopback by default: a reverse proxy on this host terminates TLS and forwards here.
     ports:
       - ${HTTP_PUBLISH:-127.0.0.1:8080}:8080
@@ -53,6 +57,8 @@ secrets:
 
 volumes:
   node-data:
+  # The server's SQLite store: derived data, rebuilt by backfill if lost (docs/STORE.md).
+  server-data:
   # In memory, so a stale socket never outlives the stack. Only the node's uid and group may enter.
   esplora-socket:
     driver_opts:

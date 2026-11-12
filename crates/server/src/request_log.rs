@@ -83,6 +83,7 @@ pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: N
         Some(Source::Coalesced) => (Some("coalesced"), None),
         Some(Source::Hot) => (Some("hot"), None),
         Some(Source::Cached) => (Some("cached"), None),
+        Some(Source::Stored) => (Some("stored"), None),
         None => (None, None),
     };
     logging::emit(&HttpRequest {
