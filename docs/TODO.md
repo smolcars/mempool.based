@@ -21,8 +21,8 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | done ([#8](https://github.com/smolcars/mempool.based/pull/8)) |
 | N3 | RPC client: fixed set of typed read-only methods | F0 | done ([#7](https://github.com/smolcars/mempool.based/pull/7)) |
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
-| S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | doing |
-| S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | todo |
+| S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | done ([#9](https://github.com/smolcars/mempool.based/pull/9)) |
+| S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | doing |
 | W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | doing |
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | todo |
 | W3 | Block page: header details, paged transaction list | W1, S2 | todo |
