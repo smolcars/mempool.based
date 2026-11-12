@@ -19,6 +19,23 @@ Mainnet, signet and testnet4 are supported, plus regtest for development.
 
 rbitcoin already keeps the transaction index, address index, cluster mempool and per-transaction fee data in one process. An explorer built for it needs no second indexer, no second copy of the mempool and no database server.
 
+## Quick start
+
+Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup) and [bun](https://bun.sh).
+
+```sh
+# Build the frontend, then run the server on it
+(cd web && bun install && bun run build)
+cargo run -p mempool-based          # LISTEN_ADDR and WEB_DIR are read from the environment
+
+# Frontend with hot reload, proxying the server above
+(cd web && bun run dev)
+
+# Test and lint: what CI runs
+cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
+(cd web && bun run typecheck && bun run lint && bun run test && bun run build && bun run size)
+```
+
 ## Documentation
 
 | Read this | For |

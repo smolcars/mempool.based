@@ -11,7 +11,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 1. **One workflow, one required check.** `ci.yml` ends in a `ci-ok` job that depends on every other job. Branch protection requires only `ci-ok`, so skipped jobs never block a merge.
 2. **Run only what changed.** A first `changes` job maps changed paths to jobs. A docs-only PR runs nothing but `ci-ok`.
 3. **Jobs run in parallel,** never chained unless one needs another's output.
-4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them.
+4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them. Only the Rust job caches (cargo registry and `target/`); `bun install` from the registry is faster than restoring a cache.
 5. **Cancel superseded runs.** A new push to a PR cancels the run in progress.
 6. **No compiling tools in CI.** Tools are installed as prebuilt binaries.
 7. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size.
@@ -21,9 +21,9 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 
 | Job | Runs when | Does |
 |---|---|---|
-| `changes` | always | Decides which jobs below run |
-| `rust` | Rust or lockfile changes | Format check, clippy with warnings denied, tests |
-| `web` | `web/` changes | Type check, lint, unit tests, production build, bundle-size check |
+| `changes` | always | Decides which jobs below run. Pull requests run only the jobs their paths need; `master` pushes run every job, which also refreshes the caches |
+| `rust` | Rust, lockfile or workflow changes | Format check, clippy with warnings denied, tests |
+| `web` | `web/` or workflow changes | Type check, lint, unit tests, production build, bundle-size check |
 | `e2e` | server, web or harness changes | Browser tests against the built server |
 | `ci-ok` | always | Fails if any job above failed |
 
