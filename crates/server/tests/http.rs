@@ -210,7 +210,7 @@ async fn api_paths_do_not_fall_back_to_the_app_shell() {
         for path in [
             "/api",
             "/api/",
-            "/api/blocks/tip/height",
+            "/api/no/such/route",
             "/app",
             "/app/",
             "/app/x",

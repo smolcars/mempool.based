@@ -370,6 +370,7 @@ name = "mempool-based"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bitcoin",
  "engine",
  "hyper",
  "hyper-util",

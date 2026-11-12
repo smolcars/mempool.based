@@ -35,7 +35,7 @@ pub enum Error {
 
 impl Error {
     /// Maps a non-200 upstream answer to an error.
-    pub(crate) fn from_status(status: StatusCode, body: &[u8]) -> Self {
+    pub fn from_status(status: StatusCode, body: &[u8]) -> Self {
         let message = message(body);
         match status {
             StatusCode::NOT_FOUND => Self::NotFound,

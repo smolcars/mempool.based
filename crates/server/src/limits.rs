@@ -74,15 +74,30 @@ impl Entry {
 
 impl Clients {
     pub fn new(limits: &Limits) -> Arc<Self> {
+        Self::with_rate(
+            f64::from(limits.client_rate_per_sec),
+            limits.client_burst,
+            limits.max_tracked_clients,
+        )
+    }
+
+    /// A separate table with its own rate (tokens per second) and burst, for a route that needs a
+    /// stricter limit than the rest.
+    pub fn with_rate(rate: f64, burst: u32, max_entries: usize) -> Arc<Self> {
         Arc::new(Self {
             table: Mutex::new(Table {
                 entries: HashMap::new(),
                 last_sweep: Instant::now(),
             }),
-            rate: f64::from(limits.client_rate_per_sec),
-            burst: f64::from(limits.client_burst),
-            max_entries: limits.max_tracked_clients,
+            rate,
+            burst: f64::from(burst),
+            max_entries,
         })
+    }
+
+    /// Takes one rate token for `client` and holds nothing.
+    pub fn take(self: &Arc<Self>, client: IpAddr) -> Result<(), ApiError> {
+        self.acquire(client, Held::Request, u32::MAX, 1.0).map(drop)
     }
 
     /// Takes `cost` rate tokens (0 or 1) and one `kind` slot for `client`, all or nothing.
