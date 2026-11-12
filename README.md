@@ -48,6 +48,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model and the rules that follow from it |
 | [`docs/CONFIG.md`](docs/CONFIG.md) | Every environment variable, its default and what it protects against |
 | [`docs/CI.md`](docs/CI.md) | CI speed budget and testing layers |
+| [`docs/LOGGING.md`](docs/LOGGING.md) | Structured logging: the event catalogue and its rules |
 | [`docs/LIGHTNING.md`](docs/LIGHTNING.md) | How the Lightning explorer works |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Visual design |
 | [`AGENTS.md`](AGENTS.md) | Rules for contributors, human or agent |

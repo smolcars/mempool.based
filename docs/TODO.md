@@ -18,7 +18,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | done ([#3](https://github.com/smolcars/mempool.based/pull/3)) |
-| N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | doing |
+| N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | done ([#8](https://github.com/smolcars/mempool.based/pull/8)) |
 | N3 | RPC client: fixed set of typed read-only methods | F0 | done ([#7](https://github.com/smolcars/mempool.based/pull/7)) |
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | doing |
@@ -32,6 +32,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget | F0, R2 | todo |
 | P1 | Docker image and compose file beside rbitcoin | S1 | doing |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
+| L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | doing |
 
 ## M2 — Live mempool
 

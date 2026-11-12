@@ -14,6 +14,9 @@ Six milestones. Each ends with something a person can open in a browser and chec
 | Compatibility | Esplora as rbitcoin serves it; mempool.space-shaped endpoints where cheap | Being a drop-in is welcome but never a reason to be worse on rbitcoin |
 | License | MIT, written clean-room | No mempool.space source is read or copied |
 | Networks | Mainnet, signet, testnet4; regtest for development | |
+| Styling | Plain CSS with design tokens, no utility framework | The design is built on tokens already; a framework would be one more build dependency for little gain |
+| Dependencies | As few as possible; none for what a few lines can do | Build time, and fewer outside parties to trust |
+| Logging | Structured, as typed events in our own small crate | Logs are an interface for the operator, and they stay maintainable when every line is a declared type |
 
 ## Out of scope
 
