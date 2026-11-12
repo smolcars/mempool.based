@@ -28,6 +28,16 @@ impl Network {
         }
     }
 
+    /// The `chain` a node of this network reports in `getblockchaininfo`.
+    pub fn rpc_chain(self) -> &'static str {
+        match self {
+            Self::Mainnet => "main",
+            Self::Signet => "signet",
+            Self::Testnet4 => "testnet4",
+            Self::Regtest => "regtest",
+        }
+    }
+
     /// Where this network's pages and APIs are mounted: `""` for mainnet, `"/signet"` and so on.
     pub fn path_prefix(self) -> &'static str {
         match self {

@@ -64,8 +64,8 @@ async fn logged(f: impl Fn(&Value) -> bool) -> Value {
 }
 
 /// A node RPC that refuses every call with 401 while `refuse` is set, and otherwise answers
-/// `getblockchaininfo`. Returns its port.
-async fn rpc(refuse: Arc<AtomicBool>) -> u16 {
+/// `getblockchaininfo` for `chain`. Returns its port.
+async fn rpc(refuse: Arc<AtomicBool>, chain: &'static str) -> u16 {
     let app = Router::new().route(
         "/",
         post(move || {
@@ -75,7 +75,7 @@ async fn rpc(refuse: Arc<AtomicBool>) -> u16 {
                     return StatusCode::UNAUTHORIZED.into_response();
                 }
                 axum::Json(json!({"id": 0, "error": null, "result": {
-                    "chain": "regtest", "blocks": 110, "headers": 110,
+                    "chain": chain, "blocks": 110, "headers": 110,
                     "bestblockhash": "3fa932c75119e4a4f4c4f5f43afe8fec03c5f3bc9b84fbadd1e96dd34bc6654d",
                     "bits": "207fffff", "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
                     "difficulty": 4.6e-10, "time": 1_700_000_000, "mediantime": 1_700_000_000,
@@ -128,7 +128,7 @@ async fn get(addr: &str, path: &str) -> (u16, String) {
 
 #[tokio::test]
 async fn a_refused_password_is_logged_at_startup_and_clients_learn_only_unavailable() {
-    let port = rpc(Arc::new(AtomicBool::new(true))).await;
+    let port = rpc(Arc::new(AtomicBool::new(true)), "regtest").await;
     let addr = start(port).await;
     // At startup, without any request: its own error event, not a network problem.
     let e = logged(|v| v["event"] == "rpc_auth_failed").await;
@@ -154,8 +154,28 @@ async fn a_refused_password_is_logged_at_startup_and_clients_learn_only_unavaila
 }
 
 #[tokio::test]
+async fn a_node_on_another_chain_is_an_error_and_not_ready() {
+    // The regtest variables point at a mainnet node.
+    let port = rpc(Arc::new(AtomicBool::new(false)), "main").await;
+    let addr = start(port).await;
+    let e = logged(|v| v["event"] == "rpc_wrong_network").await;
+    assert_eq!(
+        (
+            e["level"].as_str(),
+            e["network"].as_str(),
+            e["node_chain"].as_str()
+        ),
+        (Some("error"), Some("regtest"), Some("main"))
+    );
+    let (status, body) = get(&addr, "/readyz").await;
+    let ready: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, 503);
+    assert_eq!(ready["networks"]["regtest"]["rpc"], "wrong_network");
+}
+
+#[tokio::test]
 async fn liveness_ignores_the_node_and_readiness_does_not() {
-    let port = rpc(Arc::new(AtomicBool::new(false))).await;
+    let port = rpc(Arc::new(AtomicBool::new(false)), "regtest").await;
     let addr = start(port).await;
     logged(|v| v["event"] == "rpc_reachable" && v["height"] == 110).await;
     // RPC answers, but Electrum is unreachable: alive, not ready, and the body says which part.

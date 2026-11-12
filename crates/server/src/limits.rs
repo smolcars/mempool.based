@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -318,10 +319,14 @@ pub struct Limiter {
     preflights: Arc<Clients>,
     pub limits: Limits,
     in_flight: Arc<Semaphore>,
+    /// Requests whose forwarding header was ignored, for `proxy_header_ignored`.
+    ignored_forwarding: Arc<AtomicU64>,
+    /// `LOG_CLIENT_ADDR`: whether that event may name the peer, which may be a visitor.
+    log_client_addr: bool,
 }
 
 impl Limiter {
-    pub fn new(limits: &Limits) -> Self {
+    pub fn new(limits: &Limits, log_client_addr: bool) -> Self {
         Self {
             clients: Clients::new(limits),
             statics: Clients::with_rate(
@@ -332,6 +337,8 @@ impl Limiter {
             preflights: Clients::new(limits),
             limits: limits.clone(),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
+            ignored_forwarding: Arc::default(),
+            log_client_addr,
         }
     }
 
@@ -367,7 +374,7 @@ impl Drop for AbortOnDrop {
 
 /// Headers a proxy names the client in. Sent by a peer we do not trust, they hint that a proxy in
 /// front is missing from `TRUSTED_PROXIES`.
-const FORWARDING: [HeaderName; 3] = [
+static FORWARDING: [HeaderName; 3] = [
     HeaderName::from_static("x-forwarded-for"),
     HeaderName::from_static("x-real-ip"),
     HeaderName::from_static("forwarded"),
@@ -401,10 +408,17 @@ impl Limiter {
     ) -> Result<(Hold, IpAddr, Refusal), (Refused, Refusal)> {
         let trust = self.limits.trusted_proxy.as_ref();
         let addr = client_addr(headers, peer, trust);
+        let ignored = if trust.is_some_and(|t| t.trusts(peer.to_canonical())) {
+            None
+        } else {
+            FORWARDING.iter().find(|h| headers.contains_key(*h))
+        };
+        if let Some(header) = ignored {
+            self.forwarding_ignored(header, peer);
+        }
         let who = Refusal {
             client: addr,
-            untrusted_forwarded: !trust.is_some_and(|t| t.trusts(peer.to_canonical()))
-                && FORWARDING.iter().any(|h| headers.contains_key(h)),
+            untrusted_forwarded: ignored.is_some(),
             proxy_keyed: trust.is_some_and(|t| t.trusts(addr)),
         };
         let (table, max) = if is_static(path) {
@@ -417,6 +431,23 @@ impl Limiter {
         match table.acquire(addr, Held::Request, max, 1.0) {
             Ok(hold) => Ok((hold, addr, who)),
             Err(refused) => Err((refused, who)),
+        }
+    }
+}
+
+impl Limiter {
+    /// Counts a request whose forwarding header was ignored, and says so at a total of 1, 2, 4…
+    fn forwarding_ignored(&self, header: &'static HeaderName, peer: IpAddr) {
+        let total = self.ignored_forwarding.fetch_add(1, Ordering::Relaxed) + 1;
+        if total.is_power_of_two() {
+            logging::emit(&logging::events::ProxyHeaderIgnored {
+                header: header.as_str(),
+                peer: self
+                    .log_client_addr
+                    .then(|| peer.to_canonical().to_string()),
+                trusted_proxies_set: self.limits.trusted_proxy.is_some(),
+                total,
+            });
         }
     }
 }
@@ -654,12 +685,15 @@ mod tests {
 
     #[test]
     fn preflights_have_their_own_bounded_table() {
-        let limiter = Limiter::new(&Limits {
-            client_rate_per_sec: 1,
-            client_burst: 1,
-            max_tracked_clients: 2,
-            ..Limits::default()
-        });
+        let limiter = Limiter::new(
+            &Limits {
+                client_rate_per_sec: 1,
+                client_burst: 1,
+                max_tracked_clients: 2,
+                ..Limits::default()
+            },
+            false,
+        );
         let h = HeaderMap::new();
         let check = |m: &Method, path: &str, peer: &str| limiter.check(m, &h, path, ip(peer));
         let api = "/signet/api/tx";
