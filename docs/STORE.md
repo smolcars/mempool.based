@@ -232,10 +232,10 @@ What the mempool looked like over time: its size, fees and fee bands through the
 
 | Reason | When |
 |---|---|
-| `syncing` | The engine has not finished its first cycle, or this is the first minute after start or after a skipped minute: the flow over it was not watched whole |
+| `syncing` | The engine has not finished its first cycle, or this is the first minute after start, after a minute the engine was not live, or after a late one: the flow over it was not watched whole |
 | `stale` | The projection is stale: the node is failing and the numbers are the last good ones |
 | `lagged` | The sampler fell more than the change stream's 64 deltas behind, so the minute's flow is incomplete |
-| `late` | It woke after the next minute had begun (a stalled process), so the flow would span two minutes |
+| `late` | It read the state more than 5 s from the minute (a stalled process, a loaded machine, a clock that jumped ahead), or after the next minute had begun: the state is not that minute's and the flow would not span one minute. The minute after a late one is skipped too (as `syncing`), since its flow began off the minute |
 | `store_busy`, `store_failed` | The write queue was full (`try_write`), or the write failed |
 
 So a gap in the table is the truth: the engine was off, the node was failing, or the server was down. History starts when the server first ran with the engine on and a `DATA_DIR`.

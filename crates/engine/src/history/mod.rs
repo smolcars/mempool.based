@@ -14,7 +14,7 @@ mod db;
 mod sampler;
 
 pub use db::{Rolled, insert, record, roll_up, series};
-pub use sampler::{Config, Event, Skip, Watch, start};
+pub use sampler::{Config, Event, ON_TIME, Skip, Watch, start};
 
 use std::time::{Duration, SystemTime};
 

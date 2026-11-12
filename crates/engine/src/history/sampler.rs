@@ -15,6 +15,9 @@ use crate::mempool::{Delta, Removal, Subscription, Tracker};
 use crate::projected::Projector;
 use crate::store::{Error, Store};
 
+/// How far from its minute a sample may be read. Further, and the minute is skipped as late.
+pub const ON_TIME: Duration = Duration::from_secs(5);
+
 /// Why a minute has no sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Skip {
@@ -25,8 +28,8 @@ pub enum Skip {
     Stale,
     /// The sampler fell more than the change stream's ring behind; the minute's flow is lost.
     Lagged,
-    /// The sampler woke too late to see the minute before, so the flow would span more than
-    /// one minute.
+    /// The sampler woke more than [`ON_TIME`] from the minute, or after the next one had
+    /// begun: the state is not that minute's, and the flow would not span one minute.
     Late,
     /// The store's write queue was full.
     StoreBusy,
@@ -170,8 +173,11 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
         }
         // The nearest whole minute, so a timer that fires a hair early still names this one.
         let millis = (config.clock)().as_millis();
-        let minute = u64::try_from((millis + 30_000) / 60_000).unwrap_or(u64::MAX);
-        let time = minute.saturating_mul(MINUTE);
+        let minute = (millis + 30_000) / 60_000;
+        let on_time = millis.abs_diff(minute * 60_000) <= ON_TIME.as_millis();
+        let time = u64::try_from(minute)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MINUTE);
         if let Some((t, _)) = last.filter(|(t, _)| time <= *t) {
             // The clock went back: this minute was already looked at. Drop the flow, and owe a
             // whole minute past the last one before sampling again.
@@ -187,6 +193,7 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
             _ if p.stale => Some(Skip::Stale),
             _ if !live => Some(Skip::Syncing),
             None => Some(Skip::Syncing),
+            _ if !on_time => Some(Skip::Late),
             Some((t, _)) if t + MINUTE != time => Some(Skip::Late),
             Some((_, false)) => Some(Skip::Syncing),
             _ if !whole => Some(Skip::Lagged),
@@ -217,6 +224,7 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
             },
         };
         (config.observer)(&event);
-        last = Some((time, live));
+        // A late minute's flow ends off the minute, so the next one's starts off it: skip that too.
+        last = Some((time, live && on_time));
     }
 }

@@ -8,11 +8,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bitcoin::hashes::Hash;
-use bitcoin::{Amount, BlockHash, Txid};
+use bitcoin::{Amount, BlockHash, Transaction, Txid};
 use node::esplora::ChainTip;
 use tokio::sync::mpsc;
 
@@ -524,8 +524,46 @@ async fn a_series_over_rolled_rows_counts_their_samples_and_coverage_is_honest()
 
 // The sampler, on a real tracker and projector over a mock node, with time paused.
 
+/// Lets every task that is ready run, without moving virtual time.
+async fn settle() {
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Moves virtual time a second at a time to the next whole minute of `clock`, so the tracker
+/// and projector poll as they would. Before the last second it waits, in real time with the
+/// clock still, until `ready` holds: the engines finish work on other threads (packing) at
+/// their own pace, and the minute must not turn before they have.
+async fn to_minute(clock: &impl Fn() -> Duration, ready: impl Fn() -> bool) {
+    let minute = (clock().as_secs() / MINUTE + 1) * MINUTE;
+    loop {
+        settle().await;
+        let now = clock().as_secs();
+        if now >= minute {
+            return;
+        }
+        if now + 1 == minute {
+            let waited = std::time::Instant::now();
+            while !ready() {
+                assert!(waited.elapsed() < Duration::from_secs(20), "never ready");
+                tokio::task::yield_now().await;
+            }
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+    }
+}
+
 #[tokio::test(start_paused = true)]
-async fn samples_each_minute_skips_stale_and_syncing_minutes_and_rolls_up() {
+async fn samples_each_minute_skips_stale_late_and_syncing_minutes_and_rolls_up() {
+    // Virtual time moves only when this test moves it. Tokio's paused clock otherwise jumps to
+    // the next timer whenever the runtime is idle, and it cannot see the store's own writer
+    // thread: while a write took real milliseconds, the tracker's one-second timers would carry
+    // virtual time past the next minute, and the sampler would rightly call that minute late.
+    // A waiting blocking task holds that auto-advance off.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let hold = tokio::task::spawn_blocking(move || held.recv());
+
     let t = temp();
     // History already holds minutes from ten days ago: the first write rolls them up.
     let wall = Duration::from_secs(NOW + 20);
@@ -546,90 +584,79 @@ async fn samples_each_minute_skips_stale_and_syncing_minutes_and_rolls_up() {
         mock.clone(),
         crate::projected::Config::default(),
     );
+    let count = || -> u32 {
+        projector
+            .current()
+            .blocks
+            .iter()
+            .map(|b| b.summary.txs)
+            .sum()
+    };
+    let stale = || projector.current().stale;
 
+    // The wall clock: virtual time, moved by `shift` seconds later in the test.
     let start = tokio::time::Instant::now();
-    // Seconds the wall clock is set back by, later in the test.
-    let behind = Arc::new(AtomicU64::new(0));
+    let shift = Arc::new(AtomicI64::new(0));
+    let clock = {
+        let shift = Arc::clone(&shift);
+        move || {
+            let at = wall + start.elapsed();
+            let s = shift.load(Ordering::SeqCst);
+            let by = Duration::from_secs(s.unsigned_abs());
+            if s < 0 { at - by } else { at + by }
+        }
+    };
     let (tx_events, mut events) = mpsc::unbounded_channel();
     let config = Config {
-        clock: {
-            let back = Arc::clone(&behind);
-            Arc::new(move || {
-                wall + start.elapsed() - Duration::from_secs(back.load(Ordering::SeqCst))
-            })
-        },
+        clock: Arc::new(clock.clone()),
         observer: Arc::new(move |e: &Event| {
             let _ = tx_events.send(e.clone());
         }),
     };
     let task = start_sampler(&tracker, &projector, &t.store, config);
     let mut next = async || events.recv().await.unwrap();
-
-    let first = NOW + MINUTE;
-    // The first minute was not watched whole.
-    assert_eq!(
-        next().await,
-        Event::Skipped {
-            time: first,
-            reason: Skip::Syncing
-        }
-    );
-    let Event::Written { time, rolled, .. } = next().await else {
-        panic!("the second minute is written")
+    let skipped = |time, reason| Event::Skipped { time, reason };
+    let written = |e: Event| match e {
+        Event::Written { time, rolled, .. } => (time, rolled),
+        e => panic!("{e:?}"),
     };
-    assert_eq!(
-        (time, rolled),
-        (
-            first + MINUTE,
-            Rolled {
-                minutes: 3,
-                hours: 0
-            }
-        )
-    );
+
+    // The first minute was not watched whole; the second is written and rolls up the old rows.
+    let first = NOW + MINUTE;
+    to_minute(&clock, || true).await;
+    assert_eq!(next().await, skipped(first, Skip::Syncing));
+    to_minute(&clock, || count() == 1 && tracker.node_info().is_some()).await;
+    let rolled = Rolled {
+        minutes: 3,
+        hours: 0,
+    };
+    assert_eq!(written(next().await), (first + MINUTE, rolled));
 
     // Two arrive, then one of them and the first are mined.
     mock.set(&[(&a, 500), (&b, 700), (&c, 900)]);
-    assert!(matches!(next().await, Event::Written { time, .. } if time == first + 2 * MINUTE));
+    to_minute(&clock, || count() == 3).await;
+    assert_eq!(written(next().await).0, first + 2 * MINUTE);
     mock.set(&[(&c, 900)]);
     mock.mine(block(h0, &[&tx(9_001), &a, &b]), 1);
     tracker.tip_changed();
-    assert!(matches!(next().await, Event::Written { time, .. } if time == first + 3 * MINUTE));
+    let mined = || projector.current().tip.is_some_and(|t| t.height == 1);
+    to_minute(&clock, || count() == 1 && mined()).await;
+    assert_eq!(written(next().await).0, first + 3 * MINUTE);
 
     // The node stops answering cluster requests while the mempool changes: stale minutes are
     // skipped, and so is the first minute back, whose flow spans the outage.
     mock.0.lock().unwrap().fail_clusters = true;
     mock.set(&[(&c, 900), (&tx(4), 100)]);
-    let mut skipped = Vec::new();
-    loop {
-        match next().await {
-            Event::Skipped {
-                reason: Skip::Stale,
-                time,
-            } => {
-                skipped.push(time);
-                if skipped.len() == 2 {
-                    mock.0.lock().unwrap().fail_clusters = false;
-                }
-            }
-            Event::Written { time, .. } if skipped.is_empty() => {
-                assert!(time < first + 6 * MINUTE, "staleness takes a cycle to show");
-            }
-            e => panic!("{e:?} while stale"),
-        }
-        if skipped.len() == 2 {
-            break;
-        }
-    }
-    let back = skipped[1] + MINUTE;
-    assert_eq!(
-        next().await,
-        Event::Skipped {
-            time: back,
-            reason: Skip::Syncing
-        }
-    );
-    assert!(matches!(next().await, Event::Written { time, .. } if time == back + MINUTE));
+    to_minute(&clock, stale).await;
+    assert_eq!(next().await, skipped(first + 4 * MINUTE, Skip::Stale));
+    to_minute(&clock, stale).await;
+    assert_eq!(next().await, skipped(first + 5 * MINUTE, Skip::Stale));
+    mock.0.lock().unwrap().fail_clusters = false;
+    to_minute(&clock, || !stale() && count() == 2).await;
+    let back = first + 6 * MINUTE;
+    assert_eq!(next().await, skipped(back, Skip::Syncing));
+    to_minute(&clock, || true).await;
+    assert_eq!(written(next().await).0, back + MINUTE);
 
     let s = series(&t.store, Interval::TwoHours, back + MINUTE + 1)
         .await
@@ -649,46 +676,66 @@ async fn samples_each_minute_skips_stale_and_syncing_minutes_and_rolls_up() {
     assert_eq!((p.count, p.flow.in_count), (1, 0));
     assert_eq!((p.flow.out_count, p.flow.out_vsize), (2, va + vb));
     assert_eq!((p.flow.mined_count, p.flow.mined_vsize), (2, va + vb));
-    assert!(
-        skipped
-            .iter()
-            .all(|t| s.points.iter().all(|p| p.time != *t))
-    );
-    assert!(!s.points.iter().any(|p| p.time == back));
+    for gap in [4, 5, 6] {
+        assert!(s.points.iter().all(|p| p.time != first + gap * MINUTE));
+    }
 
-    // The clock is set back two minutes, and transactions arrive meanwhile: the minutes it
+    // The clock jumps 10 s ahead, so the next wake-up reads its minute 10 s late: that minute
+    // is skipped, and so is the one after, whose flow began off the minute. A transaction that
+    // arrives before the late minute is in neither sample.
+    let mut live = vec![(c.clone(), 900), (tx(4), 100)];
+    let mut arrive = |n: u32| {
+        live.push((tx(n), 100));
+        let refs: Vec<(&Transaction, u64)> = live.iter().map(|(t, f)| (t, *f)).collect();
+        mock.set(&refs);
+        live.len()
+    };
+    shift.store(10, Ordering::SeqCst);
+    let n = arrive(5);
+    to_minute(&clock, || true).await; // the clock's minute; the sampler wakes 10 s after it
+    to_minute(&clock, || usize::try_from(count()).unwrap() == n).await;
+    let late = back + 2 * MINUTE;
+    assert_eq!(next().await, skipped(late, Skip::Late));
+    assert_eq!(next().await, skipped(late + MINUTE, Skip::Syncing));
+    let n = arrive(6);
+    to_minute(&clock, || usize::try_from(count()).unwrap() == n).await;
+    assert_eq!(written(next().await).0, late + 2 * MINUTE);
+
+    // The clock goes back two minutes, and a transaction arrives meanwhile: the minutes it
     // repeats are not sampled again, their flow is dropped, and the first minute past the last
     // one sampled is skipped too, so no sample counts more than one minute's flow.
-    let latest = back + MINUTE;
-    behind.store(2 * MINUTE, Ordering::SeqCst);
-    mock.set(&[(&c, 900), (&tx(4), 100), (&tx(5), 100), (&tx(6), 100)]);
-    assert_eq!(
-        next().await,
-        Event::Skipped {
-            time: latest + MINUTE,
-            reason: Skip::Syncing
-        }
-    );
-    mock.set(&[
-        (&c, 900),
-        (&tx(4), 100),
-        (&tx(5), 100),
-        (&tx(6), 100),
-        (&tx(7), 100),
-    ]);
-    assert!(matches!(next().await, Event::Written { time, .. } if time == latest + 2 * MINUTE));
+    let latest = late + 2 * MINUTE;
+    shift.store(10 - 2 * 60, Ordering::SeqCst);
+    arrive(7);
+    to_minute(&clock, || true).await; // repeats latest - 60
+    to_minute(&clock, || true).await; // repeats latest
+    to_minute(&clock, || true).await;
+    assert_eq!(next().await, skipped(latest + MINUTE, Skip::Syncing));
+    let n = arrive(8);
+    to_minute(&clock, || usize::try_from(count()).unwrap() == n).await;
+    assert_eq!(written(next().await).0, latest + 2 * MINUTE);
+    assert!(events.try_recv().is_err(), "nothing else happened");
+
     let s = series(&t.store, Interval::TwoHours, latest + 2 * MINUTE)
         .await
         .unwrap();
-    let p = s.points.last().unwrap();
-    assert_eq!(
-        (p.time, p.sums.count, p.sums.flow.in_count),
-        (latest + 2 * MINUTE, 5, 1)
-    );
+    let after = |time| {
+        s.points
+            .iter()
+            .find(|p| p.time == time)
+            .map(|p| (p.sums.count, p.sums.flow.in_count))
+    };
+    assert_eq!(after(late), None);
+    assert_eq!(after(late + MINUTE), None);
+    assert_eq!(after(late + 2 * MINUTE), Some((4, 1)));
+    assert_eq!(after(latest + MINUTE), None);
+    assert_eq!(after(latest + 2 * MINUTE), Some((6, 1)));
 
     task.abort();
     projector_task.abort();
     tracker_task.abort();
+    drop(release);
+    hold.await.unwrap().unwrap_err();
 }
 
 fn start_sampler(
