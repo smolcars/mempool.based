@@ -100,7 +100,7 @@ Solid with TypeScript, built by Vite into static files. No server rendering and 
 | What | Budget |
 |---|---|
 | First load, JavaScript | 100 KB gzipped for the app shell and home page |
-| New block, node notification to WebSocket send | 50 ms |
+| New block, from the node being able to serve it to the WebSocket send | 50 ms. The node itself can hold a new block for up to about 0.4 s after announcing it ([`RBITCOIN.md`](RBITCOIN.md)); that wait is not ours to remove |
 | Cached or immutable API response, server time | 10 ms at p99 |
 | Frame rate during block and mempool animations | 60 fps on a mid-range laptop |
 

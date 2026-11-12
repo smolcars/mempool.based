@@ -4,7 +4,7 @@
 
 A fast block explorer for [rbitcoin](https://github.com/rbitcoin-org/rbitcoin): live mempool, blocks, mining and Lightning.
 
-> **Status: early development.** Nothing here is ready to run yet. Progress is tracked in [`docs/TODO.md`](docs/TODO.md).
+> **Status: early development.** The explorer for confirmed data works on mainnet, signet and testnet4: live blocks, block, transaction and address pages, and search. The live mempool, mining history and Lightning are being built. Progress is tracked in [`docs/TODO.md`](docs/TODO.md).
 
 ## What it is
 
