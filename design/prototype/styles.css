@@ -367,6 +367,8 @@
     .facts { grid-template-columns: minmax(0, 1fr); }
     .facts--single .fact { grid-template-columns: 7.5rem minmax(0, 1fr); }
     .table th:nth-child(3), .table td:nth-child(3), .table .copy { display: none; }
+    .table td:first-child { width: 100%; max-width: 0; } /* the hash column takes what is left and ellipsizes */
+    .table .hash { display: flex; }
     .table--block th:nth-child(4), .table--block td:nth-child(4) { display: none; }
     .timeline { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
     .step { grid-template-columns: auto 1fr; row-gap: 0; padding-right: 0; }
@@ -377,5 +379,9 @@
     .flow__item { padding: var(--space-1) var(--space-2); }
     .flow__amount { font-size: var(--text-sm); }
     .proto-switch__label { width: 100%; padding: var(--space-1) var(--space-2); }
+  }
+  /* Smallest phones (320 px): the mark alone carries the brand; the name stays for screen readers. */
+  @media (max-width: 380px) {
+    .brand__word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   }
 }
