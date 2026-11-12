@@ -147,3 +147,4 @@ Refined when M4 lands.
 | SB4 | The blocks table is 321 to 325 px wide in a 288 px space at phone width when the font arrives late or not at all (two columns grow); found on GitHub's runners. Fold into the redesign | SB1 | todo; part of RD1 |
 | SB5 | The first transaction-grid tests time out in Firefox on GitHub's runner about half the time (reproduced on a one-CPU Linux container): fix how they wait, without longer timeouts | SB1 | todo |
 | FX9 | The node call sharing in the Esplora pass-through has a cleanup race that can run the same computation twice, the same one the review found in the new answer cache | PF2 | todo |
+| AD1 | A very large address ties up the node for about a minute per page view for an answer that never comes: refuse early when the node has said the address is too large, bound the time an address request may take, and write up what rbitcoin would need to serve such an address | G5 | doing |
