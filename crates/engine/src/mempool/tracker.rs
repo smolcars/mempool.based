@@ -339,7 +339,7 @@ impl<S: Source> Poller<S> {
                         && self.probe.as_ref().is_some_and(|p| same_pool(p, &info)) =>
                 {
                     skipped += 1;
-                    next = started + self.config.gap;
+                    next = self.pace(started);
                     continue;
                 }
                 Ok(info) => self.cycle(info).await,
@@ -354,7 +354,7 @@ impl<S: Source> Poller<S> {
                     stats.bytes = bytes;
                     stats.calls += 1;
                     stats.skipped = std::mem::take(&mut skipped);
-                    next = started + self.config.gap.max(stats.duration);
+                    next = self.pace(started);
                     self.totals.0 += bytes;
                     self.totals.1 += stats.calls;
                     if !self.synced {
@@ -382,6 +382,12 @@ impl<S: Source> Poller<S> {
                 }
             }
         }
+    }
+
+    /// When the next iteration may start: `gap` after this one started, and never sooner
+    /// than this one took after it ended, so a slow node is talked to at most half the time.
+    fn pace(&self, started: Instant) -> Instant {
+        (started + self.config.gap).max(Instant::now() + started.elapsed())
     }
 
     fn emit(&self, e: Event) {
@@ -455,7 +461,8 @@ impl<S: Source> Poller<S> {
         stats.size = state.len();
         drop(state);
         self.last_sequence = Some(listing.mempool_sequence);
-        self.probe = Some(info);
+        // Listed transactions still missing details must be retried: no probe skip until then.
+        self.probe = (stats.vanished == 0).then_some(info);
         Ok(stats)
     }
 

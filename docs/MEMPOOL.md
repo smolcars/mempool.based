@@ -87,7 +87,7 @@ Each cycle:
 6. **Fetch** details for the added ones, as in the initial sync.
 7. **Classify** the removals, build one delta, apply it and publish it.
 
-**Cadence.** A cycle starts at least 1 s after the previous one started, and at least as long after it as the previous one took, so the tracker spends at most half its time talking to the node. One loop does everything in order: a cycle can never overlap another, and nothing queues behind a slow node. On failure the wait doubles from 2 s to a cap of 30 s, and comes back to 1 s on the next success. A tip hint skips the wait but never interrupts a cycle in progress.
+**Cadence.** A cycle starts at least 1 s after the previous one started, and never sooner after the previous one ended than that one took, so the tracker spends at most half its time talking to a slow node. After a cycle in which a listed transaction's details could not be read, the next cycle lists again whatever the probe says. One loop does everything in order: a cycle can never overlap another, and nothing queues behind a slow node. On failure the wait doubles from 2 s to a cap of 30 s, and comes back to 1 s on the next success. A tip hint skips the wait but never interrupts a cycle in progress.
 
 The probe saves the 3.6 MB listing whenever the mempool did not move. On mainnet it almost always has, so the listing runs about once a second. A change the probe cannot see (an eviction and an arrival with identical size and fee) is caught by the 10 s heartbeat.
 

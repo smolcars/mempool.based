@@ -388,6 +388,8 @@ struct Counters {
     blocks: AtomicU32,
     in_flight: AtomicU32,
     max_in_flight: AtomicU32,
+    listings_in_flight: AtomicU32,
+    max_listings: AtomicU32,
     bytes: AtomicU64,
 }
 
@@ -491,7 +493,11 @@ impl Source for Mock {
 
     async fn listing(&self) -> Result<RawMempool, SourceError> {
         self.n.listings.fetch_add(1, Ordering::SeqCst);
-        self.enter().await?;
+        let now = self.n.listings_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.n.max_listings.fetch_max(now, Ordering::SeqCst);
+        let r = self.enter().await;
+        self.n.listings_in_flight.fetch_sub(1, Ordering::SeqCst);
+        r?;
         Ok(self.with(|n| RawMempool {
             mempool_sequence: n.sequence,
             txids: n.pool.iter().map(Transaction::compute_txid).collect(),
@@ -680,16 +686,25 @@ async fn a_slow_node_is_never_polled_twice_at_once() {
     let mut last_start = None;
     for i in 0..4 {
         mock.send(&tx(&[coin(100 + i)], 1, 100 + i));
-        tracker.tip_changed(); // even hints cannot start a cycle inside another
         let s = cycle(next_cycle(&mut ev).await);
         assert!(s.duration >= Duration::from_secs(9), "{s:?}");
         let start = tokio::time::Instant::now() - s.duration;
         if let Some(prev) = last_start {
-            assert!(start - prev >= s.duration);
+            // The previous cycle took as long; it was followed by at least as long a rest.
+            assert!(start - prev >= s.duration * 2, "{:?}", start - prev);
         }
         last_start = Some(start);
     }
-    // At most two detail batches; never two listings.
+    // A hint during a cycle waits for it to end: never two listings at once.
+    mock.send(&tx(&[coin(200)], 1, 200));
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    tracker.tip_changed();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    tracker.tip_changed();
+    cycle(next_cycle(&mut ev).await);
+    cycle(next_cycle(&mut ev).await);
+    assert_eq!(mock.n.max_listings.load(Ordering::SeqCst), 1);
+    // At most two detail batches at once.
     assert!(mock.n.max_in_flight.load(Ordering::SeqCst) <= 2);
     assert_eq!(txids(&tracker), pool_txids(&mock));
     task.abort();
@@ -793,11 +808,15 @@ async fn vanished_transactions_are_skipped_then_forgotten() {
     let mut ev = tracker.events();
     let s = cycle(next_cycle(&mut ev).await);
     assert_eq!((s.added, s.vanished, s.size), (1, 1, 1));
-    // It really left; the next cycle sees nothing to remove.
+    // Readable again in an unchanged pool: the probe must not skip it until the heartbeat.
+    mock.with(|n| n.vanish.clear());
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!((s.added, s.vanished, s.skipped, s.size), (1, 0, 0, 2));
+    // Gone for real; the next cycle classifies its removal.
     mock.with(|n| n.pool.retain(|t| t.compute_txid() != b.compute_txid()));
     mock.send(&tx(&[coin(2)], 1, 3));
     let s = cycle(next_cycle(&mut ev).await);
-    assert_eq!((s.added, s.vanished, s.evicted, s.size), (1, 0, 0, 2));
+    assert_eq!((s.added, s.vanished, s.evicted, s.size), (1, 0, 1, 2));
     assert_eq!(txids(&tracker), pool_txids(&mock));
     task.abort();
 }
