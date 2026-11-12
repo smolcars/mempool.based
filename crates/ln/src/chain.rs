@@ -402,6 +402,14 @@ impl Lookup {
         }
     }
 
+    /// Forgets the answers [`Self::restore`] gave, by the saved block they were stamped with.
+    pub(crate) fn unrestore(&self, saved: BlockHash) {
+        self.lock()
+            .cache
+            .map
+            .retain(|_, (o, _)| !matches!(o, Outcome::Found(_, f) if f.tip_hash == saved));
+    }
+
     pub(crate) fn count(&self, f: impl FnOnce(&mut Rejected)) {
         f(&mut self.lock().rejected);
     }
@@ -604,7 +612,7 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, pace: Arc<Pace>
         if tip_only {
             lookup.lock().requests += 1;
             let tip = pace
-                .run(tokio::time::timeout(REQUEST_TIMEOUT, chain.tip_height()))
+                .run(async { tokio::time::timeout(REQUEST_TIMEOUT, chain.tip_height()).await })
                 .await;
             match tip {
                 Ok(Ok(tip)) => {

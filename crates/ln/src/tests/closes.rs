@@ -991,3 +991,65 @@ fn saved_answers_round_trip_and_a_bad_file_is_ignored() {
     std::fs::write(&path, b"").unwrap();
     assert_eq!(store::load_verified(&dir.0, NET, 10), None);
 }
+
+#[tokio::test]
+async fn saved_answers_are_forgotten_once_the_watcher_reads_on() {
+    // Saved at height 8; while down, the node moved to a shorter branch whose block 7 closes
+    // the channel.
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let f = fund(1, 2, 1_000_000);
+    let h = mine(&node, vec![f.clone()]);
+    mine_empty(&node, 7);
+    let id = scid(h, 1, 0);
+    let funded = node.block_at(h).unwrap();
+    let saved = node.block_at(8).unwrap().block_hash();
+    let v = store::Verified {
+        height: 8,
+        hash: saved,
+        channels: vec![store::Saved {
+            scid: id,
+            capacity: 1_000_000,
+            program: closes::program_of(&funding(1, 2)).unwrap(),
+            block: closes::BlockRef {
+                height: h,
+                hash: funded.block_hash(),
+                time: u64::from(funded.header.time),
+            },
+        }],
+    };
+    unmine(&node, 7);
+    let close = coop(
+        OutPoint::new(f.compute_txid(), 0),
+        1,
+        2,
+        vec![out(wpkh(), 999_000)],
+    );
+    mine(&node, vec![close]);
+    let graph = Graph::new(NET, sink());
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(id, 1, 2))
+        .unwrap();
+    let config = config();
+    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    g.lookup.restore(&v);
+    g.watch.resume(v.height, v.hash);
+    let pace = pace(&config);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), Arc::clone(&pace)));
+    tokio::spawn(closes::run(
+        Arc::clone(&g),
+        node.clone(),
+        pace,
+        config.tip_every,
+    ));
+    // The replay hands the channel back only after the watcher stopped waiting for it.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    wait_for("replayed", || {
+        g.replay_tick(5000);
+        !g.replaying()
+    })
+    .await;
+    // Asked of the node, which says spent: never shown as open.
+    assert!(g.graph().read_only().channel(id).is_none());
+    assert_eq!(rejected(&g).spent, 1);
+}
