@@ -1,5 +1,6 @@
 import { createRouter, memoryHistory } from "@solidjs/router";
 import { render } from "@solidjs/web";
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import type { AddressStats, Transaction, Utxo } from "../../lib/esplora";
@@ -29,13 +30,19 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-/** Answers each API path (after the network's `/api`) from `replies`; anything else is a 404. */
+/**
+ * Answers each API path (after the network's `/api`) from `replies`; anything else is a 404, but
+ * for the balance chart's first summary page, which is empty unless a test says otherwise.
+ */
 function serve(replies: Record<string, Reply>) {
   vi.stubGlobal("fetch", async (input: string) => {
     const url = input;
     calls.push(url);
     const path = url.replace(/^(\/\w+)?\/api/, "");
-    const reply = url === "/app/config" ? replies["/app/config"] : replies[path];
+    const reply =
+      url === "/app/config"
+        ? replies["/app/config"]
+        : (replies[path] ?? (path.endsWith("/txs/summary") ? [] : undefined));
     if (reply === undefined) return Response.json({ error: "not found" }, { status: 404 });
     if (typeof reply === "function") return (reply as Handler)(url);
     return Response.json(reply);
@@ -172,7 +179,7 @@ describe("address page", () => {
     expect(change).toStrictEqual(["+0.00050000 BTC", "−0.00040210 BTC", "−0.00000210 BTC"]);
     expect(text(rows[0] as Element)).toContain("Unconfirmed");
     expect(rows[1]?.querySelector("a")?.getAttribute("href")).toBe(`/tx/${txid(2)}`);
-    expect(text(el.querySelector(".section__meta") as Element)).toBe("3 of 4");
+    expect(text(el.querySelector(".address-history .section__meta") as Element)).toBe("3 of 4");
   });
 
   it("loads the next page after the last txid seen and appends it", async () => {
@@ -508,13 +515,16 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("Totals are not available for this address"));
     expect(text(el)).toContain("exchange and mining pool addresses");
     expect(text(el)).toContain("Unspent outputs are not available for this address");
+    expect(text(el)).toContain("There is no balance chart for this address");
     expect(el.querySelector('[role="alert"]')).toBeNull();
+    // Nor its balance history: the first summary page alone can take the node a minute.
+    expect(calls.some((c) => c.includes("/txs/summary"))).toBe(false);
     // The unspent outputs are not asked for: the node refuses them for the same reason.
     expect(calls.some((c) => c.endsWith("/utxo"))).toBe(false);
     const tab = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')][0];
     tab?.click();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
-    expect(text(el.querySelector(".section__meta") as Element)).toBe("1 shown");
+    expect(text(el.querySelector(".address-history .section__meta") as Element)).toBe("1 shown");
   });
 
   it("says the server does not index addresses, never that the address is empty", async () => {
@@ -577,7 +587,7 @@ describe("address page", () => {
       ["00000000…00000003:3", "0.00003000 BTC", "1"],
       ["00000000…00000001:1", "0.00001000 BTC", "11"],
     ]);
-    expect(text(el.querySelector(".section__meta") as Element)).toBe("3 outputs");
+    expect(text(el.querySelector(".address-history .section__meta") as Element)).toBe("3 outputs");
   });
 
   it("draws at most 100 unspent outputs at once", async () => {
@@ -647,6 +657,168 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     await until(() =>
       expect(text(el.querySelectorAll(".address-stat__value")[3] as Element)).toBe(`12${NNBSP}345`),
+    );
+  });
+});
+
+describe("balance chart", () => {
+  const T = 1_794_000_000;
+  const TIP = "e".repeat(64);
+  /** A summary row: transaction `n` in block `height`, ten minutes a block after T. */
+  const sum = (n: number, value: number, height: number) => ({
+    txid: txid(n),
+    value,
+    height,
+    time: T + (height - 100) * 600,
+    tx_position: 1,
+  });
+  const stamped = (body: unknown) => () =>
+    Response.json(body, {
+      headers: { "x-bitcoin-chain-tip": TIP, "x-bitcoin-chain-tip-height": "200" },
+    });
+  const slider = (el: Element) =>
+    el.querySelector<HTMLElement>("[role=slider][aria-label^='Confirmed balance']");
+  const key = (target: Element, k: string) => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+    flush();
+  };
+  const summaries = () => calls.filter((c) => c.includes("/txs/summary"));
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("steps through a receive, a spend and a receive, read by keyboard and pointer", async () => {
+    serve({
+      [`/address/${ME}`]: stats(part(80_000, 50_000, 3)),
+      [`/address/${ME}/txs`]: [],
+      [`/address/${ME}/txs/summary`]: stamped([
+        sum(3, 30_000, 102),
+        sum(2, -50_000, 101),
+        sum(1, 50_000, 100),
+      ]),
+    });
+    const el = open(`/address/${ME}`);
+    const chart = await vi.waitFor(() => slider(el) ?? Promise.reject(new Error("no chart")), {
+      timeout: 2000,
+    });
+    expect(text(el.querySelector(".address-balance .section__meta") as Element)).toBe(
+      "3 confirmed transactions",
+    );
+    expect(chart.getAttribute("aria-valuemax")).toBe("2");
+    // The latest step first: the time, the balance, the block and what it changed.
+    expect(chart.getAttribute("aria-valuetext")).toBe(
+      "2026-11-06 21:40:00 UTC: Balance 0.00030000 BTC, Block 102, Change +0.00030000 BTC",
+    );
+    key(chart, "ArrowLeft");
+    expect(chart.getAttribute("aria-valuetext")).toContain(
+      "Balance 0.00000000 BTC, Block 101, Change −0.00050000 BTC",
+    );
+    key(chart, "Home");
+    expect(chart.getAttribute("aria-valuetext")).toContain("21:20:00 UTC: Balance 0.00050000 BTC");
+    key(chart, "Escape");
+    expect(chart.getAttribute("aria-valuetext")).toContain("Block 102");
+    // The plot starts 66 px in, with the first step at its left edge: left of that is the first.
+    const svg = chart.querySelector("svg") as SVGSVGElement;
+    svg.dispatchEvent(
+      new PointerEvent("pointermove", {
+        clientX: 40,
+        clientY: 100,
+        bubbles: true,
+        pointerType: "mouse",
+      }),
+    );
+    flush();
+    expect(chart.getAttribute("aria-valuetext")).toContain("Block 100");
+    expect(text(el.querySelector(".chart__readout") as Element)).toContain("0.00050000 BTC");
+    // One summary page held the whole history: nothing else was asked.
+    expect(summaries()).toStrictEqual([`/api/address/${ME}/txs/summary`]);
+    expect(calls.filter((c) => c.includes("asof"))).toStrictEqual([]);
+  });
+
+  it("asks for its history only after the page's own transactions have answered", async () => {
+    let release: (r: Response) => void = () => {};
+    serve({
+      [`/address/${ME}`]: stats(),
+      [`/address/${ME}/txs`]: () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("Balance over time"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(summaries()).toStrictEqual([]);
+    release(Response.json([]));
+    await until(() => expect(summaries()).toHaveLength(1));
+  });
+
+  it("draws no chart, and asks for nothing, for an address with no history", async () => {
+    serve({ [`/address/${ME}`]: stats(part(0, 0, 0)), [`/address/${ME}/txs`]: [] });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("This address has never been used"));
+    expect(text(el)).not.toContain("Balance over time");
+    expect(summaries()).toStrictEqual([]);
+  });
+
+  it("says when it shows only the newest part of a long history, ending at the true balance", async () => {
+    const replies: Record<string, Reply> = {
+      [`/address/${ME}`]: stats(part(9_000_000, 0, 5598)),
+      [`/address/${ME}/txs`]: [],
+      [`/address/${ME}?asof=${TIP}`]: stamped(stats(part(9_000_000, 0, 5598))),
+    };
+    // 5 598 rows of 100 sats, newest first; only eight pages may be asked for.
+    const row = (i: number) => sum(10_000 - i, 100, 10_000 - i);
+    for (let p = 0; p < 8; p++) {
+      const page = Array.from({ length: 25 }, (_, i) => row(p * 25 + i));
+      const cursor = p === 0 ? "" : `/${txid(10_000 - p * 25 + 1)}?asof=${TIP}`;
+      replies[`/address/${ME}/txs/summary${cursor}`] = stamped(page);
+    }
+    serve(replies);
+    const el = open(`/address/${ME}`);
+    const chart = await vi.waitFor(() => slider(el) ?? Promise.reject(new Error("no chart")), {
+      timeout: 2000,
+    });
+    expect(summaries()).toHaveLength(8);
+    expect(text(el.querySelector(".address-balance .section__meta") as Element)).toBe(
+      `The last 200 of 5${NNBSP}598 confirmed transactions`,
+    );
+    expect(chart.getAttribute("aria-label")).toContain("the last 200 transactions");
+    expect(chart.getAttribute("aria-valuetext")).toContain("Balance 0.09000000 BTC");
+    key(chart, "Home");
+    // The oldest loaded block: its balance follows from the true one; its change may be partial.
+    expect(chart.getAttribute("aria-valuetext")).toContain(
+      `Balance 0.08980100 BTC, Block 9${NNBSP}801, Change no data`,
+    );
+  });
+
+  it("follows a new payment with one request, not the whole history again", async () => {
+    let rows = [sum(2, -10_000, 101), sum(1, 50_000, 100)];
+    serve({
+      [`/address/${ME}`]: stats(part(50_000, 10_000, 2)),
+      [`/address/${ME}/txs`]: [],
+      [`/address/${ME}/txs/summary`]: () => stamped(rows)(),
+    });
+    const el = open(`/address/${ME}`);
+    const chart = await vi.waitFor(() => slider(el) ?? Promise.reject(new Error("no chart")), {
+      timeout: 2000,
+    });
+    expect(chart.getAttribute("aria-valuemax")).toBe("1");
+    status("s1");
+    await until(() => expect(summaries()).toHaveLength(2));
+    rows = [sum(3, 25_000, 102), ...rows];
+    status("s2");
+    await until(() => expect(chart.getAttribute("aria-valuemax")).toBe("2"));
+    expect(chart.getAttribute("aria-valuetext")).toContain(
+      "Balance 0.00065000 BTC, Block 102, Change +0.00025000 BTC",
+    );
+    expect(text(el.querySelector(".address-balance .section__meta") as Element)).toBe(
+      "3 confirmed transactions",
     );
   });
 });

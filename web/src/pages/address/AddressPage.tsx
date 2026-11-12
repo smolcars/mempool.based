@@ -11,6 +11,7 @@ import { useNetwork, usePageTitle } from "../../lib/page";
 import { type Recognised, recognise, TYPE_NAMES } from "../../lib/address";
 import { type AddressMessage, addressTopic } from "../../lib/track-topics";
 import { refusal } from "./address";
+import { BalanceChart } from "./BalanceChart";
 import { History } from "./History";
 import { Notice, settled } from "./parts";
 import { Totals } from "./Totals";
@@ -90,6 +91,9 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   let refreshHistory = () => {
     // Replaced by History once it mounts.
   };
+  let refreshBalance = () => {
+    // Replaced by the balance chart once it mounts.
+  };
 
   // A refusal that holds for the whole address, from whichever request answered first.
   const pageRefusal = () => {
@@ -113,6 +117,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
     if (asked(stats.state)) refetchStats();
     if (asked(first.state)) refetchFirst();
     refreshHistory();
+    refreshBalance();
   };
   // The node's status can change a moment before its address index answers with the change
   // (seen on regtest), so a refetch that brings nothing new is tried again, a few times.
@@ -170,7 +175,14 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       <Match when={true}>
         <LiveLine watch={watch()} socket={socket()} />
         <Totals stats={stats} retry={retryAll} />
-        {/* The balance-over-time chart goes here: give it a fixed height so nothing below moves. */}
+        <BalanceChart
+          address={props.address}
+          stats={stats}
+          after={first.state !== "unresolved" && first.state !== "pending"}
+          onRefresh={(fn) => {
+            refreshBalance = fn;
+          }}
+        />
         <History
           address={props.address}
           stats={stats}

@@ -74,6 +74,19 @@
     }
   }
 
+  /* Balance over time: the chart's whole height is held while its code and data load. */
+  .address-balance {
+    margin-top: var(--space-7);
+  }
+  .address-balance__slot {
+    min-height: calc(var(--h) + 5.75rem);
+  }
+  .address-balance-none {
+    max-width: 48rem;
+    margin-top: var(--space-4);
+    color: var(--color-text-muted);
+  }
+
   /* History: two views under one section rule; the chosen one is underlined in the accent. */
   .address-history {
     margin-top: var(--space-7);
