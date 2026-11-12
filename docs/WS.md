@@ -65,7 +65,7 @@ Fed by the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOO
 | `mempool` | The home page's mempool panel | JSON, the whole state each time | about 200 bytes |
 | `projected` | The block strip's projected tiles | JSON, the whole state each time | about 1.4 KB |
 | `transactions` | The home page's latest transactions | JSON, the whole list each time | about 1.4 KB |
-| `fees` | The home page's "Fee to pay now" panel | JSON, the whole state each time, only when it changed | about 330 bytes |
+| `fees` | The home page's "Fee to pay now" panel | JSON, the whole state each time, only when it changed | about 390 bytes, one or two a minute |
 | `projected-txs:0` to `projected-txs:6` | One projected block's grid | Binary: a snapshot, then deltas | snapshot 48 bytes a transaction; see [Cost](#cost-of-the-mempool-topics) |
 
 With `{NET}_MEMPOOL_ENABLED=false` every one of them but `fees` answers subscribe with `{"topic":"…","type":"off"}` and nothing else; `fees` then carries the node's own estimates.

@@ -279,6 +279,55 @@ fn time_without_a_projection_is_not_counted_as_quiet_minutes() {
     assert!(r.update(1_500, &current, 100).is_some());
 }
 
+/// A mainnet moment recorded by `examples/fee_watch.rs`: every effective rate in the projected
+/// blocks with its vsize, 30 minutes of arrivals, the node's minimum, the projected blocks'
+/// lowest rates, and the answer the method gave.
+#[test]
+fn a_recorded_mainnet_mempool_gives_the_recorded_answer() {
+    let f: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../fixtures/fees/mainnet.json")).unwrap();
+    let pairs = |v: &serde_json::Value| -> Vec<(u32, u64)> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_u64().unwrap() as u32, p[1].as_u64().unwrap()))
+            .collect()
+    };
+    let d = Depth::new(pairs(&f["depth"]));
+    let minutes: Vec<Vec<(u32, u32)>> = f["inflow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| pairs(m).into_iter().map(|(r, v)| (r, v as u32)).collect())
+        .collect();
+    assert_eq!(minutes.len(), INFLOW_MINUTES);
+    let i = inflow(&minutes);
+    let floor = f["floor"].as_u64().unwrap() as u32;
+    let r = recommend(&d, &i, floor);
+    let expected: Vec<u32> = f["expected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u32)
+        .collect();
+    assert_eq!([&r.levels[..], &[r.minimum]].concat(), expected);
+    // Each level outbids the bottom of the projected block after its horizon: what pays the
+    // bottom of block N or less does not all fit in N blocks.
+    let bottoms: Vec<u32> = f["projected_min_rates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u32)
+        .collect();
+    assert!(r.levels[0] > bottoms[1], "{:?} {bottoms:?}", r.levels);
+    assert!(r.levels[1] > bottoms[3].min(bottoms[2]), "{:?} {bottoms:?}", r.levels);
+    // Without arrivals, the next block is the one-step-above-the-boundary answer.
+    let still = recommend(&d, &Inflow::default(), floor);
+    assert!(still.levels[0] <= r.levels[0]);
+    assert!(d.at_or_above(still.levels[0]) < BLOCK_VSIZE);
+    assert!(d.at_or_above(still.levels[0] - 1) >= BLOCK_VSIZE || still.levels[0] == floor.max(RELAY_FLOOR));
+}
+
 // Properties over random mempools from a deterministic generator.
 
 struct Rng(u64);

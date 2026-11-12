@@ -210,6 +210,9 @@ Shapes observed on the reference backend; values side by side in [`MEMPOOL.md`](
 | `blockVSize` | Summed sigop-adjusted vsize, an integer | The reference's has quarters (weight over four) |
 | `medianFee`, `feeRange` | The effective (chunk) rate at the middle vbyte; seven rates by vsize: lowest, 10th, 25th, 50th, 75th, 90th percentile, highest | The reference's last block carried eleven `feeRange` values; ours always seven |
 | An empty projected block | Left out | |
+| Whole numbers | Rounded up | The reference rounded to the nearest (1.557 to `1`, 3.505 to `4`), so its whole number can be below its own precise rate |
+
+Side by side on mainnet (2026-11-12, tip 975,533, three moments a minute apart, the server's engine warmed up): `mempool-blocks` agreed with the reference's block for block: the next block had the same transaction count (2,049, 2,187, 2,209 against 2,049, 2,187, 2,210), the same `blockSize` to the byte and the same `totalFees` within a few satoshis; our `blockVSize` is up to 0.1% higher (sigop-adjusted), and the deeper blocks differ by tens of transactions where they cut through the 0.12 sat/vB ties. `precise` read 2.022 / 1.001 / 0.125 / 0.1 / 0.1 against the reference's 2.919 / 1.557 / 0.716 / 0.2 / 0.1, and `recommended` 3 / 2 / 1 / 1 / 1 against 3 / 1 / 1 / 1 / 1. How each fared against the blocks that followed is in [`MEMPOOL.md`](MEMPOOL.md#against-the-blocks-that-followed).
 
 ### Mining
 
