@@ -1,0 +1,560 @@
+//! The polling shell: one loop that lists, diffs, fetches and publishes. All decisions about
+//! what changed and why live in [`super::model`]; this file only moves data.
+
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::sync::{Arc, PoisonError, RwLock};
+use std::time::Duration;
+
+use bitcoin::{BlockHash, Transaction, Txid};
+use node::esplora::{ChainTip, Esplora};
+use node::rpc::model::{MempoolEntry, MempoolInfo, RawMempool};
+use node::rpc::{self, Rpc};
+use tokio::sync::{Notify, broadcast};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::Instant;
+
+use super::model::{BlockSpends, Delta, Mempool, Removal, TxInfo};
+
+/// A node call that failed, in terms the loop acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceError {
+    /// The node's work queue is full.
+    Busy,
+    /// The answer was over the client's size cap; a smaller request may fit.
+    TooBig,
+    Failed(String),
+}
+
+/// Everything the tracker reads from the node. [`NodeSource`] is the real one; tests mock it.
+pub trait Source: Send + Sync + 'static {
+    fn mempool_info(&self) -> impl Future<Output = Result<MempoolInfo, SourceError>> + Send;
+    /// Every mempool txid with the node's `mempool_sequence`.
+    fn listing(&self) -> impl Future<Output = Result<RawMempool, SourceError>> + Send;
+    /// Entry and bytes for each txid, in order; `None` where it is no longer in the mempool.
+    fn details(
+        &self,
+        txids: &[Txid],
+    ) -> impl Future<Output = Result<Vec<Option<(MempoolEntry, Transaction)>>, SourceError>> + Send;
+    fn tip(&self) -> impl Future<Output = Result<ChainTip, SourceError>> + Send;
+    fn block(
+        &self,
+        hash: BlockHash,
+    ) -> impl Future<Output = Result<bitcoin::Block, SourceError>> + Send;
+    /// Response bytes read so far, for cost accounting.
+    fn bytes(&self) -> u64;
+    /// Node calls one [`Source::details`] makes.
+    const DETAIL_CALLS: u32 = 1;
+}
+
+/// The node over JSON-RPC (listing, entries, raw transactions) and Esplora (tip, blocks).
+/// Give the tracker its own clients so [`CycleStats::bytes`] counts only its traffic.
+#[derive(Clone)]
+pub struct NodeSource {
+    pub rpc: Rpc,
+    pub esplora: Esplora,
+}
+
+fn rpc_err(e: rpc::Error) -> SourceError {
+    match e {
+        rpc::Error::Busy => SourceError::Busy,
+        rpc::Error::ResponseTooBig => SourceError::TooBig,
+        e => SourceError::Failed(e.to_string()),
+    }
+}
+
+fn esplora_err(e: node::esplora::Error) -> SourceError {
+    match e {
+        node::esplora::Error::ResponseTooBig => SourceError::TooBig,
+        e => SourceError::Failed(e.to_string()),
+    }
+}
+
+impl Source for NodeSource {
+    const DETAIL_CALLS: u32 = 2;
+
+    async fn mempool_info(&self) -> Result<MempoolInfo, SourceError> {
+        self.rpc.mempool_info().await.map_err(rpc_err)
+    }
+
+    async fn listing(&self) -> Result<RawMempool, SourceError> {
+        self.rpc.raw_mempool().await.map_err(rpc_err)
+    }
+
+    async fn details(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Option<(MempoolEntry, Transaction)>>, SourceError> {
+        let (entries, txs) = tokio::join!(
+            self.rpc.mempool_entries(txids),
+            self.rpc.raw_transactions(txids)
+        );
+        let (entries, txs) = (entries.map_err(rpc_err)?, txs.map_err(rpc_err)?);
+        // A per-txid error (usually -5, gone since the listing) leaves that slot empty, so one
+        // odd transaction can never stall the loop; it is listed and fetched again next cycle.
+        Ok(txids
+            .iter()
+            .zip(entries.into_iter().zip(txs))
+            .map(|(txid, pair)| match pair {
+                (Ok(e), Ok(tx)) if tx.compute_txid() == *txid => Some((e, tx)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    async fn tip(&self) -> Result<ChainTip, SourceError> {
+        let s = self.esplora.tip_hash().await.map_err(esplora_err)?;
+        s.tip
+            .filter(|t| t.hash == s.value)
+            .ok_or_else(|| SourceError::Failed("tip answer without a matching stamp".into()))
+    }
+
+    async fn block(&self, hash: BlockHash) -> Result<bitcoin::Block, SourceError> {
+        Ok(self
+            .esplora
+            .block_raw(hash)
+            .await
+            .map_err(esplora_err)?
+            .value)
+    }
+
+    fn bytes(&self) -> u64 {
+        self.rpc.bytes_received() + self.esplora.bytes_received()
+    }
+}
+
+/// Timing and batching. The defaults are argued in `docs/MEMPOOL.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Config {
+    /// Least time between cycle starts. A cycle slower than this waits as long as it took.
+    pub gap: Duration,
+    /// A full listing at least this often, even when `getmempoolinfo` looks unchanged.
+    pub heartbeat: Duration,
+    /// Longest wait after failures; the wait doubles from `gap` up to this.
+    pub max_backoff: Duration,
+    /// Txids per detail batch, at most [`rpc::MAX_BATCH`].
+    pub batch: usize,
+    /// Detail batches in flight at once.
+    pub in_flight: usize,
+    /// Recent active-chain blocks kept for classifying removals.
+    pub blocks: usize,
+    /// Deltas a subscriber may fall behind before it must resubscribe.
+    pub subscriber_queue: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            gap: Duration::from_secs(1),
+            heartbeat: Duration::from_secs(10),
+            max_backoff: Duration::from_secs(30),
+            batch: 500,
+            in_flight: 2,
+            blocks: 6,
+            subscriber_queue: 64,
+        }
+    }
+}
+
+/// What one cycle did and cost.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CycleStats {
+    /// The delta it published, if anything changed.
+    pub seq: Option<u64>,
+    pub duration: Duration,
+    /// Response bytes read from the node.
+    pub bytes: u64,
+    /// Node calls, the probe included.
+    pub calls: u32,
+    /// Probes since the previous cycle that found nothing changed.
+    pub skipped: u32,
+    pub listed: usize,
+    pub added: usize,
+    /// Listed, then gone before its details were read.
+    pub vanished: usize,
+    pub confirmed: usize,
+    pub replaced: usize,
+    pub evicted: usize,
+    /// Blocks fetched to classify removals.
+    pub blocks: u32,
+    /// Transactions tracked after the cycle.
+    pub size: usize,
+    pub mempool_sequence: u64,
+    pub tip: Option<ChainTip>,
+}
+
+/// Something worth recording. Read with [`Tracker::events`]; the tracker itself logs nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// A cycle completed.
+    Cycle(CycleStats),
+    /// The first complete cycle: the initial sync. `duration` runs from start, failures included.
+    Synced {
+        duration: Duration,
+        txs: usize,
+        bytes: u64,
+        calls: u32,
+    },
+    /// A cycle failed and nothing was applied. Details already fetched are kept for the retry.
+    PollFailed {
+        error: SourceError,
+        consecutive: u32,
+        retry_in: Duration,
+    },
+    /// The node's `mempool_sequence` went backwards: it restarted. The diff is unaffected.
+    SequenceRegressed { from: u64, to: u64 },
+    /// A subscriber fell more than [`Config::subscriber_queue`] deltas behind and must resubscribe.
+    SubscriberLagged { missed: u64 },
+}
+
+struct Shared {
+    state: RwLock<Mempool>,
+    deltas: broadcast::Sender<Arc<Delta>>,
+    events: broadcast::Sender<Event>,
+    wake: Notify,
+}
+
+/// A handle on a running tracker. Cheap to clone.
+#[derive(Clone)]
+pub struct Tracker {
+    shared: Arc<Shared>,
+}
+
+/// Deltas after a snapshot, in order, without gaps.
+pub struct Subscription {
+    rx: broadcast::Receiver<Arc<Delta>>,
+    events: broadcast::Sender<Event>,
+}
+
+impl Subscription {
+    /// The next delta. `Err(Lagged)` means deltas were dropped: take a new snapshot with
+    /// [`Tracker::subscribe`]. `Err(Closed)` means the tracker is gone.
+    pub async fn recv(&mut self) -> Result<Arc<Delta>, broadcast::error::RecvError> {
+        let r = self.rx.recv().await;
+        if let Err(broadcast::error::RecvError::Lagged(missed)) = r {
+            let _ = self.events.send(Event::SubscriberLagged { missed });
+        }
+        r
+    }
+}
+
+impl Tracker {
+    /// Starts the polling loop on the current runtime. Abort the handle to stop it.
+    pub fn start<S: Source>(source: S, config: Config) -> (Self, JoinHandle<()>) {
+        let shared = Arc::new(Shared {
+            state: RwLock::new(Mempool::default()),
+            deltas: broadcast::channel(config.subscriber_queue.max(1)).0,
+            events: broadcast::channel(256).0,
+            wake: Notify::new(),
+        });
+        let poller = Poller {
+            source: Arc::new(source),
+            shared: shared.clone(),
+            config,
+            pending: HashMap::new(),
+            blocks: Vec::new(),
+            probe: None,
+            last_sequence: None,
+            synced: false,
+            started: Instant::now(),
+            totals: (0, 0),
+        };
+        (Self { shared }, tokio::spawn(poller.run()))
+    }
+
+    /// Runs `f` on the current state and subscribes in the same instant: the first delta
+    /// received is the one right after what `f` saw (its `seq` is `state.seq() + 1`).
+    pub fn subscribe<R>(&self, f: impl FnOnce(&Mempool) -> R) -> (R, Subscription) {
+        let state = self
+            .shared
+            .state
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        let r = f(&state);
+        let rx = self.shared.deltas.subscribe();
+        drop(state);
+        let events = self.shared.events.clone();
+        (r, Subscription { rx, events })
+    }
+
+    /// Runs `f` on the current state.
+    pub fn read<R>(&self, f: impl FnOnce(&Mempool) -> R) -> R {
+        f(&self
+            .shared
+            .state
+            .read()
+            .unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Statistics and abnormal conditions, for logging. Lossy if not read.
+    pub fn events(&self) -> broadcast::Receiver<Event> {
+        self.shared.events.subscribe()
+    }
+
+    /// A hint that the chain tip moved (from Electrum, say): poll now instead of at the next
+    /// gap. Without hints the tracker still sees the new tip on its next cycle.
+    pub fn tip_changed(&self) {
+        self.shared.wake.notify_one();
+    }
+}
+
+struct Poller<S> {
+    source: Arc<S>,
+    shared: Arc<Shared>,
+    config: Config,
+    /// Details fetched for listed txids but not yet published, kept across a failed cycle.
+    pending: HashMap<Txid, TxInfo>,
+    /// Recent active-chain blocks, tip first.
+    blocks: Vec<BlockSpends>,
+    /// `getmempoolinfo` before the last complete cycle.
+    probe: Option<MempoolInfo>,
+    last_sequence: Option<u64>,
+    synced: bool,
+    started: Instant,
+    /// Bytes and calls until the first complete cycle.
+    totals: (u64, u32),
+}
+
+/// The part of `getmempoolinfo` that moves when the transaction set does.
+fn same_pool(a: &MempoolInfo, b: &MempoolInfo) -> bool {
+    (a.size, a.bytes, a.total_fee) == (b.size, b.bytes, b.total_fee)
+}
+
+impl<S: Source> Poller<S> {
+    async fn run(mut self) {
+        let mut next = Instant::now();
+        let mut last_full: Option<Instant> = None;
+        let (mut failures, mut skipped) = (0u32, 0u32);
+        loop {
+            let forced = tokio::select! {
+                () = tokio::time::sleep_until(next) => false,
+                () = self.shared.wake.notified() => true,
+            };
+            let started = Instant::now();
+            let bytes = self.source.bytes();
+            let result = match self.source.mempool_info().await {
+                Ok(info)
+                    if !forced
+                        && last_full.is_some_and(|t| t.elapsed() < self.config.heartbeat)
+                        && self.probe.as_ref().is_some_and(|p| same_pool(p, &info)) =>
+                {
+                    skipped += 1;
+                    next = started + self.config.gap;
+                    continue;
+                }
+                Ok(info) => self.cycle(info).await,
+                Err(e) => Err(e),
+            };
+            let bytes = self.source.bytes().saturating_sub(bytes);
+            match result {
+                Ok(mut stats) => {
+                    failures = 0;
+                    last_full = Some(started);
+                    stats.duration = started.elapsed();
+                    stats.bytes = bytes;
+                    stats.calls += 1;
+                    stats.skipped = std::mem::take(&mut skipped);
+                    next = started + self.config.gap.max(stats.duration);
+                    self.totals.0 += bytes;
+                    self.totals.1 += stats.calls;
+                    if !self.synced {
+                        self.synced = true;
+                        self.emit(Event::Synced {
+                            duration: self.started.elapsed(),
+                            txs: stats.size,
+                            bytes: self.totals.0,
+                            calls: self.totals.1,
+                        });
+                    }
+                    self.emit(Event::Cycle(stats));
+                }
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    self.totals.0 += bytes;
+                    let doubled = self.config.gap.saturating_mul(1u32 << failures.min(16));
+                    let retry_in = doubled.min(self.config.max_backoff);
+                    next = Instant::now() + retry_in;
+                    self.emit(Event::PollFailed {
+                        error,
+                        consecutive: failures,
+                        retry_in,
+                    });
+                }
+            }
+        }
+    }
+
+    fn emit(&self, e: Event) {
+        let _ = self.shared.events.send(e);
+    }
+
+    /// One listing, diffed and published. On error nothing is published.
+    async fn cycle(&mut self, info: MempoolInfo) -> Result<CycleStats, SourceError> {
+        let mut stats = CycleStats::default();
+        let listing = self.source.listing().await?;
+        let tip = self.source.tip().await?;
+        stats.calls += 2;
+        if let Some(from) = self.last_sequence.filter(|s| *s > listing.mempool_sequence) {
+            self.emit(Event::SequenceRegressed {
+                from,
+                to: listing.mempool_sequence,
+            });
+        }
+        stats.blocks = self.recent_blocks(tip).await?;
+        stats.calls += stats.blocks;
+
+        let (diff, keys) = self.read(|m| (m.diff(&listing.txids), m.keys().clone()));
+        self.pending
+            .retain(|t, _| diff.added.binary_search(t).is_ok());
+        let need: Vec<Txid> = diff
+            .added
+            .iter()
+            .filter(|t| !self.pending.contains_key(*t))
+            .copied()
+            .collect();
+        let (calls, vanished) = self.fetch(&keys, need).await?;
+        stats.calls += calls;
+        stats.vanished = vanished;
+
+        let added: Vec<(Txid, TxInfo)> = diff
+            .added
+            .iter()
+            .filter_map(|t| Some((*t, self.pending.remove(t)?)))
+            .collect();
+        let removed = self.read(|m| m.classify(&diff.removed, &added, &self.blocks));
+        for (_, r) in &removed {
+            match r {
+                Removal::Confirmed { .. } => stats.confirmed += 1,
+                Removal::Replaced { .. } => stats.replaced += 1,
+                Removal::Evicted => stats.evicted += 1,
+            }
+        }
+        stats.listed = listing.txids.len();
+        stats.added = added.len();
+        stats.mempool_sequence = listing.mempool_sequence;
+        stats.tip = Some(tip);
+
+        let mut state = self
+            .shared
+            .state
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !added.is_empty() || !removed.is_empty() || state.tip() != Some(tip) {
+            let delta = Delta {
+                seq: state.seq() + 1,
+                mempool_sequence: listing.mempool_sequence,
+                tip,
+                added,
+                removed,
+            };
+            state.apply(&delta);
+            stats.seq = Some(delta.seq);
+            // Sent under the write lock, so a subscriber's snapshot and its first delta meet.
+            let _ = self.shared.deltas.send(Arc::new(delta));
+        }
+        stats.size = state.len();
+        drop(state);
+        self.last_sequence = Some(listing.mempool_sequence);
+        self.probe = Some(info);
+        Ok(stats)
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&Mempool) -> R) -> R {
+        f(&self
+            .shared
+            .state
+            .read()
+            .unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Makes `self.blocks` the last [`Config::blocks`] blocks ending at `tip`, fetching the
+    /// ones not already held. A reorg simply walks a different chain. Returns blocks fetched.
+    async fn recent_blocks(&mut self, tip: ChainTip) -> Result<u32, SourceError> {
+        let keys = self.read(|m| m.keys().clone());
+        let mut held = std::mem::take(&mut self.blocks);
+        let mut chain = Vec::with_capacity(self.config.blocks);
+        let (mut hash, mut height, mut fetched) = (tip.hash, tip.height, 0);
+        while chain.len() < self.config.blocks {
+            let block = match held.iter().position(|b| b.hash == hash) {
+                Some(i) => held.swap_remove(i),
+                None => {
+                    fetched += 1;
+                    let b = match self.source.block(hash).await {
+                        Ok(raw) => keys.block(height, &raw),
+                        Err(e) => {
+                            held.extend(chain);
+                            self.blocks = held;
+                            return Err(e);
+                        }
+                    };
+                    if b.hash != hash {
+                        held.extend(chain);
+                        self.blocks = held;
+                        return Err(SourceError::Failed("block answer has another hash".into()));
+                    }
+                    b
+                }
+            };
+            hash = block.prev;
+            chain.push(block);
+            let Some(h) = height.checked_sub(1) else {
+                break;
+            };
+            height = h;
+        }
+        self.blocks = chain;
+        Ok(fetched)
+    }
+
+    /// Fetches details into `self.pending`, [`Config::in_flight`] batches at a time. Returns
+    /// calls made and txids that vanished. Stops at the first failure, keeping what arrived.
+    async fn fetch(
+        &mut self,
+        keys: &super::model::Keys,
+        need: Vec<Txid>,
+    ) -> Result<(u32, usize), SourceError> {
+        let batch = self.config.batch.clamp(1, rpc::MAX_BATCH);
+        let mut queue: VecDeque<Vec<Txid>> = need.chunks(batch).map(<[Txid]>::to_vec).collect();
+        let mut set = JoinSet::new();
+        let (mut calls, mut vanished, mut failed) = (0, 0, None);
+        loop {
+            while failed.is_none() && set.len() < self.config.in_flight.max(1) {
+                let Some(chunk) = queue.pop_front() else {
+                    break;
+                };
+                let source = self.source.clone();
+                calls += S::DETAIL_CALLS;
+                set.spawn(async move {
+                    let r = source.details(&chunk).await;
+                    (chunk, r)
+                });
+            }
+            let Some(joined) = set.join_next().await else {
+                break;
+            };
+            match joined {
+                Ok((chunk, Ok(rows))) => {
+                    for (txid, row) in chunk.iter().zip(rows) {
+                        match row {
+                            Some((entry, tx)) => {
+                                self.pending.insert(*txid, keys.record(&entry, &tx));
+                            }
+                            None => vanished += 1,
+                        }
+                    }
+                }
+                // Over the size cap: halve the batch and try again. A single transaction that
+                // still does not fit is skipped like a vanished one, so it cannot stall the loop.
+                Ok((chunk, Err(SourceError::TooBig))) if chunk.len() > 1 => {
+                    let (a, b) = chunk.split_at(chunk.len() / 2);
+                    queue.push_front(b.to_vec());
+                    queue.push_front(a.to_vec());
+                }
+                Ok((_, Err(SourceError::TooBig))) => vanished += 1,
+                Ok((_, Err(e))) => failed = failed.or(Some(e)),
+                Err(e) => failed = failed.or(Some(SourceError::Failed(e.to_string()))),
+            }
+        }
+        failed.map_or(Ok((calls, vanished)), Err)
+    }
+}

@@ -467,3 +467,84 @@ async fn too_many_outpoints_are_refused_before_sending() {
         .await
         .unwrap();
 }
+
+/// Answers a JSON-RPC array from the fixtures, in reverse order, with `-5` for unknown txids.
+fn batch_mainnet(req: &Req) -> Reply {
+    let known = "000007b8d962b31541e6929d58b4be23835f5fe229437074287bfc4107ea1efd";
+    let result = |name: &str| -> Value {
+        serde_json::from_slice::<Value>(&fixture(&format!("mainnet/{name}.json"))).unwrap()["result"]
+            .clone()
+    };
+    let mut answers: Vec<Value> = req
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| {
+            let id = call["id"].clone();
+            if call["params"][0] != known {
+                let error =
+                    serde_json::json!({"code": -5, "message": "Transaction not in mempool"});
+                return serde_json::json!({"result": null, "error": error, "id": id});
+            }
+            let r = result(call["method"].as_str().unwrap());
+            serde_json::json!({"result": r, "error": null, "id": id})
+        })
+        .collect();
+    answers.reverse();
+    Reply::new(200, serde_json::to_vec(&answers).unwrap())
+}
+
+#[tokio::test]
+async fn batches_answer_each_txid_in_order() {
+    let (port, log) = mock(batch_mainnet).await;
+    let rpc = client(port);
+    let known = txid("000007b8d962b31541e6929d58b4be23835f5fe229437074287bfc4107ea1efd");
+    let gone = Txid::from_raw_hash(bitcoin::hashes::Hash::all_zeros());
+
+    let entries = rpc.mempool_entries(&[gone, known]).await.unwrap();
+    assert!(matches!(entries[0], Err(Error::Rpc { code: -5, .. })));
+    assert_eq!(entries[1].as_ref().unwrap().weight, 502);
+    let txs = rpc.raw_transactions(&[known, gone]).await.unwrap();
+    assert_eq!(txs[0].as_ref().unwrap().compute_txid(), known);
+    assert!(matches!(txs[1], Err(Error::Rpc { code: -5, .. })));
+    let sent = log.reqs.lock().unwrap()[1].body.clone();
+    assert_eq!(sent[0]["method"], "getrawtransaction");
+    assert_eq!(
+        sent[0]["params"],
+        serde_json::json!([known.to_string(), false])
+    );
+    assert!(rpc.bytes_received() > 1000);
+
+    assert!(rpc.mempool_entries(&[]).await.unwrap().is_empty());
+    assert_eq!(
+        rpc.mempool_entries(&vec![known; node::rpc::MAX_BATCH + 1])
+            .await
+            .unwrap_err(),
+        Error::RequestTooBig
+    );
+    assert_eq!(log.reqs.lock().unwrap().len(), 2);
+
+    // A whole-batch failure fails the call; a short or mismatched answer is a decode error.
+    let (port, _) = mock(|_| Reply::new(503, "Work queue depth exceeded")).await;
+    assert_eq!(
+        client(port).mempool_entries(&[known]).await.unwrap_err(),
+        Error::Busy
+    );
+    let (port, _) = mock(|_| Reply::new(200, "[]")).await;
+    assert!(matches!(
+        client(port).mempool_entries(&[known]).await,
+        Err(Error::Decode(_))
+    ));
+    let (port, _) = mock(|_| {
+        Reply::new(
+            500,
+            r#"{"result":null,"error":{"code":-32700,"message":"Parse error"},"id":null}"#,
+        )
+    })
+    .await;
+    assert!(matches!(
+        client(port).raw_transactions(&[known]).await,
+        Err(Error::Rpc { code: -32700, .. })
+    ));
+}

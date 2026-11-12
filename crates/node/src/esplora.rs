@@ -161,6 +161,11 @@ impl Esplora {
         })
     }
 
+    /// Response body bytes this client and its clones have read, for cost accounting.
+    pub fn bytes_received(&self) -> u64 {
+        self.transport.bytes_received()
+    }
+
     /// Whether the `/internal/*` bulk routes can be called: only over a unix socket.
     pub fn has_internal(&self) -> bool {
         self.transport.is_unix()

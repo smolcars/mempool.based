@@ -5,6 +5,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -87,6 +88,8 @@ pub(crate) struct Transport {
     max_body: usize,
     /// Sent on every request. Marked sensitive so `Debug` never prints it.
     authorization: Option<HeaderValue>,
+    /// Response body bytes read so far, shared by clones.
+    received: Arc<AtomicU64>,
 }
 
 impl Transport {
@@ -119,6 +122,7 @@ impl Transport {
             timeout,
             max_body,
             authorization: None,
+            received: Arc::default(),
         }
     }
 
@@ -127,6 +131,11 @@ impl Transport {
         value.set_sensitive(true);
         self.authorization = Some(value);
         self
+    }
+
+    /// Response body bytes this transport and its clones have read.
+    pub fn bytes_received(&self) -> u64 {
+        self.received.load(Ordering::Relaxed)
     }
 
     pub fn is_unix(&self) -> bool {
@@ -197,10 +206,13 @@ impl Transport {
                     Error::Unavailable(error_chain(e.as_ref()))
                 }
             })?;
+        let body = body.to_bytes();
+        self.received
+            .fetch_add(body.len() as u64, Ordering::Relaxed);
         Ok(Response {
             status: parts.status,
             headers: parts.headers,
-            body: body.to_bytes(),
+            body,
         })
     }
 }
