@@ -97,4 +97,7 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A mempool event stream (added, removed with reason, sequence number) | Removes the polling lag of up to one interval and the 260 ms diff |
 | `/internal/*` over an authenticated TCP listener | Bulk fetches when the server is not on the node's host |
 | Sub-sat precision in `getblockstats` percentiles | We could stop recomputing them |
+| A compact per-block transaction listing (txid, fee, vsize and value for each transaction) | Today each block's picture and fee rates cost a `getblock` at verbosity 2: about 10 MB and 550 to 860 ms. The same facts fit in about 0.2 MB, which would also shrink a year of fee-rate backfill from about 550 GB to about 11 GB (estimated, not measured) |
+| A new tip announced only once the block can be served | Removes the 320 to 470 ms a request for a just-announced block can be held |
+| Outpoint pushes for mempool spends | A transaction page could show an output being spent as it happens, without polling |
 | A paged or capped address-totals route | Addresses above `--max-sh-creates` get no totals or unspent list today, only paged history |
