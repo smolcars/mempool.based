@@ -55,7 +55,7 @@ A network is enabled by setting its variables (`.env.example`). Mainnet is serve
 | `/app/ws` | WebSocket for live updates | See below |
 | `/api/v1/ws` | mempool.space-shaped WebSocket | For wallets and bots; the same hub ([`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws)) |
 | `/healthz` | Liveness | No upstream calls |
-| everything else | The frontend | Static files from a configured directory, with the app shell as fallback |
+| everything else | The frontend | Static files from a configured directory, with the app shell as fallback; the shell's head names the page for link previews ([`FRONTEND.md`](FRONTEND.md#link-previews)) |
 
 Confirmed data that can no longer change (a block or transaction buried deep enough) is served with long-lived cache headers so a reverse proxy or CDN can absorb it.
 

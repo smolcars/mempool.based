@@ -132,7 +132,9 @@ The browser tests run at these defaults too, each test as a client of its own be
 
 ### Static files
 
-Pages and the files under `/assets` are answered from memory or disk with no node work behind them. They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+Pages and the files under `/assets` are answered from memory or disk with no node work behind them; a block page's head reads at most one row of the block table, two at once server-wide ([`FRONTEND.md`](FRONTEND.md#link-previews)). They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+
+There is no setting for the site's public address. Link previews ([`FRONTEND.md`](FRONTEND.md#link-previews)) leave out `og:url` and the canonical link rather than build them from the request's `Host`, which a client chooses. A preview image will need an absolute URL; that change adds the setting.
 
 ### Preflights
 
