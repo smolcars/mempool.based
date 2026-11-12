@@ -246,6 +246,9 @@ pub struct WsLimits {
     pub position_interval: Duration,
     /// Replacements remembered per network, oldest out first.
     pub replacements_kept: usize,
+    /// How long a new block announced by its header is waited for before clients are told to
+    /// resync instead.
+    pub block_wait: Duration,
 }
 
 impl Default for WsLimits {
@@ -269,6 +272,7 @@ impl Default for WsLimits {
             tracked_addresses_total: 1_000,
             position_interval: Duration::from_secs(10),
             replacements_kept: 10_000,
+            block_wait: Duration::from_secs(60),
         }
     }
 }
@@ -437,6 +441,11 @@ impl Config {
                 u64::try_from(w.position_interval.as_millis()).unwrap_or(u64::MAX),
             )?),
             replacements_kept: positive(&var, "REPLACEMENTS_KEPT", w.replacements_kept)?,
+            block_wait: Duration::from_secs(positive(
+                &var,
+                "WS_BLOCK_WAIT_SECS",
+                w.block_wait.as_secs(),
+            )?),
         };
         // Each address is one of the Electrum client's 10,000 subscriptions.
         if ws.tracked_txs_total > 1 << 20
@@ -447,6 +456,9 @@ impl Config {
             return Err("WS_TRACKED_TXS_TOTAL and REPLACEMENTS_KEPT must be at most 1048576, \
                  WS_TRACKED_ADDRESSES_TOTAL at most 10000 and WS_POSITION_INTERVAL_MS 1000 to 600000"
                 .into());
+        }
+        if !(1..=600).contains(&ws.block_wait.as_secs()) {
+            return Err("WS_BLOCK_WAIT_SECS must be 1 to 600".into());
         }
         if !(100..=60_000).contains(&ws.mempool_interval.as_millis()) || ws.latest_txs > 100 {
             return Err(

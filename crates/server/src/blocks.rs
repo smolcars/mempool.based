@@ -16,7 +16,7 @@ use logging::events::{
 };
 use node::esplora::Esplora;
 use node::rpc::{Limits, Rpc};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::config::{Backfill, NetworkConfig};
 use crate::{Network, NetworkContext, summary};
@@ -37,6 +37,9 @@ pub struct BlockTable {
     pub progress: watch::Sender<Progress>,
     /// Counts the times `follow` has written to the table, so the mining answers can follow.
     pub followed: watch::Sender<u64>,
+    /// Wakes `follow` for a new block the `blocks` topic gave up waiting for: it then takes the
+    /// block on its own retries, whenever the node serves it.
+    pub wake: Notify,
     /// The table's own node clients: one RPC slot, shared by follow and the backfill, never one
     /// of the four shared ones. Each task makes one Esplora request at a time.
     source: NodeSource,
@@ -102,6 +105,7 @@ impl BlockTable {
             store,
             progress: watch::Sender::new(Progress::default()),
             followed: watch::Sender::new(0),
+            wake: Notify::new(),
             source,
         })
     }
@@ -200,8 +204,9 @@ impl Source for Live {
     }
 }
 
-/// Follows once at start, then on every new tip; after a failure, again after a pause unless a
-/// new tip comes first. Starts the backfill after the first success.
+/// Follows once at start, then on every new tip, and when the `blocks` topic gave up on a new
+/// block; after a failure, or while the node's Esplora is behind the tip its Electrum announced,
+/// again after a pause unless a new tip comes first. Starts the backfill after the first success.
 async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
     let Some(table) = &ctx.blocks else { return };
     let live = Live {
@@ -213,6 +218,9 @@ async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
     let network = ctx.config.network.name();
     let mut tips = ctx.summaries.tips();
     let mut failures = 0u32;
+    // Follows in a row that ended below the tip Electrum announced: the node's Esplora is late
+    // (docs/RBITCOIN.md), so the newest block is looked for again after a pause.
+    let mut behind = 0u32;
     loop {
         let started = Instant::now();
         match blocks::follow(&table.store, &live, &reorgs).await {
@@ -238,6 +246,18 @@ async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
                         stale: f.stale,
                     });
                 }
+                // Behind by height, or at the height with another block: a replacement the node's
+                // Esplora does not serve yet.
+                let lagging = match ctx.electrum.tip() {
+                    Some(t) if t.height > f.tip => true,
+                    Some(t) if t.height == f.tip => blocks::by_height(&table.store, t.height)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|row| row.hash != t.hash),
+                    _ => false,
+                };
+                behind = if lagging { behind.saturating_add(1) } else { 0 };
                 logging::emit(&BlockRowsFollowed {
                     network,
                     tip: f.tip,
@@ -265,13 +285,15 @@ async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
                 }
             }
         }
-        if failures == 0 {
-            if tips.changed().await.is_err() {
-                return;
+        let tries = failures.max(behind);
+        if tries == 0 {
+            tokio::select! {
+                changed = tips.changed() => if changed.is_err() { return },
+                () = table.wake.notified() => {}
             }
         } else {
             let pause = FOLLOW_RETRY
-                .saturating_mul(1 << (failures - 1).min(16))
+                .saturating_mul(1 << (tries - 1).min(16))
                 .min(FOLLOW_RETRY_MAX);
             tokio::select! {
                 changed = tips.changed() => if changed.is_err() { return },

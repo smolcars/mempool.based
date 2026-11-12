@@ -101,7 +101,7 @@ Solid with TypeScript, built by Vite into static files. No server rendering and 
 | What | Budget |
 |---|---|
 | First load, JavaScript | 100 KB gzipped for the app shell and home page |
-| New block, from the node being able to serve it to the WebSocket send | 50 ms. The node itself can hold a new block for up to about 0.4 s after announcing it ([`RBITCOIN.md`](RBITCOIN.md)); that wait is not ours to remove |
+| New block, from the node's Electrum announcement to the `block` message on the WebSocket | 50 ms on a node with rbitcoin PR 1577 (measured 11–43 ms on mainnet and signet). rbitcoin v0.9.2 can hold a new block for a second or more after announcing it ([`RBITCOIN.md`](RBITCOIN.md)): there the budget runs from when the node can serve the block, plus at most an eighth of the hold, the hub's retry spacing |
 | Cached or immutable API response, server time | 10 ms at p99 |
 | Frame rate during block and mempool animations | 60 fps on a mid-range laptop |
 

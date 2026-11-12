@@ -50,8 +50,8 @@ const MAX_APPENDED: usize = 16;
 /// How often a healthy network writes a `mempool_summary` line.
 const SUMMARY_EVERY: Duration = Duration::from_secs(60);
 /// Longest a projection waits for the `blocks` topic to announce its tip (or for one on the
-/// announced tip): the hub's own limit for fetching a new block.
-const HOLD: Duration = Duration::from_secs(3);
+/// announced tip): the tracker's own limit for waiting on the node to serve a new block.
+pub(super) const HOLD: Duration = Duration::from_secs(3);
 
 /// Every topic this module produces.
 fn topics() -> impl Iterator<Item = Topic> {

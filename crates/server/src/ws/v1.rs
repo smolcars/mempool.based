@@ -35,9 +35,8 @@ const BLOCKS: usize = 8;
 const FETCHES: usize = 2;
 /// The largest address history page taken from the node. A page is at most 75 transactions.
 const MAX_PAGE: usize = 8 << 20;
-/// Longest `mempool-blocks` on an older tip waits for the block just announced: the hub's own
-/// limit for fetching a new block.
-const HOLD: Duration = Duration::from_secs(3);
+/// Longest `mempool-blocks` on another tip waits for the block just sent, as on `/app/ws`.
+const HOLD: Duration = super::mempool::HOLD;
 /// Messages the reference has that this server does not serve, answered with `<key>-error` so a
 /// person reading the traffic sees why nothing comes.
 const UNSERVED: [&str; 8] = [
@@ -591,8 +590,9 @@ struct Published {
 }
 
 /// Publishes the projected blocks the `/fees/mempool-blocks` route serves, when they changed.
-/// Ones on another tip than the block just announced wait for it, for at most [`HOLD`], so after
-/// a `block` the next `mempool-blocks` is on it.
+/// Ones on another tip than the block last sent wait for it, for at most [`HOLD`], so after a
+/// `block` the next `mempool-blocks` is on it. Called as they change and as a block is sent, so
+/// one on a new block follows that block's message at once when it is ready first.
 fn mempool_blocks(ctx: &NetworkContext, out: &mut Published) {
     let Some(b) = ctx.fees.blocks() else {
         return;
@@ -601,8 +601,8 @@ fn mempool_blocks(ctx: &NetworkContext, out: &mut Published) {
         return;
     }
     let msg = json!({ "mempool-blocks": api_v1::mempool_blocks(&b) });
-    ctx.hub.in_block_order(|announced: Option<BlockHash>| {
-        let agrees = announced.is_none_or(|h| b.tip.is_some_and(|t| t.hash == h));
+    ctx.hub.in_block_order(|sent: Option<BlockHash>| {
+        let agrees = sent.is_none_or(|h| b.tip.is_some_and(|t| t.hash == h));
         if !agrees && out.held.get_or_insert_with(Instant::now).elapsed() < HOLD {
             return;
         }
@@ -619,8 +619,21 @@ pub async fn run(ctx: Arc<NetworkContext>) {
     let mut events = ctx.electrum.events();
     let mut tick = tokio::time::interval(ctx.sockets.limits.mempool_interval);
     let mut published = Published::default();
+    let mut sent = ctx.hub.announced();
+    let mut blocks = ctx.fees.blocks_changed();
     loop {
         tokio::select! {
+            // A block sent, or projected blocks on a new tip: the two go out together.
+            r = sent.changed() => if r.is_err() {
+                return;
+            } else {
+                mempool_blocks(&ctx, &mut published);
+            },
+            r = blocks.changed() => if r.is_err() {
+                return;
+            } else {
+                mempool_blocks(&ctx, &mut published);
+            },
             _ = tick.tick() => {
                 if ctx.hub.subscribers(Topic::V1Stats) > 0 {
                     // Keeps the node's estimates coming while they are what is served.
