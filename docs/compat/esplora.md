@@ -86,7 +86,7 @@ All of these need `--sh-index` on the node. Unpaged stats and `/utxo` answer 503
 
 | Feature | Behaviour | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `X-Bitcoin-Chain-Tip`, `X-Bitcoin-Chain-Tip-Height` | Every response names the tip it was read at | rbitcoin Esplora | planned | M1 | node | Pass through and expose to browsers. Lets a client detect a tip change between two reads; mempool.space has nothing like it |
+| `X-Bitcoin-Chain-Tip`, `X-Bitcoin-Chain-Tip-Height` | Names the chain view a response was read at | rbitcoin Esplora | planned | M1 | node | Block, tx and header routes stamp the live tip; address and scripthash routes stamp the address-index watermark, which can lag the tip. Mempool routes, `/fee-estimates`, `/txs/package`, `POST /tx` and `/txs/mempool` carry no stamp. Pass through and expose to browsers. mempool.space has nothing like it |
 | `?asof=<blockhash>` | Pins a status, outspend, position or address read to an ancestor block | rbitcoin Esplora | planned | M1 | node | `/tx/:txid?asof=` is 404 by design; `/tx/:txid/status?asof=` works |
 
 ## Not served by rbitcoin

@@ -36,10 +36,10 @@ One table per group, each on its own page:
 | Group | Page | Rows | planned | different | skipped | Confirmed live |
 |---|---|---|---|---|---|---|
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 50 | 0 | 6 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 56 | 4 | 13 | 73 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 56 | 4 | 13 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 47 | 40 | 2 | 5 | 43 |
 | Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 38 | 2 | 6 | 29 |
-| **Total** | | **222** | **184** | **8** | **30** | **193** |
+| **Total** | | **222** | **184** | **8** | **30** | **192** |
 
 Nothing is `served` yet. Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -53,7 +53,7 @@ Nothing is `served` yet. Each row gives the feature, what it returns, where our 
 | `doc` | Not requested: from rbitcoin's v0.9.1 documentation. Writes and very large responses are in this group |
 | `—` | Not confirmed: known from the public site, but not observed during the probe window |
 
-All requests were read-only and sequential. Four `/api/v1` rows (`POST /v1/cpfp`, `/v1/psbt/addparents`, `/v1/tx/push`, `/v1/txs/package`) confirm only that the route exists: each was sent a malformed body and refused.
+All requests were read-only and sequential. Three `/api/v1` rows (`POST /v1/cpfp`, `/v1/psbt/addparents`, `/v1/txs/package`) confirm only that the route exists: each handler refused a malformed body. A body that is not JSON is refused before routing on the reference, so such a refusal proves nothing; `POST /v1/tx/push` is unconfirmed for that reason.
 
 ## Reference backend against rbitcoin's Esplora
 
@@ -75,26 +75,27 @@ Proposals for [`PLAN.md`](PLAN.md) and [`TODO.md`](TODO.md); this task does not 
 
 ### Cheaper than expected
 
-1. **CPFP and clusters are one RPC call.** `getmempoolcluster` returned a transaction's cluster and chunk fee rate in 20 ms. MP6 needs no ancestor walking of its own, and the answer is better than mempool.space's ancestor-only view.
+1. **CPFP needs no graph of our own.** `getmempoolcluster` returned a transaction's cluster and chunk fee rate in 20 ms, and `getmempoolancestors` 10 ms. The cluster call lists chunks without edges, so relationships come from `getmempoolancestors`, `getmempooldescendants` or `getmempoolentry`'s `depends`; the effective fee rate is the node's own chunk rate.
 2. **The Esplora pass-through is pure routing.** Shapes match (above), so S2 is an allow-list, typed parameters and cache headers. No response rewriting.
 3. **Difficulty adjustment is cheap** (two headers and arithmetic). It could move from M3 to M1 or M2 so the home page has it early.
-4. **`getblockstats` gives totals in 40 ms,** including `utxo_increase` for the UTXO-change extra. Only its fee-rate percentiles are unusable (whole sat/vB: they read `[0,0,0,0,2]` for the probed block).
+4. **`getblockstats` gives totals in 40 ms,** including `utxo_increase` for the UTXO-change extra. Its fee-rate percentiles are truncated to whole sat/vB (they read `[0,0,0,0,2]` for the probed block), so they cannot feed any fee-rate history.
 
 ### More expensive than expected
 
-5. **Per-transaction block data needs `getblock` verbosity 2.** The mined-block drawing (`/v1/block/:hash/summary`, W7) and our own fee percentiles (MI1) need every transaction's fee and size. Over TCP that is 0.8 s and 11 MB per full block; the paged Esplora route would take about 270 requests. A full-history backfill at that rate takes days. Proposal: use `getblockstats` for blocks whose fee rates are above 1 sat/vB (rounding does not matter there), `getblock` verbosity 2 only for recent sub-sat blocks and on demand, and the unix-socket `/internal/block/:hash/txs` when co-located. Add `getblock` to N3's method set.
+5. **Per-transaction block data needs `getblock` verbosity 2.** The mined-block drawing (`/v1/block/:hash/summary`, W7) and our own fee percentiles (MI1) need every transaction's fee and size. Over TCP that is 0.8 s and 11 MB per full block; the paged Esplora route would take about 270 requests. A sequential full-history backfill at that rate takes days. Proposal: take totals from `getblockstats`; backfill percentiles from `getblock` verbosity 2 newest first, in the background, with a few requests in parallel; prefer the unix-socket `/internal/block/:hash/txs` when co-located. Add `getblock` to N3's method set.
 6. **Block audits depend on keeping the template.** The reference cannot audit at all. MI4 needs MP2 to retain the last template (about 0.4 s and 4.9 MB from `getblocktemplate`) at each block arrival; audits cannot be backfilled for blocks we did not watch.
 7. **Mining pool identification needs a dataset.** Pool names come from coinbase tags and payout addresses. We need a list under a licence compatible with MIT, or our own. Decide before MI2.
-8. **Large addresses need a product answer.** Totals and UTXOs are refused above the node's cap. W5 must show history without totals and say why. A paged or capped stats route is a candidate for the rbitcoin wishlist in [`RBITCOIN.md`](RBITCOIN.md).
+8. **`RBITCOIN.md` overstates the chain-tip stamp.** It says every Esplora response carries the tip headers. Mempool, fee-estimate and broadcast routes carry none, and address routes stamp the address-index watermark ([`compat/esplora.md`](compat/esplora.md)). N1's tip handling should follow the narrower rule; the owner of `RBITCOIN.md` should correct it.
+9. **Large addresses need a product answer.** Totals and UTXOs are refused above the node's cap. W5 must show history without totals and say why. A paged or capped stats route is a candidate for the rbitcoin wishlist in [`RBITCOIN.md`](RBITCOIN.md).
 
 ### Cannot be supported, or not worth it
 
-9. **UTXO set size** (`utxoSetSize` in block extras): rbitcoin has no `gettxoutsetinfo`.
-10. **Lightning location features** (countries, ISPs, world and channel maps, node groups): nine rows skipped for GeoIP, ASN or curation. Lightning node responses will lack location fields.
-11. **`blocks-bulk`** is disabled on both the reference and mempool.space; skip until someone asks.
+10. **UTXO set size** (`utxoSetSize` in block extras): rbitcoin has no `gettxoutsetinfo`.
+11. **Lightning location features** (countries, ISPs, world and channel maps, node groups): nine rows skipped for GeoIP, ASN or curation. Lightning node responses will lack location fields.
+12. **`blocks-bulk`** is disabled on both the reference and mempool.space; skip until someone asks.
 
 ### Third-party dependence
 
-12. **A compatible WebSocket is worth a task.** [`ARCHITECTURE.md`](ARCHITECTURE.md) defines only `/app/ws`. Wallets and bots that follow transactions or addresses speak `/api/v1/ws` (`want`, `track-tx`, `track-address`, `track-addresses`, `ping`). Proposal: a task in M2, after S3 and MP5, that serves this JSON subset from the same hub, with the heavy `track-mempool` topic rate-limited.
-13. **Endpoints most likely relied on by others** (from what wallets and tools are publicly known to call, not measured here): Esplora `/api/tx`, `/api/tx/:txid/status`, `/api/address/*`, `/api/blocks/tip/height`; `/api/v1/fees/recommended`, `/api/v1/fees/mempool-blocks`, `/api/v1/prices`, `/api/v1/historical-price`, `/api/v1/difficulty-adjustment`, `/api/v1/cpfp/:txid`. Deliver these first within their milestones.
-14. **Serve both fee shapes.** `fees/recommended` keeps its whole-number contract for old clients; on a 0.1 sat/vB mempool it overstates the minimum tenfold, so `fees/precise` and our frontend use sub-sat values.
+13. **A compatible WebSocket is worth a task.** [`ARCHITECTURE.md`](ARCHITECTURE.md) defines only `/app/ws`. Wallets and bots that follow transactions or addresses speak `/api/v1/ws` (`want`, `track-tx`, `track-address`, `track-addresses`, `ping`). Proposal: a task in M2, after S3 and MP5, that serves this JSON subset from the same hub, with the heavy `track-mempool` topic rate-limited.
+14. **Endpoints most likely relied on by others** (from what wallets and tools are publicly known to call, not measured here): Esplora `/api/tx`, `/api/tx/:txid/status`, `/api/address/*`, `/api/blocks/tip/height`; `/api/v1/fees/recommended`, `/api/v1/fees/mempool-blocks`, `/api/v1/prices`, `/api/v1/historical-price`, `/api/v1/difficulty-adjustment`, `/api/v1/cpfp/:txid`. Deliver these first within their milestones.
+15. **Serve both fee shapes.** `fees/recommended` keeps its whole-number contract for old clients; on a 0.1 sat/vB mempool it overstates the minimum tenfold, so `fees/precise` and our frontend use sub-sat values.

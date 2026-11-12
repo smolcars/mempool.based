@@ -34,12 +34,12 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 | `GET /v1/replacements` | Recent replacement trees: new tx, time, what it replaced | Engine | planned | M2 | ref | Removal reasons from MP1 |
 | `GET /v1/fullrbf/replacements` | Only trees where a replaced tx did not signal | Engine | planned | M2 | ref | rbitcoin is always full-RBF, so this is a filter on signalling, not on policy |
 | `GET /v1/tx/:txid/rbf` | The replacement tree around one transaction | Engine; store for history | planned | M2 | ref | `null` fields when there is none |
-| `GET /v1/cpfp/:txid` | Ancestors, descendants, best descendant, effective fee rate, sigops | rbitcoin `getmempoolcluster`, `getmempoolentry` | planned | M2 | ref | Better on rbitcoin: the node gives the real cluster and its chunk fee rate, not an ancestor-only estimate. Confirmed txs read empty on the reference |
+| `GET /v1/cpfp/:txid` | Ancestors, descendants, best descendant, effective fee rate, sigops | rbitcoin `getmempoolancestors`, `getmempooldescendants`, `getmempoolentry` (`depends`); `getmempoolcluster` for the chunk fee rate | planned | M2 | ref | Better on rbitcoin: the effective fee rate is the node's own chunk fee rate, not an estimate. The cluster call has no edges, so relationships come from the ancestor and descendant calls. Confirmed txs read empty on the reference |
 | `POST /v1/cpfp` | CPFP data for several transactions at once | Engine | planned | M5 | ref | Listed on the public docs page; the reference rejected our body format with 400, so the request shape is unconfirmed |
 | `GET /v1/tx/:txid/cached` | Whether the backend holds the tx in its cache | — | skipped | — | ref | A frontend helper with no meaning outside it; 204 on the reference |
 | `POST /v1/prevouts` | Prevout and unconfirmed flag for a list of outpoints | rbitcoin `GET /tx/:txid/out/:vout`, mempool for unconfirmed | planned | M5 | ref | Backs the transaction preview page |
-| `POST /v1/psbt/addparents` | A PSBT with its parents' data filled in | rbitcoin Esplora `/tx/:txid/hex` | planned | M5 | ref | Route exists on the reference; not exercised. PSBT parsing is untrusted input |
-| `POST /v1/tx/push` | Broadcast through the `/v1` prefix | rbitcoin `POST /tx` | different | — | ref | Route exists on the reference; not exercised. Use `POST /api/tx` |
+| `POST /v1/psbt/addparents` | A PSBT with its parents' data filled in | rbitcoin Esplora `/tx/:txid/hex` | planned | M5 | ref | Route exists: the reference's handler refused an invalid PSBT. PSBT parsing is untrusted input |
+| `POST /v1/tx/push` | Broadcast through the `/v1` prefix | rbitcoin `POST /tx` | different | — | — | Not confirmed: a malformed body fails JSON parsing before routing on the reference, and a valid one would broadcast. Use `POST /api/tx` |
 | `POST /v1/txs/package` | Package submit through the `/v1` prefix | rbitcoin `POST /txs/package` | different | — | ref | Route exists on the reference. Use `POST /api/txs/package` |
 
 ## Blocks
