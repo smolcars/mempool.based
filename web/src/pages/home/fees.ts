@@ -78,8 +78,11 @@ export function fromPrecise(reply: Stamped<unknown>): FeeAnswer | undefined {
   return { source: reply.tip ? "projected" : "node", levels };
 }
 
-/** How often the precise route is asked while the topic cannot be heard. */
-export const FEES_POLL_MS = 10_000;
+/**
+ * How often the precise route is asked while the topic cannot be heard: as often as the page asked
+ * for the node's estimates before, so a page with its socket down asks no more of the server.
+ */
+export const FEES_POLL_MS = 30_000;
 /**
  * How long the last answer stays up while the next ask has not settled. A refusal is retried for
  * up to a minute (`withRetry`), and a withdrawn answer is a 503: it must not stay up meanwhile.

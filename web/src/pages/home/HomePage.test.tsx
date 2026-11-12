@@ -1081,22 +1081,27 @@ describe("the fee panel", () => {
             },
           },
         );
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
       await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block2.500 sat/vB"));
       expect(feeNote(el)).toContain("read from the projected blocks");
       // A failed ask shows no number rather than the last one.
       reply = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
       await vi.waitFor(() =>
         expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation"),
       );
-      // Back: the snapshot is the topic's answer, and the asking stops.
-      await vi.advanceTimersByTimeAsync(30_000);
+      // Back: the snapshot is the topic's answer, and the asking stops. Greet the next socket as it
+      // opens: one left unanswered for 10 s is given up on.
+      const sockets = FakeSocket.all.length;
+      for (let i = 0; i < 120 && FakeSocket.all.length === sockets; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
       FakeSocket.last().hello();
       FakeSocket.last().receive(feesMsg("projected", [4000, 2000, 1000, 100]));
       expect(feeList(el)[3]).toBe("Highnext block4.000 sat/vB");
       const asked = count("/v1/fees/precise");
-      await vi.advanceTimersByTimeAsync(20_000);
+      // A whole poll interval, ending before the fake socket's unanswered ping would drop it.
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + 5_000);
       expect(count("/v1/fees/precise")).toBe(asked);
     } finally {
       vi.useRealTimers();
