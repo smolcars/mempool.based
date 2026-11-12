@@ -144,6 +144,9 @@ struct Chunk {
     cluster: u64,
     /// The block it was packed into on the last pass.
     slot: Option<u8>,
+    /// A negative modified fee (only through `prioritisetransaction`): never mined, whatever
+    /// the minimum rate.
+    negative: bool,
 }
 
 /// Transactions grouped into the node's chunks, chunks into clusters.
@@ -205,6 +208,7 @@ impl Model {
                 txs: vec![txid],
                 cluster: id,
                 slot: None,
+                negative: false,
             },
         );
         self.clusters.insert(id, vec![id]);
@@ -288,7 +292,7 @@ impl Model {
                 raw += u64::from(weight);
                 self.unlink(m, old, weight);
             }
-            // A negative chunk fee (only through `prioritisetransaction`) is never mined.
+            let negative = ch.chunkfee.is_negative();
             let fee = u64::try_from(ch.chunkfee.to_sat()).unwrap_or(0);
             let key = Key {
                 rate: Reverse(chunk_rate(fee, ch.chunkweight)),
@@ -303,6 +307,7 @@ impl Model {
                     txs: members,
                     cluster: id,
                     slot: None,
+                    negative,
                 },
             );
             self.order.insert(key);
@@ -359,7 +364,7 @@ impl Model {
                 if c.slot.is_some() {
                     continue;
                 }
-                if !last && c.key.rate.0 < p.min_rate {
+                if !last && (c.negative || c.key.rate.0 < p.min_rate) {
                     rest.push(id);
                     continue;
                 }

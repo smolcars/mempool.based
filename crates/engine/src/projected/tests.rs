@@ -137,6 +137,22 @@ fn blocks_fill_by_raw_weight_and_skip_what_does_not_fit() {
 }
 
 #[test]
+fn a_negative_fee_chunk_is_never_mined_even_without_a_minimum_rate() {
+    let mut m = Model::default();
+    m.add(id(1), 0, 100, 400);
+    m.add(id(2), 500, 100, 400);
+    assert!(m.apply_cluster(&cluster(&[(-500, 400, &[id(2)])])));
+    let free = Packing {
+        min_rate: 0,
+        ..ONE_BLOCK
+    };
+    let blocks = order(&mut m, free);
+    // A zero fee is mined when the node's minimum is zero; a negative modified fee is not.
+    assert_eq!(txids(&blocks[0]), vec![id(1)]);
+    assert_eq!(txids(&blocks[1]), vec![id(2)]);
+}
+
+#[test]
 fn a_chunk_pulls_in_the_unplaced_chunks_before_it() {
     // Two chunks of one cluster with the same integer rate: the child chunk has the larger
     // fee so it sorts first, and selecting it must bring its parent chunk along, first.

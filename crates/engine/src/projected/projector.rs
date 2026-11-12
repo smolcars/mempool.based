@@ -206,6 +206,7 @@ impl Projector {
             config,
             pending: HashSet::new(),
             failures: 0,
+            retry_at: None,
             tracker_failing: false,
         };
         (Self { shared }, tokio::spawn(runner.run()))
@@ -274,6 +275,8 @@ struct Runner<S> {
     /// Transactions whose cluster must be asked at the next update.
     pending: HashSet<Txid>,
     failures: u32,
+    /// When to ask again after a failure. Absolute, so unrelated wakeups do not push it back.
+    retry_at: Option<Instant>,
     tracker_failing: bool,
 }
 
@@ -294,7 +297,7 @@ impl<S: ClusterSource> Runner<S> {
             }
             self.update(Input::Snapshot { seq, tip, txs }).await;
             loop {
-                let retry = (!self.pending.is_empty() && self.failures > 0).then(|| self.backoff());
+                let retry = self.retry_at.filter(|_| !self.pending.is_empty());
                 let mut lagged = false;
                 let input = tokio::select! {
                     d = sub.recv() => match d {
@@ -330,7 +333,7 @@ impl<S: ClusterSource> Runner<S> {
                         }
                         Input::Nothing
                     }
-                    () = sleep(retry) => Input::Nothing,
+                    () = sleep_until(retry) => Input::Nothing,
                 };
                 self.update(input).await;
                 if lagged {
@@ -367,6 +370,7 @@ impl<S: ClusterSource> Runner<S> {
         match failed {
             Some(error) => {
                 self.failures = self.failures.saturating_add(1);
+                self.retry_at = Some(Instant::now() + self.backoff());
                 let _ = self.shared.events.send(Event::FetchFailed {
                     error,
                     consecutive: self.failures,
@@ -374,7 +378,10 @@ impl<S: ClusterSource> Runner<S> {
                     retry_in: self.backoff(),
                 });
             }
-            None => self.failures = 0,
+            None => {
+                self.failures = 0;
+                self.retry_at = None;
+            }
         }
         stats.stale = self.failures > 0 || self.tracker_failing;
 
@@ -591,9 +598,9 @@ async fn blocking<R: Send + 'static>(
     }
 }
 
-async fn sleep(d: Option<Duration>) {
-    match d {
-        Some(d) => tokio::time::sleep(d).await,
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
     }
 }
