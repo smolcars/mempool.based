@@ -37,6 +37,8 @@ struct Reply {
     headers: Vec<(&'static str, String)>,
     body: Vec<u8>,
     delay: Duration,
+    /// Pause between sending the headers and the body.
+    body_delay: Duration,
     /// Send no Content-Length and close the connection to end the body.
     close_delimited: bool,
 }
@@ -48,6 +50,7 @@ impl Reply {
             headers: vec![],
             body: body.into(),
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             close_delimited: false,
         }
     }
@@ -125,7 +128,11 @@ where
         }
         head.push_str("\r\n");
         let w = s.get_mut();
-        if w.write_all(head.as_bytes()).await.is_err() || w.write_all(&reply.body).await.is_err() {
+        if w.write_all(head.as_bytes()).await.is_err() || w.flush().await.is_err() {
+            return;
+        }
+        tokio::time::sleep(reply.body_delay).await;
+        if w.write_all(&reply.body).await.is_err() {
             return;
         }
         if reply.close_delimited {
@@ -487,13 +494,24 @@ async fn maps_upstream_errors() {
 
 #[tokio::test]
 async fn times_out() {
-    let (url, _) = tcp_mock(|_| Reply {
-        delay: Duration::from_secs(5),
-        ..Reply::new(200, "1")
+    let (url, _) = tcp_mock(|r| {
+        let slow = Duration::from_secs(5);
+        match r.path.as_str() {
+            "/api/blocks/tip/height" => Reply {
+                delay: slow,
+                ..Reply::new(200, "1")
+            },
+            // Headers arrive at once; the body stalls.
+            _ => Reply {
+                body_delay: slow,
+                ..Reply::new(200, "1")
+            },
+        }
     })
     .await;
     let c = Esplora::with_limits(&url, Duration::from_millis(100), 1024).unwrap();
     assert_eq!(c.tip_height().await.unwrap_err(), Error::Timeout);
+    assert_eq!(c.raw(&Route::TipHash).await.unwrap_err(), Error::Timeout);
 }
 
 #[tokio::test]
