@@ -29,7 +29,30 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
 | `ci-ok` | always | Fails if any job above failed |
 
-Outside the PR path, on a schedule and when lockfiles change: dependency audit against the advisory database. After merge to `master`: the full Docker image build on both architectures (`image.yml`).
+Outside the PR path, daily and when a lockfile changes on `master`: the [dependency audit](#dependency-audit) (`audit.yml`). After merge to `master`: the full Docker image build on both architectures (`image.yml`).
+
+## Dependency audit
+
+`audit.yml` checks what we ship against the advisory databases ([`SECURITY.md`](SECURITY.md) rule 20). It runs daily, on manual dispatch, and on a push to `master` that changes `Cargo.lock`, `web/bun.lock`, `dev/audit/` or the workflow. Never on a pull request: a new advisory can land on any day, whether or not anyone opens a PR, and the PR budget has no room for it.
+
+[`dev/audit/audit.py`](../dev/audit/audit.py) runs both checks:
+
+- `Cargo.lock` against RustSec with `cargo-audit`, a pinned release binary whose checksum the workflow verifies. Every RustSec finding fails it: vulnerabilities, and the `unsound`, `unmaintained` and `yanked` warnings.
+- `web/bun.lock`, dev dependencies included, with `bun audit`, at the version `web/package.json` pins. It asks the npm registry, which serves GitHub's advisories; the fixed versions, which `bun audit` does not report, come from GitHub's advisory API.
+
+A clean run takes about 30 s, 13 of them for the audit itself, most of that fetching the advisory database. That is too little to be worth a cache.
+
+**On a finding** the run fails and its `report` job opens one issue, *Dependency audit found advisories*. The issue names each advisory, the package and version, how we depend on it (direct, or the chain of packages that pulls it in), and the fixed versions. While that issue is open, a later run edits it and adds one comment only when the findings change; otherwise it says nothing. A clean run says nothing and closes nothing: close the issue once its findings are fixed or accepted. Closing it with a finding still open brings it back on the next run. The `audit` job holds only a read token; `report`, which runs no third-party code, alone may write issues. If a tool itself fails (the database unreachable, say), the run fails without an issue, and GitHub's failed-run notification is the signal.
+
+**To accept a finding on purpose,** add it to [`dev/audit/ignore.toml`](../dev/audit/ignore.toml) with its id, the reason it does not apply to how we use the package, and the date it was reviewed. An entry without all three fails the audit, so an ignore is never silent. Remove the entry once the dependency is upgraded. A `yanked` release has no advisory id: upgrade it.
+
+**Locally,** from the repository root, with Python 3.11 or later, and [`cargo-audit`](https://github.com/rustsec/rustsec/releases) and `bun` on `PATH`:
+
+```sh
+python3 -I dev/audit/audit.py   # exit 0: clean; 1: the issue's Markdown on stdout; 2: a tool failed
+```
+
+`CARGO_LOCK=<file>` and `WEB_DIR=<directory with package.json and bun.lock>` point it at a temporary copy, for trying a change to the script.
 
 ## Test layers
 

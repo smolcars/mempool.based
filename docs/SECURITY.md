@@ -45,7 +45,7 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 
 18. **No panic on untrusted input.** A malformed request, upstream response or gossip message is an error value, never a crash.
 19. **No `unsafe`.**
-20. **Dependencies are audited in CI** against the advisory database.
+20. **Dependencies are audited in CI** against the advisory database ([`CI.md`](CI.md#dependency-audit)).
 
 ### Browsers
 

@@ -1,0 +1,94 @@
+name: Audit
+
+# Checks the dependencies we ship against the advisory databases (docs/SECURITY.md rule 20).
+# Never on pull requests, so it is outside the PR budget (docs/CI.md#dependency-audit).
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - Cargo.lock
+      - web/bun.lock
+      - dev/audit/**
+      - .github/workflows/audit.yml
+
+permissions: {}
+
+concurrency:
+  group: audit
+  cancel-in-progress: true
+
+jobs:
+  # Runs the audit tools with a read-only token; the report job alone may write.
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.audit.outputs.report }}
+    env:
+      CARGO_AUDIT_VERSION: 0.22.2
+      CARGO_AUDIT_SHA256: 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+          no-cache: true
+      # The release binary, checked against the checksum pinned above, instead of compiling it.
+      - name: Install cargo-audit
+        run: |
+          name=cargo-audit-x86_64-unknown-linux-musl-v$CARGO_AUDIT_VERSION
+          curl -sSfL -o "$RUNNER_TEMP/cargo-audit.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv$CARGO_AUDIT_VERSION/$name.tgz"
+          echo "$CARGO_AUDIT_SHA256  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP" "$name/cargo-audit"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      - name: Audit
+        id: audit
+        env:
+          # Read-only, for GitHub's advisory API: the fixed versions bun audit does not report.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python3 -I dev/audit/audit.py > "$RUNNER_TEMP/report.md"
+          status=$?
+          if [ "$status" = 1 ]; then
+            cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+            eof=$(openssl rand -hex 16)
+            { echo "report<<$eof"; cat "$RUNNER_TEMP/report.md"; echo "$eof"; } >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+  # Puts a finding in front of the owner: one open issue, edited and commented on only when the
+  # findings change. A clean run says nothing.
+  report:
+    needs: audit
+    if: always() && needs.audit.outputs.report != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REPORT: ${{ needs.audit.outputs.report }}
+      TITLE: Dependency audit found advisories
+    steps:
+      - run: |
+          printf '%s\n' "$REPORT" > "$RUNNER_TEMP/body.md"
+          # Searched on the server, so an old open issue is found however many newer ones there are.
+          number=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title \
+            --jq 'map(select(.title == env.TITLE))[0].number // empty')
+          if [ -z "$number" ]; then
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/body.md"
+          elif [ "$(gh issue view "$number" --json body --jq .body | tr -d '\r')" != "$REPORT" ]; then
+            gh issue edit "$number" --body-file "$RUNNER_TEMP/body.md"
+            gh issue comment "$number" \
+              --body "The findings changed: the description lists them as of $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
