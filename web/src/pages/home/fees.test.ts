@@ -29,12 +29,20 @@ describe("groupLevels", () => {
   });
 
   it("merges neighbours that print the same, and promises the fastest wait among them", () => {
-    // 0.121 and 0.129 both print 0.13 rounded up.
-    const g = groupLevels(answer(1.001, 0.129, 0.121, 0.1), formatFeeRateUp);
+    const g = groupLevels(answer(1.001, 0.5, 0.1, 0.1), formatFeeRateUp);
     expect(g.map((x) => [x.name, x.when, x.span])).toStrictEqual([
-      ["No rush", "within a day", 1],
-      ["Low or medium", "within 30 min", 2],
+      ["No rush or low", "within an hour", 2],
+      ["Medium", "within 30 min", 1],
       ["High", "next block", 1],
+    ]);
+    // Low and Medium alone are not a row of the panel's two by two: they stay apart, same rate.
+    // 0.121 and 0.129 both print 0.13 rounded up.
+    const middle = groupLevels(answer(1.001, 0.129, 0.121, 0.1), formatFeeRateUp);
+    expect(middle.map((x) => [x.name, x.span, x.rate])).toStrictEqual([
+      ["No rush", 1, 0.1],
+      ["Low", 1, 0.121],
+      ["Medium", 1, 0.129],
+      ["High", 1, 1.001],
     ]);
     const three = groupLevels(answer(2, 0.1, 0.1, 0.1), formatFeeRateUp);
     expect(three[0]?.name).toBe("No rush, low or medium");

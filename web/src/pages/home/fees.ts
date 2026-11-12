@@ -175,7 +175,11 @@ export interface FeeGroup {
   rate: number | undefined;
 }
 
-/** Groups the four levels, slowest first, merging neighbours whose rates print the same. */
+/**
+ * Groups the four levels, slowest first, merging neighbours whose rates print the same. The panel
+ * lays them out two by two in the same two rows whatever the grouping, so a live update never moves
+ * what follows it: Low and Medium alone are never merged, as that pair is not a row.
+ */
 export function groupLevels(
   answer: FeeAnswer | undefined,
   print: (rate: number) => string,
@@ -187,6 +191,22 @@ export function groupLevels(
     if (last && rate !== undefined && last.rate !== undefined && print(last.rate) === print(rate))
       last.members.push(p);
     else groups.push({ members: [p], rate });
+  }
+  // Low and Medium merged with neither neighbour would straddle the two rows: keep them apart.
+  if (groups.length === 3 && groups[1]?.members.length === 2) {
+    const [first, pair, last] = groups;
+    if (first !== undefined && pair !== undefined && last !== undefined) {
+      groups.splice(
+        0,
+        3,
+        first,
+        ...pair.members.map((m) => ({
+          members: [m],
+          rate: answer?.levels.find((l) => l.name === m.level)?.rate,
+        })),
+        last,
+      );
+    }
   }
   return groups.map(({ members, rate }) => {
     const names = members.map((m, i) => (i === 0 ? m.name : m.name.toLowerCase()));

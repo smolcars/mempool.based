@@ -524,9 +524,12 @@
   }
 
   /* ---------- Fee to pay now ---------- */
+  /* Two rows of two in every grouping, each row at least an answer's height, so an update that
+     merges or splits answers never moves what follows. */
   .home-fees__list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(6.75rem, auto));
     gap: var(--space-3);
   }
   .home-fees__item {
@@ -538,12 +541,12 @@
     border-radius: var(--radius-m);
     background: var(--color-surface-sunken);
   }
-  .home-fees__item--span-2 {
+  .home-fees__item--row {
     grid-column: span 2;
   }
-  .home-fees__item--span-3,
-  .home-fees__item--span-4 {
+  .home-fees__item--all {
     grid-column: span 2;
+    grid-row: span 2;
   }
   .home-fees__item dt {
     display: flex;

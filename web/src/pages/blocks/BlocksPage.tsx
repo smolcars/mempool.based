@@ -35,8 +35,9 @@ const columns = (factsOf: (id: string) => RowFacts) => [
           <Link class="blocks-height num" href={paths.block(b.id)}>
             {groupDigits(b.height)}
           </Link>
-          {/* Phones drop the Mined column, so the age moves under the height. */}
-          <span class="blocks-heightcell__age" aria-hidden="true">
+          {/* Phones drop the Mined column, so the age moves under the height; each is hidden
+              with display, so a screen reader hears whichever is shown. */}
+          <span class="blocks-heightcell__age">
             <TimeAgo time={b.timestamp} suffix={false} />
           </span>
         </span>
