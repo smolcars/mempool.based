@@ -1,4 +1,4 @@
-// Shapes of the Esplora API as rbitcoin v0.9.1 serves it (docs/esplora-openapi.yaml at tag v0.9.1
+// Shapes of the Esplora API as rbitcoin v0.9.2 serves it (docs/esplora-openapi.yaml at tag v0.9.2
 // in rbitcoin). Hand-written: only what pages use. Amounts are integer sats, times unix seconds.
 
 /** 64 hex characters, display order. */

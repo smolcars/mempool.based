@@ -1,6 +1,6 @@
 # Deploying
 
-What an operator runs: one image with the server and the built frontend, and a compose file that runs it beside rbitcoin v0.9.1 on the same host. Same host matters: rbitcoin serves its bulk `/internal/*` Esplora routes only on a unix-socket listener ([`RBITCOIN.md`](RBITCOIN.md)), and a socket can only be shared on one machine.
+What an operator runs: one image with the server and the built frontend, and a compose file that runs it beside rbitcoin v0.9.2 on the same host. Same host matters: rbitcoin serves its bulk `/internal/*` Esplora routes only on a unix-socket listener ([`RBITCOIN.md`](RBITCOIN.md)), and a socket can only be shared on one machine.
 
 ## The image
 
@@ -43,7 +43,7 @@ The server and rbitcoin log to stdout and stderr only; nothing is written to a l
 
 | Service | Image | Talks to |
 |---|---|---|
-| `node` | rbitcoin v0.9.1, pinned by digest. `RBITCOIN_IMAGE` overrides it | Esplora on a unix socket in the `esplora-socket` volume; RPC on 8332 and Electrum on 50001, both on the private compose network; P2P on `P2P_PORT`, the only thing published |
+| `node` | rbitcoin v0.9.2, pinned by digest. `RBITCOIN_IMAGE` overrides it | Esplora on a unix socket in the `esplora-socket` volume; RPC on 8332 and Electrum on 50001, both on the private compose network; P2P on `P2P_PORT`, the only thing published |
 | `server` | Built from this repo's `Dockerfile`. `SERVER_IMAGE` names another | Mounts `esplora-socket` read-only; RPC and Electrum at `node` |
 
 ### Run it
@@ -141,4 +141,4 @@ docker run --rm --network <name>_default curlimages/curl -su "mempool-based:$pas
   -d '{"method":"generatetoaddress","params":[101,"bcrt1q…"]}' http://node:8332/
 ```
 
-`docker compose -p <name> down -v` removes the chain. If `docker pull` from ghcr.io does not work on your machine, load the rbitcoin image another way and set `RBITCOIN_IMAGE=ghcr.io/rbitcoin-org/rbitcoin:0.9.1`, since a loaded image has no digest to match.
+`docker compose -p <name> down -v` removes the chain. If `docker pull` from ghcr.io does not work on your machine, load the rbitcoin image another way and set `RBITCOIN_IMAGE=ghcr.io/rbitcoin-org/rbitcoin:0.9.2`, since a loaded image has no digest to match.

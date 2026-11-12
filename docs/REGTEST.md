@@ -1,6 +1,6 @@
 # Regtest harness
 
-A private rbitcoin v0.9.1 node on regtest, in Docker, for every test that writes: mining, broadcasting, replacing. The shared nodes are read-only ([`AGENTS.md`](../AGENTS.md)).
+A private rbitcoin v0.9.2 node on regtest, in Docker, for every test that writes: mining, broadcasting, replacing. The shared nodes are read-only ([`AGENTS.md`](../AGENTS.md)).
 
 It needs Docker with Compose v2.23 or later, and `python3`. Nothing else: the script uses only the Python standard library.
 
@@ -48,7 +48,7 @@ The credentials are throwaway and fixed in [`dev/regtest/compose.yml`](../dev/re
 
 | Setting | Value |
 |---|---|
-| Image | `ghcr.io/rbitcoin-org/rbitcoin:0.9.1`, pinned by digest. Published by rbitcoin's release workflow for linux/amd64 and linux/arm64; its revision label is the `v0.9.1` tag commit |
+| Image | `ghcr.io/rbitcoin-org/rbitcoin:0.9.2`, pinned by digest. Published by rbitcoin's release workflow for linux/amd64 and linux/arm64; its revision label is the `v0.9.2` tag commit |
 | Interfaces | JSON-RPC (`--rpc-listen`), Electrum (`--electrum-listen`), Esplora (`--esplora-listen`), all over TCP |
 | Address index | On (`--sh-index`) |
 | Peers | None: `--no-seeds --no-listen` |
@@ -57,7 +57,7 @@ The credentials are throwaway and fixed in [`dev/regtest/compose.yml`](../dev/re
 
 The image is `FROM scratch` with only `rbitcoin-node` and `rbitcoin-cli`: there is no shell in the container. The CLI works through Compose: `REGTEST_PROJECT=<name> docker compose -f dev/regtest/compose.yml exec node rbitcoin-cli --network regtest getblockcount`.
 
-Set `REGTEST_IMAGE` to use another image, for example one built locally from the `v0.9.1` tag with rbitcoin's `Dockerfile`.
+Set `REGTEST_IMAGE` to use another image, for example one built locally from the `v0.9.2` tag with rbitcoin's `Dockerfile`.
 
 ## Running several at once
 
@@ -135,7 +135,7 @@ The mempool entries' acceptance times are the wall clock and differ between runs
 
 ## Measurements
 
-Measured 2026-11-11 on an Apple Silicon Mac (Docker in a Linux VM). The amd64 numbers ran the amd64 image under emulation.
+Measured 2026-11-11 with the v0.9.1 image, on an Apple Silicon Mac (Docker in a Linux VM). The amd64 numbers ran the amd64 image under emulation.
 
 | What | linux/arm64 | linux/amd64 |
 |---|---|---|

@@ -1,4 +1,4 @@
-//! Esplora REST client for rbitcoin v0.9.1.
+//! Esplora REST client for rbitcoin v0.9.2.
 //!
 //! Every call names a [`Route`], which can only be built from parsed values. Two ways to call:
 //!

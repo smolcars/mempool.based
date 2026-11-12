@@ -1,4 +1,4 @@
-# mempool.based beside rbitcoin v0.9.1, for one network. docs/DEPLOY.md explains every choice.
+# mempool.based beside rbitcoin v0.9.2, for one network. docs/DEPLOY.md explains every choice.
 # From this directory, with .env filled in from .env.example: docker compose up -d --build
 name: mempool-based
 
@@ -12,7 +12,7 @@ services:
   node:
     <<: *hardened
     # Multi-arch release image, pinned by digest. It runs as uid and gid 10001.
-    image: ${RBITCOIN_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.1@sha256:07ba41581f0c8f4c98a4b35c1106c61fe1b7c6c2c36cbd8321e7919efaae5207}
+    image: ${RBITCOIN_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.2@sha256:aeaaf8bf0f5b048c3645a3bc7e8c06d5de32ffeef0ff67f02ddcf8607bfaed42}
     command:
       - --network=${NETWORK:?set NETWORK in .env}
       - --sh-index

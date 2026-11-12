@@ -13,7 +13,7 @@ A disabled network's base is a `404`.
 
 ## The contract
 
-Request and response shapes are rbitcoin v0.9.1's: [`docs/esplora-openapi.yaml`](https://github.com/rbitcoin-org/rbitcoin/blob/v0.9.1/docs/esplora-openapi.yaml) and the "Esplora REST surface" section of its [`COMPAT.md`](https://github.com/rbitcoin-org/rbitcoin/blob/v0.9.1/COMPAT.md#esplora-rest-surface). Address and scripthash routes need the node's `--sh-index`.
+Request and response shapes are rbitcoin v0.9.2's: [`docs/esplora-openapi.yaml`](https://github.com/rbitcoin-org/rbitcoin/blob/v0.9.2/docs/esplora-openapi.yaml) and the "Esplora REST surface" section of its [`COMPAT.md`](https://github.com/rbitcoin-org/rbitcoin/blob/v0.9.2/COMPAT.md#esplora-rest-surface). Address and scripthash routes need the node's `--sh-index`.
 
 ## Routes
 
