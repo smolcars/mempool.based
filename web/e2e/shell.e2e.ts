@@ -10,11 +10,11 @@ test("the app shell loads on /regtest/ with the regtest network shown", async ({
 test("a deep link survives a reload", async ({ page }) => {
   const hash = chain.blocks[106];
   await page.goto(`/regtest/block/${hash}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Block");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Block 106");
   await expect(page.getByText(hash)).toBeVisible();
   await page.reload();
   await expect(page).toHaveURL(`/regtest/block/${hash}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Block");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Block 106");
   await expect(page.getByText(hash)).toBeVisible();
 });
 
