@@ -157,6 +157,13 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
     assert_eq!(header.hash, info.bestblockhash);
     assert_eq!(header.height, info.blocks);
     assert!(header.previousblockhash.is_some() && header.n_tx > 0);
+    let block = rpc.block(header.hash).await.unwrap();
+    assert_eq!((block.hash, block.height), (header.hash, header.height));
+    assert_eq!(block.tx.len(), 3);
+    assert_eq!(block.tx[0].fee, None);
+    assert_eq!(block.tx[1].fee, Some(Amount::from_sat(13_538)));
+    assert_eq!((block.tx[1].vsize, block.tx[1].weight), (218, 870));
+    assert!(block.weight <= 4_000_000);
     let stats = rpc
         .block_stats(BlockRef::Height(info.blocks))
         .await
@@ -190,6 +197,12 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
     let chunk = cluster.chunks.iter().find(|c| c.txs.contains(&t)).unwrap();
     assert_eq!(chunk.chunkweight, entry.chunkweight);
     assert_eq!(chunk.chunkfee, entry.fees.chunk);
+    let ancestors = rpc.mempool_ancestors(t).await.unwrap();
+    assert_eq!(ancestors.len() as u64, entry.ancestorcount - 1);
+    assert!(ancestors.contains(&parent));
+    let descendants = rpc.mempool_descendants(t).await.unwrap();
+    assert_eq!(descendants.len() as u64, entry.descendantcount - 1);
+    assert!(descendants.contains(&entry.spentby[0]));
     let diagram = rpc.mempool_feerate_diagram().await.unwrap();
     assert_eq!(diagram.len(), 13);
     assert!(diagram.iter().all(|p| p.weight > 0));
@@ -243,6 +256,7 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
         [
             "getblockchaininfo []".to_owned(),
             format!("getblockheader [\"{tip}\",true]"),
+            format!("getblock [\"{tip}\",2]"),
             format!("getblockstats [{}]", info.blocks),
             "getchaintips []".into(),
             "getdifficulty []".into(),
@@ -252,6 +266,8 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
             "getrawmempool [false,true]".into(),
             format!("getmempoolentry [\"{t}\"]"),
             format!("getmempoolcluster [\"{t}\"]"),
+            format!("getmempoolancestors [\"{t}\",false]"),
+            format!("getmempooldescendants [\"{t}\",false]"),
             "getmempoolfeeratediagram []".into(),
             format!(
                 "gettxspendingprevout [[{{\"txid\":\"{parent}\",\"vout\":0}},{{\"txid\":\"{parent}\",\"vout\":1}}]]"

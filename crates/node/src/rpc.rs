@@ -26,7 +26,7 @@ use tokio::sync::Semaphore;
 
 use crate::http::{self, Endpoint, Transport};
 use model::{
-    BlockHeader, BlockStats, BlockTemplate, BlockchainInfo, ChainTip, ChunkPoint, Cluster,
+    Block, BlockHeader, BlockStats, BlockTemplate, BlockchainInfo, ChainTip, ChunkPoint, Cluster,
     MempoolEntry, MempoolInfo, MiningInfo, NetworkInfo, PrevoutSpend, RawMempool, SmartFee,
 };
 
@@ -227,6 +227,12 @@ impl Rpc {
         self.call("getblockheader", (hash, true)).await
     }
 
+    /// `getblock` with verbosity 2: every transaction's txid, fee and size. About 11 MB for a
+    /// full mainnet block. Unknown hash: `Rpc { code: -5 }`.
+    pub async fn block(&self, hash: BlockHash) -> Result<Block, Error> {
+        self.call("getblock", (hash, 2)).await
+    }
+
     /// `getblockstats` with every stat. Past the tip: `Rpc { code: -8 }`.
     pub async fn block_stats(&self, block: BlockRef) -> Result<BlockStats, Error> {
         self.call("getblockstats", [block]).await
@@ -275,6 +281,18 @@ impl Rpc {
     /// `getmempoolcluster`: the cluster `txid` is in. Not in the mempool: `Rpc { code: -5 }`.
     pub async fn mempool_cluster(&self, txid: Txid) -> Result<Cluster, Error> {
         self.call("getmempoolcluster", [txid]).await
+    }
+
+    /// `getmempoolancestors`: the in-mempool ancestors of `txid`, without it.
+    /// Not in the mempool: `Rpc { code: -5 }`.
+    pub async fn mempool_ancestors(&self, txid: Txid) -> Result<Vec<Txid>, Error> {
+        self.call("getmempoolancestors", (txid, false)).await
+    }
+
+    /// `getmempooldescendants`: the in-mempool descendants of `txid`, without it.
+    /// Not in the mempool: `Rpc { code: -5 }`.
+    pub async fn mempool_descendants(&self, txid: Txid) -> Result<Vec<Txid>, Error> {
+        self.call("getmempooldescendants", (txid, false)).await
     }
 
     /// `getmempoolfeeratediagram`: every mining chunk in the mempool, in mining order.

@@ -54,6 +54,39 @@ pub struct BlockHeader {
     pub nextblockhash: Option<BlockHash>,
 }
 
+/// `getblock` with verbosity 2, reduced to what fee and size views need. Inputs, outputs
+/// and scripts are skipped while decoding.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Block {
+    pub hash: BlockHash,
+    /// `-1` when the block is not on the active chain.
+    pub confirmations: i64,
+    pub height: u32,
+    pub time: u32,
+    pub mediantime: u32,
+    pub size: u64,
+    pub strippedsize: u64,
+    pub weight: u64,
+    /// Absent on genesis.
+    pub previousblockhash: Option<BlockHash>,
+    /// In block order, coinbase first.
+    pub tx: Vec<BlockTx>,
+}
+
+/// One transaction of [`Block`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct BlockTx {
+    pub txid: Txid,
+    /// `None` for the coinbase.
+    #[serde(default, deserialize_with = "opt_btc")]
+    pub fee: Option<Amount>,
+    /// `ceil(weight / 4)`, not sigop-adjusted.
+    pub vsize: u32,
+    pub weight: u32,
+    /// Serialized size with witness.
+    pub size: u32,
+}
+
 /// `getblockstats`. Fees and values are in satoshis, fee rates in whole sat/vB
 /// (so the percentiles round most of today's transactions to 0, see `docs/RBITCOIN.md`).
 /// The coinbase is left out of counts, sizes and fees, as in Core.
