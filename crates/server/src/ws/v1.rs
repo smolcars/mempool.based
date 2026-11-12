@@ -268,6 +268,7 @@ impl<'a> Session<'a> {
             ("blocks", Topic::V1Blocks),
             ("stats", Topic::V1Stats),
             ("mempool-blocks", Topic::V1MempoolBlocks),
+            ("live-2h-chart", Topic::V1LiveChart),
         ];
         for (name, topic) in all {
             if !names.contains(&name) {
@@ -565,6 +566,10 @@ fn stats(ctx: &NetworkContext) -> Option<Value> {
                 "limitclustercount": i.limitclustercount, "limitclustersize": i.limitclustersize,
             }),
         );
+    }
+    // From the newest mempool history sample: absent without one, never a made-up zero.
+    if let Some(rate) = ctx.history.inflow(engine::history::unix_now()) {
+        m.insert("vBytesPerSecond".into(), rate.into());
     }
     if let Some(a) = ctx.fees.current() {
         m.insert(

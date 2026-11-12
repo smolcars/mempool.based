@@ -26,6 +26,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bitcoin::{Address, BlockHash, Script};
+use engine::audit;
 use engine::blocks::{self, Bucket, Period, Row, Span, WEEK};
 use engine::mining::pools::{self, Pool, UNKNOWN};
 use engine::mining::{Interval, hashrate};
@@ -553,7 +554,7 @@ struct Ranked<'a> {
     rank: usize,
     empty_blocks: u32,
     slug: &'a str,
-    /// Block audits are a later task.
+    /// Over the period's audited blocks: only those this server watched arrive.
     avg_match_rate: Option<f64>,
     avg_fee_delta: Option<f64>,
     pool_unique_id: u16,
@@ -954,10 +955,13 @@ async fn compute_unchecked(
         }
         Key::Pools(i) => {
             let r = since(store, span, i.start(now)).await?;
-            let counts = if r.is_empty() {
-                Vec::new()
+            let (counts, health) = if r.is_empty() {
+                (Vec::new(), Vec::new())
             } else {
-                blocks::pool_counts(store, r.lo, r.hi).await?
+                (
+                    blocks::pool_counts(store, r.lo, r.hi).await?,
+                    audit::pool_health(store, r.lo, r.hi).await?,
+                )
             };
             let list = pools::list();
             let body = Ranking {
@@ -978,7 +982,7 @@ async fn compute_unchecked(
                             rank: n + 1,
                             empty_blocks: c.empty,
                             slug,
-                            avg_match_rate: None,
+                            avg_match_rate: avg_health(&health, c.pool),
                             avg_fee_delta: None,
                             pool_unique_id: c.pool,
                         }
@@ -1249,7 +1253,16 @@ async fn network_points(
     })
 }
 
-/// Every pool's statistics and weekly hashrate share, from four reads over the whole history.
+/// The pool's mean match rate over its audited blocks, two decimals as the reference writes
+/// it; `null` without one, as the reference answers for a pool with no audited block.
+fn avg_health(health: &[audit::PoolHealth], pool: u16) -> Option<f64> {
+    health
+        .iter()
+        .find(|h| h.pool == pool)
+        .map(|h| round(h.match_rate, 2))
+}
+
+/// Every pool's statistics and weekly hashrate share, from five reads over the whole history.
 async fn pool_family(
     store: &Store,
     table: Table,
@@ -1258,6 +1271,7 @@ async fn pool_family(
     let span = table.span;
     let list = pools::list();
     let all = blocks::pool_counts(store, span.from, span.tip).await?;
+    let health = audit::pool_health(store, span.from, span.tip).await?;
     let day = since(store, span, now.saturating_sub(DAY)).await?;
     let week = since(store, span, now.saturating_sub(7 * DAY)).await?;
     let in_day = if day.is_empty() {
@@ -1325,7 +1339,7 @@ async fn pool_family(
             block_count: counts,
             block_share: shares,
             reported_hashrate: None,
-            avg_block_health: None,
+            avg_block_health: avg_health(&health, p.id),
             total_reward: all
                 .iter()
                 .find(|c| c.pool == p.id)

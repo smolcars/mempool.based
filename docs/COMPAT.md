@@ -36,12 +36,12 @@ One table per group, each on its own page:
 | Group | Page | Rows | served | planned | different | skipped | Confirmed live |
 |---|---|---|---|---|---|---|---|
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 51 | 5 | 3 | 14 | 72 |
-| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 19 | 3 | 4 | 22 | 43 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 52 | 5 | 2 | 14 | 72 |
+| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 21 | 1 | 4 | 22 | 43 |
 | Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 26 | 18 | 5 | 6 | 31 |
-| **Total** | | **232** | **140** | **28** | **12** | **52** | **194** |
+| **Total** | | **232** | **143** | **26** | **11** | **52** | **194** |
 
-Every row's status was checked against `master` on 2026-11-12 (task C1): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
+Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -84,13 +84,6 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 |---|---|---|---|---|
 | `POST /api/v1/cpfp` | CPFP data for several transactions | Nothing: the engine answers `/v1/cpfp/:txid` | An hour | Skip until a client asks: the reference's request shape is unconfirmed, and one request per transaction already works |
 | `POST /api/v1/psbt/addparents` | A PSBT with its parents filled in | A PSBT parser on the server for untrusted input, and a node read per input | Several days | Skip: a wallet tool, not explorer data, with a large untrusted-input surface |
-
-### WebSocket messages
-
-| Item | What it is | Needs | Size | Recommendation |
-|---|---|---|---|---|
-| `vBytesPerSecond` | Mempool inflow rate on `/api/v1/ws` | Nothing: the store's minute samples have it | An hour | Build |
-| `live-2h-chart` | One statistics sample a minute on `/api/v1/ws` | Nothing: the store writes the sample | A few hours | Build, with `vBytesPerSecond` |
 
 ### Waiting on the owner
 

@@ -407,7 +407,7 @@ async fn healthz() -> Json<serde_json::Value> {
     }))
 }
 
-async fn not_found() -> ApiError {
+pub(crate) async fn not_found() -> ApiError {
     ApiError::NOT_FOUND
 }
 

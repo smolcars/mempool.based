@@ -176,6 +176,31 @@ async fn healthz_is_ok_json() {
 }
 
 #[tokio::test]
+async fn backend_info_says_the_version_and_revision_and_nothing_about_the_host() {
+    let app = App::new(&config(limits()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    let health: serde_json::Value =
+        serde_json::from_str(&get_path(&addr, "/healthz").await.body).unwrap();
+    let commit = match rbitcoin_space::REVISION {
+        "unknown" => "null".to_owned(),
+        r => format!("\"{r}\""),
+    };
+    assert_eq!(health["revision"], rbitcoin_space::REVISION);
+    let want = format!(
+        r#"{{"hostname":null,"version":"{}","gitCommit":{commit},"lightning":false,"backend":"esplora","coreVersion":null,"osVersion":null}}"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    for path in ["/api/v1/backend-info", "/signet/api/v1/backend-info"] {
+        let r = get_path(&addr, path).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        assert!(r.head.contains("content-type: application/json"), "{r:?}");
+        assert_eq!(r.body, want);
+    }
+}
+
+#[tokio::test]
 async fn app_config_lists_enabled_networks_at_the_root_only() {
     let addr = start(limits()).await;
     let r = get_path(&addr, "/app/config").await;

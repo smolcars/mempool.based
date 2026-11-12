@@ -96,6 +96,32 @@ async fn fill(dir: &Path, heights: impl Iterator<Item = u32>) {
     store.close().await;
 }
 
+/// The block hash `fill` writes at `height`.
+fn block_hash(height: u32) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    hash[..4].copy_from_slice(&height.to_le_bytes());
+    hash
+}
+
+/// Audits of `(height, hash, match rate)`, every other figure zero.
+async fn audit(dir: &Path, rows: Vec<(u32, [u8; 32], f64)>) {
+    let store = Store::open(dir, "regtest", Options::default()).unwrap();
+    store
+        .write(move |sql| {
+            let mut stmt = sql.prepare(
+                "INSERT INTO audits VALUES (?1, ?2, 0, 0, ?3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, x'')",
+            )?;
+            for (height, hash, rate) in rows {
+                stmt.execute(params![&hash[..], height, rate])?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    store.close().await;
+}
+
 /// The server over `dir`, and the count of RPC calls it makes.
 async fn start(dir: &Path) -> (String, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -270,6 +296,19 @@ fn keys(r: &Reply, path: &[&str]) -> Vec<String> {
 async fn routes_answer_from_the_table_in_the_reference_shapes() {
     let d = dir("full");
     fill(&d.0, 0..=TIP).await;
+    // Foundry USA mines the heights divisible by 3: two of its blocks audited, one in the last
+    // day; AntPool's none. The audit at 3018 is of a block that left the best chain.
+    let mut reorged = block_hash(3018);
+    reorged[31] = 1;
+    audit(
+        &d.0,
+        vec![
+            (TIP - 2, block_hash(TIP - 2), 99.0),
+            (1500, block_hash(1500), 97.5),
+            (3018, reorged, 10.0),
+        ],
+    )
+    .await;
     let (addr, calls) = start(&d.0).await;
     let get = |p: &str| {
         let target = format!("{V1}{p}");
@@ -337,6 +376,14 @@ async fn routes_answer_from_the_table_in_the_reference_shapes() {
         v["pools"][2]["emptyBlocks"], 1008,
         "heights 3k + 0 hold only the coinbase"
     );
+    // The mean over the period's audited best-chain blocks; `null` for a pool with none.
+    let rates: Vec<_> = v["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["avgMatchRate"].clone())
+        .collect();
+    assert_eq!(rates, [Value::Null, Value::Null, serde_json::json!(98.25)]);
     // Difficulty 2 at a block every 600 s: 2 × 2^32 / 600.
     let h = v["lastEstimatedHashrate"].as_f64().unwrap();
     assert!(
@@ -353,6 +400,14 @@ async fn routes_answer_from_the_table_in_the_reference_shapes() {
 
     let r = get("/pools/24h").await;
     assert_eq!(r.json()["blockCount"], 144);
+    let foundry = r.json()["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["slug"] == "foundryusa")
+        .cloned()
+        .unwrap();
+    assert_eq!(foundry["avgMatchRate"], 99.0);
     assert_eq!(r.coverage(), (Some(TIP - 143), Some("true")));
 
     let r = get("/pool/foundryusa").await;
@@ -387,6 +442,11 @@ async fn routes_answer_from_the_table_in_the_reference_shapes() {
     );
     assert!((v["blockShare"]["all"].as_f64().unwrap() - 1.0 / 3.0).abs() < 1e-12);
     assert!(v["totalReward"].is_string());
+    assert_eq!(v["avgBlockHealth"], 98.25);
+    assert_eq!(
+        get("/pool/antpool").await.json()["avgBlockHealth"],
+        Value::Null
+    );
 
     let r = get("/pool/foundryusa/hashrate").await;
     let weeks = r.json();

@@ -8,7 +8,9 @@
 
 mod db;
 
-pub use db::{Scored, by_hash, by_hashes, scored_between, scored_since, write};
+pub use db::{
+    PoolHealth, Scored, by_hash, by_hashes, pool_health, scored_between, scored_since, write,
+};
 
 use std::collections::HashSet;
 

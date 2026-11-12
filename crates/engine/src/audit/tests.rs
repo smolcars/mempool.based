@@ -554,3 +554,51 @@ async fn stored_audits_read_back_and_a_reorged_block_leaves_the_pages() {
     assert_eq!(scored_since(s, 1003).await.unwrap().len(), 1);
     assert!(by_hash(s, hash(2)).await.unwrap().is_some());
 }
+
+async fn set_pool(store: &Store, height: u32, pool: u16) {
+    store
+        .write(move |sql| {
+            sql.prepare("UPDATE blocks SET pool = ?2 WHERE height = ?1")?
+                .execute(params![height, pool])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_pool_s_health_averages_only_its_audited_best_chain_blocks() {
+    let t = temp();
+    let s = &t.1;
+    // None audited yet: no pool has a figure.
+    for h in 1..=6u8 {
+        block_row(s, u32::from(h), hash(h)).await;
+        set_pool(s, u32::from(h), if h % 2 == 0 { 7 } else { 9 }).await;
+    }
+    assert_eq!(pool_health(s, 0, 10).await.unwrap(), vec![]);
+    // Pool 7 mined 2, 4 and 6, three audited; pool 9 mined 1, 3 and 5, only 3 audited.
+    for (h, rate) in [(2u8, 99.5), (4, 98.0), (6, 96.5), (3, 90.25)] {
+        assert!(write(s, audit(u32::from(h), hash(h), rate)).await.unwrap());
+    }
+    let health = |pool, audited, match_rate| PoolHealth {
+        pool,
+        audited,
+        match_rate,
+    };
+    assert_eq!(
+        pool_health(s, 0, 10).await.unwrap(),
+        vec![health(7, 3, 98.0), health(9, 1, 90.25)]
+    );
+    // A range counts only its own heights.
+    assert_eq!(
+        pool_health(s, 4, 5).await.unwrap(),
+        vec![health(7, 1, 98.0)]
+    );
+    // A reorg replaces block 6 with another pool's: its audit counts for nobody now.
+    block_row(s, 6, hash(60)).await;
+    set_pool(s, 6, 9).await;
+    assert_eq!(
+        pool_health(s, 0, 10).await.unwrap(),
+        vec![health(7, 2, 98.75), health(9, 1, 90.25)]
+    );
+}

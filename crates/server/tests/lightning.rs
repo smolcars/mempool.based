@@ -366,6 +366,11 @@ async fn with_lightning_off_the_routes_say_so() {
         assert_eq!(r.status, 503, "{path}");
         assert_eq!(r.json()["error"], "lightning is off on this network");
     }
+    // Not served at all, so the same 404 whether Lightning is on or off.
+    for path in ["countries", "isp-ranking", "world"] {
+        let r = get(&addr, &format!("/regtest/api/v1/lightning/nodes/{path}")).await;
+        assert_eq!(r.status, 404, "{path}");
+    }
     let ready = get(&addr, "/readyz").await.json();
     assert_eq!(ready["networks"]["regtest"]["lightning"], "off");
 }
@@ -921,9 +926,24 @@ async fn nodes_channels_search_and_rankings_answer_exactly_in_both_shapes() {
         ("/app/lightning/rankings/capacity?limit=101".to_owned(), 400),
         ("/api/v1/lightning/nodes/rankings/capacity".to_owned(), 404),
         ("/app/lightning/overview?x=1".to_owned(), 400),
+        // The reference's location routes are not served: 404 like any route we do not serve,
+        // not a malformed key, while anything else in a key's place is still checked strictly.
+        ("/api/v1/lightning/nodes/countries".to_owned(), 404),
+        ("/api/v1/lightning/nodes/isp-ranking".to_owned(), 404),
+        ("/api/v1/lightning/nodes/world".to_owned(), 404),
+        ("/api/v1/lightning/nodes/country/us".to_owned(), 404),
+        ("/api/v1/lightning/nodes/isp/16509".to_owned(), 404),
+        ("/api/v1/lightning/nodes/group/x".to_owned(), 404),
+        ("/api/v1/lightning/penalties".to_owned(), 404),
+        ("/api/v1/lightning/channels-geo".to_owned(), 404),
+        ("/api/v1/lightning/nodes/countrie".to_owned(), 400),
+        ("/api/v1/lightning/nodes/world/statistics".to_owned(), 400),
     ] {
         let r = get(&addr, &format!("/regtest{p}")).await;
         assert_eq!(r.status, status, "{p}");
+        if p.contains("/nodes/countries") || p.contains("/isp-ranking") || p.ends_with("/world") {
+            assert_eq!(r.json(), serde_json::json!({ "error": "not found" }), "{p}");
+        }
         if status != 200 {
             let e = r.json()["error"].as_str().unwrap().to_owned();
             assert!(!e.contains("sqlite") && !e.contains('/'), "{p}: {e}");

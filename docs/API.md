@@ -164,6 +164,22 @@ The remaining blocks are projected from now, or from the tip's timestamp if that
 
 How we differ from the reference backend, measured side by side: progress, heights, block counts and `previousTime` match exactly and `previousRetarget` up to floating-point rounding. The reference's `timeAvg` divides the time from the period's first block to *now* by the blocks mined, so it grows between blocks and is wrong when the tip is ahead of the clock; ours uses the tip's timestamp. Its `difficultyChange` follows from that average: within 0.01 percentage points of ours on mainnet and signet, but about two points off on testnet4, where tips run hours ahead. `estimatedRetargetDate` and `remainingTime` differ accordingly.
 
+### Backend info
+
+`GET /api/v1/backend-info` says what is running, in the reference's shape and field order, with only what is true here and safe to tell a client. Code: `crates/server/src/api_v1.rs`.
+
+| Field | Here | The reference's |
+|---|---|---|
+| `hostname` | `null` | Its host's name. Private ([`SECURITY.md`](SECURITY.md) rule 17) |
+| `version` | The server's version (`0.1.0`), as `/healthz` and `/app/config` say it | Its own release |
+| `gitCommit` | The commit the binary was built from, the 40 digits `/healthz` reports as `revision` ([`DEPLOY.md`](DEPLOY.md#health)); `null` for a build without one | 9 digits of its own commit |
+| `lightning` | Whether this network serves the Lightning routes | The same |
+| `backend` | `"esplora"`: transactions and addresses come from the node's Esplora | Its address backend: `esplora`, `electrum` or `none` |
+| `coreVersion` | `null` | Its node's user agent. Asking ours would be a node call per request, and it is the node's to say |
+| `osVersion` | `null` | Its host's operating system. Private |
+
+The answer is fixed for the life of the process: no node call, `Cache-Control: public, max-age=1` as every route here. The chain-tip headers are not sent: it is not about a block.
+
 ### Fees
 
 What to pay to be mined within a horizon, and the projected blocks behind it. Computed by us from the projected blocks ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations) has the method and its measured record); code: `crates/engine/src/fees.rs` for the method, `crates/server/src/ws/fees.rs` for the task, `crates/server/src/api_v1.rs` for the routes.
@@ -377,13 +393,22 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 |---|---|---|
 | `poolId`, `poolUniqueId`, `unique_id`, `pool.id` | All the list's id | The reference numbers its own database rows; we have one id |
 | `regexes` | The list's tags, matched as literal text | The list has tags, not patterns |
-| `avgMatchRate`, `avgFeeDelta`, `avgBlockHealth`, `reportedHashrate`, `minerNames` | `null` | A pool's average over its audited blocks is not computed yet ([Block audits](#block-audits) has each block's); no pool reports hashrate to us |
+| `avgMatchRate`, `avgBlockHealth` | The mean match rate of the pool's audited blocks, two decimals: in the period for `avgMatchRate`, in the whole stored history for `avgBlockHealth`; `null` when it has none | Only blocks this server watched arrive are audited ([Block health](#block-health)). The reference answers `null` for a pool with no audited block too |
+| `avgFeeDelta`, `reportedHashrate`, `minerNames` | `null` | The reference's fee delta is a string whose unit we could not tell from its answers; no pool reports hashrate to us |
 | `USD` in the fee and reward series | Absent | No price feed yet (M3). The reference leaves it out the same way on a network without prices (observed on mempool.space's signet) |
 | Block series points | A fixed number of blocks a point (above) | The reference merges blocks mined close together into one point (its 715 points for a week's 895 blocks); where its point is one block, the values are equal |
 | `avgFee_*` (whole numbers) | Our size-weighted percentiles, rounded | rbitcoin's sub-sat rates round to `0`; use `/precise` |
 | Pool blocks | `id`, `height`, `timestamp`, `difficulty`, `tx_count`, `size`, `weight`, and `extras` with `totalFees`, `medianFee`, `feeRange`, `reward`, `pool`, `avgFee`, `avgFeeRate`, `coinbaseRaw`, `coinbaseAddress`, `coinbaseAddresses`, `coinbaseSignature` (the first payout script's assembly) and `coinbaseSignatureAscii` | The block table holds no header fields (version, bits, nonce, merkle root, previous hash, median time) and no per-transaction totals; asking the node would be a call per request. `medianFee` and `feeRange` are `null` until the block is rated, with three decimals |
 | `blocks/timestamp` | At or before the time | The reference answered the same way, not with the nearest block |
 | Coverage | `X-Data-*` headers | Not on the reference, whose history is complete |
+
+#### Block health
+
+`avgMatchRate` (`/pools/:interval`) and `avgBlockHealth` (`/pool/:slug`) are the mean of the match rates ([Block audits](#block-audits)) of the pool's audited blocks: in the period asked for, or for `avgBlockHealth` in everything the table holds. Only best-chain blocks count: an audited block that a reorg replaced counts for nobody, as in the audit pages. Two decimals, as the reference writes them.
+
+**What it covers.** A block is audited only when this server watched it arrive with the mempool engine on and a projection ready ([Block audits](#block-audits)); audits cannot be made afterwards. So the average covers the blocks since the server first ran with the engine, less any it missed, which for most pools and most periods is a small part of their blocks: a pool with two blocks audited out of hundreds gets the mean of those two. The reference's shape has no place for the count, so the answer cannot say it. A pool with no audited block in the period answers `null`, as the reference answers for one (`avgBlockHealth` of a pool whose blocks all predate its audits), never `0` or `100`. To weigh the figure, count the pool's audited blocks: `/api/v1/mining/blocks/audit/scores` and `/predictions/:interval` list every audited block by height and time, and `/pool/:slug/blocks` lists the pool's heights.
+
+**Cost.** One grouped read over the audits table joined to the block table by height and hash, done with each answer's other reads and cached with it: the audits table holds one row per block watched (about 52,000 a year), so it adds well under a millisecond to a computation and nothing to a request.
 
 #### Freshness and cost
 
@@ -455,6 +480,8 @@ The mempool through time, from the history table ([`STORE.md`](STORE.md#mempool_
 |---|---|
 | `GET /api/v1/statistics/:interval` | `[{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}]`, newest first, the reference's shape (below) |
 | `GET /app/mempool/history/:interval` | Our own shape for our chart, with our ten bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)) |
+
+Each new sample is also pushed as `live-2h-chart` on `/api/v1/ws`, serialized by the same function as a `/statistics/2h` point, and its inflow is that socket's `vBytesPerSecond` ([`WS.md`](WS.md#what-the-server-sends)).
 
 **Intervals** are exactly `2h`, `24h`, `1w`, `1m` (30 days), `3m`, `6m`, `1y` (365 days), `2y`, `3y`, `4y` or `all`; anything else is `400 invalid interval`. The reference answered `2h`, `24h`, `1w`, `1m`, `1y`, `3y` and `all` and refused `5h` (the others were not asked). Each has a fixed step, so no answer holds more than 1,460 points, and a point never mixes rows coarser than itself:
 
@@ -743,7 +770,7 @@ Values and their differences from the reference:
 
 - **Only chain-verified channels.** We list a channel only once we found its funding output unspent, six deep and paying the announced keys; the reference lists what gossip claims ([`LIGHTNING.md`](LIGHTNING.md#validation)). A node is held while it has such a channel.
 - **History starts when our peer started.** `closed_channel_count`, the closed lists, `first_seen` (the oldest funding among channels we hold: for ACINQ 2019-02-26, against the reference's 2019-01-02) and `/statistics` count only what we saw. `/statistics` starts at our first statistics snapshot and adds a point for now; its points are the node's channels at each UTC midnight rebuilt from our record of opens and closes, where the reference stores a snapshot a day.
-- **Location** (`as_number`, `city_id`, `country_id`, `subdivision_id`, `longitude`, `latitude`, `iso_code`, `as_organization`, `city`, `country`, `subdivision`) is always `null`: we have no GeoIP data. `custom_records` is always `{}`.
+- **Location** (`as_number`, `city_id`, `country_id`, `subdivision_id`, `longitude`, `latitude`, `iso_code`, `as_organization`, `city`, `country`, `subdivision`) is always `null`: we have no GeoIP data. `custom_records` is always `{}`. The reference's location routes (`/nodes/countries`, `/nodes/country/:code`, `/nodes/isp-ranking`, `/nodes/isp/:asn`, `/nodes/world`, `/channels-geo`) are `404`, as any route we do not serve, never `400` for a key they are not.
 - **Left out, because we cannot know them:** `single_funded` and each end's `funding_balance` and `closing_balance`. `funding_ratio` and `closed_by` are `null`, as the reference writes them when it does not know.
 - **`node_left` is the channel's node one** (the lower key, BOLT 7's order); the reference's left end is not always that one (for `811984x2037x0` it is ACINQ, the higher). Each end carries its own policy either way.
 - **Status:** 1 when some direction has an enabled policy, 0 otherwise, which includes channels whose policies LDK dropped after two weeks of silence (CoinGate: 468 of its 1,301 open channels active here, all 1,294 on the reference's August data); 2 closed. `closing_reason` is 1 cooperative, 2 force, 3 a breach, and `null` for a close that is neither (most likely a splice); `closing_date` is the closing block's time. `created` is the funding block's time; `updated_at` the newer policy's.

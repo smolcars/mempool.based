@@ -323,5 +323,18 @@
  },
  "track-addresses-error": {
   "track-addresses-error": "(the reference's own wording, not kept)"
+ },
+ "live-2h-chart": {
+  "live-2h-chart": {
+   "added": 1794511941,
+   "count": 73078,
+   "vbytes_per_second": 1422,
+   "mempool_byte_weight": 135780856,
+   "total_fee": 5597327,
+   "min_fee": 0.1,
+   "vsizes": [
+    32885295
+   ]
+  }
  }
 }

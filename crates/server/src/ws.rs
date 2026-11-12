@@ -119,6 +119,8 @@ pub enum Topic {
     V1Stats,
     /// `/api/v1/ws`: the `mempool-blocks` messages.
     V1MempoolBlocks,
+    /// `/api/v1/ws`: `live-2h-chart`, each mempool history sample as it is written.
+    V1LiveChart,
     /// `/api/v1/ws`: one transaction followed with `track-tx`. Shares [`Topic::Tx`]'s entry.
     V1Tx(bitcoin::Txid),
     /// `/api/v1/ws`: one address followed with `track-address`. Shares [`Topic::Address`]'s
@@ -169,6 +171,7 @@ impl Topic {
             Self::V1Blocks => "v1:blocks",
             Self::V1Stats => "v1:stats",
             Self::V1MempoolBlocks => "v1:mempool-blocks",
+            Self::V1LiveChart => "v1:live-2h-chart",
             Self::V1Tx(_) => "v1:tx",
             Self::V1Address(_) | Self::V1Addresses(_) => "v1:address",
             Self::ProjectedTxs(i) => PROJECTED_TXS.get(usize::from(i)).copied().unwrap_or(""),
