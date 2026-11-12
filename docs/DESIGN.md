@@ -163,7 +163,7 @@ An output is **Spent** (or **Being spent**, while the spending transaction is un
 - **In lists:** first eight and last eight characters with a middle ellipsis (`a3f9c2e1…7b0d44e9`), in the monospace cut. The full value is in the `title` and in the copy button.
 - **As a page subject** (block hash, txid): the full value, broken into groups of eight that alternate between text and muted color, wrapping cleanly at any width. A copy button sits at the end.
 - **Addresses** in the flow diagram: seven and five characters.
-- **Copy button:** a 28 px icon button. On press it turns positive, pops once and its label reads "Copied" for 1.4 s. If the clipboard is blocked, the press still shows its state.
+- **Copy button:** a 28 px icon button. On press it turns positive, pops once and its label reads "Copied" for 1.4 s, only when the value was copied. When the browser copied nothing, its icon turns to a cross in the negative color, "Not copied" shows above it and "Could not copy" is announced, for 3 s.
 
 ### Time
 
