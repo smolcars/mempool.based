@@ -644,6 +644,8 @@ event!(StoreWriteRecovered, "store_write_recovered", Info, keep);
 #[derive(Debug, Serialize)]
 pub struct StoreReadTimedOut {
     pub network: &'static str,
+    /// Which read: a fixed label from the store's `Read`.
+    pub read: &'static str,
     pub limit_ms: u64,
 }
 event!(StoreReadTimedOut, "store_read_timed_out", Warn);
@@ -1688,6 +1690,7 @@ mod tests {
             }),
             both(&StoreReadTimedOut {
                 network: n,
+                read: "block_counts",
                 limit_ms: 2000,
             }),
             both(&BlockRowsFollowed {

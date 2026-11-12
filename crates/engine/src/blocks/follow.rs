@@ -9,7 +9,7 @@ use bitcoin::BlockHash;
 use super::backfill::BATCH;
 use super::db::{self, RATE, REPLACE};
 use super::{Error, Header, RATED_BY_FOLLOW, Rated, Source, ZONE};
-use crate::store::{Store, params};
+use crate::store::{Read, Store, params};
 
 /// Counts [`follow`]'s writes that replaced or removed rows. The backfill drops a batch it read
 /// before one, since that batch may come from the chain the reorg left. Cheap to clone.
@@ -75,7 +75,7 @@ pub async fn follow<S: Source>(
             return Err(Error::Moved);
         }
         let (lo, hi) = (last.height, first.height);
-        stored.extend(store.read(move |sql| db::stored(sql, lo, hi)).await?);
+        stored.extend(store.read(Read::BlockFollow, move |sql| db::stored(sql, lo, hi)).await?);
         headers.extend(page);
         let tip = headers.first().map_or(0, |h| h.height);
         match lo.checked_sub(1) {
@@ -85,7 +85,7 @@ pub async fn follow<S: Source>(
     }
     // Below it, from the highest stored row down, while pages hold stale rows.
     while let Some(below) = headers.last().and_then(|h| h.height.checked_sub(1)) {
-        let Some(h) = store.read(move |sql| db::highest(sql, below)).await? else {
+        let Some(h) = store.read(Read::BlockFollow, move |sql| db::highest(sql, below)).await? else {
             break;
         };
         let page = source.headers(Some(h)).await?;
@@ -98,7 +98,7 @@ pub async fn follow<S: Source>(
             return Err(Error::Moved);
         }
         let (lo, hi) = (last.height, first.height);
-        let here = store.read(move |sql| db::stored(sql, lo, hi)).await?;
+        let here = store.read(Read::BlockFollow, move |sql| db::stored(sql, lo, hi)).await?;
         let stale_here = page
             .iter()
             .any(|h| here.get(&h.height).is_some_and(|(s, _)| *s != h.id));

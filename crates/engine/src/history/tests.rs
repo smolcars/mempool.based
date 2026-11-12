@@ -76,7 +76,7 @@ fn minute(time: u64, n: u64) -> Point {
 /// Every stored row, by level then time.
 async fn rows(store: &Store) -> Vec<(i64, Point)> {
     store
-        .read(|sql| {
+        .read(crate::store::Read::Blocks, |sql| {
             let mut stmt = sql.prepare(
                 "SELECT level, time, samples, count, vsize, fees, min_fee, band0, band1, band2, \
                  band3, band4, band5, band6, band7, band8, band9, in_count, in_vsize, out_count, \
@@ -425,7 +425,7 @@ async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_a
     let newest = i64::try_from(crate::store::MIGRATIONS.len()).unwrap();
     let version = async |store: &Store| -> (i64, i64) {
         store
-            .read(|sql| {
+            .read(crate::store::Read::Blocks, |sql| {
                 let v = sql
                     .prepare("PRAGMA user_version")?
                     .query_row([], |r| r.get(0))?;
@@ -862,7 +862,7 @@ async fn history_benchmark() {
         started.elapsed()
     );
     let n: i64 = store
-        .read(|sql| {
+        .read(crate::store::Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM mempool_history")?
                 .query_row(params![], |r| r.get(0))?)

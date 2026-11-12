@@ -71,8 +71,9 @@ impl BlockTable {
                 duration_ms: ms(*elapsed),
                 queue_depth: *queue_depth,
             }),
-            store::Event::ReadTimedOut { limit } => logging::emit(&StoreReadTimedOut {
+            store::Event::ReadTimedOut { read, limit } => logging::emit(&StoreReadTimedOut {
                 network,
+                read: read.label(),
                 limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
             }),
             store::Event::WriteFailed {

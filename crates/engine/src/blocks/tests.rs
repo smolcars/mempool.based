@@ -930,7 +930,7 @@ async fn read_benchmark() {
             .unwrap();
         time(&format!("a year's heights by time {range:?}"), s.elapsed());
         let s = Instant::now();
-        let c = t.store.read(db::counts).await.unwrap();
+        let c = t.store.read(crate::store::Read::BlockCounts, db::counts).await.unwrap();
         time(&format!("row counts {c:?}"), s.elapsed());
     }
 }

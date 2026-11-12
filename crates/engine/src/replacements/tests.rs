@@ -477,7 +477,7 @@ async fn replacements_benchmark() {
     }
     let rows: i64 = t
         .store
-        .read(|sql| {
+        .read(crate::store::Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM replacements")?
                 .query_row([], |r| r.get(0))?)
@@ -486,7 +486,7 @@ async fn replacements_benchmark() {
         .unwrap();
     let bytes: i64 = t
         .store
-        .read(|sql| {
+        .read(crate::store::Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT sum(pgsize) FROM dbstat WHERE name LIKE '%replacements%'")?
                 .query_row([], |r| r.get(0))?)

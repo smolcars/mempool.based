@@ -21,7 +21,7 @@ use tokio::time::Instant;
 
 use super::db::{self, INSERT_NEW, RATE};
 use super::{Error, RATED_BY_FOLLOW, Rated, Reorgs, Source, SourceError, ZONE};
-use crate::store::Store;
+use crate::store::{Read, Store};
 
 /// Blocks per totals step: one `getblockstats` batch of about 1.3 s of node time for full
 /// mainnet blocks, far inside the RPC timeout.
@@ -183,7 +183,7 @@ pub async fn backfill<S: Source>(
         (p.totals_done, p.rates_done) = done;
         if finished || reported.elapsed() >= TICK {
             reported = Instant::now();
-            if let Ok((rows, rated)) = store.read(db::counts).await {
+            if let Ok((rows, rated)) = store.read(Read::BlockCounts, db::counts).await {
                 (p.rows, p.rated) = (rows, rated);
             }
             (options.observer)(&Event::Progress(&p));
@@ -217,7 +217,7 @@ pub(super) async fn totals_step<S: Source>(
     let mut hi = cursor;
     let missing = loop {
         let lo = hi.saturating_sub(SCAN - 1);
-        let present = store.read(move |sql| db::present(sql, lo, hi)).await?;
+        let present = store.read(Read::Backfill, move |sql| db::present(sql, lo, hi)).await?;
         let present: std::collections::HashSet<u32> = present.into_iter().collect();
         // One run of consecutive heights, so the row checked below it is the only one under it.
         let mut missing: Vec<u32> = Vec::new();
@@ -260,7 +260,7 @@ pub(super) async fn totals_step<S: Source>(
     // and refill the heights.
     if let Some(below) = headers.last().and_then(|h| h.height.checked_sub(1)) {
         let found = store
-            .read(move |sql| match db::highest(sql, below)? {
+            .read(Read::Backfill, move |sql| match db::highest(sql, below)? {
                 Some(b) => Ok(db::stored(sql, b, b)?.remove(&b).map(|(h, _)| (b, h))),
                 None => Ok(None),
             })
@@ -315,7 +315,7 @@ async fn rates_step<S: Source>(
         return Ok((None, 0));
     }
     let Some((height, hash)) = store
-        .read(move |sql| db::next_unrated(sql, floor, cursor))
+        .read(Read::Backfill, move |sql| db::next_unrated(sql, floor, cursor))
         .await?
     else {
         return Ok((None, 0));
