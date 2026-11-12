@@ -96,6 +96,10 @@ fn out(t: Txid, vout: u32) -> OutPoint {
 }
 
 fn make(inputs: &[OutPoint], outputs: u32, tag: u32) -> Transaction {
+    make_with(inputs, outputs, tag, Sequence::MAX)
+}
+
+fn make_with(inputs: &[OutPoint], outputs: u32, tag: u32, sequence: Sequence) -> Transaction {
     Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: LockTime::from_consensus(tag),
@@ -104,7 +108,7 @@ fn make(inputs: &[OutPoint], outputs: u32, tag: u32) -> Transaction {
             .map(|o| TxIn {
                 previous_output: *o,
                 script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
+                sequence,
                 witness: Witness::new(),
             })
             .collect(),
@@ -190,10 +194,27 @@ impl Mock {
     /// Sends a transaction. Like the node's full RBF, whatever spends one of its inputs leaves,
     /// with its descendants.
     pub(crate) fn send(&self, inputs: &[OutPoint], outputs: u32, fee: u64, vsize: u64) -> Txid {
+        self.send_with(inputs, outputs, fee, vsize, false)
+    }
+
+    /// [`Mock::send`], signalling replaceability (BIP 125) when `rbf`.
+    pub(crate) fn send_with(
+        &self,
+        inputs: &[OutPoint],
+        outputs: u32,
+        fee: u64,
+        vsize: u64,
+        rbf: bool,
+    ) -> Txid {
         let mut n = self.node();
         n.next += 1;
+        let sequence = if rbf {
+            Sequence::ENABLE_RBF_NO_LOCKTIME
+        } else {
+            Sequence::MAX
+        };
         let t = MockTx {
-            tx: make(inputs, outputs, n.next),
+            tx: make_with(inputs, outputs, n.next, sequence),
             fee,
             vsize,
             time: 1_700_000_000 + u64::from(n.next),
@@ -218,7 +239,7 @@ impl Mock {
     }
 
     /// Mines these chunks as one cluster, as the node would for a child paying for its parent.
-    fn join(&self, chunks: &[&[Txid]]) {
+    pub(crate) fn join(&self, chunks: &[&[Txid]]) {
         let mut n = self.node();
         let c: Vec<ClusterChunk> = chunks
             .iter()
@@ -584,7 +605,18 @@ pub(crate) fn context_at(
     mempool: bool,
     tweak: impl FnOnce(&mut WsLimits),
 ) -> Arc<NetworkContext> {
-    let vars: HashMap<&str, &str> = [
+    context_in(electrum, esplora, mempool, None, tweak)
+}
+
+/// [`context_at`] with a store in `data_dir`.
+pub(crate) fn context_in(
+    electrum: &str,
+    esplora: &str,
+    mempool: bool,
+    data_dir: Option<&str>,
+    tweak: impl FnOnce(&mut WsLimits),
+) -> Arc<NetworkContext> {
+    let mut vars: HashMap<&str, &str> = [
         ("REGTEST_RPC_HOST", "127.0.0.1"),
         ("REGTEST_RPC_PORT", "1"),
         ("REGTEST_RPC_USER", "u"),
@@ -598,6 +630,9 @@ pub(crate) fn context_at(
     ]
     .into_iter()
     .collect();
+    if let Some(dir) = data_dir {
+        vars.insert("DATA_DIR", dir);
+    }
     let mut config = Config::from_vars(|k| vars.get(k).map(|v| (*v).to_owned())).unwrap();
     config.ws.mempool_interval = Duration::from_millis(20);
     config.ws.position_interval = Duration::from_millis(200);

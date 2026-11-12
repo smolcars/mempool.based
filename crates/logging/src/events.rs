@@ -886,6 +886,30 @@ pub struct TrackingRefused {
 }
 event!(TrackingRefused, "tracking_refused", Warn);
 
+/// The replacement record was put back from the store when the mempool engine started.
+#[derive(Debug, Serialize)]
+pub struct ReplacementsRestored {
+    pub network: &'static str,
+    pub links: usize,
+    pub duration_ms: u64,
+}
+event!(ReplacementsRestored, "replacements_restored", Info);
+
+/// The replacement record could not be read from or written to the store. At the 1st, 2nd, 4th,
+/// 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct ReplacementsStoreFailed {
+    pub network: &'static str,
+    /// `restore` or `write`.
+    pub task: &'static str,
+    /// `queue_full`, `timed_out` or `store`.
+    pub error: &'static str,
+    /// Links in the write that was lost.
+    pub links: usize,
+    pub failures: u64,
+}
+event!(ReplacementsStoreFailed, "replacements_store_failed", Warn);
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -1315,6 +1339,18 @@ mod tests {
             both(&MempoolHistoryFailed {
                 network: n,
                 error: "store",
+                failures: 1,
+            }),
+            both(&ReplacementsRestored {
+                network: n,
+                links: 9_812,
+                duration_ms: 31,
+            }),
+            both(&ReplacementsStoreFailed {
+                network: n,
+                task: "write",
+                error: "queue_full",
+                links: 3,
                 failures: 1,
             }),
             both(&TrackingSummary {

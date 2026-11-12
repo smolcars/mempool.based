@@ -131,10 +131,13 @@ pub(crate) fn run(
     let stats = Arc::new(Mutex::new(Sent::default()));
     let found = Arc::new(Mutex::new(None));
     ctx.track.attach(tracker, projector);
-    vec![
+    let (kept, writer) = crate::replacements::writer(ctx).unzip();
+    let mut tasks: Vec<JoinHandle<()>> = writer.into_iter().collect();
+    tasks.extend([
         tokio::spawn(super::track::follow_txs(
             Arc::clone(&ctx.track),
             ctx.sockets.limits.mempool_interval,
+            kept,
         )),
         tokio::spawn(hint(
             tracker.clone(),
@@ -168,7 +171,8 @@ pub(crate) fn run(
             }),
             Default::default(),
         )),
-    ]
+    ]);
+    tasks
 }
 
 /// A new block's way through the engines and the topics, for its `mempool_block` line.

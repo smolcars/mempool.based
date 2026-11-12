@@ -128,10 +128,10 @@ A subset of mempool.space's own API, for wallets and tools written against it, u
 New routes follow this pattern; the code is `crates/server/src/api_v1.rs`.
 
 - **Same shape, our numbers.** Field names, their order and their JSON types match the reference backend ([`COMPAT.md`](COMPAT.md)). The values are computed by us, from the node; where they differ from the reference's, the route's section says how and why. Clean room: shapes are observed from responses, never read from mempool.space's code or docs.
-- **Answered from memory.** A task per network keeps the answer current, woken by the Electrum events the WebSocket hub follows, and does the node fetches. A request never causes a node call (rule 8), except on the block routes, which read headers and blocks once each and keep them ([Blocks](#blocks)). Pure logic lives in `engine`, the task in its own server module.
+- **Answered from memory.** A task per network keeps the answer current, woken by the Electrum events the WebSocket hub follows, and does the node fetches. A request never causes a node call (rule 8), except on the block routes, which read headers and blocks once each and keep them ([Blocks](#blocks)), and `POST /prevouts`, which reads each outpoint asked under the batch routes' cost limit ([Prevouts](#prevouts)). Pure logic lives in `engine`, the task in its own server module.
 - **Before the first answer:** `503` `{"error": "not ready yet; retry"}` with `Retry-After: 1`.
 - **Headers:** `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height` name the tip the answer is as of. When the node cannot confirm the answer is current (Electrum is disconnected, or a newer tip could not be computed yet), `Age` gives the seconds since it was computed; the last answer is still served. `Cache-Control: public, max-age=1`. CORS is that of `/api`.
-- **Requests:** `GET` and `HEAD`. Query strings are ignored, so cache-busting parameters work. Errors use the model above.
+- **Requests:** `GET` and `HEAD`, and `POST` for `/prevouts`. Query strings are ignored, so cache-busting parameters work, except `txId[]` on `/transaction-times`. Errors use the model above.
 
 ### Difficulty adjustment
 
@@ -508,6 +508,119 @@ Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat
 - **Against the node:** `min_fee` equal at all 19. Count, virtual size and fees equal at 4; at the others we were 1 to 16 transactions (0.02 % at most) behind, with the vsize and fees of those transactions: what arrived between the projection's last update and the minute. The ten bands summed to `vsize` at every sample.
 - **Against the reference,** whose samples fall 32 s after ours: over the 18 minutes both had, its `count` was 55 to 104 higher (about 32 s of arrivals at 2.5 a second), `mempool_byte_weight` 0.03 % to 0.1 % higher and `total_fee` 0.5 % to 1.3 % higher, both growing with the mempool over those seconds. `min_fee` equal. `vsizes[0]` (under 1 sat/vB) about 5,600 vB (0.02 %) lower here and `vsizes[1]` 2,400 vB lower to 10,000 vB higher: a rate of 0.995 sat/vB prints as `1.00` and counts at 1 to 2 here, and we band by effective (chunk) rate. `vbytes_per_second` 430 to 1,160 here and 500 to 870 there, minute by minute, and 652 against 667 on average: the same arrivals, counted over minutes that start 32 s apart.
 - **Cost.** No node call: the sampler reads the engine's memory and writes about 100 bytes a minute. The routes answered in 2 to 6 ms the first time in a minute (a read and both shapes), and from memory after.
+
+### Transactions
+
+What wallets ask about unconfirmed transactions: was it replaced and by what, what does it really pay given its relatives, when was it first seen, is this address valid, what does this input spend. Code: `crates/server/src/transactions.rs`; the replacement record is `crates/engine/src/replacements/` ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)). Shapes observed on the reference backend (`fixtures/api-v1/transactions.json` holds the recorded answers the tests compare against), never read from its code.
+
+| Route | Answer | Node calls | Cache |
+|---|---|---|---|
+| `GET /api/v1/validate-address/:address` | `{address, isscript, isvalid, iswitness, scriptPubKey[, witness_program, witness_version]}`, or `{"isvalid": false}` | none | 1 day |
+| `GET /api/v1/transaction-times?txId[]=…` | First-seen time per txid, Unix seconds, in request order; `0` when unknown | none | 1 s |
+| `GET /api/v1/replacements` | The 25 newest replacement trees, newest first | none | 1 s |
+| `GET /api/v1/fullrbf/replacements` | The 25 newest trees in which something was replaced without signalling | none | 1 s |
+| `GET /api/v1/tx/:txid/rbf` | `{replacements, replaces}`: the tree holding `txid`, and what `txid` itself replaced; each `null` when there is none | none | 1 s |
+| `GET /api/v1/cpfp/:txid` | `{ancestors, bestDescendant, descendants, effectiveFeePerVsize, fee, adjustedVsize}`, or `{"ancestors": []}` | none | 1 s |
+| `POST /api/v1/prevouts` | For each `{txid, vout}` asked, `{prevout, unconfirmed}` or `null` | one or two Esplora reads per distinct outpoint, under the batch routes' cost limit | `no-store` |
+
+Every route but `validate-address` and `prevouts` answers from the mempool engine's memory and needs it on: with `{NET}_MEMPOOL_ENABLED=false` they answer `503 the mempool engine is off on this server`, and before the tracker's first cycle `503 not ready yet; retry`. `transaction-times` and `cpfp` carry the chain-tip headers of the tracker's last cycle.
+
+**Parameters,** each parsed before any work (rule 2):
+
+| Input | Rule | Refused with |
+|---|---|---|
+| `:txid` | Exactly 64 hex digits | `400 invalid txid` |
+| `txId[]` (also written `txId%5B%5D`) | Exactly 64 hex digits each, at most 100; a txid may repeat and is answered each time. Other query parameters are ignored, as everywhere under `/api/v1`. A request head is at most 16 KiB, so about 200 would not fit anyway | `400 invalid txId`, `400 at most 100 txids`, `431` from the HTTP parser past 16 KiB |
+| `:address` | Our own parser, for the network in the URL, at most 128 characters | Never refused: anything that is not an address of this network is `{"isvalid": false}`. A path that is not UTF-8 once percent-decoded is `400` |
+| `prevouts` body | A JSON array of `{"txid": <64 hex>, "vout": <u32>}`, no other fields, at most 100 items, at most `MAX_BODY_BYTES` (16 KiB, which holds about 190) | `400 body must be a JSON array of {"txid", "vout"}`, `400 invalid txid`, `400 at most 100 outpoints`, `413 body too large` |
+
+#### Replacement trees
+
+A tree is a replacement and everything it removed, recursively: its root is the newest replacement, each node's `replaces` what that one removed. Built from the replacement record, which keeps the newest `REPLACEMENTS_KEPT` (10,000) replacements and, with a `DATA_DIR`, survives restarts ([`STORE.md`](STORE.md#replacements)).
+
+```json
+{"tx": {"txid": "…", "fee": 2000, "vsize": 250, "value": 2001, "rate": 8, "time": 1794485667, "rbf": true, "fullRbf": false, "mined": true},
+ "time": 1794485667, "fullRbf": true,
+ "replaces": [{"tx": {"txid": "…", "fee": 500, "vsize": 200, "value": 1000, "rate": 2.5, "time": 1794485633, "rbf": false},
+               "time": 1794485633, "interval": 34, "fullRbf": true, "replaces": []}],
+ "mined": true}
+```
+
+| Field | Here |
+|---|---|
+| `tx.fee`, `tx.value` | Its own base fee and total output value, sats, as the tracker held them |
+| `tx.vsize`, `tx.rate` | Weight over four, unrounded, and fee over that, sat/vB, as the reference writes them (`152.25`). A whole value is written as an integer (`125`), as the reference does |
+| `tx.time`, `time` | When the node accepted it (its `getmempoolentry` time, so it survives our restarts) |
+| `tx.rbf` | It signalled replaceability itself: an input's sequence below `0xfffffffe` (BIP 125). Inherited signalling is not counted |
+| `tx.fullRbf` | On a node that replaced something: whether one of the transactions it replaced directly did not signal. Absent on a leaf, as on the reference |
+| `fullRbf` | Whether this transaction (unless it is the root) or anything below it was replaced without signalling |
+| `interval` | Seconds from this transaction's arrival to the arrival of the one that replaced it. Absent on the root |
+| `mined`, `tx.mined` | `true` on the root once we saw it confirmed, or when it went straight into a block without our seeing it in the mempool; absent otherwise |
+
+**`/fullrbf/replacements`** lists the trees whose root `fullRbf` is `true`. rbitcoin replaces whether or not a transaction signals, so on rbitcoin this is a filter on signalling, not on policy: every replacement here is a full-RBF replacement in the policy sense.
+
+#### Differences from the reference
+
+| Field or route | Here | Why |
+|---|---|---|
+| What a tree lists | Everything the replacement removed, a replaced transaction's descendants included, each as replaced by the root of its step | The tracker sees the descendants leave with their parent and records them with the same replacement ([`MEMPOOL.md`](MEMPOOL.md#why-a-transaction-left)). The reference appears to list only conflicts; not observed with descendants |
+| A root the tracker never held | `fee`, `vsize`, `value`, `rate` and `rbf` are `null`, `time` is when we saw the replacement | It was confirmed in the block that removed the original, so we never read it. Rare: a replacement mined within one poll of arriving |
+| `tx.rate` | The transaction's own fee over its size | The reference wrote a rate adjusted for unconfirmed ancestors where it had one (24 of 39 compared on mainnet). Ours is the transaction's alone; its effective rate is `/cpfp`'s |
+| A miner confirms the transaction we saw replaced | The mined one is the newest end and replaced the other; its figures are `null` | What happened last: the block's transaction pushed out the one in our mempool. The reference keeps "B replaced A" and marks A mined |
+| Order of a node's fields | `tx`, `time`, `interval`, `fullRbf`, `replaces`, then `mined` | The reference writes `interval` before `fullRbf` on a leaf and last on a node with children; we use one order |
+| History | The newest 10,000 replacements, from when the server first ran with the engine on | Bounded by `REPLACEMENTS_KEPT`. The reference's own retention was not observed |
+| `rbf` replaces | What `txid` replaced directly, including descendants that left with them | As above |
+
+#### CPFP
+
+From the projected blocks' copy of the transaction's cluster (the node's own chunks, from `getmempoolcluster`, at most one update behind) and the tracker's records and inputs, as the relatives route ([`FRONTEND.md`](FRONTEND.md#a-transactions-relatives-and-replacements)). A request costs a few hash-map lookups over at most 64 transactions under the engines' read locks, on a blocking thread because a pack can hold the projector's lock for up to about 170 ms on mainnet. It never asks the node.
+
+| Field | Here |
+|---|---|
+| `ancestors`, `descendants` | Every mempool transaction it spends from or that spends from it, transitively, within its cluster, as `{txid, fee, weight}`, in the cluster's mining order. The reference listed fewer (one ancestor of 24 for one mainnet transaction) |
+| `bestDescendant` | The descendant mined last in the transaction's own chunk: the child whose fee lifts it. `null` unless the chunk pays more per vbyte than the transaction alone does, so `null` when nothing lifts it |
+| `effectiveFeePerVsize` | The node's own chunk rate: the chunk's fee (with `prioritisetransaction` deltas) over its sigop-adjusted weight over four. This is the rate mining selection uses on rbitcoin, not an estimate from ancestors and descendants |
+| `fee` | Its own base fee |
+| `adjustedVsize` | Its sigop-adjusted vsize from the node, a whole number. The reference wrote weight over four (`149.25`) |
+| `sigops` | Absent: we count no sigops. A client that needs it should treat it as unknown |
+
+Not in the mempool (confirmed, replaced, never seen), or in it but not placed by the projected blocks yet (the second or so after it arrives): `{"ancestors": []}`, as the reference answers confirmed and unknown transactions and the ones it has not processed yet. An invalid txid is `400 invalid txid` where the reference answered `501 Invalid transaction ID`.
+
+#### First-seen times
+
+A time is known for a transaction in the mempool now (the node's accept time, so it survives our restarts), and for a transaction the replacement record holds, replaced or replacement, even after it left the mempool. Everything else is `0`: a transaction that confirmed (the reference also answers `0` for those), one that left for another reason, or one never seen. Times listed in block audits are not looked up: they are stored per block, not by txid. Our times are the node's own, so they read about a second earlier than the reference's, which stamps when it saw the transaction.
+
+#### Address validation
+
+Our own parser for the network in the URL, never the node. The fields are those of rbitcoin's `validateaddress`, in its order: `isscript` is `true` for P2SH, P2WSH, P2TR and pay-to-anchor; `witness_program` and `witness_version` only for a witness address; bech32 comes back in lower case. An address of another network is `{"isvalid": false}`, as on the reference, which also answers that for anything it cannot parse. Equal to the reference's answers byte for byte on the nine mainnet cases recorded (`fixtures/api-v1/transactions.json`).
+
+#### Prevouts
+
+For each outpoint in the body, in order: `{"prevout": <the output>, "unconfirmed": <bool>}`, or `null` when the transaction or the output does not exist. The output has `scriptpubkey`, `scriptpubkey_address` (when the output has an address), `scriptpubkey_asm`, `scriptpubkey_type` and `value`, as Esplora writes them.
+
+**Node work, bounded.** Per distinct outpoint, one Esplora `/tx/:txid/out/:vout` read (confirmed outputs only, a point lookup), skipped when the tracker holds the transaction; when that finds nothing, one `/tx/:txid`, shared by every outpoint of that transaction in the request. So at most 200 reads for the largest body, one at a time. The whole request is one call under the address and batch routes' cost limit ([above](#protection-for-the-node)): it waits for one of the network's four slots, counts against the twelve running or waiting and the client's share, and holds its slot until the node has answered its last read, even after the request timed out. No read starts more than 60 seconds after the batch's first, and each read is abandoned after 60 seconds, so a batch holds its slot two minutes at most; one cut short by that deadline is `504 request timed out`. Identical bodies at the same moment share one run. A read the node fails is `502 upstream unavailable` (`504` on a timeout) for the whole request.
+
+Differences: the reference wrote `"scriptpubkey_address": ""` for an output without an address and put `value` first for a confirmed output; we leave the field out and use one order. No chain-tip headers: the reads may straddle a block.
+
+#### Cost and comparison
+
+Every route but `prevouts` asks the node nothing: a request is a parse and a few hash-map lookups under the engines' read locks (`cpfp` over at most 64 transactions, `transaction-times` over at most 100). The two tree lists are built once per change of the replacement record and kept, so a request between changes copies bytes. The record holds at most `REPLACEMENTS_KEPT` replacements, about 0.3 KB each in memory (3 MB at the default bound); the store holds the same rows at 205 bytes each (2.1 MB, [`STORE.md`](STORE.md#replacements)).
+
+**Against the node and the reference,** mainnet, 2026-11-12, 12:43 to 13:30 UTC: one release build with the engine on (59,000 to 63,000 transactions, read-only, blocks 975,555 and 975,556), then a restart on the final build. Server times are from a client on the same machine; the node is on the LAN.
+
+| Route | First request | Repeated |
+|---|---|---|
+| `validate-address` | 0.6 ms | 0.25 ms |
+| `transaction-times`, 50 txids | 0.3 ms | 0.27 ms |
+| `replacements`, `fullrbf/replacements` | 0.3 ms | 0.26 ms |
+| `tx/:txid/rbf` | 0.23 ms | 0.21 ms |
+| `cpfp` (a 64-transaction cluster) | 0.22 ms | 0.19 ms |
+| `prevouts`, 10 mempool outpoints | 60 to 190 ms: ten `/tx/:txid` reads, one at a time | the same: no answer is kept |
+
+- **Replacements.** After 47 minutes the record held 436 replacements (140 with their replacement mined, 16 whose replacement the tracker never held), 106 KB on disk. Of our 46 transactions in the 25 newest trees, 41 were in the reference's 25. Fee, size, value and signalling were equal for every one we both held in the mempool. Our times are the node's accept times, 1 to 2 s before the reference's own stamps; our `rate` is each transaction's own, where the reference wrote an ancestor-adjusted rate for 24 of the 39 compared in the first check. The rest differ where a miner confirmed the transaction we had seen replaced: the reference keeps "B replaced A" and marks A mined, we record that the mined A replaced B, with A as the newest end and `mined`; its figures are then `null`, since its own link, which held them, is dropped (a known gap).
+- **Restart.** The final build read the 437 stored replacements back in under a millisecond, and every route answered from them.
+- **CPFP**, eight transactions with unconfirmed relatives: the effective rate equal to the reference's to the last digit for four, and within 0.08 % for three, where the reference's own view of the cluster was older (it listed fewer descendants: 15 against our 18). Ancestors: equal counts for six, where the reference listed 0 of 9 for one. Descendants: ours are every descendant in the cluster, the reference's often fewer (10 of 33). `bestDescendant` was `null` on the reference for all of them; ours names one for 32 of 34 checked, because on these chains of 0.12 sat/vB transactions the chunk pays a little more than the transaction alone.
+- **First-seen.** Equal to the node's `getmempoolentry` time; 1 to 2 s before the reference's, as above. Transactions that left the mempool as replaced: ours from the record, `0` on the reference.
 
 ## Using it from the frontend
 

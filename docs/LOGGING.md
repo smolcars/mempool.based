@@ -155,6 +155,8 @@ The `tx:` and `address:` topics ([`WS.md`](WS.md#following-a-transaction-or-an-a
 |---|---|---|---|
 | `tracking_summary` | info | `network`, `txs`, `addresses`, `subscribed`, `refused`, `messages`, `bytes`, `address_errors`, `replacements`, `replaced` | Once a minute per network while anything is followed or happened: transactions and addresses followed now, new ones followed in the minute, refused for a full server, messages sent and their bytes (encoded once), addresses the node would not or could not watch, the replacement record's size now and the replacements recorded in the minute |
 | `tracking_refused` | warn | `network`, `kind`, `reason`, `total` | A socket was refused a transaction (`kind` `tx`) or address (`address`) because the network already follows `WS_TRACKED_TXS_TOTAL` or `WS_TRACKED_ADDRESSES_TOTAL` (`reason` `server_full`). At a total of 1, 2, 4, 8… per kind and network |
+| `replacements_restored` | info | `network`, `links`, `duration_ms` | The replacement record was put back from the store when the mempool engine started ([`STORE.md`](STORE.md#replacements)): `links` read, oldest first. Once per network per start, with a `DATA_DIR` |
+| `replacements_store_failed` | warn | `network`, `task`, `error`, `links`, `failures` | The record could not be read back (`task` `restore`) or a change written (`write`): `error` is `queue_full` (the writer was 64 writes behind and this one was dropped; memory still has it), `timed_out` or `store`. `links` is how many the lost write held. At the 1st, 2nd, 4th, 8th… failure in a row |
 
 ### Derived data
 

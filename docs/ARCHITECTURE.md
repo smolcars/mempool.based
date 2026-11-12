@@ -85,7 +85,7 @@ One SQLite file per network, in WAL mode.
 
 - **One writer task** owns all writes. API handlers read through separate read-only connections.
 - **Migrations** are numbered SQL files applied in order, tracked with `user_version`.
-- **Everything derivable is rebuildable.** Dropping the file loses only what was observed live: mempool history, first-seen times and block audits.
+- **Everything derivable is rebuildable.** Dropping the file loses only what was observed live: mempool history, block audits (with the first-seen times they list) and the replacement record.
 
 ## Frontend
 

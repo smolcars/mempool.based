@@ -22,6 +22,7 @@ pub mod request_log;
 mod serve;
 pub mod statistics;
 pub mod summary;
+mod transactions;
 mod v1_blocks;
 pub mod ws;
 
@@ -107,6 +108,8 @@ pub struct NetworkContext {
     pub v1: Arc<ws::v1::Compat>,
     /// Esplora headers by hash for the `/api/v1` block routes.
     pub block_headers: v1_blocks::Headers,
+    /// `/api/v1/replacements` and `/api/v1/fullrbf/replacements`, built once per change.
+    pub trees: transactions::Trees,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -159,6 +162,7 @@ impl NetworkContext {
             history: statistics::History::default(),
             v1: Arc::new(ws::v1::Compat::new(Some(&url))),
             block_headers: v1_blocks::Headers::default(),
+            trees: transactions::Trees::default(),
         })
     }
 }
@@ -177,6 +181,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .merge(statistics::app_routes())
         .merge(api_v1::routes())
         .merge(audits::routes())
+        .merge(transactions::routes())
 }
 
 /// The whole application, ready to serve.
