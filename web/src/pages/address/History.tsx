@@ -1,0 +1,477 @@
+import { useSearchParams } from "@solidjs/router";
+import {
+  batch,
+  createComputed,
+  createMemo,
+  createSignal,
+  For,
+  type JSX,
+  Match,
+  on,
+  onCleanup,
+  type Resource,
+  Show,
+  Switch,
+} from "solid-js";
+import { Amount } from "../../components/Amount";
+import "../../components/Button.css";
+import { type Column, DataTable } from "../../components/DataTable";
+import { FeeRate } from "../../components/FeeRate";
+import { Hash } from "../../components/Hash";
+import "../../components/SectionHeader.css";
+import { Empty, ErrorState } from "../../components/States";
+import { TimeAgo } from "../../components/Time";
+import { createApi, fetchApi } from "../../lib/api";
+import type { AddressStats, Transaction, Utxo } from "../../lib/esplora";
+import { groupDigits, MISSING } from "../../lib/format";
+import { NETWORK_NAMES, paths } from "../../lib/network";
+import { useNetwork } from "../../lib/page";
+import {
+  confirmations,
+  isCoinbase,
+  mergePages,
+  netChange,
+  pageIsFull,
+  refusal,
+  sortUtxos,
+  txFeeRate,
+} from "./address";
+import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
+
+/** Confirmed transactions per page of address history; the first page adds the unconfirmed ones. */
+export const PAGE = 25;
+/** Unspent outputs drawn at a time. The list arrives whole; this bounds the DOM. */
+export const UTXO_STEP = 100;
+
+const VIEWS = [
+  { id: "transactions", label: "Transactions" },
+  { id: "unspent", label: "Unspent outputs" },
+] as const;
+type View = (typeof VIEWS)[number]["id"];
+
+/** Rows drawn while a list loads: as many as will arrive, when the count is known. */
+const placeholders = (count: number | undefined): null[] =>
+  Array.from({ length: Math.max(1, Math.min(count ?? 6, PAGE)) }, () => null);
+
+const plural = (n: number, one: string, many: string) =>
+  `${groupDigits(n)} ${n === 1 ? one : many}`;
+
+/**
+ * The address's transactions and unspent outputs, as two views of one section. The view is in
+ * the URL (`?view=unspent`), so a link or a reload opens the same one. Loaded pages survive a
+ * switch between views.
+ */
+export function History(props: {
+  address: string;
+  stats: Resource<AddressStats>;
+  first: Resource<Transaction[]>;
+  retryFirst: () => void;
+  /** Hands the page a function that refreshes what this section loaded on its own. */
+  onRefresh: (refresh: () => void) => void;
+}) {
+  const network = useNetwork();
+  const path = `/address/${encodeURIComponent(props.address)}`;
+  const [search, setSearch] = useSearchParams<{ view: string }>();
+  const view = (): View => (search.view === "unspent" ? "unspent" : "transactions");
+  const tabs: HTMLButtonElement[] = [];
+
+  const select = (id: View, focus = false) => {
+    setSearch({ view: id === "transactions" ? undefined : id }, { replace: true, scroll: false });
+    if (focus) tabs[VIEWS.findIndex((v) => v.id === id)]?.focus();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    const i = VIEWS.findIndex((v) => v.id === view());
+    const last = VIEWS.length - 1;
+    const to =
+      e.key === "ArrowRight"
+        ? (i + 1) % VIEWS.length
+        : e.key === "ArrowLeft"
+          ? (i + last) % VIEWS.length
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? last
+              : -1;
+    const next = VIEWS[to];
+    if (!next) return;
+    e.preventDefault();
+    select(next.id, true);
+  };
+
+  // Transactions: the first page comes from the page (it refreshes on focus), later pages from here.
+  const [later, setLater] = createSignal<Transaction[]>([]);
+  const [lastPageFull, setLastPageFull] = createSignal(true);
+  const [loadingMore, setLoadingMore] = createSignal(false);
+  const [moreError, setMoreError] = createSignal<unknown>();
+  const controller = new AbortController();
+  onCleanup(() => controller.abort());
+
+  const first = () => settled(props.first);
+  const shown = createMemo(() => {
+    const f = first();
+    return f ? mergePages(f, later()) : undefined;
+  });
+  const total = () => {
+    const s = settled(props.stats);
+    return s ? s.chain_stats.tx_count + s.mempool_stats.tx_count : undefined;
+  };
+  const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : lastPageFull());
+
+  // A transaction that arrives with a refresh flashes once, so the eye finds it.
+  let known: Set<string> | undefined;
+  let fresh = new Set<string>();
+  createComputed(
+    on(first, (f) => {
+      if (!f) return;
+      fresh = new Set(known ? f.map((t) => t.txid).filter((id) => !known?.has(id)) : []);
+      known = new Set([...(known ?? []), ...f.map((t) => t.txid)]);
+    }),
+  );
+
+  const loadMore = async () => {
+    const list = shown();
+    const last = list?.[list.length - 1];
+    if (!last || loadingMore()) return;
+    setLoadingMore(true);
+    setMoreError(undefined);
+    try {
+      const page = await fetchApi<Transaction[]>(
+        network(),
+        `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
+        { signal: controller.signal },
+      );
+      batch(() => {
+        setLater((l) => [...l, ...page]);
+        setLastPageFull(pageIsFull(page, PAGE));
+        setLoadingMore(false);
+      });
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      batch(() => {
+        setMoreError(e);
+        setLoadingMore(false);
+      });
+    }
+  };
+
+  // Unspent outputs: asked for only once the view is opened, and never when the node has already
+  // refused this address's totals, because it refuses its unspent outputs for the same reason.
+  const statsFailure = () =>
+    props.stats.state === "errored" ? refusal(props.stats.error) : undefined;
+  const [opened, setOpened] = createSignal(false);
+  createComputed(() => {
+    if (view() === "unspent") setOpened(true);
+  });
+  const statsKnown = () => props.stats.state !== "unresolved" && props.stats.state !== "pending";
+  const wantUtxos = () => opened() && statsKnown() && statsFailure() !== "too-large";
+  const [utxos, { refetch: refetchUtxos }] = createApi<Utxo[]>(() => wantUtxos() && `${path}/utxo`);
+  const [tip, { refetch: refetchTip }] = createApi<string>(
+    () => wantUtxos() && "/blocks/tip/height",
+    { as: "text" },
+  );
+  props.onRefresh(() => {
+    if (utxos.state === "ready") refetchUtxos();
+    if (tip.state === "ready") refetchTip();
+  });
+
+  const meta = () => {
+    if (view() === "transactions") {
+      const list = shown();
+      if (!list || list.length === 0) return "";
+      const n = total();
+      return n === undefined
+        ? `${groupDigits(list.length)} shown`
+        : `${groupDigits(list.length)} of ${groupDigits(n)}`;
+    }
+    const u = settled(utxos);
+    return u ? plural(u.length, "output", "outputs") : "";
+  };
+
+  return (
+    <section class="address-history" aria-label="History">
+      <div class="section__head address-history__head">
+        <div class="address-tabs" role="tablist" aria-label="Show" onKeyDown={onKeyDown}>
+          <For each={VIEWS}>
+            {(v, i) => (
+              <button
+                ref={(el) => {
+                  tabs[i()] = el;
+                }}
+                type="button"
+                role="tab"
+                class="address-tab"
+                id={`address-tab-${v.id}`}
+                aria-controls="address-panel"
+                aria-selected={view() === v.id}
+                tabindex={view() === v.id ? 0 : -1}
+                onClick={() => select(v.id)}
+              >
+                {v.label}
+              </button>
+            )}
+          </For>
+        </div>
+        <span class="section__meta num">{meta()}</span>
+      </div>
+      <div
+        class="address-panel"
+        role="tabpanel"
+        id="address-panel"
+        aria-labelledby={`address-tab-${view()}`}
+      >
+        <Show
+          when={view() === "unspent"}
+          fallback={
+            <Transactions
+              address={props.address}
+              first={props.first}
+              retryFirst={props.retryFirst}
+              shown={shown()}
+              total={total()}
+              rowClass={(tx) => (tx && fresh.has(tx.txid) ? "address-row--new" : undefined)}
+              more={
+                <Show when={shown()}>
+                  <div class="address-more">
+                    <Show when={moreError()}>
+                      {(e) => <ErrorState title="Could not load more transactions" error={e()} />}
+                    </Show>
+                    <Show when={hasNext() || moreError()}>
+                      <button
+                        class="btn"
+                        type="button"
+                        onClick={loadMore}
+                        aria-disabled={loadingMore()}
+                      >
+                        {loadingMore()
+                          ? "Loading…"
+                          : moreError()
+                            ? "Try again"
+                            : `Show ${PAGE} more`}
+                      </button>
+                    </Show>
+                    {/* Phones have no room for the count in the section head. */}
+                    <span class="address-more__count num">{meta()}</span>
+                  </div>
+                </Show>
+              }
+            />
+          }
+        >
+          <Switch>
+            <Match when={statsFailure() === "too-large"}>
+              <Notice title="Unspent outputs are not available for this address">
+                The node refuses to list them for the same reason it refuses the totals: the address
+                has too much history.
+              </Notice>
+            </Match>
+            <Match when={true}>
+              <Unspent utxos={utxos} tip={tip} retry={() => refetchUtxos()} />
+            </Match>
+          </Switch>
+        </Show>
+      </div>
+    </section>
+  );
+}
+
+/** When a transaction confirmed, or that it has not. */
+function When(props: { tx: Transaction }) {
+  return (
+    <Show when={props.tx.status.confirmed} fallback={<UnconfirmedMark />}>
+      <Show when={props.tx.status.block_time} fallback={MISSING}>
+        {(t) => <TimeAgo time={t()} />}
+      </Show>
+    </Show>
+  );
+}
+
+function Transactions(props: {
+  address: string;
+  first: Resource<Transaction[]>;
+  retryFirst: () => void;
+  shown: Transaction[] | undefined;
+  total: number | undefined;
+  rowClass: (tx: Transaction | null) => string | undefined;
+  more: JSX.Element;
+}) {
+  const network = useNetwork();
+  const columns: Column<Transaction | null>[] = [
+    {
+      header: "Time",
+      optional: true,
+      cell: (tx) => (tx ? <When tx={tx} /> : <Skeleton width="8ch" />),
+    },
+    {
+      header: "Transaction",
+      cell: (tx) =>
+        tx ? (
+          <span class="address-txcell">
+            <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+            {/* Phones drop the time column, so the time moves under the txid. */}
+            <span class="address-txcell__when">
+              <When tx={tx} />
+            </span>
+          </span>
+        ) : (
+          <Skeleton width="19ch" />
+        ),
+    },
+    {
+      header: "This address, BTC",
+      numeric: true,
+      cell: (tx) => {
+        if (!tx) return <Skeleton width="11ch" />;
+        const sats = netChange(tx, props.address);
+        return sats === null ? (
+          <span title="The node no longer keeps this transaction's inputs">{MISSING}</span>
+        ) : (
+          <Amount sats={sats} signed unit={false} />
+        );
+      },
+    },
+    {
+      header: "Fee rate, sat/vB",
+      numeric: true,
+      optional: true,
+      cell: (tx) => {
+        if (!tx) return <Skeleton width="6ch" />;
+        if (isCoinbase(tx)) return <span class="muted">Coinbase</span>;
+        const rate = txFeeRate(tx);
+        return rate === null ? MISSING : <FeeRate rate={rate} unit={false} />;
+      },
+    },
+  ];
+
+  return (
+    <Switch>
+      <Match when={props.first.state === "errored"}>
+        <ErrorState
+          title="Could not load this address's transactions"
+          error={props.first.error}
+          retry={props.retryFirst}
+        />
+      </Match>
+      <Match when={props.shown?.length === 0}>
+        <Empty title="This address has never been used">
+          No transaction on {NETWORK_NAMES[network()]} has paid to it or spent from it. A payment to
+          it will show here once it reaches the mempool.
+        </Empty>
+      </Match>
+      <Match when={true}>
+        <div class="address-txs" aria-busy={props.shown === undefined}>
+          <DataTable
+            caption="Transactions of this address, newest first"
+            columns={columns}
+            rows={props.shown ?? placeholders(props.total)}
+            rowClass={props.rowClass}
+          />
+          <Show when={props.shown === undefined}>
+            <span class="visually-hidden" role="status">
+              Loading transactions
+            </span>
+          </Show>
+        </div>
+        {props.more}
+      </Match>
+    </Switch>
+  );
+}
+
+/** An output's confirmations, or that it has none yet. `words` adds the noun, for phones. */
+function Confirmations(props: { utxo: Utxo; tip: number | undefined; words?: boolean }) {
+  return (
+    <Show when={props.utxo.status.confirmed} fallback={<UnconfirmedMark />}>
+      <Show when={props.tip} fallback={<Skeleton width="4ch" />}>
+        {(tip) => {
+          const n = () => confirmations(props.utxo, tip());
+          return (
+            <span class="num">
+              {props.words ? plural(n(), "confirmation", "confirmations") : groupDigits(n())}
+            </span>
+          );
+        }}
+      </Show>
+    </Show>
+  );
+}
+
+function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry: () => void }) {
+  const [limit, setLimit] = createSignal(UTXO_STEP);
+  const sorted = createMemo(() => {
+    const u = settled(props.utxos);
+    return u ? sortUtxos(u) : undefined;
+  });
+  const tipHeight = () => {
+    const t = Number(settled(props.tip));
+    return Number.isSafeInteger(t) ? t : undefined;
+  };
+  const columns: Column<Utxo | null>[] = [
+    {
+      header: "Output",
+      cell: (u) =>
+        u ? (
+          <span class="address-txcell">
+            <span class="address-outpoint">
+              <Hash value={u.txid} href={paths.tx(u.txid)} copy={false} />
+              <span class="address-outpoint__vout num">:{u.vout}</span>
+            </span>
+            {/* Phones drop the confirmations column, so the count moves under the output. */}
+            <span class="address-txcell__when">
+              <Confirmations utxo={u} tip={tipHeight()} words />
+            </span>
+          </span>
+        ) : (
+          <Skeleton width="22ch" />
+        ),
+    },
+    {
+      header: "Amount, BTC",
+      numeric: true,
+      cell: (u) => (u ? <Amount sats={u.value} unit={false} /> : <Skeleton width="10ch" />),
+    },
+    {
+      header: "Confirmations",
+      numeric: true,
+      optional: true,
+      cell: (u) => (u ? <Confirmations utxo={u} tip={tipHeight()} /> : <Skeleton width="4ch" />),
+    },
+  ];
+  const rest = () => (sorted()?.length ?? 0) - limit();
+
+  return (
+    <Switch>
+      <Match when={props.utxos.state === "errored"}>
+        <ErrorState
+          title="Could not load the unspent outputs"
+          error={props.utxos.error}
+          retry={props.retry}
+        />
+      </Match>
+      <Match when={sorted()?.length === 0}>
+        <Empty title="No unspent outputs">
+          This address holds no coins: everything paid to it has been spent, or nothing has been
+          paid to it yet.
+        </Empty>
+      </Match>
+      <Match when={true}>
+        <div class="address-utxos" aria-busy={sorted() === undefined}>
+          <DataTable
+            caption="Unspent outputs of this address, newest first"
+            columns={columns}
+            rows={sorted()?.slice(0, limit()) ?? placeholders(undefined)}
+          />
+        </div>
+        <Show when={rest() > 0}>
+          <div class="address-more">
+            <button class="btn" type="button" onClick={() => setLimit((n) => n + UTXO_STEP)}>
+              Show {groupDigits(Math.min(rest(), UTXO_STEP))} more
+            </button>
+            <span class="address-more__count address-more__count--always num">
+              {groupDigits(limit())} of {groupDigits(sorted()?.length ?? 0)} shown
+            </span>
+          </div>
+        </Show>
+      </Match>
+    </Switch>
+  );
+}
