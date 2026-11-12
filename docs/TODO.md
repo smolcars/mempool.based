@@ -120,6 +120,11 @@ Refined when M4 lands.
 | C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
-| Q3 | Performance pass against the budgets | M4 | doing |
+| Q3 | Performance pass against the budgets | M4 | built, waiting for review (the reviewer is not starting); branch `t3/performance-benchmarks` |
+| PF1 | Count rate-limit refusals instead of logging each one: a single flooding client made the server write 911 MB of log in 30 s | Q3 | todo |
+| PF2 | Build store-backed answers once per tip instead of per request: they cost 8 ms at 100 clients and 46 ms at 1,000 | Q3 | todo |
+| PF3 | Hold immutable node answers in memory: `/api/block/:hash` misses the 10 ms budget because it is passed through uncached | Q3 | todo |
+| PF4 | Shorten the page's request chain on slow networks: `/app/config` waits behind 15 small chunks on six connections, about 1 to 1.5 s | Q3 | todo |
+| PF5 | Document host limits for many sockets in the operator guide: delivery stalled at 10,000 sockets when the host ran short of network buffers | Q3, Q4 | todo |
 | Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | doing |
 | Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | doing |
