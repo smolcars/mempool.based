@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ConnectInfo;
-use axum::http::Method;
 use axum::response::Response;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -45,12 +44,11 @@ impl Early {
         req: &mut hyper::Request<Incoming>,
         peer: SocketAddr,
     ) -> Result<Option<Hold>, Response> {
-        // Preflights are answered before the limits (`cors`), as they always were.
-        if req.method() == Method::OPTIONS {
-            return Ok(None);
-        }
         let path = req.uri().path();
-        match self.limiter.check(req.headers(), path, peer.ip()) {
+        match self
+            .limiter
+            .check(req.method(), req.headers(), path, peer.ip())
+        {
             Ok((hold, addr, who)) => {
                 req.extensions_mut().insert(Checked::Admitted { addr, who });
                 Ok(Some(hold))

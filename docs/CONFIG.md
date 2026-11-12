@@ -69,7 +69,7 @@ What each setting changes, and the event catalogue, are in [`LOGGING.md`](LOGGIN
 
 ## Limits
 
-Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md) rules 6 and 7). Each must be a positive integer. The per-client limits below apply to requests a handler answers (`/api`, `/app`, `/healthz`, `/readyz`, under any network prefix); pages and static files have their own fixed per-client limits ([below](#static-files)), so loading the app never uses up the allowance its API calls need. Refusals are small JSON errors: `429` with `Retry-After: 1` when one client is over its share, `503` when the server as a whole is, `413` for a body that is too large and `504` for a request that ran out of time.
+Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md) rules 6 and 7). Each must be a positive integer. The per-client limits below apply to requests a handler answers (`/api`, `/app`, `/healthz`, `/readyz`, under any network prefix); pages and static files have their own fixed per-client limits ([below](#static-files)), so loading the app never uses up the allowance its API calls need; API preflights have their own too ([below](#preflights)). Refusals are small JSON errors: `429` with `Retry-After: 1` when one client is over its share, `503` when the server as a whole is, `413` for a body that is too large and `504` for a request that ran out of time.
 
 | Variable | Default | Protects against |
 |---|---|---|
@@ -131,6 +131,10 @@ The browser tests run at these defaults too, each test as a client of its own be
 ### Static files
 
 Pages and the files under `/assets` are answered from memory or disk with no node work behind them. They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+
+### Preflights
+
+A browser sends an `OPTIONS` preflight before some cross-origin calls to `/api` (a `POST` with a JSON body, for one) and caches the answer for up to a day. Preflights to `/api` are counted in a per-client table of their own with the API's numbers: `CLIENT_RATE_PER_SEC`, `CLIENT_BURST` and `CLIENT_MAX_CONCURRENT_REQUESTS`, and `MAX_TRACKED_CLIENTS` entries. A page sends at most one preflight per call, so a page whose calls are allowed is never refused their preflights, and a preflight never spends the token of the call it precedes. A client flooding preflights is refused with `429` past its allowance, and the refusals are summarised like any other ([`LOGGING.md`](LOGGING.md#refusals)). An `OPTIONS` outside `/api` is no preflight we answer and is counted like any request to its path.
 
 ### Address and batch routes
 

@@ -348,6 +348,22 @@ async fn start_stoppable(
 /// Sends `count` GETs of `/app/config` down one connection, each naming `client(i)` as the
 /// client, and returns how many were answered 200 and 429.
 async fn pipeline(addr: &str, count: usize, client: impl Fn(usize) -> String) -> (usize, usize) {
+    let raw = exchange(addr, count, |i| {
+        format!(
+            "GET /app/config HTTP/1.1\r\nHost: t\r\nX-Forwarded-For: {}\r\n",
+            client(i)
+        )
+    })
+    .await;
+    (
+        raw.matches("HTTP/1.1 200").count(),
+        raw.matches("HTTP/1.1 429").count(),
+    )
+}
+
+/// Sends `count` requests down one connection, each `head(i)` (request line and headers without
+/// `Connection` or the blank line), and returns every response as text.
+async fn exchange(addr: &str, count: usize, head: impl Fn(usize) -> String) -> String {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut reqs = String::new();
     for i in 0..count {
@@ -356,10 +372,7 @@ async fn pipeline(addr: &str, count: usize, client: impl Fn(usize) -> String) ->
         } else {
             "keep-alive"
         };
-        reqs.push_str(&format!(
-            "GET /app/config HTTP/1.1\r\nHost: t\r\nX-Forwarded-For: {}\r\nConnection: {close}\r\n\r\n",
-            client(i)
-        ));
+        reqs.push_str(&format!("{}Connection: {close}\r\n\r\n", head(i)));
     }
     let (mut rd, mut wr) = stream.split();
     let (_, raw) = tokio::join!(wr.write_all(reqs.as_bytes()), async {
@@ -367,10 +380,14 @@ async fn pipeline(addr: &str, count: usize, client: impl Fn(usize) -> String) ->
         rd.read_to_end(&mut raw).await.unwrap();
         raw
     });
-    let raw = String::from_utf8_lossy(&raw);
-    (
-        raw.matches("HTTP/1.1 200").count(),
-        raw.matches("HTTP/1.1 429").count(),
+    String::from_utf8_lossy(&raw).into_owned()
+}
+
+/// A browser's preflight for a cross-origin POST to the API, from `client`.
+fn preflight(client: &str) -> String {
+    format!(
+        "OPTIONS /signet/api/tx HTTP/1.1\r\nHost: t\r\nOrigin: https://wallet.example\r\n\
+         Access-Control-Request-Method: POST\r\nX-Forwarded-For: {client}\r\n"
     )
 }
 
@@ -464,9 +481,14 @@ async fn many_clients_each_over_its_limit_share_one_summary() {
     assert_eq!(requests.filter(|v| v["status"] == 429).count(), 1);
     let s = lines
         .iter()
-        .find(|v| v["event"] == "requests_refused" && v["total"] == refused)
+        .find(|v| {
+            v["event"] == "requests_refused"
+                && v["top_client"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("10.9."))
+        })
         .expect("one summary for every client");
-    assert!(s["top_client"].as_str().unwrap().starts_with("10.9."));
+    assert_eq!(s["total"], refused);
     assert!(s["top_client_refused"].as_u64() <= Some(2), "{s}");
     assert_eq!(s["proxy_keyed"], 0);
     let clients = s["clients"].as_u64().unwrap();
@@ -542,4 +564,121 @@ async fn a_refusal_answered_before_routing_is_the_routed_one() {
             "every response has an id"
         );
     }
+}
+
+#[tokio::test]
+async fn a_preflight_flood_is_refused_past_its_limit_and_summarised() {
+    let limits = Limits {
+        client_burst: 5,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    let ip = "198.51.100.60";
+    let (addr, stop, served) = start_stoppable(proxied(limits)).await;
+    let raw = exchange(&addr, 500, |_| preflight(ip)).await;
+    let (ok, refused) = (
+        raw.matches("HTTP/1.1 204").count(),
+        raw.matches("HTTP/1.1 429").count(),
+    );
+    assert_eq!(ok + refused, 500, "{raw}");
+    assert!((5..=10).contains(&ok), "{ok} served");
+    // The flood spent the preflights' allowance, not the API's.
+    let (api_ok, _) = pipeline(&addr, 5, |_| ip.to_owned()).await;
+    assert_eq!(api_ok, 5);
+    stop.send(()).unwrap();
+    served.await.unwrap();
+
+    let lines: Vec<Value> = logged()
+        .1
+        .into_iter()
+        .filter(|v| v["client"] == ip || v["top_client"] == ip)
+        .collect();
+    let requests: Vec<&Value> = lines
+        .iter()
+        .filter(|v| v["event"] == "http_request")
+        .collect();
+    assert_eq!(requests.iter().filter(|v| v["status"] == 204).count(), ok);
+    let first: Vec<_> = requests.iter().filter(|v| v["status"] == 429).collect();
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["refused"], "client_rate");
+    let summaries: Vec<_> = lines
+        .iter()
+        .filter(|v| v["event"] == "requests_refused")
+        .collect();
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
+    assert_eq!(summaries[0]["total"], refused);
+    assert_eq!(summaries[0]["routes"]["api"], refused);
+}
+
+#[tokio::test]
+async fn an_honest_page_is_never_refused_a_preflight_or_its_request() {
+    let limits = Limits {
+        client_burst: 3,
+        client_rate_per_sec: 20,
+        ..Limits::default()
+    };
+    let ip = "198.51.100.61";
+    let (addr, stop, served) = start_stoppable(proxied(limits)).await;
+    let pair = |i: usize| {
+        if i == 0 {
+            preflight(ip)
+        } else {
+            format!("GET /app/config HTTP/1.1\r\nHost: t\r\nX-Forwarded-For: {ip}\r\n")
+        }
+    };
+    // A whole burst of calls at once, each with its preflight; then calls at a little under the
+    // sustained rate (one token every 50 ms).
+    for _ in 0..3 {
+        let raw = exchange(&addr, 2, pair).await;
+        assert!(!raw.contains("HTTP/1.1 429"), "{raw}");
+    }
+    for _ in 0..15 {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let raw = exchange(&addr, 2, pair).await;
+        assert!(raw.starts_with("HTTP/1.1 204"), "{raw}");
+        assert!(raw.contains("HTTP/1.1 200"), "{raw}");
+    }
+    stop.send(()).unwrap();
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn preflights_from_many_clients_share_one_summary() {
+    const CLIENTS: usize = 300;
+    let limits = Limits {
+        client_burst: 1,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    let (addr, stop, served) = start_stoppable(proxied(limits)).await;
+    let client = |i: usize| format!("10.10.{}.{}", i / 3 / 256, i / 3 % 256);
+    let raw = exchange(&addr, CLIENTS * 3, |i| preflight(&client(i))).await;
+    let refused = raw.matches("HTTP/1.1 429").count();
+    assert_eq!(raw.matches("HTTP/1.1 204").count(), CLIENTS);
+    assert_eq!(refused, 2 * CLIENTS);
+    stop.send(()).unwrap();
+    served.await.unwrap();
+
+    let lines = logged().1;
+    let ours = |v: &&Value| {
+        v["client"]
+            .as_str()
+            .is_some_and(|c| c.starts_with("10.10."))
+    };
+    let requests = lines
+        .iter()
+        .filter(|v| v["event"] == "http_request")
+        .filter(ours);
+    assert_eq!(requests.filter(|v| v["status"] == 429).count(), 1);
+    let s = lines
+        .iter()
+        .find(|v| {
+            v["event"] == "requests_refused"
+                && v["top_client"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("10.10."))
+        })
+        .expect("one summary for every client");
+    assert_eq!(s["total"], refused);
+    assert_eq!(s["routes"]["api"], refused);
 }

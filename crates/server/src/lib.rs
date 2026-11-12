@@ -398,7 +398,7 @@ async fn not_found() -> ApiError {
 }
 
 /// Whether `path` is under some network's `/api`.
-fn is_api(path: &str) -> bool {
+pub(crate) fn is_api(path: &str) -> bool {
     Network::ALL.iter().any(|n| {
         path.strip_prefix(n.path_prefix())
             .is_some_and(|rest| rest == "/api" || rest.starts_with("/api/"))
@@ -407,12 +407,18 @@ fn is_api(path: &str) -> bool {
 
 /// `/api` is a public API that web wallets call from other origins. Nothing in it depends on
 /// cookies or other ambient credentials, so any origin may read it, broadcast included. Outermost,
-/// so refusals from the limits (429, 503, 504) are readable cross-origin too.
+/// so refusals from the limits (429, 503, 504) are readable cross-origin too. A preflight is
+/// answered here once `serve` has admitted it under its own limits; one it refused goes on to
+/// [`limits::limit`] to be answered as the refusal.
 async fn cors(req: Request, next: Next) -> Response {
     if !is_api(req.uri().path()) {
         return next.run(req).await;
     }
-    let preflight = req.method() == Method::OPTIONS;
+    let preflight = req.method() == Method::OPTIONS
+        && !matches!(
+            req.extensions().get::<limits::Checked>(),
+            Some(limits::Checked::Refused(..))
+        );
     let mut res = if preflight {
         finish(StatusCode::NO_CONTENT.into_response()).await
     } else {

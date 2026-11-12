@@ -49,7 +49,7 @@ Who can cause each event that is not on a fixed schedule, and how often. Per-cli
 | Event | Who causes it | How often, at most |
 |---|---|---|
 | `http_request`, served (any status a handler answered, `400`, `404` and `413` included) | Any client | One per request admitted: 20 a second per client sustained on the API (120 at once), 100 on static files (400 at once). Many clients together: as many as the server answers, so the ceiling applies; `LOG_REQUESTS=failures` or `off` lowers it |
-| `http_request`, an `OPTIONS` preflight to `/api` | Any client | One each, `204`: preflights are answered before the limits, so browsers can always read a refusal. Bounded only by the [ceiling](#the-ceiling) |
+| `http_request`, an `OPTIONS` preflight to `/api` | Any client | One per preflight admitted, `204`: preflights have a per-client allowance of their own, the API's numbers (20 a second, 120 at once), so they never spend a call's token. Past it they are refused like any request and summarised |
 | `http_request`, refused by a limit (`refused` set, except `timeout`) | Any client | One per reason after a minute without that reason; the rest go into `requests_refused` |
 | `http_request`, `timeout` | A client whose request outlives `REQUEST_TIMEOUT_SECS` | One each: admitted work that ran, bounded by `CLIENT_MAX_CONCURRENT_REQUESTS` per timeout per client |
 | `requests_refused` | Any client | One a minute while anything is refused, the same size whatever the number of clients |
