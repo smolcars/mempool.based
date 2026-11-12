@@ -154,6 +154,7 @@ Weights: `--weight-light` 340 (dimmed zeros), `--weight-regular` 420, `--weight-
 | Size | One quantity, one unit family, everywhere: serialized size in B, kB, MB; virtual size in vB, kvB, MvB; weight in WU, kWU, MWU. The base unit under 10 000, then k or M (powers of 1 000) with two decimals (`formatSize`). A block's **size** is its serialized size; its virtual size is always written in vB units or labelled "virtual". The same block reads the same string on every page | `209 vB`, `1.69 MB`, `998.52 kvB`, `3.99 MWU` |
 | Units | Muted, after a space. In tables the unit moves into the column header ("Value, BTC") and cells hold bare numbers, except sizes, which keep their unit in the cell because one column spans B to MB. A unit hidden from sight is still in the text for screen readers | |
 | Approximate | `~` for projected values, `≈` for derived counts | `~0.64 sat/vB`, `≈ 15 blocks` |
+| Very small or large | A power of ten with three significant digits, where writing the figure out would not fit a phone (`formatPowerOfTen`): below 0.001, or past the last prefix. Regtest's difficulty is the one seen in practice | `4.66 × 10⁻¹⁰` |
 
 ### Spent state
 
