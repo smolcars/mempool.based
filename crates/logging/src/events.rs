@@ -227,8 +227,8 @@ pub struct RequestsRefused<'a> {
     /// Seconds the counts cover.
     pub window_secs: u64,
     pub total: u64,
-    /// Of `total`, written as their own `http_request`: the first of each reason after a quiet
-    /// window.
+    /// Of `total`, the first of each reason after a quiet window, passed on to be written as their
+    /// own `http_request` (which `LOG_REQUESTS` or the ceiling may still leave out).
     pub logged: u64,
     /// By the `refused` label of `http_request`; one entry per label at most.
     pub reasons: &'a BTreeMap<&'static str, u64>,
