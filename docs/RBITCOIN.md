@@ -22,7 +22,7 @@ RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `
 - **Cluster mempool.** `getmempoolcluster` and `getmempoolfeeratediagram` expose the same chunks mining selection uses, so projected blocks need no template builder of our own.
 - **Per-transaction fee, size and weight on disk** (`txstat`), which makes `getblockstats` cheap.
 - **Output lookup by position:** `GET /block-height/:height/tx/:index/out/:vout`, and a batch form `POST /block-heights/txs/outs` taking up to 300. Built for Lightning gossip validation and needs no address index.
-- **Chain-tip stamps.** Every Esplora response carries `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height`. If two sequential fetches disagree, the tip moved between them: discard and retry. `?asof=<blockhash>` pins a read to an ancestor.
+- **Chain-tip stamps.** Block, transaction and tip routes carry `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height`. If two sequential fetches disagree, the tip moved between them: discard and retry. Address and scripthash routes are stamped with the address index's position, which can trail the tip. Mempool, fee-estimate and broadcast routes carry no stamp (the paged `/mempool/txids/page` does). `?asof=<blockhash>` pins a read to an ancestor.
 
 ## What it does not give us
 
@@ -71,3 +71,4 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A mempool event stream (added, removed with reason, sequence number) | Removes the polling lag of up to one interval and the 260 ms diff |
 | `/internal/*` over an authenticated TCP listener | Bulk fetches when the server is not on the node's host |
 | Sub-sat precision in `getblockstats` percentiles | We could stop recomputing them |
+| A paged or capped address-totals route | Addresses above `--max-sh-creates` get no totals or unspent list today, only paged history |

@@ -9,7 +9,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | F0 | Rust workspace, skeleton server (`/healthz`, static files), skeleton frontend, CI within budget | — | done ([#1](https://github.com/smolcars/mempool.based/pull/1)) |
-| R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | doing |
+| R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | done ([#6](https://github.com/smolcars/mempool.based/pull/6)) |
 | R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | done ([#2](https://github.com/smolcars/mempool.based/pull/2)) |
 | D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | done ([#5](https://github.com/smolcars/mempool.based/pull/5)) |
 
@@ -27,10 +27,10 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | todo |
 | W3 | Block page: header details, paged transaction list | W1, S2 | todo |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | todo |
-| W5 | Address page: totals, unspent outputs, paged history | W1, S2 | todo |
+| W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | todo |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget | F0, R2 | todo |
-| P1 | Docker image and compose file beside rbitcoin | S1 | todo |
+| P1 | Docker image and compose file beside rbitcoin | S1 | doing |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 
 ## M2 — Live mempool
@@ -47,6 +47,8 @@ Refined when M1 lands.
 | MP6 | RBF history and CPFP or cluster view | MP1 | todo |
 | W7 | WebGL block renderer for projected and mined blocks | W1, MP3 | todo |
 | W8 | Mempool page: live flow, fee bands | W7 | todo |
+| DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | todo |
+| WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
 
 ## M3 — Mining and history
 
@@ -55,9 +57,9 @@ Refined when M2 lands.
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | todo |
-| MI1 | Block summaries with backfill: reward, fees, our own fee-rate percentiles | ST1, N1, N3 | todo |
-| MI2 | Mining pool attribution from coinbase tags and addresses | MI1 | todo |
-| MI3 | Hashrate and difficulty adjustment | MI1 | todo |
+| MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | todo |
+| MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | todo |
+| MI3 | Hashrate history | MI1 | todo |
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
