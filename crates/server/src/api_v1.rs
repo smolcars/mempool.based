@@ -57,6 +57,7 @@ pub fn routes() -> Router<Arc<NetworkContext>> {
         .route("/api/v1/fees/mempool-blocks", get(fees_mempool_blocks))
         .merge(crate::mining::routes())
         .merge(crate::statistics::routes())
+        .merge(crate::v1_blocks::routes())
 }
 
 /// The reference's five levels, in its order. `T` is whole sat/vB (`u64`) or precise (`f64`).

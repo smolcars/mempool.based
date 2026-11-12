@@ -24,8 +24,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// Transactions in each mock block, the coinbase included.
 const TXS: usize = 100;
-/// Bytes the server's cache counts for one mock block: header, records and fixed overhead.
-const ENTRY: usize = 8 + 20 * TXS + 512;
+/// Bytes the server's cache counts for one mock block: header, records, txids and weights, and
+/// fixed overhead.
+const ENTRY: usize = 8 + 20 * TXS + 36 * TXS + 512;
 
 // The node side.
 

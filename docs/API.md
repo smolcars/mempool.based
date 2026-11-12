@@ -128,7 +128,7 @@ A subset of mempool.space's own API, for wallets and tools written against it, u
 New routes follow this pattern; the code is `crates/server/src/api_v1.rs`.
 
 - **Same shape, our numbers.** Field names, their order and their JSON types match the reference backend ([`COMPAT.md`](COMPAT.md)). The values are computed by us, from the node; where they differ from the reference's, the route's section says how and why. Clean room: shapes are observed from responses, never read from mempool.space's code or docs.
-- **Answered from memory.** A task per network keeps the answer current, woken by the Electrum events the WebSocket hub follows, and does the node fetches. A request never causes a node call (rule 8). Pure logic lives in `engine`, the task in its own server module.
+- **Answered from memory.** A task per network keeps the answer current, woken by the Electrum events the WebSocket hub follows, and does the node fetches. A request never causes a node call (rule 8), except on the block routes, which read headers and blocks once each and keep them ([Blocks](#blocks)). Pure logic lives in `engine`, the task in its own server module.
 - **Before the first answer:** `503` `{"error": "not ready yet; retry"}` with `Retry-After: 1`.
 - **Headers:** `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height` name the tip the answer is as of. When the node cannot confirm the answer is current (Electrum is disconnected, or a newer tip could not be computed yet), `Age` gives the seconds since it was computed; the last answer is still served. `Cache-Control: public, max-age=1`. CORS is that of `/api`.
 - **Requests:** `GET` and `HEAD`. Query strings are ignored, so cache-busting parameters work. Errors use the model above.
@@ -213,6 +213,94 @@ Shapes observed on the reference backend; values side by side in [`MEMPOOL.md`](
 | Whole numbers | Rounded up | The reference rounded to the nearest (1.557 to `1`, 3.505 to `4`), so its whole number can be below its own precise rate |
 
 Side by side on mainnet (2026-11-12, tip 975,533, three moments a minute apart, the server's engine warmed up): `mempool-blocks` agreed with the reference's block for block: the next block had the same transaction count (2,049, 2,187, 2,209 against 2,049, 2,187, 2,210), the same `blockSize` to the byte and the same `totalFees` within a few satoshis; our `blockVSize` is up to 0.1% higher (sigop-adjusted), and the deeper blocks differ by tens of transactions where they cut through the 0.12 sat/vB ties. `precise` read 2.022 / 1.001 / 0.125 / 0.1 / 0.1 against the reference's 2.919 / 1.557 / 0.716 / 0.2 / 0.1, and `recommended` 3 / 2 / 1 / 1 / 1 against 3 / 1 / 1 / 1 / 1. How each fared against the blocks that followed is in [`MEMPOOL.md`](MEMPOOL.md#against-the-blocks-that-followed).
+
+### Blocks
+
+Blocks with the reference's `extras`, and every transaction of a block, for tools that list and inspect blocks. Code: `crates/server/src/v1_blocks.rs` for the block routes, `crates/server/src/summary.rs` for the two summary routes.
+
+| Route | Answer | `Cache-Control` |
+|---|---|---|
+| `GET /api/v1/blocks[/:start_height]` | Up to 15 blocks from `start_height` (the block table's top without it) down, newest first, each as below | a day when settled (below), else `max-age=1` |
+| `GET /api/v1/block/:hash` | One block: `{id, height, version, timestamp, bits, nonce, difficulty, merkle_root, tx_count, size, weight, previousblockhash, mediantime, stale, extras}` | as above |
+| `GET /api/v1/block/:hash/summary` | Every transaction in block order: `[{txid, fee, vsize, value, rate}]` | immutable |
+| `GET /api/v1/block/:hash/tx/:txid/summary` | That transaction's row | immutable |
+| `GET /api/v1/blocks/tip/height` | `/api/blocks/tip/height`'s answer, sharing its calls and its one-second cache | as that route |
+
+**Where each part comes from.** The header fields are the node's Esplora block JSON. `extras` come from the block table's row ([`STORE.md`](STORE.md#blocks)) and the block's audit ([Block audits](#block-audits)); they never cost a node call. The summaries come from the same cached `getblock` as `/app/block/:hash/txs` ([`FRONTEND.md`](FRONTEND.md#block-summaries)).
+
+`extras`, in the reference's order:
+
+| Field | Here |
+|---|---|
+| `reward`, `totalFees` | The coinbase's outputs summed, and the block's fees, in sats |
+| `coinbaseRaw`, `coinbaseSignatureAscii` | The coinbase input's script as hex, and as one Latin-1 character per byte. Chain data, serialized as JSON strings |
+| `medianFee`, `feeRange` | Our size-weighted fee-rate percentiles (lowest, 10th, 25th, 50th, 75th, 90th, highest) to three decimals; `medianFee` is the 50th. `null` until the block is rated |
+| `avgFee`, `avgFeeRate` | Fees over the paying transactions; fees over their weight / 4, three decimals |
+| `virtualSize` | Weight / 4 |
+| `coinbaseAddress`, `coinbaseAddresses`, `coinbaseSignature` | The coinbase's paying outputs as addresses, the first of them, and the first output's script assembly |
+| `header` | The 80-byte header as hex, rebuilt from Esplora's fields and checked against the block's id |
+| `pool` | `{id, name, slug, minerNames: null}` by the rules in [Who mined a block](#who-mined-a-block) |
+| `matchRate`, `expectedFees`, `expectedWeight` | The block's audit; `null` when we did not watch it arrive |
+| `feePercentiles`, `utxoSetSize`, `totalInputAmt`, `firstSeen` | `null`, as on the reference |
+
+`stale` is always `false`: only a block on the best chain has a row. In the summaries, `vsize` is weight / 4, unrounded, and `rate` is the fee over the node's vsize in whole vbytes (weight / 4 rounded up), as the reference rates a transaction on its own; the coinbase's `fee` and `rate` are `0`.
+
+#### What the table does not hold yet
+
+The backfill fills the table newest first ([`STORE.md`](STORE.md#backfill)), so on a fresh install older blocks have no row for a while. A client never gets a hole or a block without its extras:
+
+- **A list is the run of stored rows from its start down,** cut at the first height the backfill has not reached. `X-Data-From-Height` and `X-Data-From-Time` name its lowest block and `X-Data-Complete` is `true` when it holds all 15, or every block down to genesis ([Coverage](#coverage)).
+- **A start height or block without a row** is `404 {"error": "block not indexed yet"}`.
+- **A block the table has yet to follow:** a start height between the table's top and the node's tip, or the node's new best block while the table still holds the one it replaced, is `503 not ready yet; retry` with `Retry-After: 1`. The table follows each new tip within about a second.
+- **A block that left the best chain** is `404 {"error": "block is not on the best chain"}`.
+- **A start height past the node's tip** is `[]`, as on the reference. The node's tip height is asked through `/api/blocks/tip/height`'s one-second cache, so this costs at most one call a second.
+- **Rows without fee rates** (rated within `BACKFILL_FEE_RATE_DEPTH`, a year by default, and never below it) have `medianFee` and `feeRange` `null`, never `0`.
+- Without a block table (`DATA_DIR` unset) the three block routes answer `503 block extras need a block table on this server`; the summaries still work.
+
+#### Caching and reorgs
+
+An answer is read fresh from the table on each request, so a list never holds a block the table has replaced: once `follow` repairs a reorg, the next answer has the new block. The table's top is read again after the rows; if it moved meanwhile, the answer is `503 not ready yet; retry` rather than rows from one chain under the tip of another. `X-Bitcoin-Chain-Tip` names the table's top, the newest block the answer can include. An answer is **settled** when every block in it is buried under at least 100 more (below `follow`'s zone, where rows are no longer rewritten), is rated, and the list is complete; it is then `public, max-age=86400`. Not `immutable`: a release with a new pool list can name a block's miner differently. Everything else is `max-age=1`. The summaries are fixed by the block's hash and immutable, as `/app/block/:hash/txs`.
+
+#### Differences from the reference
+
+| Field or route | Here | Why |
+|---|---|---|
+| `orphans`, `utxoSetChange`, `avgTxSize`, `totalInputs`, `totalOutputs`, `totalOutputAmt`, `segwitTotalTxs`, `segwitTotalSize`, `segwitTotalWeight`, `coinbaseBip54`, `similarity` | Absent | The table does not hold them and asking the node per block would cost a `getblockstats` or a `getblock` per request. Absent rather than `null` or `[]`, so a client cannot read them as zero or as "no orphans" |
+| `medianFee`, `feeRange` | Our percentiles of each transaction's own rate, weighted by virtual size, three decimals | Another method: the reference's are close in the middle (2.126 against 2.131) and apart at the low end (0.151 against 1.012), where it rates packages together. On older blocks it gave whole numbers (`[0, 1, 1, 1, 2, 3, 217]`) |
+| `feePercentiles`, `utxoSetSize`, `totalInputAmt`, `medianFeeAmt` on older blocks | `null`, and `medianFeeAmt` absent | The reference filled these for blocks indexed under an older release (at 974,000) and left them `null` for recent ones. The node has no `gettxoutsetinfo` and the table no input totals |
+| `avgFeeRate` | Three decimals | The reference's is a whole number (1 for 1.77) |
+| `matchRate`, `expectedFees`, `expectedWeight` | Our audit's score | The reference audits by its own method ([Block audits](#block-audits)) |
+| `coinbaseAddresses` | At most the first 8 paying outputs | The table keeps at most 8 payout scripts ([`STORE.md`](STORE.md#blocks)); the reference listed all 17 of one block's |
+| `pool` | The list's id, name and slug; `minerNames` always `null` | As the mining routes ([Differences](#differences-from-the-reference-2)): other ids, `SecPool` for `SECPOOL`, `oceanxyz` for `ocean`. The reference names OCEAN's miners from their tags; we do not |
+| `firstSeen` | `null` | The reference gave `null` too |
+| `stale` | Always `false` | A block off the best chain is a `404` here |
+| Holes and unrated rows | Cut lists, `404` and `null` fee fields, with the coverage headers | Not on the reference, whose history is complete |
+
+Side by side on mainnet (2026-11-12, tip 975,545; the tip list, the list from 974,000, block 975,541's summary and one recent full block, compared field by field): every header field, `reward`, `totalFees`, `avgFee`, the coinbase fields, `header` and `virtualSize` were identical in every block; the differences are the rows above. The summary had the same 2,077 transactions in the same order with the same `fee`, `vsize` and `value`; `rate` differed only for the 145 transactions the reference rated as packages.
+| Summary `time` | Absent | The reference adds when it first saw a transaction, for some; we keep accept times only for an audit's listed transactions |
+| Summary `flags` | Absent | The reference's bit field of transaction features (script types, RBF and the like) needs every input's previous output, which `getblock` at verbosity 2 does not give. A `0` would claim none |
+| Summary `rate` | The transaction's own rate | The reference gives a transaction mined with its ancestors or descendants their package's rate (three transactions at 16.861 where their own were 5.34, 6.00 and 33.10). In one mainnet block, 1,931 of 2,076 rates were equal and the other 145 were such packages |
+| `tx/:txid/summary` of a txid not in the block | `404 {"error": "transaction not found in this block"}` | The reference answers `404` too |
+
+#### Cost
+
+A request never fetches a block for `extras`. Headers are kept by hash in memory (up to 4,096 per network; a hash fixes its header), so a block costs one Esplora request the first time any of these routes shows it, and none after: a list of 15 not seen before is two `/blocks/:height` pages of ten, and the tip list costs one page per new block. Identical requests in flight share one call, with the `/api` pass-through. A table that is behind a reorg is asked for that block by hash. Explaining a missing row costs one `/block/:hash` and, where the table holds another block at that height, one `/block/:hash/status`.
+
+Measured on mainnet through a synced node over a private network (release build, a table of 3,401 rows, `curl` on the same machine; server time from the request log):
+
+| Route | First | Then | Node calls the first time |
+|---|---|---|---|
+| `blocks/:height` | 22.6 ms | 0.3 ms | two `/blocks/:height` |
+| `blocks` (tip) | | 0.35 ms | one `/blocks/:height` per new block |
+| `block/:hash` | 16.7 ms | 0.19 ms | one `/block/:hash` |
+| `block/:hash/summary` (2,300 transactions, 370 KB) | 2.28 s | 0.64 ms | one `getblock` |
+| `block/:hash/summary` (4,000 transactions, 636 KB) | | 1.15 ms | |
+| `block/:hash/tx/:txid/summary` | as the summary | 0.02 ms | none once the summary is cached |
+| `blocks/tip/height` | 12.7 ms | 0.02 ms | one `/blocks/tip/height` a second at most |
+
+The table's part is a `top`, a `page` of 15 or a `by_hash`, and one audit read: on a 975,000-row table (`read_benchmark`, [`STORE.md`](STORE.md#reading)), 0.11 to 0.17 ms for the newest page of 15, 0.09 to 0.24 ms for one deep in history and 0.03 to 0.09 ms by hash, so a full table adds about 0.1 ms to the times above.
+
+The summaries share the block summary cache and its limits ([`FRONTEND.md`](FRONTEND.md#block-summaries)): a block in the cache costs nothing, and one that is not costs one `getblock` at verbosity 2, counted under the same per-network and per-client limits as `/app/block/:hash/txs`. Asking for a block's summary, any of its transactions' rows and its records costs one `getblock` in all. A cache entry now also holds each transaction's txid and weight, 36 bytes more per transaction.
 
 ### Mining
 

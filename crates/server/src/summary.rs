@@ -27,7 +27,7 @@ use axum::extract::{Path, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, Txid};
 use engine::audit::Totals;
 use logging::events::{
     BlockSummariesRecovered, BlockSummariesRefused, BlockSummaryComputed, BlockSummaryFailed,
@@ -65,6 +65,8 @@ pub struct Summary {
     pub facts: Facts,
     /// [`stats::encode_txs`].
     pub txs: Bytes,
+    /// Each transaction's txid and weight, in the records' order: what `/api/v1` adds to them.
+    ids: Vec<(Txid, u32)>,
     prev: Option<BlockHash>,
     /// The block's audit, decided before the summary is published.
     audit: Option<Totals>,
@@ -72,8 +74,54 @@ pub struct Summary {
 
 impl Summary {
     fn size(&self) -> usize {
-        self.txs.len() + ENTRY_OVERHEAD
+        self.txs.len() + self.ids.len() * std::mem::size_of::<(Txid, u32)>() + ENTRY_OVERHEAD
     }
+
+    /// Every transaction in block order, as `/api/v1/block/:hash/summary` lists them.
+    fn rows(&self) -> impl Iterator<Item = TxRow> + '_ {
+        let records = self
+            .txs
+            .get(stats::TXS_HEADER..)
+            .unwrap_or_default()
+            .as_chunks::<{ stats::TXS_RECORD }>()
+            .0;
+        self.ids.iter().zip(records).map(|(&(txid, weight), r)| {
+            // A record is vsize `u32`, fee `u64`, value `u64`, little-endian.
+            let num = |at: usize| {
+                r.get(at..at + 8)
+                    .and_then(|b| b.try_into().ok())
+                    .map_or(0, u64::from_le_bytes)
+            };
+            let fee = num(4);
+            let whole = r
+                .get(..4)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0, u32::from_le_bytes);
+            TxRow {
+                txid,
+                fee,
+                vsize: f64::from(weight) / 4.0,
+                value: num(12),
+                rate: if whole == 0 {
+                    0.0
+                } else {
+                    fee as f64 / f64::from(whole)
+                },
+            }
+        })
+    }
+}
+
+/// One transaction as the reference's block summary lists it. `vsize` is weight / 4, unrounded,
+/// as the reference gives it; `rate` is the fee over the node's vsize (whole vbytes), as the
+/// reference's is for every transaction it does not rate as part of a package.
+#[derive(Debug, Serialize)]
+struct TxRow {
+    txid: Txid,
+    fee: u64,
+    vsize: f64,
+    value: u64,
+    rate: f64,
 }
 
 /// Why a computation produced no summary.
@@ -326,6 +374,7 @@ async fn compute(
             Ok(Arc::new(Summary {
                 facts: stats::facts(&b),
                 txs,
+                ids: b.tx.iter().map(|t| (t.txid, t.weight)).collect(),
                 prev: b.previousblockhash,
                 audit,
             }))
@@ -590,6 +639,53 @@ pub async fn batch(
         .unwrap_or_else(|a: Answer| a.into_response(ROUTE))
 }
 
+/// `GET /api/v1/block/{hash}/summary`: every transaction, in the reference's shape. The same
+/// summary as the routes above, under their limits: a cached block costs the node nothing.
+/// Query strings are ignored, as on every `/api/v1` route.
+pub async fn v1_txs(
+    State(ctx): State<Arc<NetworkContext>>,
+    Extension(client): Extension<Client>,
+    Path(hash): Path<String>,
+) -> Response {
+    const ROUTE: &str = "v1_block_summary";
+    let answer = async {
+        let hash = crate::esplora::block_hash(&hash).map_err(Answer::Bad)?;
+        let (s, source) = get(&ctx, hash, client.addr).await?;
+        let rows: Vec<TxRow> = s.rows().collect();
+        let body = serde_json::to_vec(&rows).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        Ok(ok(ROUTE, "application/json", body.into(), source))
+    };
+    answer
+        .await
+        .unwrap_or_else(|a: Answer| a.into_response(ROUTE))
+}
+
+/// `GET /api/v1/block/{hash}/tx/{txid}/summary`: one row of the above.
+pub async fn v1_tx(
+    State(ctx): State<Arc<NetworkContext>>,
+    Extension(client): Extension<Client>,
+    Path((hash, txid)): Path<(String, String)>,
+) -> Response {
+    const ROUTE: &str = "v1_block_tx_summary";
+    let answer = async {
+        let hash = crate::esplora::block_hash(&hash).map_err(Answer::Bad)?;
+        let txid = crate::esplora::txid(&txid).map_err(Answer::Bad)?;
+        let (s, source) = get(&ctx, hash, client.addr).await?;
+        let row = s
+            .rows()
+            .find(|r| r.txid == txid)
+            .ok_or(Answer::Bad(NOT_IN_BLOCK))?;
+        let body = serde_json::to_vec(&row).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        Ok(ok(ROUTE, "application/json", body.into(), source))
+    };
+    answer
+        .await
+        .unwrap_or_else(|a: Answer| a.into_response(ROUTE))
+}
+
+const NOT_IN_BLOCK: ApiError =
+    ApiError::new(StatusCode::NOT_FOUND, "transaction not found in this block");
+
 /// `hashes=` and nothing else: 1 to [`MAX_BATCH`] block hashes, comma-separated (`%2C` too).
 fn parse_batch(query: Option<&str>) -> Result<Vec<BlockHash>, Answer> {
     let bad = |m| Answer::Bad(ApiError::bad_request(m));
@@ -734,6 +830,7 @@ mod tests {
                 miner: engine::blocks::Miner::UNKNOWN,
             },
             txs: vec![0; records].into(),
+            ids: Vec::new(),
             prev: None,
             audit: None,
         })

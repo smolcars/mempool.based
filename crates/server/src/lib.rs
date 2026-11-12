@@ -22,6 +22,7 @@ pub mod request_log;
 mod serve;
 pub mod statistics;
 pub mod summary;
+mod v1_blocks;
 pub mod ws;
 
 use std::future::Future;
@@ -104,6 +105,8 @@ pub struct NetworkContext {
     pub history: statistics::History,
     /// The mempool.space-shaped socket's own state (`ws::v1`).
     pub v1: Arc<ws::v1::Compat>,
+    /// Esplora headers by hash for the `/api/v1` block routes.
+    pub block_headers: v1_blocks::Headers,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -155,6 +158,7 @@ impl NetworkContext {
             fees: ws::fees::Fees::default(),
             history: statistics::History::default(),
             v1: Arc::new(ws::v1::Compat::new(Some(&url))),
+            block_headers: v1_blocks::Headers::default(),
         })
     }
 }
