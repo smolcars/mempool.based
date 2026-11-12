@@ -133,7 +133,7 @@ function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
     <nav class="mempool-intervals" aria-label="Period">
       <ul>
         <Show when={props.fitted}>
-          <li>
+          <li class="mempool-intervals__recorded">
             <Link class="mempool-intervals__item" href={paths.mempool()} aria-current="page">
               Recorded
               <span class="visually-hidden">: since this server began recording</span>

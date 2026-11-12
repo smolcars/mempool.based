@@ -439,9 +439,27 @@
     font-size: var(--text-md);
     font-weight: var(--weight-regular);
   }
-  /* The two ends' terms in one table, read across. */
-  .ln-policies th[scope="row"] {
-    width: 34%;
+  /* The two ends' terms in one table, read across: fixed columns whose text wraps, so two long
+     names never widen it past a phone. */
+  .ln-policies {
+    table-layout: fixed;
+  }
+  .ln-policies :is(th, td) {
+    overflow-wrap: anywhere;
+    overflow: hidden;
+  }
+  /* A name and its key in a column narrower than they are: both cut, the whole in their titles. */
+  .ln-policies thead :is(.ln-node, .ln-node *, .hash, .hash__text) {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .ln-policies thead .hash__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ln-policies th[scope="row"],
+  .ln-policies thead th:first-child {
+    width: 30%;
     padding-right: var(--space-3);
     color: var(--color-text-muted);
     font-weight: var(--weight-regular);

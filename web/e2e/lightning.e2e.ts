@@ -66,7 +66,7 @@ test("the overview, a node and a channel, from mainnet's answers", async ({ page
   await expect(page.locator("dl").getByText(/^36\s228$/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Newest channels" })).toBeVisible();
 
-  const connected = page.getByRole("table", { name: "The ten nodes with the most channels" });
+  const connected = page.getByRole("table", { name: "The five nodes with the most channels" });
   await connected.getByRole("link", { name: "ACINQ" }).click();
   await expect(page).toHaveURL(`/regtest/lightning/node/${ACINQ}`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("ACINQ");
@@ -153,7 +153,9 @@ for (const width of [320, 360]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       // Every page here links a node once its answer is drawn.
-      await expect(page.locator('main a[href*="/lightning/node/"]').first()).toBeVisible();
+      await expect(
+        page.locator('main a[href*="/lightning/node/"]:not(.table__rowlink)').first(),
+      ).toBeVisible();
       for (const t of await page.getByRole("table").all()) {
         const box = await t.evaluate((el) => ({
           table: el.scrollWidth,
@@ -190,7 +192,9 @@ for (const width of [360, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of [`/regtest/lightning/node/${ACINQ}`, "/regtest/lightning/rankings"]) {
       await page.goto(path);
-      await expect(page.locator('main a[href*="/lightning/node/"]').first()).toBeVisible();
+      await expect(
+        page.locator('main a[href*="/lightning/node/"]:not(.table__rowlink)').first(),
+      ).toBeVisible();
       const tight = await page.evaluate(() => {
         const out: string[] = [];
         for (const row of document.querySelectorAll("main table tr")) {

@@ -125,6 +125,10 @@
       width: 100%;
       min-width: 0;
     }
+    /* "Recorded" is a word, not a figure: it takes two cells. */
+    .mempool-intervals__recorded {
+      grid-column: span 2;
+    }
     .mempool-chart--size {
       min-height: calc(300px + 16rem);
     }
