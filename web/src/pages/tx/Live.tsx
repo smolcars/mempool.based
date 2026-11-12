@@ -1,0 +1,374 @@
+// The transaction page's live parts: where it waits, who it is mined with, what replaced it, and
+// whether the page is live. The state behind them is in state.ts.
+import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { FeeRate } from "../../components/FeeRate";
+import { Hash } from "../../components/Hash";
+import { Link } from "../../components/Link";
+import { SectionHeader } from "../../components/SectionHeader";
+import { TimeUtc } from "../../components/Time";
+import { feeColor, groupDigits } from "../../lib/format";
+import { type Topic, useLiveStatus, useTopic } from "../../lib/live";
+import { paths } from "../../lib/network";
+import { useNetwork } from "../../lib/page";
+import {
+  type Position,
+  type ReplacementLink,
+  type TxMessage,
+  type TxState,
+  txTopic,
+} from "../../lib/track-topics";
+import { type Liveness, place, type Relatives, group, ratesDiffer } from "./state";
+
+/** Follows a topic while mounted. `again` gets the function that subscribes afresh. */
+export function Follow<M>(props: {
+  topic: Topic<M>;
+  message: (m: M) => void;
+  resync: () => void;
+  again?: (restart: () => void) => void;
+}) {
+  const restart = useTopic(props.topic, {
+    message: (m) => props.message(m),
+    resync: () => props.resync(),
+  });
+  props.again?.(restart);
+  return null;
+}
+
+/** How often the page checks over HTTP when it is not live (docs/FRONTEND.md "Live data"). */
+export const POLL_MS = 10_000;
+
+const LIVE_LABELS: Record<Liveness, string> = {
+  live: "Live",
+  connecting: "Connecting",
+  silent: "Not live",
+  stale: "Node not answering",
+  off: "Not live",
+  refused: "Not live",
+  down: "Not live",
+};
+
+/** The live channel's state, as an icon and a word, and what the page does instead when not live. */
+export function LiveState(props: { liveness: Liveness; network: string }) {
+  const every = `Checking every ${POLL_MS / 1000} s instead.`;
+  const detail = () =>
+    ({
+      live: "",
+      connecting: "",
+      silent: `The server has not caught up with the mempool yet. ${every}`,
+      stale: `The server has lost touch with its node. ${every}`,
+      off: `This server does not follow the ${props.network} mempool. ${every}`,
+      refused: `The server is following as many transactions as it can. ${every}`,
+      down: `The live connection dropped. ${every}`,
+    })[props.liveness];
+  return (
+    <p class={`tx-live tx-live--${props.liveness}`}>
+      <svg class="tx-live__icon" viewBox="0 0 12 12" aria-hidden="true">
+        <circle cx="6" cy="6" r="4" />
+      </svg>
+      <span class="tx-live__label">{LIVE_LABELS[props.liveness]}</span>
+      <Show when={detail()}>
+        <span class="tx-live__detail">{detail()}</span>
+      </Show>
+    </p>
+  );
+}
+
+/**
+ * Where an unconfirmed transaction waits: the projected blocks as a lane ending at the "now" line,
+ * its block marked, and the same in words. The marker moves only when its block changes; what is
+ * ahead of it changes in place, so the panel is alive without twitching.
+ */
+export function Where(props: { position: Position | null; live: boolean; reserve: boolean }) {
+  const network = useNetwork();
+  return (
+    <section
+      class="tx-where"
+      classList={{ "tx-where--reserve": props.reserve }}
+      aria-labelledby="tx-where-title"
+    >
+      <SectionHeader title="Where it waits" id="tx-where-title" />
+      <Switch>
+        <Match when={!props.live}>
+          <p class="tx-where__text">
+            Its place in the queue shows while the page is live. Until then the page checks over
+            HTTP whether it has confirmed.
+          </p>
+        </Match>
+        <Match when={props.position} keyed={false}>
+          {(p) => {
+            const words = () => place(p(), network());
+            // The last projected block first, the next one beside the "now" line.
+            const slots = () =>
+              Array.from({ length: Math.max(1, p().blocks) }, (_, i) => p().blocks - 1 - i);
+            return (
+              <>
+                <div class="tx-lane" aria-hidden="true">
+                  <div class="tx-lane__track" style={{ "--n": String(slots().length) }}>
+                    <For each={slots()}>
+                      {(b) => (
+                        <span class="tx-lane__slot" classList={{ "is-here": b === p().block }}>
+                          <span class="tx-lane__label num">
+                            {b === 0
+                              ? "Next"
+                              : b === p().blocks - 1 && p().blocks > 1
+                                ? `${b + 1}+`
+                                : b + 1}
+                          </span>
+                        </span>
+                      )}
+                    </For>
+                    <span
+                      class="tx-lane__marker"
+                      style={{
+                        "--i": String(p().blocks - 1 - p().block),
+                        "--c": feeColor(p().effectiveRate),
+                      }}
+                    />
+                  </div>
+                  <span class="tx-lane__now">Now</span>
+                </div>
+                <p class="tx-where__place">
+                  <Link href={paths.projected(words().page)}>{words().where}</Link>
+                  <span class="tx-where__projected">, projected</span>
+                </p>
+                <p class="tx-where__text num">{words().ahead}</p>
+                <p class="tx-where__text">{words().when}</p>
+                <p class="tx-where__note">
+                  A projection from this server's view of the mempool, not a promise: miners pick
+                  their own blocks, and anything that pays more goes ahead of it.
+                </p>
+              </>
+            );
+          }}
+        </Match>
+        <Match when={true}>
+          <p class="tx-where__text">
+            Not placed yet: it reached the node a moment ago, and the projected blocks take it in
+            with their next update.
+          </p>
+        </Match>
+      </Switch>
+    </section>
+  );
+}
+
+const RELATION: Record<string, string> = {
+  this: "This transaction",
+  parent: "Its parent",
+  child: "Its child",
+  related: "Related",
+};
+
+/** Who it is mined with, when that is not itself alone: the group and why (CPFP, in words). */
+export function Group(props: { relatives: Relatives; txid: string; rate: number | null }) {
+  const g = () => group(props.relatives, props.txid);
+  const others = () => g().together.filter((m) => m.relation !== "this");
+  const who = () => {
+    const o = others();
+    const only = o[0];
+    if (o.length === 1 && only) {
+      return only.relation === "child"
+        ? "its child"
+        : only.relation === "parent"
+          ? "its parent"
+          : "one related transaction";
+    }
+    return `${groupDigits(o.length)} related transactions`;
+  };
+  const sentence = (): JSX.Element => {
+    const eff = g().rate;
+    const own = props.rate;
+    if (eff === undefined || own === null || !ratesDiffer(eff, own)) {
+      return <>A miner takes it together with {who()}, at one rate for the group.</>;
+    }
+    // Each sentence ends in words, so a rate's swatch never strands the full stop on a line.
+    const pays = others().length === 1 ? "pays" : "pay";
+    return eff > own ? (
+      <>
+        On its own it pays <FeeRate rate={own} />, but {who()} {pays} enough to lift the group to{" "}
+        <FeeRate rate={eff} /> as a whole.
+      </>
+    ) : (
+      <>
+        On its own it pays <FeeRate rate={own} />, but it can only be mined with the unconfirmed
+        transactions whose coins it spends, which pay less: the group is mined at{" "}
+        <FeeRate rate={eff} /> as a whole.
+      </>
+    );
+  };
+  return (
+    <Show when={others().length > 0 || g().before.length > 0 || g().after.length > 0}>
+      <section class="tx-group" aria-labelledby="tx-group-title">
+        <h3 class="tx-group__title" id="tx-group-title">
+          Mined with
+        </h3>
+        <Show when={others().length > 0}>
+          <p class="tx-group__text">{sentence()}</p>
+          <p class="tx-group__why">
+            A transaction can only be mined with or after the ones whose coins it spends, so miners
+            weigh such a group by its total fee over its total size. When a child raises the rate
+            this way it is called child pays for parent.
+          </p>
+          <ul class="tx-group__list" aria-label="Mined together, in mining order">
+            <For each={g().together}>
+              {(m) => (
+                <li class="tx-group__member">
+                  <span class="tx-group__who">{RELATION[m.relation]}</span>
+                  <Hash
+                    value={m.txid}
+                    {...(m.relation === "this" ? {} : { href: paths.tx(m.txid) })}
+                    copy={false}
+                  />
+                  <span class="tx-group__rate">
+                    <Show when={m.rate !== undefined} fallback="–">
+                      <FeeRate rate={m.rate ?? 0} />
+                    </Show>
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <Show when={g().before.length > 0}>
+          <p class="tx-group__text">
+            It spends coins from unconfirmed transactions that will be mined before it:
+          </p>
+          <TxList txids={g().before} label="Unconfirmed parents mined before it" />
+        </Show>
+        <Show when={g().after.length > 0}>
+          <p class="tx-group__text">Unconfirmed transactions that spend its coins wait for it:</p>
+          <TxList txids={g().after} label="Unconfirmed children that wait for it" />
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
+function TxList(props: { txids: string[]; label: string }) {
+  return (
+    <ul class="tx-group__list" aria-label={props.label}>
+      <For each={props.txids}>
+        {(id) => (
+          <li class="tx-group__member">
+            <Hash value={id} href={paths.tx(id)} copy={false} />
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+/**
+ * What replaced it, link by link to the newest replacement, whose own state is followed live (one
+ * topic, however long the chain).
+ */
+export function Chain(props: { chain: ReplacementLink[]; truncated: boolean }) {
+  const last = () => props.chain.at(-1);
+  return (
+    <div class="tx-chain">
+      <Show when={props.chain.length > 1}>
+        <p class="tx-chain__lead">
+          It was replaced {groupDigits(props.chain.length)} times
+          {props.truncated ? " or more" : ""}. Each version spends the same coins, so only the last
+          can still confirm.
+        </p>
+      </Show>
+      <ol class="tx-chain__list" aria-label="Replacements, oldest first">
+        <For each={props.chain}>
+          {(l, i) => (
+            <li class="tx-chain__link">
+              <span class="tx-chain__step num" aria-hidden="true">
+                {i() + 1}
+              </span>
+              <span class="tx-chain__body">
+                <span class="tx-chain__line">
+                  {i() === 0 ? (
+                    "This version"
+                  ) : (
+                    <Hash value={l.txid} href={paths.tx(l.txid)} copy={false} />
+                  )}
+                  <Show when={l.rate !== undefined}>
+                    <span class="tx-chain__rate">
+                      {" "}
+                      at <FeeRate rate={l.rate ?? 0} />
+                    </span>
+                  </Show>
+                </span>
+                <span class="tx-chain__line">
+                  replaced by <Hash value={l.by} href={paths.tx(l.by)} copy={false} />
+                  <Show when={l.byRate !== undefined}>
+                    <span class="tx-chain__rate">
+                      {" "}
+                      at <FeeRate rate={l.byRate ?? 0} />
+                    </span>
+                  </Show>
+                </span>
+                <Show when={l.seen}>
+                  {(t) => (
+                    <span class="tx-chain__when">
+                      <TimeUtc time={t()} />
+                    </span>
+                  )}
+                </Show>
+              </span>
+            </li>
+          )}
+        </For>
+      </ol>
+      <Show when={last()?.by} keyed>
+        {(id) => <Newest txid={id} />}
+      </Show>
+    </div>
+  );
+}
+
+/** The newest replacement's own state, from its topic: where it is, or that it confirmed. */
+function Newest(props: { txid: string }) {
+  const network = useNetwork();
+  const socket = useLiveStatus();
+  const [heardState, setSaid] = createSignal<TxState>();
+  // Only what the topic says now: nothing once the live channel has dropped.
+  const said = () => (socket() === "live" ? heardState() : undefined);
+  const message = (m: TxMessage) => setSaid(m.type === "tx" && !m.stale ? m : undefined);
+  return (
+    <p class="tx-chain__newest">
+      <span>
+        Follow <Hash value={props.txid} href={paths.tx(props.txid)} copy={false} />, the newest
+        version.
+      </span>{" "}
+      <Switch>
+        <Match when={said()?.state === "confirmed" && (said() as TxState & { state: "confirmed" })}>
+          {(c) => (
+            <span>
+              It confirmed in{" "}
+              <Link href={paths.block(c().hash)}>block {groupDigits(c().height)}</Link>.
+            </span>
+          )}
+        </Match>
+        <Match when={said()?.state === "mempool" && (said() as TxState & { state: "mempool" })}>
+          {(m) => (
+            <span>
+              It waits in the mempool
+              <Show when={m().position}>
+                {(p) => (
+                  <>
+                    :{" "}
+                    <Link href={paths.projected(place(p(), network()).page)}>
+                      {place(p(), network()).where.toLowerCase()}
+                    </Link>
+                    , projected
+                  </>
+                )}
+              </Show>
+              .
+            </span>
+          )}
+        </Match>
+        <Match when={said()?.state === "evicted"}>
+          <span>It left the mempool without being mined.</span>
+        </Match>
+      </Switch>
+      <Follow topic={txTopic(props.txid)} message={message} resync={() => setSaid(undefined)} />
+    </p>
+  );
+}

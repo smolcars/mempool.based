@@ -135,6 +135,8 @@ describe("retries", () => {
     expect(retryDelay(busy(0), 0)).toBeUndefined();
     expect(retryDelay(new Error("x"), 0)).toBeUndefined();
     expect(retryDelay(busy(503, 1), RETRY_ATTEMPTS)).toBeUndefined();
+    // A server whose mempool engine is off says so on every try.
+    expect(retryDelay(new ApiError(503, "Mempool is switched off.", 1), 0)).toBeUndefined();
   });
 
   it("waits as a busy refusal says, then answers", async () => {

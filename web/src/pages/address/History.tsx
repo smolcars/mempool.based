@@ -101,7 +101,7 @@ export function History(props: {
     select(next.id, true);
   };
 
-  // Transactions: the first page comes from the page (it refreshes on focus), later pages from here.
+  // Transactions: the first page comes from the page (it refreshes when the history changes), later pages from here.
   const [later, setLater] = createSignal<Transaction[]>([]);
   const [lastPageFull, setLastPageFull] = createSignal(true);
   const [loadingMore, setLoadingMore] = createSignal(false);
@@ -126,10 +126,20 @@ export function History(props: {
   // Counts first pages; a page request made before the latest one is dropped when it lands.
   let generation = 0;
   let known = new Set<string>();
-  let fresh = new Set<string>();
+  // A signal, so a row drawn before the set is worked out still takes its flash.
+  const [fresh, setFresh] = createSignal(new Set<string>());
+  // What a first page says, to tell a refresh that changed nothing from one that did. In any
+  // order: the node lists unconfirmed transactions in no fixed order (seen on regtest).
+  const pageKey = (page: Transaction[]) => {
+    const keys = page.map((t) => `${t.txid}:${t.status.block_hash ?? ""}`);
+    // oxlint-disable-next-line unicorn/no-array-sort -- sorts the array just made; toSorted is past this lib target
+    return keys.sort().join(",");
+  };
   createComputed(
     on(first, (f) => {
       if (!f) return;
+      // Nothing changed: pages already loaded, and one on its way, still continue it.
+      if (previous && pageKey(f) === pageKey(previous)) return;
       generation++;
       const ids = new Set(f.map((t) => t.txid));
       const old = previous;
@@ -137,7 +147,7 @@ export function History(props: {
         if (untrack(later).length === 0) setLastPageFull(pageIsFull(old, PAGE));
         setLater(keptAfterRefresh(f, mergePages(old, untrack(later)), PAGE));
       }
-      fresh = new Set(old ? [...ids].filter((id) => !known.has(id)) : []);
+      setFresh(new Set(old ? [...ids].filter((id) => !known.has(id)) : []));
       known = new Set([...known, ...ids]);
       previous = f;
     }),
@@ -188,9 +198,12 @@ export function History(props: {
     () => wantUtxos() && "/blocks/tip/height",
     { as: "text" },
   );
+  // A request still in flight is asked again, so its answer is as new as the change.
+  const asked = (state: string) =>
+    state === "ready" || state === "refreshing" || state === "pending";
   props.onRefresh(() => {
-    if (utxos.state === "ready") void refetchUtxos();
-    if (tip.state === "ready") void refetchTip();
+    if (asked(utxos.state)) void refetchUtxos();
+    if (asked(tip.state)) void refetchTip();
   });
 
   const meta = () => {
@@ -248,7 +261,7 @@ export function History(props: {
               retryFirst={props.retryFirst}
               shown={shown()}
               total={total()}
-              rowClass={(tx) => (tx && fresh.has(tx.txid) ? "address-row--new" : undefined)}
+              rowClass={(tx) => (tx && fresh().has(tx.txid) ? "address-row--new" : undefined)}
               more={
                 <Show when={shown()}>
                   <div class="address-more">

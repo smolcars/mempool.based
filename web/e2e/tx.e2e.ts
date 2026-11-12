@@ -1,4 +1,4 @@
-import { chain, expect, test } from "./fixtures";
+import { chain, expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 test("a confirmed transaction names every output type and links where the money went", async ({
   page,
@@ -75,7 +75,7 @@ test.describe("transactions the node no longer has", () => {
     await expect(page.getByText("Transaction not found")).toBeVisible();
   });
 
-  test("an unconfirmed transaction that is replaced is marked as gone, without a reload", async ({
+  test("an unconfirmed transaction that is replaced names its replacement, without a reload", async ({
     page,
     request,
   }) => {
@@ -85,14 +85,75 @@ test.describe("transactions the node no longer has", () => {
     );
     await page.goto(`/regtest/tx/${originalTxid}`);
     await expect(page.getByText("Unconfirmed", { exact: true })).toBeVisible();
-    await expect(page.getByText("Waiting for a block")).toBeVisible();
     await expect(page.getByText("Yes, until it confirms")).toBeVisible();
+    // The server takes it in at its next cycle; the page then says where it waits.
+    await expect(page.getByRole("link", { name: "In the next block" }).first()).toBeVisible({
+      timeout: PROJECTION_LAG_MS,
+    });
 
-    expect((await request.post("/regtest/api/tx", { data: replacement })).status()).toBe(200);
-    // The page checks again whenever the tab becomes visible; that saves waiting for the timer.
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect(page.getByText("Removed", { exact: true })).toBeVisible();
-    await expect(page.getByText("No longer in the mempool", { exact: true })).toBeVisible();
+    const replacementTxid = await (
+      await request.post("/regtest/api/tx", { data: replacement })
+    ).text();
+    await expect(page.getByText("Replaced", { exact: true }).first()).toBeVisible({
+      timeout: PROJECTION_LAG_MS,
+    });
+    const notice = page.getByText("This version was replaced").locator("..");
+    await expect(notice.getByRole("link", { name: /…/ }).first()).toHaveAttribute(
+      "href",
+      `/regtest/tx/${replacementTxid}`,
+    );
+    await expect(notice).toContainText("paying 5.00 sat/vB where this one paid 1.00 sat/vB");
+    await expect(page.getByText("No: it was replaced")).toBeVisible();
     await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
+
+    // Opened later, the node no longer has it, and the server still says what happened.
+    await page.reload();
+    await expect(page.getByText("This version was replaced")).toBeVisible();
   });
+});
+
+test("an unconfirmed transaction shows where it waits, and leaving lets go of it", async ({
+  page,
+}) => {
+  // Each socket's frames sent, and whether it closed.
+  const sockets: { sent: string[]; closed: boolean }[] = [];
+  page.on("websocket", (ws) => {
+    const s = { sent: [] as string[], closed: false };
+    sockets.push(s);
+    ws.on("framesent", (f) => s.sent.push(String(f.payload)));
+    ws.on("close", () => {
+      s.closed = true;
+    });
+  });
+  await page.goto(`/regtest/tx/${chain.txs.payment}`);
+  const where = page.getByRole("region", { name: "Where it waits" });
+  await expect(where.getByRole("link", { name: "In the next block" })).toHaveAttribute(
+    "href",
+    "/regtest/block/next",
+  );
+  await expect(where).toContainText("Regtest has no block schedule");
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  const topic = `tx:${chain.txs.payment}`;
+  const following = sockets.find((s) => s.sent.some((f) => f.includes(topic)));
+  expect(following, "a socket that follows the transaction").toBeDefined();
+  await page.getByRole("link", { name: "Blocks", exact: true }).click();
+  await expect(page).toHaveURL("/regtest/blocks");
+  // Released: unsubscribed, or the socket closed with nothing else on it.
+  await expect(() => {
+    const released =
+      following?.closed === true ||
+      following?.sent.some((f) => f.includes('"op":"unsubscribe"') && f.includes(topic));
+    expect(released, "the transaction's topic released").toBe(true);
+  }).toPass();
+});
+
+test("a parent shows the rate its child lifts it to, and links the child", async ({ page }) => {
+  await page.goto(`/regtest/tx/${chain.txs.cpfp_parent}`);
+  await expect(page.getByText("Effective fee rate")).toBeVisible();
+  const group = page.getByRole("region", { name: "Mined with" });
+  await expect(group).toContainText("but its child pays enough to lift the group to");
+  await expect(group.getByRole("link")).toHaveAttribute(
+    "href",
+    `/regtest/tx/${chain.txs.cpfp_child}`,
+  );
 });

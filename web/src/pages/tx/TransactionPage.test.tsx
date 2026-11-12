@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import type { Outspend, Transaction, TxStatus } from "../../lib/esplora";
+import { fakeBlock, FakeSocket } from "../../lib/fakes";
 import TransactionPage, { POLL_MS } from "./TransactionPage";
 
 const TXID = "d1d7cf2b9189a07521354c5d5012c3147d9825596b6ec6cc3100904f0785fcfe";
@@ -63,6 +64,8 @@ beforeEach(() => {
   clearApiCache();
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
+  FakeSocket.all = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
 });
 afterEach(() => {
   for (const d of disposers.splice(0)) d();
@@ -101,10 +104,48 @@ const api = (path: string) => `/api${path}`;
 const serve = (tx: Transaction, spends: Outspend[] = [], tip = "975518") => {
   replies = {
     [api(`/tx/${tx.txid}`)]: { status: 200, body: tx },
+    [api(`/tx/${tx.txid}/status`)]: { status: 200, body: tx.status },
     [api(`/tx/${tx.txid}/outspends`)]: { status: 200, body: spends },
     [api("/blocks/tip/height")]: { status: 200, body: tip },
+    [`/app/tx/${tx.txid}/replacements`]: {
+      status: 200,
+      body: { txid: tx.txid, truncated: false, replaced_by: [], replaces: [] },
+    },
   };
 };
+/** Every topic the page asked the socket for, sorted. */
+const subscribed = (ws: FakeSocket): string[] => {
+  const topics = ws.sent.flatMap((m) =>
+    (m as { op: string }).op === "subscribe" ? (m as { topics: string[] }).topics : [],
+  );
+  // oxlint-disable-next-line unicorn/no-array-sort -- a fresh array; toSorted is past this lib target
+  return topics.sort();
+};
+/** The polite live region's text. */
+const live = (el: Element) => text(el.querySelector("p[aria-live=polite]") as Element);
+/** A `tx:` message for the page's transaction, as the server sends it. */
+const msg = (m: Record<string, unknown>) => ({
+  topic: `tx:${TXID}`,
+  type: "tx",
+  stale: false,
+  ...m,
+});
+const mempoolMsg = (block: number, extra: Record<string, unknown> = {}, effective = 1000) =>
+  msg({
+    state: "mempool",
+    time: 1_794_461_221,
+    fee: 141,
+    vsize: 141,
+    rate: 1000,
+    position: {
+      block,
+      blocks: 8,
+      effective_rate: effective,
+      ahead_vsize: 412_311,
+      ahead_txs: 1022,
+    },
+    ...extra,
+  });
 
 describe("TransactionPage", () => {
   it("shows a confirmed payment: status, block, confirmations, fee and where the money went", async () => {
@@ -180,40 +221,331 @@ describe("TransactionPage", () => {
     );
   });
 
-  it("notices when an unconfirmed transaction confirms, without a reload", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  it("follows an unconfirmed transaction live: where it waits, then the moment it confirms", async () => {
     serve(payment({ confirmed: false }));
-    let status: TxStatus = { confirmed: false };
-    replies[api(`/tx/${TXID}/status`)] = () => ({ status: 200, body: status });
     const el = page(`/tx/${TXID}`);
     await settle();
     expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
-    expect(text(el)).toContain("Waiting for a block");
     expect(text(el)).toContain("Yes, until it confirms");
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    expect(subscribed(ws)).toStrictEqual(["blocks", `tx:${TXID}`]);
+    expect(text(el)).toContain("Connecting");
 
-    vi.advanceTimersByTime(POLL_MS);
+    ws.receive(mempoolMsg(2));
     await settle();
-    expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
+    expect(text(el.querySelector(".tx-live") as Element)).toBe("Live");
+    const where = el.querySelector(".tx-where") as Element;
+    expect(where.querySelector("a")?.getAttribute("href")).toBe("/block/next/3");
+    expect(text(where)).toContain("In about 3 blocks, projected");
+    expect(text(where)).toContain("1 022 transactions (412.31 kvB) would be mined before it.");
+    expect(text(where)).toContain("Roughly 30 minutes");
+    expect(el.querySelector(".tx-lane__slot.is-here .tx-lane__label")?.textContent).toBe("3");
+    // A position that only moves is not announced.
+    expect(live(el)).toBe("");
+    ws.receive(mempoolMsg(1));
+    await settle();
+    expect(live(el)).toBe("");
+    ws.receive(mempoolMsg(0));
+    await settle();
+    expect(live(el)).toBe("Now projected for the next block.");
+    expect(el.querySelector(".tx-where a")?.getAttribute("href")).toBe("/block/next");
 
-    status = { ...confirmed };
+    replies[api(`/tx/${TXID}/status`)] = { status: 200, body: confirmed };
+    ws.receive(msg({ state: "confirmed", height: 975_516, hash: BLOCK }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+    expect(el.querySelector(".tx-step--landed")).not.toBeNull();
+    expect(el.querySelector(".tx-where")).toBeNull();
+    expect(live(el)).toBe("Confirmed in block 975 516.");
+    // The tip from the blocks topic counts the confirmations.
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(975_517) });
+    await settle();
+    expect(text(el)).toContain("2 confirmations of 6 so far.");
+  });
+
+  it("falls back to checking over HTTP when the live channel drops, and says so", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    ws.receive(mempoolMsg(0));
+    await settle();
+    ws.drop(1006);
+    await settle();
+    expect(text(el.querySelector(".tx-live") as Element)).toBe(
+      "Not liveThe live connection dropped. Checking every 10 s instead.",
+    );
+    // Without the topic there is no position to vouch for.
+    expect(text(el)).toContain("Its place in the queue shows while the page is live.");
+    expect(fetchMock.mock.calls.some(([u]) => u === api(`/tx/${TXID}/status`))).toBe(true);
+
+    replies[api(`/tx/${TXID}/status`)] = { status: 200, body: confirmed };
     replies[api("/blocks/tip/height")] = { status: 200, body: "975516" };
     vi.advanceTimersByTime(POLL_MS);
     await settle();
     expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
-    expect(el.querySelector(".tx-step--landed")).not.toBeNull();
     expect(text(el)).toContain("1 confirmation of 6 so far.");
-    expect(text(el.querySelector("p[aria-live=polite]") as Element)).toBe(
-      "Confirmed in block 975 516.",
+  });
+
+  it("after a reconnect, checks over HTTP while the topic has said nothing yet", async () => {
+    vi.useFakeTimers();
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await vi.advanceTimersByTimeAsync(50);
+    const first = FakeSocket.last();
+    first.hello({ network: "mainnet" });
+    first.receive(mempoolMsg(0));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(el.querySelector(".tx-lane")).not.toBeNull();
+    first.drop(1006);
+    await vi.advanceTimersByTimeAsync(1100); // the reconnect's backoff
+    const second = FakeSocket.last();
+    expect(second).not.toBe(first);
+    second.hello({ network: "mainnet" }); // a restarted server, still on its first mempool cycle
+    await vi.advanceTimersByTimeAsync(50);
+    // What the topic said before the drop no longer vouches for a position.
+    expect(el.querySelector(".tx-lane")).toBeNull();
+    const asked = () =>
+      fetchMock.mock.calls.filter(([u]) => u === api(`/tx/${TXID}/status`)).length;
+    const before = asked();
+    await vi.advanceTimersByTimeAsync(5100);
+    expect(text(el.querySelector(".tx-live") as Element)).toContain(
+      "The server has not caught up with the mempool yet.",
+    );
+    expect(asked()).toBeGreaterThan(before);
+  });
+
+  it("says when the server does not follow this network's mempool, and polls instead", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive({ topic: `tx:${TXID}`, type: "off" });
+    await settle();
+    expect(text(el)).toContain("This server does not follow the Mainnet mempool.");
+    expect(el.querySelector(".tx-where")).toBeNull();
+    const asked = () =>
+      fetchMock.mock.calls.filter(([u]) => u === api(`/tx/${TXID}/status`)).length;
+    const before = asked();
+    vi.advanceTimersByTime(POLL_MS);
+    await settle();
+    expect(asked()).toBe(before + 1);
+    // Nor does it ask the routes that need the mempool engine.
+    expect(fetchMock.mock.calls.some(([u]) => u.startsWith("/app/"))).toBe(false);
+  });
+
+  it("says when the node is not answering, and when the server is following too many", async () => {
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    ws.receive(mempoolMsg(0, { stale: true }));
+    await settle();
+    expect(text(el.querySelector(".tx-live") as Element)).toContain("Node not answering");
+    ws.receive({ topic: `tx:${TXID}`, type: "refused", reason: "server_full" });
+    await settle();
+    expect(text(el.querySelector(".tx-live") as Element)).toContain(
+      "The server is following as many transactions as it can.",
     );
   });
 
-  it("handles a transaction that vanishes while unconfirmed", async () => {
+  it("shows the rate a child lifts its parent to, and who they are", async () => {
+    serve(payment({ confirmed: false }));
+    replies[`/app/tx/${TXID}/relatives`] = {
+      status: 200,
+      body: {
+        txid: TXID,
+        stale: false,
+        chunk: 0,
+        parents: [],
+        children: [SPENDER],
+        chunks: [{ fee: 3316, vsize: 267, rate: 12_419, txs: [TXID, SPENDER] }],
+        txs: [
+          { txid: TXID, chunk: 0, time: 1, fee: 141, vsize: 141, block: 0, parents: [] },
+          { txid: SPENDER, chunk: 0, time: 1, fee: 3175, vsize: 126, block: 0, parents: [TXID] },
+        ],
+      },
+    };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(mempoolMsg(0, {}, 12_419));
+    await settle();
+    expect(text(el)).toContain("Effective fee rate12.4 sat/vB");
+    const group = el.querySelector(".tx-group") as Element;
+    expect(text(group)).toContain(
+      "On its own it pays 1.00 sat/vB, but its child pays enough to lift the group to 12.4 sat/vB as a whole.",
+    );
+    expect(text(group)).toContain("child pays for parent");
+    expect(group.querySelector("a")?.getAttribute("href")).toBe(`/tx/${SPENDER}`);
+  });
+
+  it("names what replaced it and follows the chain to the newest version", async () => {
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    const first = {
+      txid: TXID,
+      by: SPENDER,
+      seen: 1_794_461_300,
+      fee: 141,
+      vsize: 141,
+      rate: 1000,
+      by_fee: 900,
+      by_vsize: 141,
+      by_rate: 6383,
+    };
+    ws.receive(msg({ state: "replaced", by: SPENDER, truncated: false, chain: [first] }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Replaced");
+    expect(live(el)).toBe(
+      "Replaced by another transaction spending the same coins, at 6.38 sat/vB.",
+    );
+    const notice = el.querySelector(".tx-notice") as Element;
+    expect(text(notice)).toContain("paying 6.38 sat/vB where this one paid 1.00 sat/vB");
+    expect(notice.querySelector(`a[href="/tx/${SPENDER}"]`)).not.toBeNull();
+    expect(text(el)).toContain("No: it was replaced");
+    expect(text(el)).toContain("Will not confirm");
+
+    const NEWER = "e".repeat(64);
+    ws.receive(
+      msg({
+        state: "replaced",
+        by: SPENDER,
+        truncated: false,
+        chain: [first, { txid: SPENDER, by: NEWER }],
+      }),
+    );
+    await settle();
+    expect(live(el)).toBe("Its replacement was replaced too.");
+    expect(text(el)).toContain("It was replaced 2 times.");
+    // Only the newest version is followed, to say where it is.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 300);
+    });
+    expect(ws.sent).toContainEqual({ op: "subscribe", topics: [`tx:${NEWER}`] });
+    ws.receive({
+      topic: `tx:${NEWER}`,
+      type: "tx",
+      stale: false,
+      state: "confirmed",
+      height: 975_520,
+      hash: BLOCK,
+    });
+    await settle();
+    expect(text(el.querySelector(".tx-chain__newest") as Element)).toContain(
+      "It confirmed in block 975 520.",
+    );
+  });
+
+  it("explains a replaced transaction opened later, from the server's record", async () => {
+    replies = {
+      [api("/blocks/tip/height")]: { status: 200, body: "975518" },
+      [`/app/tx/${TXID}/replacements`]: {
+        status: 200,
+        body: {
+          txid: TXID,
+          truncated: false,
+          replaces: [],
+          replaced_by: [
+            {
+              txid: TXID,
+              by: SPENDER,
+              seen: 1_794_461_300,
+              fee: 141,
+              vsize: 141,
+              rate: 1000,
+              by_fee: null,
+              by_vsize: null,
+              by_rate: null,
+            },
+          ],
+        },
+      },
+    };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(msg({ state: "unknown" }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Replaced");
+    expect(text(el)).toContain("This version was replaced");
+    expect(el.querySelector(`.tx-notice a[href="/tx/${SPENDER}"]`)).not.toBeNull();
+    expect(text(el)).not.toContain("Transaction not found");
+  });
+
+  it("says only what is known when nothing remembers the transaction", async () => {
+    replies = {
+      [api("/blocks/tip/height")]: { status: 200, body: "975518" },
+      [`/app/tx/${TXID}/replacements`]: {
+        status: 200,
+        body: { txid: TXID, truncated: false, replaces: [], replaced_by: [] },
+      },
+    };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(msg({ state: "unknown" }));
+    await settle();
+    expect(el.querySelector(".tx-status")).toBeNull();
+    expect(text(el)).toContain("Transaction not found");
+    expect(text(el)).toContain("it has none for this transaction");
+  });
+
+  it("says a dropped transaction was dropped, not replaced", async () => {
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(msg({ state: "evicted" }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Dropped");
+    expect(text(el)).toContain("Dropped from the mempool without being mined");
+    expect(text(el)).toContain("replaced by a transaction this server did not see");
+    expect(text(el)).not.toContain("This version was replaced");
+  });
+
+  it("trusts HTTP for a transaction confirmed before anyone followed it", async () => {
+    serve(payment(confirmed));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(msg({ state: "unknown" }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+    expect(text(el)).toContain("3 confirmations of 6 so far.");
+  });
+
+  it("states plainly when a reorganisation sends it back to the mempool", async () => {
+    serve(payment(confirmed), [], "975516");
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    ws.receive(msg({ state: "confirmed", height: 975_516, hash: BLOCK }));
+    await settle();
+    ws.receive(mempoolMsg(0));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
+    expect(text(el)).toContain("Back in the mempool");
+    expect(text(el)).toContain("is no longer part of the chain");
+    expect(live(el)).toMatch(/^Unconfirmed again: block 975 516 left the chain/);
+  });
+
+  it("handles a transaction that vanishes while the page checks over HTTP", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     serve(payment({ confirmed: false }));
     replies[api(`/tx/${TXID}/status`)] = { status: 404, body: { error: "not found" } };
     const el = page(`/tx/${TXID}`);
     await settle();
-    vi.advanceTimersByTime(POLL_MS);
+    FakeSocket.last().drop(1006);
     await settle();
     expect(el.querySelector(".tx-status")?.textContent).toBe("Removed");
     expect(text(el)).toContain("No longer in the mempool");
@@ -221,24 +553,47 @@ describe("TransactionPage", () => {
     // The page keeps what it knew; it does not fall back to "not found".
     expect(el.querySelectorAll(".tx-flow__item")).not.toHaveLength(0);
     // And it stops asking.
-    const calls = fetchMock.mock.calls.length;
+    const calls = fetchMock.mock.calls.filter(([u]) => u.startsWith("/api/")).length;
     vi.advanceTimersByTime(POLL_MS * 3);
     await settle();
-    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    expect(fetchMock.mock.calls.filter(([u]) => u.startsWith("/api/"))).toHaveLength(calls);
   });
 
-  it("goes back to unconfirmed when its block leaves the chain", async () => {
+  it("shows a transaction the node did not know, once it is broadcast, without the live channel", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    serve(payment(confirmed), [], "975516");
-    replies[api(`/tx/${TXID}/status`)] = { status: 200, body: { confirmed: false } };
+    replies = {
+      [api("/blocks/tip/height")]: { status: 200, body: "975518" },
+      [`/app/tx/${TXID}/replacements`]: {
+        status: 200,
+        body: { txid: TXID, truncated: false, replaced_by: [], replaces: [] },
+      },
+    };
     const el = page(`/tx/${TXID}`);
     await settle();
-    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+    FakeSocket.last().drop(1006);
+    await settle();
+    expect(text(el)).toContain("Transaction not found");
+    serve(payment({ confirmed: false }));
     vi.advanceTimersByTime(POLL_MS);
     await settle();
     expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
-    expect(text(el)).toContain("Waiting for a block");
-    expect(text(el.querySelector("p[aria-live=polite]") as Element)).toContain("Unconfirmed again");
+    expect(el.querySelectorAll(".tx-flow__item")).not.toHaveLength(0);
+  });
+
+  it("follows nothing for a settled transaction, and lets go of what it follows on leaving", async () => {
+    serve(payment(confirmed), [], "975600");
+    page(`/tx/${TXID}`);
+    await settle();
+    expect(FakeSocket.all).toHaveLength(0);
+
+    serve(payment({ confirmed: false }));
+    page(`/tx/${TXID}`);
+    await settle();
+    const ws = FakeSocket.last();
+    ws.hello({ network: "mainnet" });
+    expect(subscribed(ws)).toStrictEqual(["blocks", `tx:${TXID}`]);
+    for (const d of disposers.splice(0)) d();
+    expect(ws.closedWith).toBe(1000);
   });
 
   it("reveals a long witness a hundred items at a time", async () => {
