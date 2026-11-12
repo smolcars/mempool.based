@@ -84,7 +84,7 @@ A successful answer is forwarded byte for byte. Any other answer is replaced by 
 
 - `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height` are copied from the node's answer when it has them.
 - `Content-Type` is the node's. No other node header is copied (`X-Powered-By` is dropped).
-- **CORS:** every `/api` response carries `Access-Control-Allow-Origin: *` and exposes the two chain-tip headers and `X-Request-Id` ([`LOGGING.md`](LOGGING.md#request-ids)), including refusals (`429`, `503`, `504`), so a web client can read why it was refused. A preflight `OPTIONS` is answered with `204`, methods `GET, HEAD, POST`, header `Content-Type`, cached for a day. Broadcast is included: it needs no credentials and no cookie ever applies, so a cross-origin page can do nothing a plain `curl` cannot, and refusing CORS would only break browser wallets.
+- **CORS:** every `/api` response carries `Access-Control-Allow-Origin: *` and exposes the two chain-tip headers, `X-Request-Id` ([`LOGGING.md`](LOGGING.md#request-ids)) and the mining routes' coverage headers ([below](#coverage)), including refusals (`429`, `503`, `504`), so a web client can read why it was refused. A preflight `OPTIONS` is answered with `204`, methods `GET, HEAD, POST`, header `Content-Type`, cached for a day. Broadcast is included: it needs no credentials and no cookie ever applies, so a cross-origin page can do nothing a plain `curl` cannot, and refusing CORS would only break browser wallets.
 
 ### Cache headers
 

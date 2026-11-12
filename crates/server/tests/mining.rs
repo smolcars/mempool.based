@@ -116,6 +116,8 @@ async fn start(dir: &Path) -> (String, Arc<AtomicUsize>) {
         ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1".to_owned()),
         ("DATA_DIR", dir.display().to_string()),
         ("BACKFILL_ENABLED", "false".to_owned()),
+        // The mempool tracker polls the node; these routes must not, so count them alone.
+        ("REGTEST_MEMPOOL_ENABLED", "false".to_owned()),
     ]
     .into_iter()
     .collect();

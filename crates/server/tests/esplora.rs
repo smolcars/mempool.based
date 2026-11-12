@@ -247,7 +247,10 @@ async fn responses_are_forwarded_byte_for_byte_with_our_headers() {
         assert_eq!(r.header("access-control-allow-origin"), Some("*"));
         assert_eq!(
             r.header("access-control-expose-headers"),
-            Some("x-bitcoin-chain-tip, x-bitcoin-chain-tip-height, x-request-id")
+            Some(
+                "x-bitcoin-chain-tip, x-bitcoin-chain-tip-height, x-request-id, \
+                 x-data-from-height, x-data-from-time, x-data-complete"
+            )
         );
         assert!(
             r.header("x-powered-by").is_none(),
