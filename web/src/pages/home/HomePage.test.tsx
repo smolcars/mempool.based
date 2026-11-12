@@ -3,6 +3,7 @@ import { mount } from "../../components/test-utils";
 import { clearApiCache } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { FakeSocket, fakeBlock } from "../../lib/fakes";
+import { type BlockSummary, clearSummaries } from "../../lib/summary";
 import HomePage from "./HomePage";
 
 const chain = (from: number, to: number, branch = "a") =>
@@ -22,13 +23,17 @@ const FEES = { "1": 5.2, "3": 1.1, "6": 0.5, "144": 0.12 };
 const RECENT = [{ txid: "c".repeat(64), fee: 300, vsize: 150, value: 12_345 }];
 
 let replies: Record<string, () => Response>;
+/** The batch summary route; unset, it is a 404 and tiles keep their neutral gauge. */
+let summaries: ((hashes: string[]) => Response | Promise<Response>) | undefined;
 let blocksServed: Block[];
 let requests: string[];
 
 function serve() {
   vi.stubGlobal("fetch", async (url: string) => {
-    const path = url.replace(/^\/regtest\/api/, "");
+    const path = url.replace(/^\/(regtest|signet)\/api/, "");
     requests.push(path);
+    const batch = /\/app\/blocks\/summary\?hashes=(.*)$/.exec(path);
+    if (batch && summaries) return summaries(batch[1]?.split(",") ?? []);
     const reply = replies[path];
     if (reply) return reply();
     return Response.json({ error: "not found" }, { status: 404 });
@@ -37,6 +42,8 @@ function serve() {
 
 beforeEach(() => {
   clearApiCache();
+  clearSummaries();
+  summaries = undefined;
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   requests = [];
@@ -297,6 +304,238 @@ describe("the live indicator", () => {
       replies["/mempool/recent"] = () => Response.json(RECENT);
       vi.advanceTimersByTime(5_000);
       await vi.waitFor(() => expect(el.querySelector(".home-live")?.textContent).toBe("Live"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+const facts = (id: string, over: Partial<BlockSummary> = {}): BlockSummary => ({
+  id,
+  height: 0,
+  tx_count: 3,
+  fees: 900,
+  vsize: 400,
+  weight: 1600,
+  fee_rate: { min: 0.1, p10: 0.1, p25: 0.15, median: 1.234, p75: 3, p90: 4, max: 12.5 },
+  fee_bands: [100, 0, 0, 0, 200, 0, 0, 0, 0, 100],
+  ...over,
+});
+const tile = (el: HTMLElement, height: number) =>
+  el.querySelector<HTMLElement>(`.home-strip__lane > li[data-height="${height}"]`);
+const summaryRequests = () => requests.filter((p) => p.includes("/app/blocks/summary"));
+
+describe("the tiles' fee facts", () => {
+  it("loads every tile's facts in one request on first paint, and settles their layers in", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el } = await open();
+    await vi.waitFor(() =>
+      expect(tile(el, 10)?.querySelectorAll(".strata__layer")).toHaveLength(3),
+    );
+    expect(summaryRequests()).toHaveLength(1);
+    expect(summaryRequests()[0]?.split(",")).toHaveLength(10);
+    const t = tile(el, 10) as HTMLElement;
+    expect(t.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB");
+    expect(t.querySelector(".home-tile__range")?.textContent).toBe("0.10 – 12.5");
+    expect(t.querySelector(".strata--settle")).not.toBeNull();
+    // The gauge the layers settle over clears away.
+    expect(t.querySelector(".home-tile__fill--gone")).not.toBeNull();
+    expect(t.querySelector("a")?.getAttribute("aria-label")).toContain(
+      "median fee 1.23 sat/vB, fee range 0.10 to 12.5 sat/vB",
+    );
+    // The median's swatch is the color of a band the strata draw.
+    const swatch = t.querySelector<HTMLElement>(".fee__swatch")?.style.getPropertyValue("--swatch");
+    const layers = [...t.querySelectorAll<HTMLElement>(".strata__layer")];
+    expect(layers.map((l) => l.style.getPropertyValue("--c"))).toContain(swatch);
+  });
+
+  it("shows the neutral gauge and loading lines while the facts are on their way", async () => {
+    summaries = () => new Promise<Response>(() => {});
+    const { el } = await open();
+    const t = tile(el, 10) as HTMLElement;
+    expect(t.querySelector(".home-tile__fill")).not.toBeNull();
+    expect(t.querySelectorAll(".home-tile__bone--line")).toHaveLength(2);
+    expect(t.querySelector(".strata")).toBeNull();
+    expect(t.querySelector("a")?.getAttribute("aria-label")).not.toContain("fee");
+  });
+
+  it("says plainly when a block holds only its coinbase", async () => {
+    summaries = (hashes) =>
+      Response.json(
+        hashes.map((h) =>
+          facts(h, { fee_rate: null, fee_bands: Array.from({ length: 10 }, () => 0) }),
+        ),
+      );
+    const { el } = await open();
+    const t = tile(el, 10) as HTMLElement;
+    await vi.waitFor(() => expect(t.querySelector(".home-tile__fee")?.textContent).toBe("No fees"));
+    expect(t.querySelector(".home-tile__range")?.textContent).toBe("Coinbase only");
+    expect(t.querySelector(".strata")).toBeNull();
+    expect(t.querySelector(".home-tile__fill:not(.home-tile__fill--gone)")).not.toBeNull();
+    expect(t.querySelector("a")?.getAttribute("aria-label")).toContain(
+      "only the coinbase, no fees",
+    );
+  });
+
+  it("keeps the gauge and the block's size when the facts cannot be had", async () => {
+    const { el } = await open();
+    const t = tile(el, 10) as HTMLElement;
+    await vi.waitFor(() => expect(t.querySelector(".home-tile__fee")?.textContent).toBe("250 vB"));
+    expect(t.querySelector(".home-tile__range")?.textContent).toBe("under 1% full");
+  });
+
+  it("fills a new block's tile from the WebSocket, without asking HTTP", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el, ws } = await open();
+    await vi.waitFor(() => expect(summaryRequests()).toHaveLength(1));
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+    const t = tile(el, 11) as HTMLElement;
+    expect(t.querySelectorAll(".home-tile__bone--line")).toHaveLength(2);
+    ws.receive({
+      topic: "blocks",
+      type: "summary",
+      summary: facts(fakeBlock(11).id, {
+        fee_rate: { min: 0.1, p10: 0.1, p25: 0.2, median: 0.5, p75: 1, p90: 2, max: 3 },
+      }),
+    });
+    expect(t.querySelector(".home-tile__fee")?.textContent).toBe("0.50 sat/vB");
+    expect(t.querySelector(".strata--settle")).not.toBeNull();
+    // A malformed push is ignored, and a push for a block not shown is kept for later.
+    ws.receive({ topic: "blocks", type: "summary", summary: { id: fakeBlock(10).id } });
+    expect(summaryRequests()).toHaveLength(1);
+  });
+
+  it("asks HTTP for a new block's facts when the push does not come", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+      const { el, ws } = await open();
+      await vi.waitFor(() => expect(summaryRequests()).toHaveLength(1));
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+      vi.advanceTimersByTime(3_000);
+      expect(summaryRequests()).toHaveLength(1);
+      vi.advanceTimersByTime(1_500);
+      await vi.waitFor(() => expect(summaryRequests()).toHaveLength(2));
+      expect(summaryRequests()[1]).toContain(fakeBlock(11).id);
+      await vi.waitFor(() =>
+        expect(tile(el, 11)?.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the tiles' fee facts, racing", () => {
+  it("keeps a pushed summary when the HTTP fallback for it fails afterwards", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let failFallback: (r: Response) => void = () => {};
+      summaries = (hashes) =>
+        hashes.includes(fakeBlock(11).id)
+          ? new Promise<Response>((resolve) => {
+              failFallback = resolve;
+            })
+          : Response.json(hashes.map((h) => facts(h)));
+      const { el, ws } = await open();
+      await vi.waitFor(() => expect(summaryRequests()).toHaveLength(1));
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+      vi.advanceTimersByTime(4_500);
+      await vi.waitFor(() => expect(summaryRequests()).toHaveLength(2));
+      ws.receive({ topic: "blocks", type: "summary", summary: facts(fakeBlock(11).id) });
+      failFallback(Response.json({ error: "upstream failed" }, { status: 502 }));
+      const t = tile(el, 11) as HTMLElement;
+      await vi.waitFor(() =>
+        expect(t.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB"),
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      expect(t.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the difficulty adjustment", () => {
+  const ADJUSTMENT = {
+    progressPercent: 89.0377,
+    difficultyChange: -7.046,
+    estimatedRetargetDate: Date.now() + 39 * 3_600_000 + 30 * 60_000 + 30_000,
+    remainingBlocks: 221,
+    remainingTime: 1,
+    previousRetarget: 5.539,
+    previousTime: 1,
+    nextRetargetHeight: 975_744,
+    timeAvg: 1,
+    adjustedTimeAvg: 1,
+    timeOffset: 0,
+    expectedBlocks: 1932.47,
+  };
+
+  it("says regtest never adjusts, rather than show a change of zero", async () => {
+    const { el } = await open();
+    expect(el.querySelector(".home-difficulty")?.textContent).toContain(
+      "Regtest never adjusts its difficulty",
+    );
+    expect(requests.some((p) => p.includes("difficulty"))).toBe(false);
+  });
+
+  it("shows the period, the expected change, when, and the previous change", async () => {
+    replies["/v1/difficulty-adjustment"] = () => Response.json(ADJUSTMENT);
+    const el = mount(() => <HomePage />, "/signet/");
+    const panel = () => el.querySelector(".home-difficulty")?.textContent ?? "";
+    await vi.waitFor(() => expect(panel()).toContain("Down 7.05%"));
+    expect(panel()).toContain("1\u202F795 of 2\u202F016 blocks");
+    expect(panel()).toContain("137 blocks behind");
+    expect(panel()).toContain("at block 975\u202F744");
+    expect(panel()).toContain("in 39 h 30 min");
+    expect(panel()).toContain("Up 5.54%");
+  });
+
+  it("asks again while its answer is as of an older tip than the strip shows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const stamp = (hash: string) => ({
+        "x-bitcoin-chain-tip": hash,
+        "x-bitcoin-chain-tip-height": "9",
+      });
+      let n = 0;
+      replies["/v1/difficulty-adjustment"] = () =>
+        Response.json(ADJUSTMENT, {
+          headers: stamp(n++ === 0 ? "ab".repeat(32) : fakeBlock(10).id),
+        });
+      mount(() => <HomePage />, "/signet/");
+      await vi.waitFor(() => expect(n).toBe(1));
+      vi.advanceTimersByTime(1_600);
+      await vi.waitFor(() => expect(n).toBe(2));
+      // Caught up with the strip's tip: no more asking.
+      vi.advanceTimersByTime(10_000);
+      expect(n).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits out the server's 503 before its first answer without showing an error", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let n = 0;
+      replies["/v1/difficulty-adjustment"] = () =>
+        n++ === 0
+          ? Response.json(
+              { error: "not ready yet; retry" },
+              { status: 503, headers: { "retry-after": "1" } },
+            )
+          : Response.json(ADJUSTMENT);
+      const el = mount(() => <HomePage />, "/signet/");
+      const panel = () => el.querySelector(".home-difficulty");
+      await vi.waitFor(() => expect(n).toBe(1));
+      expect(panel()?.querySelector('[role="alert"]')).toBeNull();
+      expect(panel()?.querySelector(".home-difficulty__stats")?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+      vi.advanceTimersByTime(1_300);
+      await vi.waitFor(() => expect(panel()?.textContent).toContain("Down 7.05%"));
     } finally {
       vi.useRealTimers();
     }

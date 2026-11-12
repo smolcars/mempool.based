@@ -1,0 +1,72 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearApiCache } from "./api";
+import {
+  type BlockSummary,
+  clearSummaries,
+  fetchSummaries,
+  isSummary,
+  knownSummary,
+} from "./summary";
+
+const hash = (n: number) => n.toString(16).padStart(64, "0");
+const summary = (n: number): BlockSummary => ({
+  id: hash(n),
+  height: n,
+  tx_count: 2,
+  fees: 300,
+  vsize: 150,
+  weight: 600,
+  fee_rate: { min: 2, p10: 2, p25: 2, median: 2, p75: 2, p90: 2, max: 2 },
+  fee_bands: [0, 0, 0, 0, 0, 0, 150, 0, 0, 0],
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  clearApiCache();
+  clearSummaries();
+});
+
+describe("isSummary", () => {
+  it("accepts the server's shape, including a coinbase-only block", () => {
+    expect(isSummary(summary(1))).toBe(true);
+    expect(isSummary({ ...summary(1), fee_rate: null })).toBe(true);
+  });
+
+  it("refuses anything it could not draw", () => {
+    expect(isSummary({ ...summary(1), id: "<b>" })).toBe(false);
+    expect(isSummary({ ...summary(1), fee_bands: [1, 2] })).toBe(false);
+    expect(isSummary({ ...summary(1), fee_bands: [...summary(1).fee_bands.slice(1), -1] })).toBe(
+      false,
+    );
+    expect(isSummary({ ...summary(1), fee_rate: { median: 1 } })).toBe(false);
+    expect(isSummary({ ...summary(1), fees: "300" })).toBe(false);
+    expect(isSummary(null)).toBe(false);
+  });
+});
+
+describe("fetchSummaries", () => {
+  it("asks in batches of ten, skips what it knows, and keeps what it gets", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      asked.push(url);
+      const hashes = new URL(url, "http://x").searchParams.get("hashes")?.split(",") ?? [];
+      return Response.json(hashes.map((h) => summary(Number.parseInt(h, 16))));
+    });
+    const wanted = Array.from({ length: 12 }, (_, i) => hash(i + 1));
+    const found = await fetchSummaries("signet", wanted);
+    expect(found.size).toBe(12);
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toMatch(/^\/signet\/app\/blocks\/summary\?hashes=/);
+    expect(asked[1]?.split(",")).toHaveLength(2);
+    expect(knownSummary("signet", hash(3))?.height).toBe(3);
+    expect(knownSummary("mainnet", hash(3))).toBeUndefined();
+    await fetchSummaries("signet", [hash(3), hash(4)]);
+    expect(asked).toHaveLength(2);
+  });
+
+  it("leaves out what the server did not send or sent malformed", async () => {
+    vi.stubGlobal("fetch", async () => Response.json([summary(1), { id: hash(2) }]));
+    const found = await fetchSummaries("mainnet", [hash(1), hash(2)]);
+    expect([...found.keys()]).toStrictEqual([hash(1)]);
+  });
+});

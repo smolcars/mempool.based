@@ -2,6 +2,7 @@ import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
 import { render } from "solid-js/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
+import { type BlockSummary, clearSummaries } from "../../lib/summary";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import BlocksPage from "../blocks/BlocksPage";
 import BlockPage from "./BlockPage";
@@ -51,6 +52,7 @@ const coinbase = tx(0, {
 interface Reply {
   status?: number;
   body: unknown;
+  headers?: Record<string, string>;
 }
 let replies: Record<string, Reply | ((n: number) => Reply)> = {};
 const calls: string[] = [];
@@ -68,16 +70,47 @@ function serve(table: typeof replies) {
     // Block JSON is immutable, as the server marks it, so the client keeps it in memory.
     const headers = /^\/block\/[0-9a-f]{64}$/.test(path)
       ? { "cache-control": "public, max-age=31536000, immutable" }
-      : {};
+      : (reply.headers ?? {});
     return typeof reply.body === "string"
       ? new Response(reply.body, { status, headers })
       : Response.json(reply.body, { status, headers });
   });
 }
 
+// Status replies carry the tip they are as of, as rbitcoin stamps them.
 const status = (s: Partial<BlockStatus> = {}): Reply => ({
   body: { in_best_chain: true, height: block.height, next_best: NEXT, ...s },
+  headers: { "x-bitcoin-chain-tip": "cd".repeat(32), "x-bitcoin-chain-tip-height": "975420" },
 });
+
+const SUMMARY: BlockSummary = {
+  id: HASH,
+  height: block.height,
+  tx_count: 30,
+  fees: 500_000,
+  vsize: 999_391,
+  weight: 3_989_000,
+  fee_rate: {
+    min: 0.100_719,
+    p10: 0.12,
+    p25: 0.126_984,
+    median: 1.085_088_8,
+    p75: 2.007_012,
+    p90: 3.150_749,
+    max: 62.100_917,
+  },
+  fee_bands: [367_013, 9447, 153, 5069, 233_233, 20_986, 238_267, 102_460, 17_310, 5453],
+};
+const COINBASE_ONLY: BlockSummary = {
+  ...SUMMARY,
+  tx_count: 1,
+  fees: 0,
+  vsize: 0,
+  weight: 0,
+  fee_rate: null,
+  fee_bands: Array.from({ length: 10 }, () => 0),
+};
+const summaryPath = (...hashes: string[]) => `/app/blocks/summary?hashes=${hashes.join(",")}`;
 const normal = () => ({
   [`/block/${HASH}`]: { body: block },
   [`/block/${HASH}/status`]: status(),
@@ -87,11 +120,15 @@ const normal = () => ({
   [`/block/${HASH}/txs/25`]: { body: Array.from({ length: 5 }, (_, i) => tx(i + 25)) },
   "/blocks/tip/height": { body: "975420" },
   "/block-height/975411": { body: HASH },
+  [summaryPath(HASH)]: { body: [SUMMARY] },
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   clearApiCache();
+  clearSummaries();
   document.body.replaceChildren();
 });
 
@@ -149,6 +186,105 @@ describe("BlockPage", () => {
     expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
     expect(text(el.querySelector("tbody tr") as Element)).toContain("Coinbase");
     expect(document.title).toBe("Block 975 411 | mempool.based".replace(" 4", " 4"));
+  });
+
+  it("fills the fee facts and the core sample's layers from the summary", async () => {
+    serve(normal());
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB"));
+    expect(fact(el, "Fee range")).toContain("0.10 – 62.1 sat/vB");
+    const layers = [...el.querySelectorAll<HTMLElement>(".block-core .strata__layer")];
+    expect(layers).toHaveLength(10);
+    expect(layers[0]?.style.getPropertyValue("--c")).toBe("var(--fee-1)");
+    // The median's swatch is the band of its printed value, and that band holds part of the block.
+    const swatch = el.querySelector<HTMLElement>(".block-fact .fee__swatch");
+    expect(swatch?.style.getPropertyValue("--swatch")).toBe("var(--fee-5)");
+    const caption = text(el.querySelector(".block-core__caption") as Element);
+    expect(caption).toContain("Layers, cheapest first: under 0.20 sat/vB: 367.01 kvB, 37%");
+    expect(caption).toContain("10.0 sat/vB and up: 5 453 vB, under 1%");
+    expect(el.querySelector(".block-core .feekey")).not.toBeNull();
+  });
+
+  it("says when a block holds only its coinbase", async () => {
+    serve({ ...normal(), [summaryPath(HASH)]: { body: [COINBASE_ONLY] } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Median fee rate")).toContain("None"));
+    expect(fact(el, "Median fee rate")).toContain("Only the coinbase, which pays none");
+    expect(fact(el, "Fee range")).toBe("–");
+    expect(el.querySelectorAll(".strata__layer")).toHaveLength(0);
+    expect(el.querySelector(".block-core__fill--strata")).toBeNull();
+  });
+
+  it("waits out a busy server without showing an error, as Retry-After says", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(Math, "random").mockReturnValue(0); // no jitter
+    const busy = (code: number, after: string): Reply => ({
+      status: code,
+      body: { error: "busy" },
+      headers: { "retry-after": after },
+    });
+    serve({
+      ...normal(),
+      [summaryPath(HASH)]: (n) =>
+        n === 1 ? busy(503, "1") : n === 2 ? busy(429, "2") : { body: [SUMMARY] },
+    });
+    const asked: number[] = [];
+    const served = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string) => {
+      if (input === summaryPath(HASH)) asked.push(Date.now());
+      return served(input);
+    });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(asked).toHaveLength(2));
+    // No error while a retry is pending, and none sooner than Retry-After.
+    expect(el.querySelector(".block-fact__retry")).toBeNull();
+    expect(text(el)).not.toContain("Busy");
+    expect(fact(el, "Median fee rate")).toBe("");
+    await until(() => expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB"));
+    expect(asked).toHaveLength(3);
+    const [a = 0, b = 0, c = 0] = asked;
+    expect(b - a).toBeGreaterThanOrEqual(1000);
+    // The 429 said two seconds, which is also the backoff for a second retry.
+    expect(c - b).toBeGreaterThanOrEqual(2000);
+  });
+
+  it("offers to try the fee facts again when they fail for good", async () => {
+    serve({
+      ...normal(),
+      [summaryPath(HASH)]: (n) =>
+        n === 1 ? { status: 502, body: { error: "node failed" } } : { body: [SUMMARY] },
+    });
+    const el = open(`/block/${HASH}`);
+    const retry = await until(() => {
+      const b = el.querySelector<HTMLButtonElement>(".block-fact__retry");
+      expect(b).not.toBeNull();
+      return b as HTMLButtonElement;
+    });
+    expect(fact(el, "Fee range")).toBe("–");
+    retry.click();
+    await until(() => expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB"));
+  });
+
+  it("asks for the fee facts again when the network changes under the same hash", async () => {
+    serve(normal());
+    const el = open(`/signet/block/${HASH}`);
+    // The test server only knows mainnet's summary, as if the block were mainnet's.
+    await until(() => expect(el.querySelector(".block-fact__retry")).not.toBeNull());
+    history.set({ value: `/block/${HASH}` });
+    await until(() => expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB"));
+  });
+
+  it("counts confirmations from the tip the status reply is stamped with", async () => {
+    serve({
+      ...normal(),
+      [`/block/${HASH}/status`]: {
+        ...status(),
+        headers: { "x-bitcoin-chain-tip": "cd".repeat(32), "x-bitcoin-chain-tip-height": "975413" },
+      },
+    });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Confirmations")).toBe("3"));
+    expect(calls).not.toContain("/blocks/tip/height");
   });
 
   it("shows the right header after moving between cached blocks", async () => {
@@ -293,6 +429,34 @@ describe("BlocksPage", () => {
     await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(6));
     expect(el.querySelector('a[rel="prev"]')?.getAttribute("href")).toBe("/blocks/15");
     expect(el.querySelector('a[rel="next"]')).toBeNull();
+  });
+
+  it("fills each row's fee figures on its own, so a busy row does not hold up the rest", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rows = list(975_420);
+    const table: typeof replies = {
+      "/blocks": { body: rows },
+      "/blocks/tip/height": { body: "975420" },
+    };
+    for (const [i, b] of rows.entries()) {
+      table[summaryPath(b.id)] = {
+        body: [i === 1 ? { ...COINBASE_ONLY, id: b.id } : { ...SUMMARY, id: b.id }],
+      };
+    }
+    const slow = rows[2]?.id ?? "";
+    table[summaryPath(slow)] = (n) =>
+      n === 1
+        ? { status: 503, body: { error: "busy" }, headers: { "retry-after": "1" } }
+        : { body: [{ ...SUMMARY, id: slow, fees: 7 }] };
+    serve(table);
+    const el = open("/blocks");
+    const row = (i: number) => text(el.querySelectorAll("tbody tr")[i] as Element);
+    await until(() => expect(row(0)).toContain("1.09"));
+    expect(row(0)).toContain("0.00500000");
+    expect(row(1)).toContain("None");
+    expect(el.querySelectorAll("tbody tr")[2]?.querySelector(".block-skel")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1300);
+    await until(() => expect(row(2)).toContain("0.00000007"));
   });
 
   it("refuses a bad height", () => {

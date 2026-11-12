@@ -37,8 +37,11 @@
     font-weight: var(--weight-bold);
   }
 
+  /* At least a screen tall, so the footer starts below the fold and a page that loads after the
+     shell pushes nothing visible down (it measured as a layout shift on every page). */
   .site-main {
     flex: 1 0 auto;
+    min-height: 100dvh;
     padding-bottom: var(--space-8);
   }
   .site-main:focus {

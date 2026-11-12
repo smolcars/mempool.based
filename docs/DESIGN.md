@@ -233,7 +233,7 @@ The sequence uses FLIP: measure every tile, change the DOM, then animate each ti
 | Logo | `design/logo.svg`: a tile with three strata, the top layer in the accent and offset, still settling. In the header it is inline SVG with the tile in `--color-network`. The wordmark is live text in the heavy weight, so a new name is one string |
 | Block tile | Projected (dashed) or mined (solid). Height or label, median fee, fee range, strata, transaction count and age. Mined tiles link to the block and show the pool below |
 | Block strip | Projected lane, "now" line, mined lane. Scrolls sideways inside itself on narrow screens and starts centered on the line |
-| Strata | Fee bands stacked by virtual size, inside a tile. Fill height is how full the block is |
+| Strata | Fee bands stacked by virtual size, inside a tile. Fill height is how full the block is. A band with any transactions is at least about 2 px thick where the block's height leaves room; in a nearly empty block the layers share its true height and the smallest may not show. Until the block's fee data arrives, a neutral gauge of the same height stands in |
 | Mempool bar | Horizontal strata of the whole mempool. Each band has a tooltip and is focusable |
 | Fee key | Ten swatches with lower bounds |
 | Fee ladder | A log scale from 0.1 to 20 sat/vB with pins for the four recommendations. Pin labels stack into rows so close values never collide, and flip near the right end. A list below gives each priority with its expected wait |
@@ -266,11 +266,15 @@ The sequence uses FLIP: measure every tile, change the DOM, then animate each ti
 │ Transactions  Size  Fees  Lowest     │   pins on a log scale        │
 │ [██████ mempool bar ████▌▌▌]          │ ●────●──●────●───────────    │
 │ fee key                              │ No rush  Low  Medium  High   │
-├──────────────────────────────────────┴──────────────────────────────┤
-│ Latest transactions ═══════════════════════════════════════  ● Live │
-│ txid             fee rate        size        value                  │
-└─────────────────────────────────────────────────────────────────────┘
+├──────────────────────────────────────┼──────────────────────────────┤
+│ Latest transactions ════════════════ │ Difficulty adjustment ══════ │
+│ txid     fee rate    size    value   │ [████████████████░░┃░░]      │
+│                                      │ 1 797 of 2 016 blocks        │
+│                                      │ Expected  Next  Previous     │
+└──────────────────────────────────────┴──────────────────────────────┘
 ```
+
+The difficulty bar is neutral (never a fee color); its mark is where the period would be at one block every ten minutes. Changes read as an arrow and a word ("Down 7.05%"). On a network that never retargets (regtest) the section says so instead.
 
 Phones: one column; the strip scrolls sideways; stats in two columns.
 

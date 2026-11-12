@@ -25,6 +25,7 @@ web/
       api.ts            HTTP client and `createApi` resource
       live.ts           The WebSocket client: `useTopic`, `useLiveStatus` (see "Live data")
       blocks-topic.ts   The `blocks` topic: its messages and how to keep a block list current
+      summary.ts        Block summaries: their type, a check, a page-wide cache and the batch fetch
       fakes.ts          Test stand-ins: a fake WebSocket and made-up blocks
       esplora.ts        Types for the Esplora replies pages use
       page.ts           `useNetwork`, `usePageTitle`
@@ -94,7 +95,9 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 ```
 
 - `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, and answers at once from the cache. Return a falsy path to wait for something else first.
-- `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops.
+- `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops. `fetchApp<T>` is the same for the app's own API under the network's `/app`.
+- **Chain-tip stamps.** `createApi<T>(path, { stamped: true })` and `fetchStamped<T>(network, path)` give `{ value, tip }`, where `tip` is the `X-Bitcoin-Chain-Tip` and its height that the reply is as of (undefined for an unstamped or cached reply). Take every figure that depends on the tip from one stamped reply, or compare the stamps of two: the block page counts confirmations from its status reply's stamp, and the home page's difficulty panel asks again while its answer's stamp trails the strip's tip.
+- **Busy servers.** `withRetry(call, signal)` retries a 503 or 429 no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. Show a loading state, not an error, while it waits. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
 - `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`). The default is JSON.
 - Failures are `ApiError` with `status` (0 when the server cannot be reached) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
 - Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
@@ -145,6 +148,8 @@ What the public API cannot give cheaply: a mined block's fee facts and every tra
 
 Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUint64(o, true))` is exact. A record has no txid: when a square is hovered or clicked, ask `/api/block/:hash/txid/:index`, which is cached for good. Mainnet block 975 511, 4,198 transactions, is 83,968 bytes: 16.6 KB gzipped and 12.7 KB with brotli, if the proxy in front compresses (the server itself does not). The facts are about 400 bytes. Check the version before reading; a different one means a newer server and a page that needs a reload.
 
+**In the frontend.** `lib/summary.ts` has the type, `isSummary`, and `fetchSummaries(network, hashes, signal)`, which asks for up to ten at a time with `withRetry` and keeps every summary it sees, fetched or pushed, for the life of the page (`knownSummary`). The home page asks for its ten tiles in one batch on first paint and then takes each new block's from the WebSocket, asking over HTTP only if the push has not come within 4 s. The blocks list asks per row, two at a time, so an old page fills in row by row. Draw the bands with `Strata`.
+
 **Caching.** A summary is fixed by its hash, so success is `Cache-Control: public, max-age=31536000, immutable`, and `api.ts`-style in-memory caching is right. Errors are `no-store`.
 
 **Cost and limits.** An uncached block costs the node a heavy call (about 0.7 s and 10 MB on mainnet), so:
@@ -193,6 +198,7 @@ Import from `components/`. All of them render chain data as text only.
 | `Sats sats unit?` | Grouped sats |
 | `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~` |
 | `FeeKey` | The ten bands with their lower bounds. Put it next to every fee visual |
+| `Strata layers settle?` | A block's fee bands as stacked layers, cheapest at the bottom, filling the box it is put in. Compute `layers` with `strataLayers(fee_bands, fill, min)`: `fill` is how full the block is, `min` the thinnest layer as a share of the box (about 2 px). `settle` drops the layers in, cheapest first; reduced motion fades them. Decorative: give the figures, or `describeBands(fee_bands)`, as text beside it |
 | `Hash value href? head? tail? copy? copyLabel?` | Hash or address, shortened in the middle, linked when given a `paths` result, with copy |
 | `HashFull value copyLabel?` | A page subject's hash in full, grouped by eight, with copy |
 | `CopyButton value label?` | The copy button on its own |
