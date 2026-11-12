@@ -276,13 +276,19 @@ fn reference_point(p: &Point, short: bool) -> ReferencePoint {
 /// the point `/api/v1/statistics/2h` now lists first, encoded once for every socket wanting it.
 pub(crate) fn sampled(latest: &Mutex<Option<Point>>, hub: &Hub, sample: &Point) {
     *latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(*sample);
-    let msg = json!({ "live-2h-chart": reference_point(sample, true) });
+    // Serialized from the struct, not through `json!`, so the fields keep the reference's order.
+    #[derive(Serialize)]
+    struct Live {
+        #[serde(rename = "live-2h-chart")]
+        point: ReferencePoint,
+    }
+    let Ok(msg) = serde_json::to_vec(&Live {
+        point: reference_point(sample, true),
+    }) else {
+        return;
+    };
     // No state for new subscribers: the reference sends nothing on `want`, only each new sample.
-    hub.publish(
-        Topic::V1LiveChart,
-        &Frame::text(msg.to_string().as_bytes()),
-        Snapshot::Keep,
-    );
+    hub.publish(Topic::V1LiveChart, &Frame::text(&msg), Snapshot::Keep);
 }
 
 /// Our own shape, for our chart: oldest first, every field a mean per sampled minute.

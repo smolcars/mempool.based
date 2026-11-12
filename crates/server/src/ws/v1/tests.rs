@@ -843,8 +843,13 @@ async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
     let body = axum::body::to_bytes(res.into_body(), 1 << 20)
         .await
         .unwrap();
-    let http: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(msg, json!({ "live-2h-chart": http[0] }));
+    // Byte for byte the point the route lists, field order included: `[<point>]` with one row.
+    let http = std::str::from_utf8(&body).unwrap();
+    let frame = got[0][0].as_bytes();
+    assert_eq!(
+        std::str::from_utf8(&frame[frame.len() - (body.len() + 16)..]).unwrap(),
+        format!(r#"{{"live-2h-chart":{}}}"#, &http[1..http.len() - 1])
+    );
     assert_eq!(
         msg,
         json!({"live-2h-chart": {
