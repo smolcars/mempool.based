@@ -107,6 +107,69 @@ fn a_replacement_undone_by_a_block_leaves_one_newest_end() {
     assert_eq!(again.tree(&id(2)), r.tree(&id(2)));
 }
 
+/// B replaced A in our mempool, then a miner confirmed A: the tracker no longer held A, so the
+/// new link names A without figures, as it does a replacement straight from a block.
+fn won_after_all() -> Link {
+    Link {
+        by_tx: None,
+        mined: true,
+        ..link(2, 1)
+    }
+}
+
+#[test]
+fn the_original_confirmed_after_all_keeps_its_figures() {
+    let mut r = Replacements::new(10);
+    r.insert(link(1, 2));
+    let recorded = r.insert(won_after_all());
+    let a = link(1, 2).tx;
+    assert_eq!(recorded.by_tx, Some(a), "what the store is given");
+    let tree = r.tree(&id(2)).unwrap();
+    assert_eq!(
+        (tree.txid, tree.tx, tree.time),
+        (id(1), Some(a), u64::from(a.time))
+    );
+    assert!(tree.mined);
+    assert_eq!(r.facts(&id(1)), Some(a));
+    assert_eq!(r.chain(&id(2)).0[0].json()["by_fee"], a.fee);
+    // A replacement that was never replaced itself still has none.
+    let mut other = Replacements::new(10);
+    other.insert(won_after_all());
+    assert_eq!(other.tree(&id(2)).unwrap().tx, None);
+}
+
+/// A record put back from `store`, as at a start.
+async fn reopen(store: &Store) -> Replacements {
+    let mut r = Replacements::new(10);
+    for l in db::load(store, 10).await.unwrap() {
+        r.restore(l);
+    }
+    r
+}
+
+#[tokio::test]
+async fn the_figures_kept_survive_a_restart_on_either_side_of_the_block() {
+    let t = temp();
+    let write = |l: Link| Batch {
+        links: vec![l],
+        ..Batch::default()
+    };
+    // Restarted between the replacement and the block: the record put back holds A's figures.
+    let mut r = Replacements::new(10);
+    db::write(&t.store, vec![write(r.insert(link(1, 2)))], 10)
+        .await
+        .unwrap();
+    let mut r2 = reopen(&t.store).await;
+    let recorded = r2.insert(won_after_all());
+    db::write(&t.store, vec![write(recorded)], 10)
+        .await
+        .unwrap();
+    let want = r2.tree(&id(2)).unwrap();
+    assert_eq!(want.tx, Some(link(1, 2).tx));
+    // And again after the block.
+    assert_eq!(reopen(&t.store).await.tree(&id(2)), Some(want));
+}
+
 fn idn(n: u32) -> Txid {
     let mut b = [0u8; 32];
     b[..4].copy_from_slice(&n.to_le_bytes());

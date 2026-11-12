@@ -174,19 +174,25 @@ impl Replacements {
         self.links.get(txid).map(|(_, l)| l)
     }
 
-    /// Records a replacement seen now.
-    pub fn insert(&mut self, link: Link) {
-        self.restore(link);
+    /// Records a replacement seen now, and returns it as recorded: with the replacement's
+    /// figures from its own old link when the tracker no longer held them.
+    pub fn insert(&mut self, link: Link) -> Link {
+        let link = self.restore(link);
         self.recorded += 1;
+        link
     }
 
     /// Puts back a link recorded before (from the store), oldest first, without counting it as
-    /// new.
-    pub fn restore(&mut self, link: Link) {
+    /// new. Returns it as [`Self::insert`] does.
+    pub fn restore(&mut self, mut link: Link) -> Link {
         self.unlink(&link.txid);
         // `by` is back (in the mempool or a block), so what replaced it before no longer has:
-        // keeping both would make a loop with no newest end.
-        self.unlink(&link.by);
+        // keeping both would make a loop with no newest end. Its figures stay, as this link's:
+        // a miner confirming a transaction we saw replaced is the usual way here, and the
+        // tracker no longer held it.
+        if let Some(old) = self.unlink(&link.by) {
+            link.by_tx = link.by_tx.or(Some(old.tx));
+        }
         self.next += 1;
         self.version += 1;
         self.links.insert(link.txid, (self.next, link));
@@ -199,6 +205,7 @@ impl Replacements {
                 self.unlink(&t);
             }
         }
+        link
     }
 
     /// `txid` was confirmed: if it replaced anything, its tree is now mined. Returns whether it
@@ -216,16 +223,16 @@ impl Replacements {
         true
     }
 
-    fn unlink(&mut self, txid: &Txid) {
-        let Some((_, old)) = self.links.remove(txid) else {
-            return;
-        };
+    /// Drops `txid`'s link, and returns it.
+    fn unlink(&mut self, txid: &Txid) -> Option<Link> {
+        let (_, old) = self.links.remove(txid)?;
         if let Some(list) = self.replaced.get_mut(&old.by) {
             list.retain(|t| t != txid);
             if list.is_empty() {
                 self.replaced.remove(&old.by);
             }
         }
+        Some(old)
     }
 
     /// What replaced `txid`, then what replaced that, to the newest we know: at most
