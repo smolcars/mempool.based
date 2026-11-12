@@ -53,7 +53,8 @@ jobs:
         working-directory: web
         env:
           E2E_ENGINE: ${{ matrix.engine }}
-      - run: bun run e2e
+      # Headless Firefox on Linux finds no GL driver, so no WebGL: headed under Xvfb, Mesa draws it.
+      - run: ${{ matrix.engine == 'firefox' && 'xvfb-run -a bun run e2e --headed' || 'bun run e2e' }}
         working-directory: web
         env:
           E2E_ENGINE: ${{ matrix.engine }}
