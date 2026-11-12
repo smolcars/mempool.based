@@ -285,6 +285,37 @@ async fn read(ctx: &NetworkContext, client: &Client, route: Route) -> Response {
     respond(&route, answer, source)
 }
 
+/// `GET /api/v1/blocks/tip/height`: `/blocks/tip/height`'s answer, sharing its calls and cache.
+pub(crate) async fn tip_height(
+    State(ctx): State<Arc<NetworkContext>>,
+    Extension(client): Extension<Client>,
+) -> Response {
+    read(&ctx, &client, Route::TipHeight).await
+}
+
+/// The node's JSON answer to a light read, through the same call sharing as the pass-through,
+/// for routes built on it. Errors are the pass-through's.
+pub(crate) async fn json<T: serde::de::DeserializeOwned>(
+    ctx: &NetworkContext,
+    route: Route,
+) -> Result<(T, Source), ApiError> {
+    let mut key = String::with_capacity(160);
+    route.write_path(&mut key);
+    let ttl = if is_hot(&route) {
+        HOT_TTL
+    } else {
+        Duration::ZERO
+    };
+    let (answer, source) = ctx.api.flights.run(key, ttl, ctx.esplora.raw(&route)).await;
+    let raw = answer.map_err(|e| upstream_error(&e, &route))?;
+    if raw.status != StatusCode::OK {
+        let e = Error::from_status(raw.status, &raw.body);
+        return Err(upstream_error(&e, &route));
+    }
+    let value = serde_json::from_slice(&raw.body).map_err(|_| ApiError::UPSTREAM)?;
+    Ok((value, source))
+}
+
 /// Routes whose cost on the node grows with the data behind them: an address's whole history
 /// (seconds for a busy one), or a batch of lookups. `?asof=` makes every request a distinct key,
 /// so sharing calls cannot bound them; [`heavy`] does.

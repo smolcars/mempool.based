@@ -796,7 +796,7 @@ fn asm(s: &Script) -> String {
     s.to_asm_string()
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes
         .iter()
@@ -806,7 +806,7 @@ fn hex(bytes: &[u8]) -> String {
         })
 }
 
-fn round(x: f64, places: i32) -> f64 {
+pub(crate) fn round(x: f64, places: i32) -> f64 {
     let f = 10f64.powi(places);
     (x * f).round() / f
 }

@@ -126,7 +126,7 @@ The block summary routes ([`FRONTEND.md`](FRONTEND.md#block-summaries)) keep com
 
 | Variable | Default | Protects against |
 |---|---|---|
-| `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 20 bytes per transaction plus about 0.5 KB: 40 to 140 KB for today's mainnet blocks, so the default holds 230 to 800 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a `getblock` of up to 10 MB. At most 1,048,576 |
+| `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 56 bytes per transaction (its record, txid and weight) plus about 0.5 KB: 110 to 390 KB for today's mainnet blocks, so the default holds 80 to 290 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a `getblock` of up to 10 MB. At most 1,048,576 |
 
 ### Block table
 

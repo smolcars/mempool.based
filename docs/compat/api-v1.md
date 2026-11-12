@@ -46,14 +46,14 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `GET /v1/blocks[/:start_height]` | 15 blocks with `extras`: pool, reward, fee range, median fee, totals, coinbase, audit scores | Esplora for headers; store for extras | planned | M3 | ref | Reference shows `avgFeeRate: 0` and a `feeRange` floor of 0.12: whole-sat rounding. We compute our own |
-| `GET /v1/block/:hash` | One block with `extras` | As above | planned | M3 | ref | Reference leaves `utxoSetSize`, `totalInputAmt`, `matchRate` null |
-| `GET /v1/block/:hash/summary` | Every tx in the block: txid, fee, vsize, value, rate, flags | rbitcoin `getblock` verbosity 2; store | planned | M2 | ref | Feeds the mined-block view. 1.2 MB for a full block. `getblock` v2 has per-tx fees: 0.8 s and 11 MB per full block over TCP |
-| `GET /v1/block/:hash/tx/:txid/summary` | One tx's summary row in a block | As above | planned | M2 | ref | |
+| `GET /v1/blocks[/:start_height]` | 15 blocks with `extras`: pool, reward, fee range, median fee, totals, coinbase, audit scores | Esplora for headers, kept by hash; store for extras | served | M3 | ref | Reference shows `avgFeeRate: 0` and a `feeRange` floor of 0.12: whole-sat rounding. We compute our own. Eleven `extras` fields the store lacks are left out; a list stops at the first block the backfill has not reached, with the coverage headers ([`API.md`](../API.md#blocks)) |
+| `GET /v1/block/:hash` | One block with `extras` | As above | served | M3 | ref | Reference leaves `utxoSetSize`, `totalInputAmt`, `matchRate` null; we leave the first two null and give our audit's score. `404 block not indexed yet` before the backfill reaches it |
+| `GET /v1/block/:hash/summary` | Every tx in the block: txid, fee, vsize, value, rate, flags | rbitcoin `getblock` verbosity 2, the block summary cache | served | M2 | ref | Feeds the mined-block view. 1.2 MB for a full block. `getblock` v2 has per-tx fees: 0.8 s and 11 MB per full block over TCP. One `getblock` per block, shared with `/app`. No `flags` or `time`; `rate` is the tx's own, not its package's |
+| `GET /v1/block/:hash/tx/:txid/summary` | One tx's summary row in a block | As above | served | M2 | ref | The same row; `404` for a txid not in the block |
 | `GET /v1/block/:hash/audit-summary` | Expected template against the mined block: added, missing, fresh, sigop, prioritized txs, match rate | Engine at block time; store | served | M3 | pub | 404 `Audit not available` on the reference. Our categories, no `template`, and only the lists we can detect ([`API.md`](../API.md#block-audits)) |
 | `GET /v1/block/:hash/tx/:txid/audit` | Whether one tx was expected, seen, added, conflicting, prioritized | Store | served | M3 | pub | `prioritized` and `accelerated` always `false`; a txid in none of our lists reads as matched |
 | `GET /v1/mining/blocks/timestamp/:timestamp` | The newest block stamped at or before a Unix time | Store | served | M3 | ref | Not the nearest: the reference answered the block 252 s before rather than the one 17 s after. `404` before the stored history ([`API.md`](../API.md#mining)) |
-| `GET /v1/blocks/tip/height` | Tip height | rbitcoin Esplora | planned | M5 | ref | An alias of `/api/blocks/tip/height` |
+| `GET /v1/blocks/tip/height` | Tip height | rbitcoin Esplora | served | M5 | ref | An alias of `/api/blocks/tip/height`, sharing its calls and cache |
 | `GET /v1/blocks-bulk/:min[/:max]` | Many blocks with extras | — | skipped | — | ref, pub | Disabled on the reference and on mempool.space. Revisit if asked for |
 
 ## Mining
