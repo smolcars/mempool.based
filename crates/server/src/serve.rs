@@ -281,11 +281,9 @@ mod tests {
         let mut held = Vec::new();
         for i in 0..cap.min(512) {
             let connect =
-                tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr));
-            let stream = connect
-                .await
-                .unwrap_or_else(|_| panic!("connection {i} was dropped"));
-            held.push(stream.unwrap());
+                tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr)).await;
+            assert!(connect.is_ok(), "connection {i} was dropped");
+            held.push(connect.unwrap().unwrap());
         }
     }
 }
