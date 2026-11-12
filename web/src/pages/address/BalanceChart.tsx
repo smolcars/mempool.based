@@ -21,7 +21,7 @@ import { settled } from "./parts";
 
 const Chart = lazy(() => import("../../components/chart/Chart"));
 
-/** Plot height in px; the slot holds it, the readout and the caption before the chart arrives. */
+/** Plot height in px. `.address-balance__slot` holds it with the readout and caption: keep both. */
 const HEIGHT = 200;
 
 /** BTC without the zeros a round tick does not need: `0.5`, `1 200`. */
@@ -136,7 +136,7 @@ export function BalanceChart(props: {
             <h2 id="address-balance-title">Balance over time</h2>
             <div class="section__meta">{meta()}</div>
           </div>
-          <div class="address-balance__slot" style={{ "--h": `${HEIGHT}px` }}>
+          <div class="address-balance__slot">
             <Switch>
               <Match when={view()}>
                 {(v) => (

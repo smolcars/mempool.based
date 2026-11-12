@@ -78,8 +78,9 @@
   .address-balance {
     margin-top: var(--space-7);
   }
+  /* The plot's height (HEIGHT in BalanceChart.tsx), its readout and its caption. */
   .address-balance__slot {
-    min-height: calc(var(--h) + 5.75rem);
+    min-height: calc(200px + 5.75rem);
   }
   .address-balance-none {
     max-width: 48rem;
