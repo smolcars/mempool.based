@@ -17,7 +17,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | doing |
+| N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | done ([#3](https://github.com/smolcars/mempool.based/pull/3)) |
 | N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | doing |
 | N3 | RPC client: fixed set of typed read-only methods | F0 | doing |
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | doing |
