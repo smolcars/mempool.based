@@ -1,0 +1,61 @@
+# Security
+
+The server sits between the public internet and a Bitcoin node. A client must never be able to make the server, or the node behind it, do something the operator did not intend.
+
+## Trust
+
+| Party | Trust |
+|---|---|
+| Browsers and API clients | **Untrusted.** Assume every byte is hostile |
+| Chain data (scripts, `OP_RETURN` text, coinbase tags) | **Untrusted content.** Valid on chain does not mean safe to render |
+| Lightning gossip (aliases, addresses, colors) | **Untrusted content** |
+| Price feeds and other third-party APIs | **Untrusted content** |
+| The rbitcoin node | Trusted for chain facts; its responses are still parsed defensively |
+| Operator configuration | Trusted |
+
+## Rules
+
+### Reaching the node
+
+1. **Clients never choose where the server connects.** Upstream addresses come from configuration only. No request parameter is ever used as a host, port, URL or socket path.
+2. **Every parameter is parsed into a strict type before any upstream call:** a txid is 64 hex characters, a height is a `u32`, an address is parsed for the configured network. Raw client strings are never spliced into an upstream path or RPC call.
+3. **Routes are an allow-list.** The Esplora pass-through forwards only named routes. There is no generic proxy and no path forwarding.
+4. **RPC is called with a fixed set of read-only methods.** Credentials never leave the server and never appear in a response, log line or error.
+5. **Broadcast is the only write.** It is size-capped, rate-limited, and can be switched off.
+
+### Bounding work
+
+6. **Every request has a body limit, a timeout and a concurrency limit.** Defaults are small; raise them per route with a reason.
+7. **Rate limits are per client address.** Behind a reverse proxy, the client address comes only from a header the operator configured as trusted.
+8. **Expensive answers are computed once.** Concurrent identical requests share one upstream call, results are cached, and list endpoints are paged with a hard cap.
+9. **WebSocket connections are bounded in every dimension:** total connections, connections per address, inbound message size, messages per second, subscriptions per connection, tracked addresses and transactions per connection, and send-queue length. A slow client is disconnected.
+10. **Client subscriptions never map one-to-one onto node resources.** Tracked scripts are multiplexed onto shared Electrum subscriptions with a global cap and reference counts.
+11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated.
+
+### Handling data
+
+12. **SQL is always parameterized.** Request handlers get read-only connections.
+13. **Responses are serialized, never string-built.**
+14. **The frontend renders chain and gossip data as text.** No `innerHTML`, no building markup from data, no data-derived URLs in `href` or `src` without a scheme allow-list.
+15. **A strict Content-Security-Policy is always sent:** `default-src 'self'`, no inline scripts, no third-party origins. Fonts and assets are self-hosted.
+16. **Static files are served from one fixed directory** with no path traversal.
+17. **Errors tell the client what was wrong with its request and nothing about the server:** no stack traces, upstream URLs, file paths or SQL.
+
+### Process
+
+18. **No panic on untrusted input.** A malformed request, upstream response or gossip message is an error value, never a crash.
+19. **No `unsafe`.**
+20. **Dependencies are audited in CI** against the advisory database.
+
+## Reviewing a change
+
+Every PR that adds or changes a route, a WebSocket message or a parser answers four questions in its description:
+
+1. What can a client send here, and what is the largest and most malformed version of it?
+2. What upstream work can one request cause, and what bounds it?
+3. What data in the response did we not produce ourselves, and how is it encoded?
+4. Which rule above was the closest call?
+
+## Reporting
+
+Report vulnerabilities privately through GitHub's security advisories on this repository.

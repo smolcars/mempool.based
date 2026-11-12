@@ -1,0 +1,50 @@
+# Rules for contributors
+
+mempool.based is a block explorer built for rbitcoin v0.9.1. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code, and the doc for the area you touch (see the table in [`README.md`](README.md)).
+
+## Never
+
+1. **Never commit secrets or private infrastructure details.** That means `.env`, credentials, private hostnames, IP addresses and local file paths. The repo is public. Use the variable names from `.env.example`.
+2. **Never broadcast a transaction on mainnet, and never call a write RPC on a shared node.** Test writes on regtest ([`docs/REGTEST.md`](docs/REGTEST.md)).
+3. **Never read or copy mempool.space source code.** It is AGPL and this project is MIT. Work from its observable API behaviour and write everything in your own words.
+4. **Never weaken a rule in [`docs/SECURITY.md`](docs/SECURITY.md) to make something work.** If a rule blocks you, say so in the PR.
+5. **Never push CI over its budget.** A PR must finish its checks in under 3 minutes with a warm cache ([`docs/CI.md`](docs/CI.md)).
+6. **Never edit [`docs/TODO.md`](docs/TODO.md).** The orchestrator owns it.
+
+## Workflow
+
+- Branch from `master`. One task is one PR. Keep PRs small enough to review in one sitting.
+- Stay inside the files your task names. If you need to change something outside them, keep it minimal and call it out in the PR.
+- Merges are squash merges. The PR title becomes the commit message, so make it a plain sentence describing the change.
+- Update the doc that owns a fact when your change makes it wrong. Each fact lives in one doc.
+
+## Prove it works
+
+- Run what you built. Passing unit tests alone is not proof.
+- **UI changes are verified in a real headless browser** (Playwright with Chromium) at a desktop and a phone width, in light and dark themes. Attach the screenshots to the PR. Do not commit them.
+- Backend changes that talk to a node are verified against a real rbitcoin: regtest in Docker, or a synced node through `.env`.
+- State in the PR what you checked and what you could not check.
+
+## Code
+
+- **Rust:** edition 2024, `cargo fmt`, `cargo clippy -- -D warnings`. No `unsafe`. No panic on untrusted input: no `unwrap`, `expect` or unchecked indexing on anything that came from a client or the network.
+- **TypeScript:** strict mode, no `any`. Never put chain data into the page as HTML. Transaction data, coinbase tags and Lightning aliases are attacker-controlled text.
+- **Dependencies:** adding one needs a reason in the PR. Prefer the standard library and what is already in the tree.
+- **Ports:** never hardcode a port in a test or script. Bind port 0 or take the port from the environment, because several agents work on one machine at once.
+- **Fixtures:** small, public chain data only, under `fixtures/`.
+- **Comments:** explain why, in one line, when the code cannot.
+
+## Design
+
+UI work follows [`docs/DESIGN.md`](docs/DESIGN.md) and uses the `frontend-design` skill.
+
+## Repo layout
+
+| Path | Holds |
+|---|---|
+| `crates/` | Rust workspace: the server and its libraries |
+| `web/` | Solid frontend |
+| `dev/` | Local development tooling, including the regtest harness |
+| `design/` | Static design prototypes |
+| `fixtures/` | Recorded public chain data for tests |
+| `docs/` | Plans, architecture and rules |
