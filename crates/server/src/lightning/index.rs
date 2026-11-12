@@ -3,7 +3,7 @@
 //! funding txids the peer never learns, asked of the node in the background.
 //!
 //! The graph is copied [`CHUNK`] entries per hold of its lock, so gossip never waits more than a
-//! fraction of a millisecond for it, and indexed off the lock on a blocking thread. Requests read
+//! millisecond or so for it, and indexed off the lock on a blocking thread that never sees the peer. Requests read
 //! the finished index through an `Arc` and never touch the graph, the peer or the node.
 
 use std::sync::Arc;
@@ -143,11 +143,13 @@ pub(crate) async fn keep(
                 }
             }
             if let Some((_, p)) = &past {
-                let (peer, p) = (Arc::clone(&peer), Arc::clone(p));
+                // The copy runs here, about 11 ms on mainnet, so no other task ever holds the
+                // peer: at shutdown the owner gets it back whole and stops it in order.
+                let started = Instant::now();
+                let c = copy(&*peer);
+                let copied = started.elapsed();
+                let p = Arc::clone(p);
                 let built = tokio::task::spawn_blocking(move || {
-                    let started = Instant::now();
-                    let c = copy(&*peer);
-                    let copied = started.elapsed();
                     let index = Index::build(c.nodes, c.channels, &p);
                     (index, copied, started.elapsed(), c.longest_hold)
                 })
