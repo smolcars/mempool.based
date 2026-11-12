@@ -1,4 +1,12 @@
-import { useLocation } from "@solidjs/router";
+import {
+  createMemoryHistory,
+  MemoryRouter,
+  Route,
+  useLocation,
+  useNavigate,
+} from "@solidjs/router";
+import { type Component, lazy, Suspense } from "solid-js";
+import { render } from "solid-js/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../lib/api";
 import { SearchField } from "./SearchField";
@@ -138,5 +146,68 @@ describe("SearchField", () => {
     expect(el.querySelector(".search__busy")).toBeNull();
     expect(signals[0]?.aborted).toBe(true);
     expect(path()).toBe("/");
+  });
+});
+
+describe("SearchField and navigation", () => {
+  it("drops a search when the reader navigates elsewhere, even before that page has loaded", async () => {
+    let answer: ((r: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    let release: () => void = () => undefined;
+    const Slow = lazy(
+      () =>
+        new Promise<{ default: Component }>((resolve) => {
+          release = () => resolve({ default: () => <p>slow page</p> });
+        }),
+    );
+    let go: (path: string) => void = () => undefined;
+    const history = createMemoryHistory();
+    history.set({ value: "/" });
+    const el = document.createElement("div");
+    document.body.append(el);
+    const dispose = render(
+      () => (
+        <MemoryRouter
+          history={history}
+          root={(props) => {
+            const navigate = useNavigate();
+            go = (path) => navigate(path);
+            return (
+              <>
+                <SearchField />
+                <Suspense>{props.children}</Suspense>
+              </>
+            );
+          }}
+        >
+          <Route path="/" component={() => <p>home</p>} />
+          <Route path="/slow" component={Slow} />
+          <Route path="/tx/:txid" component={() => <p>tx page</p>} />
+        </MemoryRouter>
+      ),
+      el,
+    );
+    const input = el.querySelector("input");
+    if (!input) throw new Error("no input");
+    input.value = TXID;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    input.form?.requestSubmit();
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    go("/slow");
+    // The search answers while the page the reader chose is still loading.
+    answer?.(Response.json({ confirmed: true }));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    release();
+    await vi.waitFor(() => expect(el.textContent).toContain("slow page"));
+    expect(history.get()).toBe("/slow");
+    dispose();
   });
 });

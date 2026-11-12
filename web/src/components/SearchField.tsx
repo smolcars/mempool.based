@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from "@solidjs/router";
+import { useBeforeLeave, useNavigate } from "@solidjs/router";
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { ApiError } from "../lib/api";
 import { groupDigits, truncateMiddle } from "../lib/format";
@@ -37,7 +37,6 @@ export function SearchField(props: SearchFieldProps) {
   const id = () => props.id ?? "search";
   const network = useNetwork();
   const navigate = useNavigate();
-  const location = useLocation();
   const [text, setText] = createSignal("");
   const [logic, setLogic] = createSignal<Logic>();
   const [busy, setBusy] = createSignal(false);
@@ -80,7 +79,7 @@ export function SearchField(props: SearchFieldProps) {
   );
   onCleanup(() => clearTimeout(pause));
 
-  // Every new search, edit, or page change makes the search in flight stale.
+  // Every new search, edit, or navigation makes the search in flight stale.
   let generation = 0;
   const stop = () => {
     generation += 1;
@@ -88,7 +87,8 @@ export function SearchField(props: SearchFieldProps) {
     setBusy(false);
     setMiss(undefined);
   };
-  createEffect(on(() => location.pathname, stop, { defer: true }));
+  // Navigation start, not end: a page still loading must not be overridden by a search answering.
+  useBeforeLeave(stop);
 
   const search = async (query: string) => {
     stop();
