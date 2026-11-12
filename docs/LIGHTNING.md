@@ -278,6 +278,21 @@ Nothing gossip sends changes what the watcher asks of the node: a channel enters
 | Block window | 100 blocks with their closes (a few hundred bytes each) |
 | History | `Config::history` (10,000) records of about 250 bytes: 2.5 MB |
 
+### Closes measured on mainnet
+
+2026-11-12, `crates/ln/examples/ln_watch.rs`, release build, the default peers, a synced rbitcoin v0.9.2 mainnet node on the same private network. A first start from an empty directory ran 15 minutes; the peer was then stopped for 44 minutes (three blocks), and restarted from the graph file it saved for 75 minutes.
+
+| | |
+|---|---|
+| First start | The watcher started from the tip; every channel was verified at that tip, so nothing needed checking again. 36,222 channels watched, one `Opened` each |
+| Catch-up after 44 minutes down | The restart's replay found 2 stored channels spent; both closes (blocks 975,537 and 975,539) were found from spend records 72 and 74 s after start, 8 requests in all. The replay itself costs what [Validation measured on mainnet](#validation-measured-on-mainnet) says |
+| Closes seen | 27 in 13 blocks (975,537 to 975,549): 26 cooperative, 1 force (with anchors). 11 in one block (975,541). No penalty, no reorg |
+| Checked by hand | Four closes against the node: each spends the output at its channel id's position, in the block recorded, with the fee and capacity recorded. The three cooperative ones have the `closing_signed` shape (sequence `0xffffffff`, locktime 0); the force close carries both commitment markers and two 330-sat anchors |
+| Node cost per block | One page of headers (4.4 KB), the raw block (1.7 MB on average over 8 blocks) and one 0.3 KB position request per close; besides, the tip every 10 s. 388 requests and 13.6 MB in the last hour |
+| Memory | Peak 175 MB on the first start, 301 MB on the restart while the loaded graph and the new one coexist (234 MB before the watcher existed: macOS's figures on this busy machine vary by tens of MB) |
+
+**Across a day's blocks.** Every spend of a two-of-two in the 144 blocks before 975,536 (229 MB read): 209 commitments (206 with anchors), 1,720 single-input non-commitment spends and 3,070 multi-input ones, no revocation sweep. Commitments are Lightning's alone, so about 200 force closes a day, private channels included; the other two counts include ordinary two-of-two wallets (consolidations of up to 224 such inputs, sequence 0), which is why the watcher matches only announced channels' outputs. No public source gives a daily close count to compare: Glassnode charts only the net daily change in channels, mempool.space and Coinglass only totals.
+
 ## Bounds
 
 Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a channel cost an attacker a real funding output, but the graph is bounded anyway, and so is the validation itself.
