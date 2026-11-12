@@ -306,7 +306,7 @@ pub struct ChainReorg {
     pub network: &'static str,
     pub fork_height: u32,
 }
-event!(ChainReorg, "chain_reorg", Warn);
+event!(ChainReorg, "chain_reorg", Info, keep);
 
 /// The node refused our RPC user and password. Clients see only "unavailable"; the operator must
 /// fix `{NET}_RPC_USER` or `{NET}_RPC_PASSWORD`. Written at startup and whenever a check finds it
@@ -668,7 +668,7 @@ pub struct BlockRowsReorged {
     pub fork_height: u32,
     pub stale: usize,
 }
-event!(BlockRowsReorged, "block_rows_reorged", Warn);
+event!(BlockRowsReorged, "block_rows_reorged", Info, keep);
 
 /// Filling the block table failed; it is retried after a pause. At the 1st, 2nd, 4th, 8th…
 /// failure in a row.
@@ -873,7 +873,7 @@ pub struct FeesFallbackStarted {
     pub network: &'static str,
     pub reason: &'static str,
 }
-event!(FeesFallbackStarted, "fees_fallback_started", Warn);
+event!(FeesFallbackStarted, "fees_fallback_started", Info, keep);
 
 /// Our own recommendations are served again, after `duration_ms` of fallback.
 #[derive(Debug, Serialize)]
@@ -2137,6 +2137,19 @@ mod tests {
             assert!(
                 doc.contains(&format!("| `{name}` |")),
                 "{name} is missing from the catalogue in docs/LOGGING.md"
+            );
+        }
+    }
+
+    #[test]
+    fn every_level_matches_the_catalogue() {
+        let doc = include_str!("../../../docs/LOGGING.md");
+        for (name, json, _) in samples() {
+            let v: Value = serde_json::from_slice(&json).unwrap();
+            let level = v["level"].as_str().unwrap();
+            assert!(
+                doc.contains(&format!("| `{name}` | {level} |")),
+                "{name} is {level} in the code but not in the catalogue in docs/LOGGING.md"
             );
         }
     }
