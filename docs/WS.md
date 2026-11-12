@@ -58,7 +58,7 @@ A `block` message is about 500 bytes whatever the block's size: transactions are
 
 ### Mempool topics
 
-Fed by the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOOL.md#in-the-server)). Each topic sends at most one message per `WS_MEMPOOL_INTERVAL_MS` (2 s), always the latest state, so changes in between are merged. Nothing is sent before the tracker's first complete cycle; a subscriber then gets the current state on subscribe, as for `blocks`.
+Fed by the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOOL.md#in-the-server)). Each topic sends at most one message per `WS_MEMPOOL_INTERVAL_MS` (2 s), always the latest state, so changes in between are merged. The exception is a new block: the state on it goes out at once ([below](#when-a-block-is-found)). Nothing is sent before the tracker's first complete cycle; a subscriber then gets the current state on subscribe, as for `blocks`.
 
 | Topic | For | Format | Size on mainnet |
 |---|---|---|---|
@@ -116,6 +116,22 @@ What to pay to be mined within each horizon ([`MEMPOOL.md`](MEMPOOL.md#fee-recom
 **`projected-txs:N`**
 
 Block `N` of `projected`, 0 to 6. The last block has no topic: it is the rest of the mempool and has no size bound. One socket holds at most `WS_MAX_BLOCK_SUBSCRIPTIONS` (2) of these; switch by subscribing to the new one and unsubscribing from the old. The first message is a snapshot (kind 1), possibly followed at once by up to 16 deltas (kind 2) that bring it to the current state; then a delta whenever the block's transactions change, or a snapshot when that is smaller (a new block usually replaces block 0 whole).
+
+### When a block is found
+
+What a socket subscribed to `blocks` and the mempool topics receives for each new block B, in this order:
+
+1. **`block` for B.**
+2. **The mempool topics on B**: `mempool`, `projected` with `tip` B, then each `projected-txs:N` that changed. They hold nothing B confirmed, nothing that spent what a transaction in B spent, and none of those transactions' descendants. They are sent as soon as the server has them, without waiting for the rate limit.
+3. **`summary` for B**, whenever it is computed: before, between or after the messages of step 2.
+
+The server keeps that order for every message it sends to subscribers. A projection on B is never sent before B's `block`, and after B's `block` no mempool message on an older tip is sent. One case is outside it: a topic's state sent on subscribe is the latest the server holds. A socket that subscribes in the moment between B's `block` and the projection on B gets the mempool topics' state on the parent. `projected.tip` names that block, and the state on B follows as an ordinary message. A page can therefore say "Block B was found" on the `block` message, and treat the next `projected` (and the `mempool` and `projected-txs:N` that come with it) as the state after B. That includes a quiet or empty mempool, where only the tip moves. The `transactions` topic is not tied to blocks.
+
+**How soon.** Step 2 follows step 1 within milliseconds when the node serves the block at once: 2 ms median and 6 ms at most after the `block` message over 22 blocks on regtest. On mainnet it was 592 ms after the `block` message (one block, 68,000 transactions in the mempool; [`MEMPOOL.md`](MEMPOOL.md#when-a-block-is-found) has the breakdown). The wait is the tracker's poll in progress, if any, reading the new block from the node, asking it for the clusters the block touched, and packing.
+
+**When it cannot.** The server holds a projection that disagrees with the announced block for at most 3 s. If the mempool engine has not reached B by then (the node is failing, or will not serve the block), it sends what it has. That message's `tip` says which block it is on, and `stale` is usually set. After a `reorg` or a `resync` there is no announced block to agree with, so nothing is held until the next `block`.
+
+**Then the refresh.** About a second later on mainnet, the server has asked the node for every cluster again. The few records that refresh corrects (transactions whose chunk changed in ways the block alone does not show) arrive as ordinary changes, at the normal rate.
 
 ### Binary frames
 

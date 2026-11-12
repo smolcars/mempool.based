@@ -1726,3 +1726,21 @@ async fn addresses_recover_from_outages_honestly() {
     assert_eq!(v["reason"], json!("too_large"));
     follow.abort();
 }
+
+#[tokio::test]
+async fn a_confirmation_is_said_at_once_whatever_the_interval() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 500, 200);
+    let s = Server::start(&mock, |w| w.mempool_interval = Duration::from_secs(10));
+    s.settle().await;
+    let mut c = Client::new(256);
+    let topic = tx_topic(a);
+    c.sub(&s, &topic).unwrap();
+    c.expect(&s.mempool_view(a)).await;
+
+    let at = Instant::now();
+    let b1 = mock.mine(&[a]);
+    let v = c.wait(&topic, |v| state(v) == "confirmed").await;
+    assert_eq!(v["hash"], json!(b1.to_string()));
+    assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+}

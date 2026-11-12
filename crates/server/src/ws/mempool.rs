@@ -14,8 +14,9 @@ use bitcoin::hashes::Hash;
 use engine::mempool::{self, Mempool, NodeSource, SourceError, Tracker, TxInfo};
 use engine::projected::{self, BANDS, Placed, ProjectedBlock, Projection, Projector};
 use logging::events::{
-    MempoolPollFailed, MempoolRecovered, MempoolSequenceRegressed, MempoolSubscriberLagged,
-    MempoolSummary, MempoolSynced, ProjectionFetchFailed, ProjectionRecovered, ProjectionResynced,
+    MempoolBlock, MempoolPollFailed, MempoolRecovered, MempoolSequenceRegressed,
+    MempoolSubscriberLagged, MempoolSummary, MempoolSynced, ProjectionFetchFailed,
+    ProjectionRecovered, ProjectionResynced,
 };
 use node::electrum;
 use node::esplora::{ChainTip, Esplora};
@@ -48,6 +49,9 @@ const DELTA_HEAD: usize = 32;
 const MAX_APPENDED: usize = 16;
 /// How often a healthy network writes a `mempool_summary` line.
 const SUMMARY_EVERY: Duration = Duration::from_secs(60);
+/// Longest a projection waits for the `blocks` topic to announce its tip (or for one on the
+/// announced tip): the hub's own limit for fetching a new block.
+const HOLD: Duration = Duration::from_secs(3);
 
 /// Every topic this module produces.
 fn topics() -> impl Iterator<Item = Topic> {
@@ -124,18 +128,24 @@ pub(crate) fn run(
     projector: &Projector,
 ) -> Vec<JoinHandle<()>> {
     let stats = Arc::new(Mutex::new(Sent::default()));
+    let found = Arc::new(Mutex::new(None));
     ctx.track.attach(tracker, projector);
     vec![
         tokio::spawn(super::track::follow_txs(
             Arc::clone(&ctx.track),
             ctx.sockets.limits.mempool_interval,
         )),
-        tokio::spawn(hint(tracker.clone(), ctx.electrum.events())),
+        tokio::spawn(hint(
+            tracker.clone(),
+            ctx.electrum.events(),
+            Arc::clone(&found),
+        )),
         tokio::spawn(projected_feed(
             Arc::clone(ctx),
             projector.clone(),
             tracker.clone(),
             Arc::clone(&stats),
+            Arc::clone(&found),
         )),
         tokio::spawn(latest_feed(
             Arc::clone(ctx),
@@ -147,6 +157,7 @@ pub(crate) fn run(
             tracker.clone(),
             projector.clone(),
             stats,
+            found,
         )),
         tokio::spawn(super::fees::run(
             Arc::clone(ctx),
@@ -159,12 +170,54 @@ pub(crate) fn run(
     ]
 }
 
-/// Polls the tracker at once when Electrum announces a block, instead of at its next cycle.
-async fn hint(tracker: Tracker, mut events: tokio::sync::broadcast::Receiver<electrum::Event>) {
+/// A new block's way through the engines and the topics, for its `mempool_block` line.
+#[derive(Debug, Clone, Copy)]
+struct Found {
+    height: u32,
+    /// When Electrum announced it.
+    at: Instant,
+    tracker: Option<Duration>,
+    path: &'static str,
+    confirmed: usize,
+    replaced: usize,
+    node_calls: u32,
+    node_bytes: u64,
+    sent: Option<Duration>,
+}
+
+type Clock = Arc<Mutex<Option<Found>>>;
+
+fn clock(c: &Clock) -> std::sync::MutexGuard<'_, Option<Found>> {
+    c.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Hands every block Electrum announces to the tracker, which drops what it confirmed at once;
+/// after a reorg or missed events, polls at once instead.
+async fn hint(
+    tracker: Tracker,
+    mut events: tokio::sync::broadcast::Receiver<electrum::Event>,
+    found: Clock,
+) {
     loop {
         match events.recv().await {
-            Ok(electrum::Event::Block(_) | electrum::Event::Reorg { .. })
-            | Err(RecvError::Lagged(_)) => tracker.tip_changed(),
+            Ok(electrum::Event::Block(tip)) => {
+                *clock(&found) = Some(Found {
+                    height: tip.height,
+                    at: Instant::now(),
+                    tracker: None,
+                    path: "listing",
+                    confirmed: 0,
+                    replaced: 0,
+                    node_calls: 0,
+                    node_bytes: 0,
+                    sent: None,
+                });
+                tracker.block_found(ChainTip {
+                    hash: tip.hash,
+                    height: tip.height,
+                });
+            }
+            Ok(electrum::Event::Reorg { .. }) | Err(RecvError::Lagged(_)) => tracker.tip_changed(),
             Ok(_) => {}
             Err(RecvError::Closed) => return,
         }
@@ -194,34 +247,78 @@ fn publish(hub: &Hub, stats: &Mutex<Sent>, topic: Topic, frame: &Frame, snapshot
 
 // Projected blocks: `mempool`, `projected` and `projected-txs:N`.
 
-/// Publishes the projection at most once per `WS_MEMPOOL_INTERVAL_MS`, always its latest state.
-/// It reads whole projections and compares them with what it published, so it can never lose
-/// its place in the projector's stream. The node's minimum fee rate can move on its own, so it is
-/// also checked once per interval.
+/// Publishes the projection at most once per `WS_MEMPOOL_INTERVAL_MS`, always its latest state,
+/// except that one on a new tip goes out at once. It reads whole projections and compares them
+/// with what it published, so it can never lose its place in the projector's stream. The node's
+/// minimum fee rate can move on its own, so it is also checked once per interval.
+///
+/// The order `docs/WS.md` promises: a projection on another tip than the block the `blocks` topic
+/// last announced waits for the two to agree, for at most [`HOLD`]. So after a block's message,
+/// the next mempool messages are on that block, and none comes before it.
 async fn projected_feed(
     ctx: Arc<NetworkContext>,
     projector: Projector,
     tracker: Tracker,
     stats: Arc<Mutex<Sent>>,
+    found: Clock,
 ) {
     let interval = ctx.sockets.limits.mempool_interval;
+    let mut announced = ctx.hub.announced();
     let mut out = Published::default();
     let mut next = Instant::now();
+    // Since when the projection and the announced block have disagreed.
+    let mut held: Option<Instant> = None;
     loop {
         let (p, mut sub) = projector.subscribe();
         let min_fee = tracker.node_info().map(|i| i.mempoolminfee);
+        drop(announced.borrow_and_update());
         // Before the tracker's first cycle the projection is empty, not the mempool.
-        if p.tip.is_some() && (out.seq != Some(p.seq) || out.min_fee != min_fee) {
-            out.publish(&ctx.hub, &stats, &p, min_fee);
-            next = Instant::now() + interval;
-        }
+        let changed = p.tip.is_some() && (out.seq != Some(p.seq) || out.min_fee != min_fee);
+        let new_tip = p.tip != out.tip;
+        let wake = ctx.hub.in_block_order(|block| {
+            let now = Instant::now();
+            let agrees = block.is_none_or(|b| p.tip.is_some_and(|t| t.hash == b));
+            let hold_until = if agrees {
+                held = None;
+                None
+            } else {
+                Some(*held.get_or_insert(now) + HOLD)
+            };
+            if !changed {
+                None
+            } else if hold_until.is_some_and(|t| now < t) {
+                hold_until
+            } else if new_tip || now >= next {
+                out.publish(&ctx.hub, &stats, &p, min_fee);
+                next = now + interval;
+                if let (Some(t), Some(f)) = (p.tip, clock(&found).as_mut())
+                    && t.height == f.height
+                    && f.sent.is_none()
+                {
+                    f.sent = Some(f.at.elapsed());
+                }
+                None
+            } else {
+                Some(next)
+            }
+        });
         tokio::select! {
             r = sub.recv() => if let Err(RecvError::Closed) = r {
                 return;
             },
+            r = announced.changed() => if r.is_err() {
+                return;
+            },
+            () = sleep_until(wake) => {}
             () = tokio::time::sleep(interval) => {}
         }
-        tokio::time::sleep_until(next).await;
+    }
+}
+
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -229,6 +326,7 @@ async fn projected_feed(
 #[derive(Default)]
 struct Published {
     seq: Option<u64>,
+    tip: Option<ChainTip>,
     min_fee: Option<bitcoin::Amount>,
     blocks: [Option<TxsTopic>; TXS_TOPICS],
 }
@@ -253,6 +351,7 @@ impl Published {
     ) {
         let moved = self.seq.replace(p.seq) != Some(p.seq);
         self.min_fee = min_fee;
+        self.tip = p.tip;
         let text = |v: Value| Frame::text(v.to_string().as_bytes());
         publish(
             hub,
@@ -607,6 +706,7 @@ async fn report(
     tracker: Tracker,
     projector: Projector,
     sent: Arc<Mutex<Sent>>,
+    found: Clock,
 ) {
     let mut tracker_events = tracker.events();
     let mut projector_events = projector.events();
@@ -617,7 +717,31 @@ async fn report(
     loop {
         tokio::select! {
             e = tracker_events.recv() => match e {
+                Ok(mempool::Event::Block(b)) => {
+                    if let (Some(f), Some(tip)) = (clock(&found).as_mut(), b.tip)
+                        && tip.height >= f.height
+                        && f.tracker.is_none()
+                    {
+                        f.tracker = Some(b.since_found.unwrap_or_else(|| f.at.elapsed()));
+                        f.path = "block";
+                        (f.confirmed, f.replaced) = (b.confirmed, b.replaced);
+                        (f.node_calls, f.node_bytes) = (b.calls, b.bytes);
+                    }
+                    summary.confirmed += b.confirmed as u64;
+                    summary.replaced += b.replaced as u64;
+                    summary.evicted += b.evicted as u64;
+                    summary.node_calls += u64::from(b.calls);
+                    summary.node_bytes += b.bytes;
+                }
                 Ok(mempool::Event::Cycle(c)) => {
+                    if let (Some(f), Some(tip)) = (clock(&found).as_mut(), c.tip)
+                        && tip.height >= f.height
+                        && f.tracker.is_none()
+                        && c.seq.is_some()
+                    {
+                        f.tracker = Some(f.at.elapsed());
+                        (f.confirmed, f.replaced) = (c.confirmed, c.replaced);
+                    }
                     if poll_failures > 0 {
                         logging::emit(&MempoolRecovered { network, failures: poll_failures });
                         poll_failures = 0;
@@ -665,6 +789,26 @@ async fn report(
             },
             e = projector_events.recv() => match e {
                 Ok(projected::Event::Update(u)) => {
+                    if u.refresh {
+                        let f = clock(&found).take_if(|f| f.sent.is_some());
+                        if let Some(f) = f {
+                            logging::emit(&MempoolBlock {
+                                network,
+                                height: f.height,
+                                path: f.path,
+                                confirmed: f.confirmed,
+                                replaced: f.replaced,
+                                tracker_ms: f.tracker.map_or(0.0, ms),
+                                sent_ms: f.sent.map_or(0.0, ms),
+                                node_calls: f.node_calls,
+                                node_bytes: f.node_bytes,
+                                refresh_ms: ms(f.at.elapsed()),
+                                refresh_set: u.set,
+                                refresh_removed: u.removed,
+                                refresh_bytes: u.bytes,
+                            });
+                        }
+                    }
                     if fetch_failures > 0 && !u.stale {
                         logging::emit(&ProjectionRecovered { network, failures: fetch_failures });
                         fetch_failures = 0;

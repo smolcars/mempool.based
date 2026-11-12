@@ -119,6 +119,9 @@ pub struct UpdateStats {
     pub set: usize,
     pub removed: usize,
     pub stale: bool,
+    /// The once-a-block refresh of every cluster: `set` and `removed` are then how far the
+    /// projection published for the block was from the node's full answer.
+    pub refresh: bool,
 }
 
 /// Something worth recording. Read with [`Projector::events`]; the projector logs nothing.
@@ -207,7 +210,7 @@ impl Projector {
             pending: HashSet::new(),
             failures: 0,
             retry_at: None,
-            refresh: false,
+            refresh: Vec::new(),
             tracker_failing: false,
         };
         (Self { shared }, tokio::spawn(runner.run()))
@@ -284,8 +287,9 @@ struct Runner<S> {
     /// When to ask again after a failure. Absolute, so unrelated wakeups do not push it back.
     retry_at: Option<Instant>,
     tracker_failing: bool,
-    /// A block arrived: ask every cluster again right after publishing it.
-    refresh: bool,
+    /// A block arrived: every transaction, to ask its cluster again once the block's own update
+    /// is published and the tracker has nothing more to fold in.
+    refresh: Vec<Txid>,
 }
 
 impl<S: ClusterSource> Runner<S> {
@@ -303,7 +307,7 @@ impl<S: ClusterSource> Runner<S> {
             if !std::mem::take(&mut first) {
                 let _ = self.shared.events.send(Event::Resynced { txs: txs.len() });
             }
-            self.update(Input::Snapshot { seq, tip, txs }).await;
+            self.update(Input::Snapshot { seq, tip, txs }, false).await;
             loop {
                 let retry = self.retry_at.filter(|_| !self.pending.is_empty());
                 let mut lagged = false;
@@ -343,9 +347,12 @@ impl<S: ClusterSource> Runner<S> {
                     }
                     () = sleep_until(retry) => Input::Nothing,
                 };
-                self.update(input).await;
-                if std::mem::take(&mut self.refresh) {
-                    self.update(Input::Nothing).await;
+                self.update(input, false).await;
+                // Waits while the tracker has more: in a burst, each block's own update goes
+                // out before the refresh, which then covers them all.
+                if !self.refresh.is_empty() && self.tracker.read(mempool::Mempool::seq) == seq {
+                    self.pending.extend(std::mem::take(&mut self.refresh));
+                    self.update(Input::Nothing, true).await;
                 }
                 if lagged {
                     break;
@@ -362,7 +369,7 @@ impl<S: ClusterSource> Runner<S> {
     }
 
     /// Applies the input, asks the node for every cluster that changed, packs and publishes.
-    async fn update(&mut self, input: Input) {
+    async fn update(&mut self, input: Input, refresh: bool) {
         let shared = self.shared.clone();
         let (mut need, tip, mempool_seq, deltas, all) =
             blocking(&shared, move |s| apply(s, input)).await;
@@ -376,6 +383,7 @@ impl<S: ClusterSource> Runner<S> {
         let mut stats = UpdateStats {
             deltas,
             mempool_seq,
+            refresh,
             ..UpdateStats::default()
         };
         let started = Instant::now();
@@ -417,10 +425,9 @@ impl<S: ClusterSource> Runner<S> {
         stats.pack = started.elapsed();
         self.pending.extend(recheck);
         // What we cannot see change (a `prioritisetransaction`, a lost recheck) is corrected
-        // once per block: every cluster is asked again in the update that follows this one.
+        // once per block: every cluster is asked again right after this update.
         if !all.is_empty() {
-            self.pending.extend(all);
-            self.refresh = true;
+            self.refresh = all;
         }
         let _ = self.shared.events.send(Event::Update(stats));
     }

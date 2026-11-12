@@ -329,6 +329,79 @@ impl Mempool {
             .collect()
     }
 
+    /// Transactions the blocks rule out, sorted by txid: those they contain, those spending an
+    /// outpoint one of their transactions spends, and the descendants of the latter. Exact while
+    /// the blocks are on the active chain: the node cannot hold any of them.
+    pub(crate) fn ruled_out(&self, blocks: &[BlockSpends]) -> Vec<Txid> {
+        let mut out: HashSet<Txid> = blocks
+            .iter()
+            .flat_map(|b| &b.txids)
+            .filter(|t| self.txs.contains_key(*t))
+            .copied()
+            .collect();
+        let spent = |k: &u64| blocks.iter().any(|b| b.spends.contains_key(k));
+        let mut generation: Vec<Txid> = self
+            .txs
+            .iter()
+            .filter(|(t, i)| !out.contains(*t) && i.spends.iter().any(spent))
+            .map(|(t, _)| *t)
+            .collect();
+        // A child of a conflicted transaction goes with it: one pass per generation.
+        while !generation.is_empty() {
+            let outputs: HashSet<u64> = generation
+                .iter()
+                .flat_map(|t| {
+                    let n = self.txs.get(t).map_or(0, |i| i.outputs);
+                    (0..n).map(move |vout| self.keys.key(&OutPoint::new(*t, vout)))
+                })
+                .collect();
+            out.extend(generation);
+            generation = self
+                .txs
+                .iter()
+                .filter(|(t, i)| !out.contains(*t) && i.spends.iter().any(|k| outputs.contains(k)))
+                .map(|(t, _)| *t)
+                .collect();
+        }
+        let mut out: Vec<Txid> = out.into_iter().collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Drops the additions the blocks rule out, as [`Mempool::ruled_out`] does for those held:
+    /// contained in a block, spending what a block's transaction spends, or spending an output of
+    /// a transaction that left (`removed`, the confirmed excepted) or was dropped here.
+    pub(crate) fn rule_out_added(
+        &self,
+        added: &mut Vec<(Txid, TxInfo)>,
+        removed: &[Txid],
+        blocks: &[BlockSpends],
+    ) {
+        let mined = |t: &Txid| blocks.iter().any(|b| b.txids.contains(t));
+        let outputs = |t: Txid, n: u32| (0..n).map(move |v| self.keys.key(&OutPoint::new(t, v)));
+        let mut dead: HashSet<u64> = removed
+            .iter()
+            .filter(|t| !mined(t))
+            .flat_map(|t| outputs(*t, self.txs.get(t).map_or(0, |i| i.outputs)))
+            .collect();
+        loop {
+            let before = added.len();
+            added.retain(|(t, i)| {
+                let gone = mined(t)
+                    || i.spends.iter().any(|k| {
+                        dead.contains(k) || blocks.iter().any(|b| b.spends.contains_key(k))
+                    });
+                if gone && !mined(t) {
+                    dead.extend(outputs(*t, i.outputs));
+                }
+                !gone
+            });
+            if added.len() == before {
+                return;
+            }
+        }
+    }
+
     /// Applies the next delta. A delta out of order is refused and changes nothing.
     pub fn apply(&mut self, d: &Delta) -> bool {
         if d.seq != self.seq + 1 {

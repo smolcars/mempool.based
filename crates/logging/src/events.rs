@@ -652,6 +652,29 @@ pub struct ProjectionRecovered {
 }
 event!(ProjectionRecovered, "projection_recovered", Info);
 
+/// A new block's way through the live mempool, from the node's announcement: when the tracker
+/// dropped what it confirmed, when the mempool topics were sent on it, and how much the
+/// once-a-block refresh of every cluster then corrected. Once per block, at that refresh.
+#[derive(Debug, Serialize)]
+pub struct MempoolBlock {
+    pub network: &'static str,
+    pub height: u32,
+    /// `block` (from the block's own transactions) or `listing` (the next poll caught it).
+    pub path: &'static str,
+    pub confirmed: usize,
+    pub replaced: usize,
+    pub tracker_ms: f64,
+    pub sent_ms: f64,
+    /// The tracker's node calls and response bytes for the block, on the `block` path.
+    pub node_calls: u32,
+    pub node_bytes: u64,
+    pub refresh_ms: f64,
+    pub refresh_set: usize,
+    pub refresh_removed: usize,
+    pub refresh_bytes: u64,
+}
+event!(MempoolBlock, "mempool_block", Info);
+
 /// The projector fell behind the tracker and rebuilt from a fresh snapshot.
 #[derive(Debug, Serialize)]
 pub struct ProjectionResynced {
@@ -1134,6 +1157,21 @@ mod tests {
             both(&FeesFallbackEnded {
                 network: n,
                 duration_ms: 12_000,
+            }),
+            both(&MempoolBlock {
+                network: n,
+                height: 975_530,
+                path: "block",
+                confirmed: 3_502,
+                replaced: 3,
+                tracker_ms: 120.5,
+                sent_ms: 160.25,
+                node_calls: 2,
+                node_bytes: 1_600_000,
+                refresh_ms: 700.0,
+                refresh_set: 12,
+                refresh_removed: 0,
+                refresh_bytes: 6_000_000,
             }),
             both(&MempoolSubscriberLagged {
                 network: n,

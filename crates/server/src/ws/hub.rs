@@ -9,6 +9,7 @@ use node::electrum::{self, Tip};
 use node::esplora::{Esplora, Route};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
 
 use logging::events::{BlockUnavailable, WsClientsDropped, WsFanout};
 
@@ -52,6 +53,11 @@ pub struct Hub {
     topics: Mutex<HashMap<Topic, TopicState>>,
     /// Clients dropped for each limit, by close code, for [`WsClientsDropped`].
     dropped: Mutex<HashMap<u16, u64>>,
+    /// The block the `blocks` topic last announced; `None` after a reorg or a `resync`.
+    announced: watch::Sender<Option<BlockHash>>,
+    /// Held while a block is announced, and while a decision taken on [`Hub::announced`] is
+    /// sent, so the two never cross.
+    order: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -68,7 +74,29 @@ impl Hub {
             sockets,
             topics: Mutex::default(),
             dropped: Mutex::default(),
+            announced: watch::Sender::new(None),
+            order: Mutex::new(()),
         }
+    }
+
+    /// The block the `blocks` topic last announced, set once its `block` message is queued to
+    /// every subscriber; `None` while the topic does not know the tip.
+    pub fn announced(&self) -> watch::Receiver<Option<BlockHash>> {
+        self.announced.subscribe()
+    }
+
+    /// Sends a `blocks` message with `send`, and records `block` as the block now announced.
+    pub(crate) fn announce_tip(&self, block: Option<BlockHash>, send: impl FnOnce()) {
+        let _order = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        send();
+        self.announced.send_replace(block);
+    }
+
+    /// Runs `f` on the block announced now, with no block announced until it returns: the
+    /// messages `f` sends land on the side of every `block` message that `f` saw.
+    pub(crate) fn in_block_order<R>(&self, f: impl FnOnce(Option<BlockHash>) -> R) -> R {
+        let _order = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        f(*self.announced.borrow())
     }
 
     fn topics(&self) -> std::sync::MutexGuard<'_, HashMap<Topic, TopicState>> {
@@ -199,7 +227,9 @@ pub async fn feed(
             Ok(electrum::Event::Reorg { fork_height }) => {
                 last.hash = None;
                 let msg = json!({ "topic": "blocks", "type": "reorg", "fork_height": fork_height });
-                hub.announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
+                hub.announce_tip(None, || {
+                    hub.announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
+                });
             }
             Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
                 // The last block is still a fair snapshot; a newer tip arrives as a `block`.
@@ -229,8 +259,10 @@ async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last)
         Some(block) => {
             last.failures = 0;
             let msg = json!({ "topic": "blocks", "type": "block", "block": block });
-            ctx.hub
-                .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+            ctx.hub.announce_tip(Some(tip.hash), || {
+                ctx.hub
+                    .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+            });
             ctx.summaries.new_tip(tip.hash, since);
         }
         None => {
@@ -244,7 +276,8 @@ async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last)
                 });
             }
             // A later subscriber must learn it missed this block, not get the one before.
-            resync(ctx, since, Snapshot::Replace);
+            ctx.hub
+                .announce_tip(None, || resync(ctx, since, Snapshot::Replace));
         }
     }
 }

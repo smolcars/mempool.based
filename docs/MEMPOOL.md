@@ -18,7 +18,8 @@ Measurements below are from a synced mainnet node on a private network, 2026-11-
 let (tracker, task) = Tracker::start(NodeSource { rpc, esplora }, Config::default());
 let (snapshot, mut sub) = tracker.subscribe(|m: &Mempool| /* copy what you need */);
 while let Ok(delta) = sub.recv().await { /* delta.seq == previous + 1 */ }
-tracker.tip_changed();          // from the Electrum header subscription; optional
+tracker.block_found(tip);       // a block the node announced: what it confirms leaves at once
+tracker.tip_changed();          // poll now (after a reorg or missed announcements)
 tracker.read(|m| m.get(&txid)); // a point lookup
 tracker.read(|m| m.links(&txids)); // which of these spends which, from the inputs held
 tracker.events();               // statistics and abnormal conditions, for logging
@@ -91,7 +92,7 @@ Each cycle:
 6. **Fetch** details for the added ones, as in the initial sync.
 7. **Classify** the removals, build one delta, apply it and publish it.
 
-**Cadence.** A cycle starts at least 1 s after the previous one started, and never sooner after the previous one ended than that one took, so the tracker spends at most half its time talking to a slow node. After a cycle in which a listed transaction's details could not be read, the next cycle lists again whatever the probe says. One loop does everything in order: a cycle can never overlap another, and nothing queues behind a slow node. On failure the wait doubles from 2 s to a cap of 30 s, and comes back to 1 s on the next success. A tip hint skips the wait but never interrupts a cycle in progress.
+**Cadence.** A cycle starts at least 1 s after the previous one started, and never sooner after the previous one ended than that one took, so the tracker spends at most half its time talking to a slow node. After a cycle in which a listed transaction's details could not be read, the next cycle lists again whatever the probe says. One loop does everything in order: a cycle can never overlap another, and nothing queues behind a slow node. On failure the wait doubles from 2 s to a cap of 30 s, and comes back to 1 s on the next success. A hint (`block_found` or `tip_changed`) skips the wait but never interrupts a cycle in progress; what `block_found` does is in [When a block is found](#when-a-block-is-found).
 
 The probe saves the 3.6 MB listing whenever the mempool did not move. On mainnet it almost always has, so the listing runs about once a second. A change the probe cannot see (an eviction and an arrival with identical size and fee) is caught by the 10 s heartbeat.
 
@@ -157,6 +158,7 @@ The tracker logs nothing itself. `Tracker::events()` yields:
 | Event | Fields |
 |---|---|
 | `Cycle` | per cycle: duration, response bytes, node calls, probes skipped since the last cycle, txids listed, added, vanished, removed by reason, blocks fetched, model size, `mempool_sequence`, tip, published `seq` |
+| `Block` | per block applied from its own transactions: the same fields, nothing listed or added, and the time from `block_found` to the delta |
 | `Synced` | once, after the first complete cycle: duration from start, transactions, bytes, calls |
 | `PollFailed` | the error, consecutive failures, the wait before the retry |
 | `SequenceRegressed` | old and new `mempool_sequence` |
@@ -203,7 +205,7 @@ rbitcoin mines by cluster-mempool chunks: each cluster is linearized and cut int
 - every transaction the tracker adds (its cluster may now include older transactions it lifts);
 - the remaining members of the cluster of every transaction the tracker removes (the cluster may have split, or lost the child that lifted a parent);
 - a cluster whose answer named members the tracker has not shown us yet, again at the next update;
-- every cluster, once per block, right after the block's update is published. Anything we cannot see change, such as a `prioritisetransaction` on the node or a lost recheck, is corrected within a block.
+- every cluster, once per block, right after the block's update is published and once the tracker has nothing more to fold in, so in a burst each block's own update goes out first. Anything we cannot see change, such as a `prioritisetransaction` on the node or a lost recheck, is corrected within a block.
 
 It asks once per cluster as far as it knows them: each answer covers its members, and later rounds ask only for what is still uncovered.
 
@@ -296,7 +298,7 @@ When the tip moves, the first block of the last projection on the old tip is kep
 - **Sigops are not counted.** The template also stops at 80,000 sigop cost. We do not have each transaction's sigops; a mainnet template uses about 8,000, so the limit does not bind today.
 - **Pulling ancestors.** We pull in a chunk's earlier, unplaced chunks of the same cluster, not only its ancestors, since the answer does not say which chunks depend on which. They differ only when an earlier chunk of a cluster did not fit and a later, independent one would.
 - **`prioritisetransaction`** deltas are in the node's chunk fees and rates but not in the record's own `fee`, which is the base fee. A delta applied to a transaction whose cluster does not otherwise change shows at the next block's refresh.
-- **One update behind.** The projection follows the tracker, so it trails the node by up to one tracker cycle (about 1.5 s) plus one cluster request.
+- **One update behind.** The projection follows the tracker, so it trails the node by up to one tracker cycle (about 1.5 s) plus one cluster request. A new block is the exception: see [When a block is found](#when-a-block-is-found).
 
 ### What is exposed for logging
 
@@ -304,7 +306,7 @@ The projector logs nothing itself. `Projector::events()` yields:
 
 | Event | Fields |
 |---|---|
-| `Update` | per update: tracker deltas folded in, clusters asked, node requests, response bytes, time waiting for the node, time packing, transactions, chunks, records set and removed, `stale`, the published `seq` |
+| `Update` | per update: tracker deltas folded in, clusters asked, node requests, response bytes, time waiting for the node, time packing, transactions, chunks, records set and removed, `stale`, the published `seq`, and `refresh` for the once-a-block refresh, whose records set and removed are what it corrected |
 | `FetchFailed` | the error, consecutive failures, transactions pending, the wait before the retry |
 | `Resynced` | the projector fell behind the tracker and rebuilt from a snapshot: transactions |
 | `SubscriberLagged` | how many deltas the subscriber missed |
@@ -314,11 +316,11 @@ The projector logs nothing itself. `Projector::events()` yields:
 `crates/server/src/ws/mempool.rs` runs one tracker and one projector per enabled network, from startup, unless `{NET}_MEMPOOL_ENABLED=false` ([`CONFIG.md`](CONFIG.md#the-live-mempool)).
 
 - **Their own node clients.** The tracker gets its own RPC and Esplora clients and the projector its own RPC client, so the byte counts in their events are theirs alone. Each RPC client allows four calls in flight: with the shared client the API uses, at most twelve of the node's sixteen work-queue slots.
-- **The tip hint.** A task follows the network's Electrum events and calls `tip_changed` on every new block or reorg, so a block's removals are seen at once instead of at the next cycle.
+- **The tip hint.** A task follows the network's Electrum events: it hands every new block to `block_found`, and calls `tip_changed` after a reorg or when it missed events.
 - **A node down at boot.** Nothing special: the tracker retries with its backoff (2 s doubling to 30 s), the projector waits for it, and the topics publish nothing until the first complete cycle. When the node comes back the initial sync runs and the topics start. A node lost later leaves the last projection in place, marked `stale`.
 - **Shutdown.** When shutdown starts, the engines and their tasks are aborted, so no polling continues while sockets drain.
 - **The topics** (`mempool`, `projected`, `projected-txs:N`, `transactions`, in [`WS.md`](WS.md#mempool-topics), and `tx:<txid>`, below) are fed by one task per network each from the latest projection and the tracker's change stream. No subscription asks the node for anything.
-- **The log.** The engines' events become typed lines ([`LOGGING.md`](LOGGING.md#the-live-mempool)): `mempool_synced` once, one `mempool_summary` a minute with the minute's totals, and a line for each abnormal condition, repeats summarised at powers of two.
+- **The log.** The engines' events become typed lines ([`LOGGING.md`](LOGGING.md#the-live-mempool)): `mempool_synced` once, one `mempool_summary` a minute with the minute's totals, one `mempool_block` per block with its timings, and a line for each abnormal condition, repeats summarised at powers of two.
 
 ### Following a transaction
 
@@ -426,3 +428,63 @@ The same moments, the three sources side by side (sat/vB; next block / 3 blocks 
 Ours and the reference's next-block numbers are close; below that they part. The mempool at the time held about three blocks above 0.125 sat/vB and then some 25 MvB of transactions at 0.12 sat/vB and below, so a transaction at 0.126 sat/vB is ahead of all of those and, unless more than three blocks' worth arrives above it, mined within six blocks: that is our `low`, where the reference said 0.4 to 1.6. `no_rush` is the minimum because the whole mempool plus a day of arrivals at the observed pace fits in 144 blocks; the reference's economy level read 0.2 (twice its minimum) at every moment. Neither longer level could be scored in this run.
 
 A recorded moment of this run (the projection's rates and sizes, 30 minutes of arrivals and the answer) is `fixtures/fees/mainnet.json`, replayed by a test.
+
+## When a block is found
+
+The moment a block is found is when the projected blocks matter most, and when the parts above meet: Electrum announces the block, the tracker learns what left, the projector repacks, and the WebSocket sends the block, its summary and the new projection ([`WS.md`](WS.md#when-a-block-is-found) has the order clients are promised).
+
+**What happens, in order:**
+
+1. Electrum announces block B. The server's hint task calls `Tracker::block_found(B)`.
+2. The tracker's loop takes it as soon as the cycle in progress, if any, ends. It reads the tip from Esplora, every 25 ms for up to 3 s, until Esplora serves B or a later block. The node can announce a block some hundreds of milliseconds before it serves it ([`RBITCOIN.md`](RBITCOIN.md#rules-that-follow)). It then fetches the block into its window of six, as a cycle would, and publishes one delta. That delta removes everything the window's blocks rule out: what they contain (`Confirmed`), what spent an outpoint they spend, and those transactions' descendants (`Replaced` by the block's transaction). The delta is published even when nothing left, because a new tip is a change. No listing is made.
+3. The projector folds the delta in. It asks the node for the clusters the removed transactions belonged to (a child whose parent was mined now stands alone, or in a smaller chunk), packs, and publishes. Then, once the tracker has nothing more to fold in, it asks for every cluster again (the refresh).
+4. The WebSocket feed sends a projection on a new tip at once, without the 2 s rate limit. It holds one whose tip differs from the block the `blocks` topic last announced, for at most 3 s, so a client always sees the block first and nothing older after it.
+
+**What keeps it right:**
+
+- *A block lands during a poll.* The hint waits for the poll to end, and the two never overlap. A poll whose listing came before the block, but whose tip read came after, also removes what the new blocks rule out, though its listing still held it. So no delta on a new tip keeps a transaction known to be mined. The block step then finds nothing left to do. Electrum is not always first: on mainnet a poll read the new tip from Esplora 300 ms before Electrum announced it, with a listing taken just before the block.
+- *The block is not served yet.* The tip is read again until it is, for up to 3 s. If it is not served by then, a full cycle runs at once. Until the tracker's tip reaches the announced height, no probe may skip a listing: an empty or quiet mempool's totals do not move with a block, and before this rule such a block went unseen until the 10 s heartbeat.
+- *A burst.* Each announcement is applied in turn, each block fetched once. The refresh waits for the last. A newer announcement replaces one still waited for, which may never be served after a reorg.
+- *A refresh in progress.* The projector does one thing at a time, so a block's delta that arrives while the previous block's refresh runs (27 requests and 1.6 s on mainnet) waits for it. That needs two blocks within about two seconds.
+- *A reorg, or more blocks than the window.* When the new tip does not extend the chain the tracker held, the block step still removes what the new chain rules out, then a full cycle runs at once. Only a listing shows what came back.
+- *The audit record.* The projection on the old tip is archived as `Expected` when the first projection on the new one is published, as before.
+- *Gapless deltas and a consistent snapshot.* The block step publishes under the same write lock and with the same numbering as a cycle.
+
+**Early against refreshed.** The projection sent for the block is built from the node's answer for every cluster the block touched. So it differs from the refreshed one only by what the block alone does not reveal: a `prioritisetransaction`, a cluster the tracker had not fully seen, ties. On regtest the refresh corrected 0 records in 19 of 20 blocks and 1 record in the other. On mainnet it moved 4,659 records of 68,000 at block 975,535. Most of those moves are not corrections: the refresh applies every cluster afresh, every chunk gets a new id, and ids break ties. So thousands of chunks of equal rate and fee change places, and some cross a block boundary. How many changed rate was not measured. Clients are not told the first projection is provisional: it is as true as anything the server sends, and the refresh's corrections arrive as ordinary changes.
+
+**Measured on regtest** (release build, 22 blocks a few seconds apart, each mining a random ancestor-closed 60% of a mempool of 8 to 87 transactions, the rest staying behind, children of mined parents included). Times are from Electrum's announcement:
+
+| | Before | After |
+|---|---|---|
+| Tracker delta that confirms the block | 4 ms median, 17 ms max | 2.8 ms median, 5 ms max |
+| Projection without the block's transactions | 4 ms median, 20 ms max | about 1 ms later |
+| `projected` message on the socket | 1,016 ms median, 1,921 ms max (4.7 s once) | 3.5 ms median, 10 ms max |
+| From the `block` message to the `projected` message | 1,015 ms median | 2 ms median, 6 ms max |
+| A `projected` on the old tip after the `block` message | none seen | none, and the server holds it back |
+
+So on regtest the whole delay was the feed's 2 s rate limit. With the mempool's totals unchanged by a block (an empty mempool), the tracker could also miss the block until its 10 s heartbeat: the hint's cycle read the tip before Esplora served the block, and every probe after it found nothing changed. That is what made the browser tests that mine see the projection several blocks behind.
+
+**Measured on mainnet** (2026-11-12, read-only, 68,000 transactions in the mempool, release build, one block on the final block path: 975,535). Times from Electrum's announcement:
+
+| Step | ms |
+|---|---|
+| The tip read, held by the node until it serves the block (the `blocks` topic's own fetch was held as long: its `block` message left at 487 ms) | 487 |
+| The raw block, 1.58 MB | 108 |
+| What the window rules out (2,930 transactions) and their reasons, over 68,000 held | 61 |
+| Tracker delta published | 657 |
+| The projector: two cluster requests for what the block touched, while the node also serves the block summary's `getblock` | about 240 |
+| Packing | 182 |
+| Mempool topics sent on the block | 1,080, which is 592 ms after the `block` message |
+| `summary` sent | 1,974, which is 1,487 ms after the `block` message |
+| Refresh of every cluster done (12 requests, 5.9 MB) | 2,799 |
+
+No mempool message on the old tip came after the `block` message, and none on the new tip before it. Before the change the same block would have waited for a poll, about 600 ms for the listing and the block, and then for the feed's rate limit of up to 2 s. Builders measured 3 to 6 s on mainnet. An earlier build in the same run showed a further gap: a poll read the new tip 300 ms before Electrum announced it, while its listing still held the block's 2,948 transactions. That build sent a projection on the new tip still holding them. The rule that a poll which sees a new tip drops what the block rules out closes it.
+
+**Node cost per block,** the WebSocket's block fetch and the summary's `getblock` left aside (both unchanged):
+
+| | Before | After |
+|---|---|---|
+| Tracker | the cycle that sees the block: probe, listing, tip, the raw block, details | one tip read (more only while Esplora lags: one per 25 ms), the raw block; the next cycle fetches no block |
+| Projector | the block's clusters, then every cluster | the same |
+
+So a block costs the node one more tip read (about 100 bytes) and no second fetch of its transactions. On regtest the block step made 2 calls and read 2 to 13 KB per block. On mainnet it made 2 calls and read 1.58 MB, the block the poll used to fetch, and the poll after it fetched none. The tracker's polling stayed at 210 to 255 calls and 185 to 255 MB a minute at 68,000 transactions.

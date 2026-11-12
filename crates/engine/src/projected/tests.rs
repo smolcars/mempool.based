@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bitcoin::absolute::LockTime;
 use bitcoin::block::{Header, Version};
@@ -20,7 +20,7 @@ use node::esplora::ChainTip;
 use node::rpc::model::{Cluster, ClusterChunk, EntryFees, MempoolEntry, MempoolInfo, RawMempool};
 
 use super::model::{Model, Packing, Placed};
-use super::{BlockSummary, ClusterSource, Config, Projection, Projector, band};
+use super::{BlockSummary, ClusterSource, Config, Event, Projection, Projector, band};
 use crate::mempool::{self, Source, SourceError, Tracker};
 
 fn id(n: u8) -> Txid {
@@ -661,6 +661,73 @@ async fn follows_the_tracker_with_exact_deltas_an_archive_and_staleness() {
     mock.set(&[]);
     until(&mut sub, &mut view, |r, _| r.is_empty()).await;
     assert!(projector.current().blocks.iter().all(|b| b.txs.is_empty()));
+    task.abort();
+    tracker_task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_found_block_is_projected_at_once_and_the_refresh_agrees() {
+    let mock = Mock::default();
+    let b0 = block(BlockHash::all_zeros(), &[&tx(9_000)]);
+    let h0 = b0.block_hash();
+    mock.mine(b0, 0);
+    let (parent, child, other) = (tx(1), tx(2), tx(3));
+    mock.set(&[(&parent, 10), (&child, 5_000), (&other, 1_000)]);
+    mock.join(&[&parent, &child], 5_010);
+    // Slow polls, so only the found block can explain a quick update.
+    let tracker_config = mempool::Config {
+        gap: Duration::from_secs(30),
+        heartbeat: Duration::from_secs(60),
+        ..mempool::Config::default()
+    };
+    let (tracker, tracker_task) = Tracker::start(mock.clone(), tracker_config);
+    let (projector, task) = Projector::start(tracker.clone(), mock.clone(), Config::default());
+    let (snapshot, mut sub) = projector.subscribe();
+    let mut view = (records(&snapshot), snapshot.seq, Vec::new(), snapshot.stale);
+    until(&mut sub, &mut view, |r, _| r.len() == 3).await;
+    let mut events = projector.events();
+
+    // The block takes the parent and leaves its child, which now stands alone at its own rate.
+    let b1 = block(h0, &[&tx(9_001), &parent]);
+    let h1 = b1.block_hash();
+    mock.set(&[(&child, 5_000), (&other, 1_000)]);
+    mock.mine(b1, 1);
+    let at = Instant::now();
+    tracker.block_found(ChainTip {
+        hash: h1,
+        height: 1,
+    });
+    let alone = u32::try_from(5_000 * 1000 / vsize(&child)).unwrap();
+    until(&mut sub, &mut view, |r, _| r.len() == 2).await;
+    assert!(at.elapsed() < Duration::from_secs(5), "{:?}", at.elapsed());
+    let early = projector.current();
+    assert_eq!(early.tip.map(|t| t.hash), Some(h1));
+    assert_eq!(view.0[&child.compute_txid()].rate, alone);
+    assert!(!view.0.contains_key(&parent.compute_txid()));
+
+    // The refresh of every cluster that follows finds nothing to correct.
+    let refresh = loop {
+        if let Event::Update(u) = events.recv().await.unwrap()
+            && u.refresh
+        {
+            break u;
+        }
+    };
+    assert_eq!((refresh.set, refresh.removed, refresh.seq), (0, 0, None));
+    assert_eq!(projector.current().seq, early.seq);
+
+    // What we expected on the old tip is kept for the audit of the block mined on it.
+    let expected = projector.expected(&h0).unwrap();
+    assert_eq!(expected.tip.hash, h0);
+    let txs: Vec<Txid> = expected.block.txs.iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        txs,
+        vec![
+            parent.compute_txid(),
+            child.compute_txid(),
+            other.compute_txid()
+        ]
+    );
     task.abort();
     tracker_task.abort();
 }

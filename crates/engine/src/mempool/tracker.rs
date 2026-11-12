@@ -181,6 +181,8 @@ pub struct CycleStats {
     pub size: usize,
     pub mempool_sequence: u64,
     pub tip: Option<ChainTip>,
+    /// For a [`Event::Block`]: from [`Tracker::block_found`] to the delta's publication.
+    pub since_found: Option<Duration>,
 }
 
 /// Something worth recording. Read with [`Tracker::events`]; the tracker itself logs nothing.
@@ -188,6 +190,9 @@ pub struct CycleStats {
 pub enum Event {
     /// A cycle completed.
     Cycle(CycleStats),
+    /// A block from [`Tracker::block_found`] was applied from its own transaction list, before
+    /// the next listing. `listed`, `added` and `vanished` are zero.
+    Block(CycleStats),
     /// The first complete cycle: the initial sync. `duration` runs from start, failures included.
     Synced {
         duration: Duration,
@@ -212,6 +217,8 @@ struct Shared {
     deltas: broadcast::Sender<Arc<Delta>>,
     events: broadcast::Sender<Event>,
     wake: Notify,
+    /// The newest block announced through [`Tracker::block_found`] and not yet applied, and when.
+    found: std::sync::Mutex<Option<(ChainTip, Instant)>>,
     /// The node's last `getmempoolinfo` answer.
     info: std::sync::Mutex<Option<MempoolInfo>>,
 }
@@ -248,6 +255,7 @@ impl Tracker {
             deltas: broadcast::channel(config.subscriber_queue.max(1)).0,
             events: broadcast::channel(256).0,
             wake: Notify::new(),
+            found: std::sync::Mutex::new(None),
             info: std::sync::Mutex::new(None),
         });
         let poller = Poller {
@@ -257,6 +265,7 @@ impl Tracker {
             pending: HashMap::new(),
             blocks: Vec::new(),
             probe: None,
+            wanted: None,
             last_sequence: None,
             synced: false,
             started: Instant::now(),
@@ -309,7 +318,28 @@ impl Tracker {
     pub fn tip_changed(&self) {
         self.shared.wake.notify_one();
     }
+
+    /// A new best block, as the node announced it (Electrum's header subscription): what it
+    /// confirms or conflicts with leaves at once, from the block's own transaction list, without
+    /// waiting for the next listing. A cycle in progress finishes first. See `docs/MEMPOOL.md`.
+    pub fn block_found(&self, tip: ChainTip) {
+        let mut found = self
+            .shared
+            .found
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if found.is_none_or(|(f, _)| tip.height >= f.height) {
+            *found = Some((tip, Instant::now()));
+        }
+        drop(found);
+        self.shared.wake.notify_one();
+    }
 }
+
+/// How often the tip is read again while the node's Esplora has not caught up with a block it
+/// announced, and for how long (`docs/RBITCOIN.md`): as the WebSocket hub waits for a block.
+const FOUND_RETRY: Duration = Duration::from_millis(25);
+const FOUND_WAIT: Duration = Duration::from_secs(3);
 
 struct Poller<S> {
     source: Arc<S>,
@@ -321,11 +351,21 @@ struct Poller<S> {
     blocks: Vec<BlockSpends>,
     /// `getmempoolinfo` before the last complete cycle.
     probe: Option<MempoolInfo>,
+    /// The last block announced through [`Tracker::block_found`]. Until the model's tip is it or
+    /// above it, no probe may skip a listing: a block is a change even when the mempool's totals
+    /// do not move, and the node can announce one before it serves it.
+    wanted: Option<ChainTip>,
     last_sequence: Option<u64>,
     synced: bool,
     started: Instant,
     /// Bytes and calls until the first complete cycle.
     totals: (u64, u32),
+}
+
+/// Whether `tip` is the announced block `found` or above it. At the same height another hash is
+/// not enough: after a reorg to an equal height, the node may still serve the block replaced.
+fn reached(tip: ChainTip, found: ChainTip) -> bool {
+    tip.height > found.height || tip.hash == found.hash
 }
 
 /// The part of `getmempoolinfo` that moves when the transaction set does.
@@ -343,6 +383,30 @@ impl<S: Source> Poller<S> {
                 () = tokio::time::sleep_until(next) => false,
                 () = self.shared.wake.notified() => true,
             };
+            let found = self
+                .shared
+                .found
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            // A block that extends the chain we hold needs no listing now; anything else (not
+            // served in time, a reorg, a failure) falls through to a full cycle at once.
+            if let Some((tip, at)) = found
+                && self.synced
+                && self.apply_found(tip, at).await
+            {
+                self.wanted = None;
+                continue;
+            }
+            if let Some((tip, _)) = found {
+                self.wanted = Some(tip);
+            }
+            if let (Some(t), Some(w)) = (self.read(Mempool::tip), self.wanted)
+                && reached(t, w)
+            {
+                self.wanted = None;
+            }
+            let forced = forced || self.wanted.is_some();
             let started = Instant::now();
             let bytes = self.source.bytes();
             let info = self.source.mempool_info().await;
@@ -415,6 +479,101 @@ impl<S: Source> Poller<S> {
         let _ = self.shared.events.send(e);
     }
 
+    /// Applies the announced block `found` (at `at`) from its transaction list. Returns true when
+    /// that is all the moment needs: the new tip extends the chain the model was on.
+    async fn apply_found(&mut self, found: ChainTip, at: Instant) -> bool {
+        let started = Instant::now();
+        let bytes = self.source.bytes();
+        let mut stats = CycleStats::default();
+        let Ok((tip, at)) = self.served_tip(found, at, &mut stats).await else {
+            return false;
+        };
+        let old = self.read(Mempool::tip);
+        let Ok(fetched) = self.recent_blocks(tip).await else {
+            return false;
+        };
+        stats.blocks = fetched;
+        stats.calls += fetched;
+        let removed = self.read(|m| m.classify(&m.ruled_out(&self.blocks), &[], &self.blocks));
+        for (_, r) in &removed {
+            match r {
+                Removal::Confirmed { .. } => stats.confirmed += 1,
+                Removal::Replaced { .. } => stats.replaced += 1,
+                Removal::Evicted => stats.evicted += 1,
+            }
+        }
+        let mut state = self
+            .shared
+            .state
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !removed.is_empty() || state.tip() != Some(tip) {
+            let replaced = removed
+                .iter()
+                .filter(|(_, r)| matches!(r, Removal::Replaced { .. }))
+                .filter_map(|(t, _)| Some((*t, state.get(t)?.clone())))
+                .collect();
+            let delta = Delta {
+                seq: state.seq() + 1,
+                mempool_sequence: state.mempool_sequence(),
+                tip,
+                added: Vec::new(),
+                removed,
+                replaced,
+            };
+            state.apply(&delta);
+            stats.seq = Some(delta.seq);
+            // Sent under the write lock, so a subscriber's snapshot and its first delta meet.
+            let _ = self.shared.deltas.send(Arc::new(delta));
+        }
+        stats.size = state.len();
+        stats.mempool_sequence = state.mempool_sequence();
+        drop(state);
+        stats.tip = Some(tip);
+        stats.since_found = Some(at.elapsed());
+        stats.duration = started.elapsed();
+        stats.bytes = self.source.bytes().saturating_sub(bytes);
+        self.totals.0 += stats.bytes;
+        self.totals.1 += stats.calls;
+        self.emit(Event::Block(stats));
+        // A reorg, or more blocks than the window: transactions may have come back.
+        old.is_none_or(|o| self.blocks.iter().any(|b| b.hash == o.hash))
+    }
+
+    /// The node's tip once its Esplora serves `found` (announced at `at`) or a later block, read
+    /// every [`FOUND_RETRY`] for at most [`FOUND_WAIT`], with when the block waited for was
+    /// announced.
+    async fn served_tip(
+        &self,
+        mut found: ChainTip,
+        mut at: Instant,
+        stats: &mut CycleStats,
+    ) -> Result<(ChainTip, Instant), SourceError> {
+        let deadline = Instant::now() + FOUND_WAIT;
+        loop {
+            let asked = Instant::now();
+            let tip = self.source.tip().await?;
+            stats.calls += 1;
+            if reached(tip, found) {
+                return Ok((tip, at));
+            }
+            if asked >= deadline {
+                return Err(SourceError::Failed("announced block not served".into()));
+            }
+            tokio::time::sleep_until(asked + FOUND_RETRY).await;
+            // A newer announcement (another block, or a reorg away from this one) is waited for
+            // instead: this one may never be served. It stays queued, so the loop still takes it.
+            if let Some(newer) = *self
+                .shared
+                .found
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+            {
+                (found, at) = newer;
+            }
+        }
+    }
+
     /// One listing, diffed and published. On error nothing is published.
     async fn cycle(&mut self, info: MempoolInfo) -> Result<CycleStats, SourceError> {
         let mut stats = CycleStats::default();
@@ -430,7 +589,16 @@ impl<S: Source> Poller<S> {
         stats.blocks = self.recent_blocks(tip).await?;
         stats.calls += stats.blocks;
 
-        let (diff, keys) = self.read(|m| (m.diff(&listing.txids), m.keys().clone()));
+        let (mut diff, keys) = self.read(|m| (m.diff(&listing.txids), m.keys().clone()));
+        // A block can land between the listing and the tip read: what the new blocks rule out
+        // leaves now, though the listing still had it, so no delta on a new tip says otherwise.
+        let moved = self.read(Mempool::tip) != Some(tip);
+        if moved {
+            diff.removed
+                .extend(self.read(|m| m.ruled_out(&self.blocks)));
+            diff.removed.sort_unstable();
+            diff.removed.dedup();
+        }
         self.pending
             .retain(|t, _| diff.added.binary_search(t).is_ok());
         let need: Vec<Txid> = diff
@@ -443,11 +611,14 @@ impl<S: Source> Poller<S> {
         stats.calls += calls;
         stats.vanished = vanished;
 
-        let added: Vec<(Txid, TxInfo)> = diff
+        let mut added: Vec<(Txid, TxInfo)> = diff
             .added
             .iter()
             .filter_map(|t| Some((*t, self.pending.remove(t)?)))
             .collect();
+        if moved {
+            self.read(|m| m.rule_out_added(&mut added, &diff.removed, &self.blocks));
+        }
         let removed = self.read(|m| m.classify(&diff.removed, &added, &self.blocks));
         for (_, r) in &removed {
             match r {
