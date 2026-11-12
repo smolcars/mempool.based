@@ -26,8 +26,8 @@ import { EMPTY_MODEL, type ProjectionModel, receive } from "./projection";
 const MEMPOOL_MS = 10_000;
 const RECENT_MS = 5_000;
 /**
- * A server starting up sends nothing until its first mempool cycle (about 10 s on mainnet): poll
- * if the topics are silent this long after the socket is up.
+ * A server starting up sends nothing until its first mempool cycle (about 10 s on mainnet): a panel
+ * whose topic has sent nothing this long after the page opened is polled until it does.
  */
 export const TOPIC_GRACE_MS = 5_000;
 
@@ -50,14 +50,9 @@ export function createLiveMempool(network: Network, status: Accessor<LiveStatus>
   const grace = setTimeout(() => setSilent(true), TOPIC_GRACE_MS);
   onCleanup(() => clearTimeout(grace));
 
-  const heard = () => {
-    clearTimeout(grace);
-    setSilent(false);
-  };
   // A topic is off for every topic at once (one setting per network), so any `off` counts.
   useTopic(mempoolTopic, {
     message: (m) => {
-      heard();
       setOff(m.type === "off");
       if (m.type === "mempool") setState(m);
     },
@@ -67,7 +62,6 @@ export function createLiveMempool(network: Network, status: Accessor<LiveStatus>
   });
   useTopic(transactionsTopic, {
     message: (m) => {
-      heard();
       setOff(m.type === "off");
       if (m.type === "transactions") setSeen(m);
     },
@@ -77,7 +71,6 @@ export function createLiveMempool(network: Network, status: Accessor<LiveStatus>
   });
   useTopic(projectedTopic, {
     message: (m) => {
-      heard();
       setOff(m.type === "off");
       setProjection((p) => receive(p, m, Date.now()));
     },
@@ -87,21 +80,23 @@ export function createLiveMempool(network: Network, status: Accessor<LiveStatus>
   });
 
   const live = () => status() === "live" && !off();
-  const polling = () =>
-    off() || status() === "reconnecting" || status() === "offline" || (!state() && silent());
+  const down = () => off() || status() === "reconnecting" || status() === "offline";
+  // A topic sends only when its state changes, so silence after its first state is not a fault:
+  // the server says `stale` when it loses its node. Silence before it is a server still starting.
+  const polling = () => down() || (!state() && silent()) || (!seen() && silent());
   const polledMempool = createPoll<MempoolSummary>(
     network,
     "/mempool",
     MEMPOOL_MS,
     isMempoolSummary,
-    polling,
+    () => down() || (!state() && silent()),
   );
   const polledRecent = createPoll<RecentTx[]>(
     network,
     "/mempool/recent",
     RECENT_MS,
     isRecentList,
-    polling,
+    () => down() || (!seen() && silent()),
   );
 
   // The socket's state wins while it is live; otherwise the newer of the two.

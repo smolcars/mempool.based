@@ -410,6 +410,12 @@ describe("the tiles' fee facts", () => {
     });
     expect(t.querySelector(".home-tile__fee")?.textContent).toBe("0.50 sat/vB");
     expect(t.querySelector(".strata--settle")).not.toBeNull();
+    // The other tiles keep their layers' elements, so they do not settle in a second time.
+    const older = tile(el, 10)?.querySelector(".strata__layer");
+    expect(older).not.toBeNull();
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(12) });
+    ws.receive({ topic: "blocks", type: "summary", summary: facts(fakeBlock(12).id) });
+    expect(tile(el, 10)?.querySelector(".strata__layer")).toBe(older);
     // A malformed push is ignored, and a push for a block not shown is kept for later.
     ws.receive({ topic: "blocks", type: "summary", summary: { id: fakeBlock(10).id } });
     expect(summaryRequests()).toHaveLength(1);
@@ -699,6 +705,20 @@ describe("the live mempool", () => {
     }
   });
 
+  it("polls a panel whose topic is silent, even when the other topics have spoken", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { ws } = await open(true);
+      ws.receive(projectedMsg(10));
+      ws.receive(txsMsg([1]));
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(count("/mempool")).toBe(1);
+      expect(count("/mempool/recent")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says quietly when the server has lost its node, and keeps the last state", async () => {
     const { el, ws } = await open(true);
     ws.receive(projectedMsg(10, 8, 3000, true));
@@ -775,6 +795,7 @@ describe("the projected tiles", () => {
     expect(projectedTiles(el).map((t) => t.dataset["key"])).toStrictEqual(["12", "13", "14", "15"]);
     const mined = tile(el, 11) as HTMLElement;
     expect(mined.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
+    expect(mined.querySelector(".home-tile__foot")?.textContent).toContain("~3\u202F000 tx");
     expect(mined.querySelector(".home-tile__guess")).not.toBeNull();
     ws.receive({ topic: "blocks", type: "summary", summary: facts(fakeBlock(11).id) });
     await vi.waitFor(() =>
@@ -782,12 +803,20 @@ describe("the projected tiles", () => {
     );
     expect(mined.querySelector(".home-tile__guess--gone")).not.toBeNull();
     expect(mined.querySelector(".strata--morph")).not.toBeNull();
+    expect(mined.querySelector(".home-tile__foot")?.textContent).toContain("1 tx");
     // The new projection arrives: same places, its own figures.
     ws.receive(projectedMsg(11, 8));
     expect(projectedTiles(el).map((t) => t.dataset["key"])).toStrictEqual(["12", "13", "14", "15"]);
     expect(el.querySelector('[aria-live="polite"]')?.textContent).toBe(
       "Block 11 mined: 1 transaction.",
     );
+    // A refetch draws the tile afresh, settled: what was projected is not shown again.
+    blocksServed = chain(4, 13);
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
+    await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
+    const redrawn = tile(el, 11) as HTMLElement;
+    expect(redrawn.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB");
+    expect(redrawn.querySelector(".home-tile__guess")).toBeNull();
   });
 
   it("when the projection comes before its block, the old next tile still crosses", async () => {

@@ -15,7 +15,7 @@ import {
 } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
-import { Strata, strataLayers } from "../../components/Strata";
+import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { useNow } from "../../lib/clock";
 import type { Block } from "../../lib/esplora";
@@ -43,7 +43,7 @@ import {
   releaseIn,
   sameTiles,
 } from "./projection";
-import { ProjectedTile, projectedLayers, TILE_LAYER_MIN } from "./ProjectedTile";
+import { ProjectedTile, projectedLayers, sameLayers, TILE_LAYER_MIN } from "./ProjectedTile";
 import type { TileFacts } from "./summaries";
 
 const MAX_WEIGHT = 4_000_000;
@@ -418,6 +418,12 @@ export function BlockStrip(props: {
     return tip ? formatRelative(tip.timestamp, now(), { suffix: false }) : undefined;
   };
   const keys = createMemo(() => view().tiles.map((t) => t.key));
+  /** A crossing's projection is for the tile drawn for it, once: a refetch redraws it settled. */
+  const take = (id: string) => {
+    const p = provisional.get(id);
+    provisional.delete(id);
+    return p;
+  };
   const tileAt = (key: number) => () => view().tiles.find((t) => t.key === key);
   const note = () => {
     const v = view();
@@ -508,7 +514,7 @@ export function BlockStrip(props: {
                         block={b}
                         now={now}
                         facts={props.facts(b.id)}
-                        provisional={provisional.get(b.id)}
+                        provisional={take(b.id)}
                       />
                     )}
                   </For>
@@ -567,10 +573,16 @@ function MinedTile(props: {
   // facts it was drawn with are simply there.
   const settle = untrack(() => props.facts === undefined) && !guess;
   const rates = () => summary()?.fee_rate ?? undefined;
-  const layers = createMemo(() => {
-    const s = summary();
-    return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
-  });
+  // Any summary arriving re-reads every tile's facts; unchanged layers keep their elements, so a
+  // tile that settled in once does not settle again.
+  const layers = createMemo<Layer[]>(
+    () => {
+      const s = summary();
+      return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
+    },
+    [],
+    { equals: sameLayers },
+  );
   const label = () =>
     [
       `Block ${groupDigits(b().height)}`,
@@ -636,7 +648,11 @@ function MinedTile(props: {
           </Show>
         </span>
         <span class="home-tile__foot">
-          <span class="num">{groupDigits(b().tx_count)} tx</span>
+          <span class="num">
+            {guessing() && projected
+              ? `~${groupDigits(projected.txs)} tx`
+              : `${groupDigits(b().tx_count)} tx`}
+          </span>
           <time class="num" datetime={isoTime(b().timestamp)} title={formatUtc(b().timestamp)}>
             {tileAge(b().timestamp, props.now())}
           </time>

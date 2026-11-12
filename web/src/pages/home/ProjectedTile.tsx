@@ -25,7 +25,8 @@ export function projectedLabel(t: Tile, network: Network): string {
   return `${title}, projected: ${txs}, median fee about ${formatFeeRate(t.medianRate)} sat/vB, fee range ${formatFeeRate(t.minRate)} to ${formatFeeRate(t.maxRate)} sat/vB`;
 }
 
-const sameLayers = (a: readonly Layer[], b: readonly Layer[]) =>
+/** Whether two sets of layers draw the same, so their elements (and any settling) can stay. */
+export const sameLayers = (a: readonly Layer[], b: readonly Layer[]) =>
   a.length === b.length &&
   a.every((l, i) => {
     const m = b[i];
