@@ -103,7 +103,8 @@ The proxy must **overwrite** the header (or append to it), never pass on what th
 ```nginx
 # nginx, in the location that proxies to the server
 proxy_set_header X-Real-IP $remote_addr;          # overwrites anything the client sent
-proxy_set_header Host $host;                      # the WebSocket origin check compares against it
+proxy_set_header Host $http_host;                 # as the browser sent it, port included: the
+                                                  # WebSocket origin check compares against it
 proxy_http_version 1.1;
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";

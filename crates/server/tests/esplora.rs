@@ -670,3 +670,56 @@ async fn heavy_routes_have_a_cost_limit_that_outlives_the_request() {
     assert_eq!(heavy(9, 10).await.unwrap().status, 504);
     assert_eq!(address_calls(&seen), 5);
 }
+
+#[tokio::test]
+async fn a_heavy_call_outlives_its_first_request_without_being_repeated() {
+    use mempool_based::config::{IpNet, TrustedProxy};
+    // The node takes 3 s per answer; our requests give up after 1 s.
+    let (url, seen) = mock(Duration::from_secs(3)).await;
+    let mut c = config(&url, false);
+    c.limits.request_timeout = Duration::from_secs(1);
+    c.limits.client_requests = 24;
+    c.limits.trusted_proxy = Some(TrustedProxy {
+        header: "x-real-ip".parse().unwrap(),
+        proxies: vec![IpNet::parse("127.0.0.1").unwrap()],
+    });
+    let app = App::new(&c);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    let heavy = |client: u8, n: u32| {
+        let addr = addr.clone();
+        tokio::spawn(async move {
+            let line = format!("GET /api/address/{MAIN}?asof={n:064x}");
+            send(
+                &addr,
+                &line,
+                &format!("X-Real-IP: 192.0.2.{client}\r\n"),
+                b"",
+            )
+            .await
+        })
+    };
+    let calls = |seen: &Seen| {
+        hits(seen)
+            .iter()
+            .filter(|p| p.starts_with("/address/"))
+            .count()
+    };
+
+    let first = heavy(1, 1);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Joins the running call, then outlives the request that started it.
+    let follower = heavy(2, 1);
+    assert_eq!(first.await.unwrap().status, 504);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        calls(&seen),
+        1,
+        "the follower must not start the call again"
+    );
+    assert_eq!(follower.await.unwrap().status, 504);
+    // With no request left, the call still runs and is still joined, not repeated.
+    assert_eq!(heavy(3, 1).await.unwrap().status, 504);
+    assert_eq!(calls(&seen), 1);
+}
