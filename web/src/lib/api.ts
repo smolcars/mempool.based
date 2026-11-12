@@ -239,9 +239,9 @@ export function retryDelay(
     !(error instanceof ApiError) ||
     (error.status !== 503 && error.status !== 429) ||
     exhausted.has(error) ||
-    // Every 503 carries Retry-After, but these two refusals are about the address and the server's
-    // setup, which a retry cannot change (docs/API.md, "Error bodies").
-    /too large|index is disabled/i.test(error.message)
+    // Every 503 carries Retry-After, but these refusals are about the address and the server's
+    // setup, which a retry cannot change (docs/API.md, "Error bodies" and "Mining").
+    /too large|index is disabled|needs a block table/i.test(error.message)
   ) {
     return undefined;
   }

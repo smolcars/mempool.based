@@ -8,7 +8,7 @@ import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
-import { ApiError, fetchApi, isNotFound, withRetry } from "../../lib/api";
+import { ApiError, fetchApi, isNotFound } from "../../lib/api";
 import { groupDigits, MISSING } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
@@ -263,16 +263,17 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
       setMoreError(e);
       setMore("failed");
     };
-    withRetry(() =>
-      fetchApi<unknown>(props.network, `/v1/mining/pool/${props.slug}/blocks/${last.height}`),
-    ).then((v) => {
-      if (!isPoolBlocks(v)) {
-        fail(new ApiError(200, "The server sent a reply that could not be read."));
-        return;
-      }
-      setOlder((o) => [...o, ...v]);
-      setMore(v.length < PAGE ? "done" : "idle");
-    }, fail);
+    fetchApi<unknown>(props.network, `/v1/mining/pool/${props.slug}/blocks/${last.height}`).then(
+      (v) => {
+        if (!isPoolBlocks(v)) {
+          fail(new ApiError(200, "The server sent a reply that could not be read."));
+          return;
+        }
+        setOlder((o) => [...o, ...v]);
+        setMore(v.length < PAGE ? "done" : "idle");
+      },
+      fail,
+    );
   };
   const exhausted = () => more() === "done" || (first.answer()?.value.length ?? 0) < PAGE;
   return (

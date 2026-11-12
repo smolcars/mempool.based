@@ -1,6 +1,6 @@
 // Loading a mining route: retried while the server is not ready, checked, with its coverage.
 import { type Accessor, createEffect, createSignal, on, onCleanup } from "solid-js";
-import { ApiError, type Coverage, fetchStamped, withRetry } from "../../lib/api";
+import { ApiError, type Coverage, fetchStamped } from "../../lib/api";
 import type { Network } from "../../lib/network";
 
 /** The server keeps no block table, so it has no mining history at all (docs/API.md "Mining"). */
@@ -30,7 +30,8 @@ export interface MiningData<T> {
 
 /**
  * One mining route on the page's network, fetched again whenever `path` changes. Return
- * undefined from `path` to wait. A 503 before the server's first answer is retried as it says.
+ * undefined from `path` to wait. A 503 before the server's first answer is retried as it says
+ * (`lib/api.ts`).
  */
 export function createMiningData<T>(
   network: Accessor<Network>,
@@ -50,14 +51,8 @@ export function createMiningData<T>(
     const c = new AbortController();
     controller = c;
     setLoading(true);
-    withRetry(
-      () =>
-        fetchStamped<unknown>(n, p, { signal: c.signal }).catch((e: unknown) => {
-          // Not retried: a server without a table will not grow one.
-          throw isNoTable(e) ? new NoHistoryError() : e;
-        }),
-      c.signal,
-    ).then(
+    // Busy refusals are retried inside; a server without a table is not, since it will not grow one.
+    fetchStamped<unknown>(n, p, { signal: c.signal }).then(
       (r) => {
         if (c.signal.aborted) return;
         setLoading(false);
@@ -69,7 +64,7 @@ export function createMiningData<T>(
       (e: unknown) => {
         if (c.signal.aborted) return;
         setLoading(false);
-        setError(e);
+        setError(isNoTable(e) ? new NoHistoryError() : e);
       },
     );
   };
