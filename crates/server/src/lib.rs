@@ -55,6 +55,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 pub use config::{Config, Limits, Network, NetworkConfig, WsLimits};
 pub use error::ApiError;
 use limits::Limiter;
+pub use serve::bind;
 
 /// Sent on every response. The CSP is SECURITY.md rule 15.
 pub const SECURITY_HEADERS: [(HeaderName, &str); 4] = [

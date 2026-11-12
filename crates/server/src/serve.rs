@@ -17,7 +17,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Sleep;
 use tower::ServiceExt;
@@ -61,6 +61,24 @@ impl Early {
             Err((refused, _)) => Err(crate::refused_early(path, refused)),
         }
     }
+}
+
+/// The listen queue asked for. The kernel cuts it to the host's own cap (`net.core.somaxconn` on
+/// Linux, `kern.ipc.somaxconn` on macOS), so that setting decides; tokio's `bind` asks for 128.
+const BACKLOG: u32 = 65_535;
+
+/// Binds `addr` with the longest listen queue the host allows, so a burst of connections, such as
+/// every open page reconnecting after a restart, waits in the queue instead of being dropped.
+pub fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }?;
+    // As std and tokio's `bind` do on Unix: a restart can bind while old connections linger.
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
 }
 
 /// Largest request head (request line and headers) a client may send.
@@ -239,5 +257,35 @@ impl AsyncWrite for WriteDeadline {
         let this = self.get_mut();
         let poll = Pin::new(&mut this.io).poll_shutdown(cx);
         this.watch(cx, poll)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// More clients than tokio's default queue of 128 connect while nothing accepts: each
+    /// handshake completes in the queue. With a queue of 128 the 130th is dropped and retried a
+    /// second later.
+    #[tokio::test]
+    async fn a_burst_waits_in_the_listen_queue() {
+        let cap: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let listener = bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut held = Vec::new();
+        for i in 0..cap.min(512) {
+            let connect =
+                tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr));
+            let stream = connect
+                .await
+                .unwrap_or_else(|_| panic!("connection {i} was dropped"));
+            held.push(stream.unwrap());
+        }
     }
 }
