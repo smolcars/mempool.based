@@ -23,13 +23,13 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | done ([#9](https://github.com/smolcars/mempool.based/pull/9)) |
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | doing |
-| W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | doing |
+| W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | done ([#11](https://github.com/smolcars/mempool.based/pull/11)) |
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | todo |
 | W3 | Block page: header details, paged transaction list | W1, S2 | todo |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | todo |
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | todo |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
-| E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget | F0, R2 | todo |
+| E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | doing |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 | L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | doing |
