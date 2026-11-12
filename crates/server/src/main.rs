@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mempool_based::{Config, router};
+use mempool_based::{App, Config};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -25,15 +25,13 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("listening on http://{}", config.listen);
-    let app = router(&config.web_dir);
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-    {
-        eprintln!("error: {e}");
-        return ExitCode::FAILURE;
+    let names: Vec<&str> = config.networks.iter().map(|n| n.network.name()).collect();
+    if names.is_empty() {
+        eprintln!("warning: no network is configured; only the frontend and /healthz are served");
     }
+    let bound = listener.local_addr().unwrap_or(config.listen);
+    eprintln!("listening on http://{bound} for {}", names.join(", "));
+    App::new(&config).serve(listener, shutdown_signal()).await;
     ExitCode::SUCCESS
 }
 
