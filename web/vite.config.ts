@@ -38,7 +38,19 @@ export default defineConfig({
   // happy-dom gives component tests a DOM; pure-logic tests run in it unchanged.
   test: { environment: "happy-dom" },
   // No data: URIs, so the strict CSP (default-src 'self') holds for every asset.
-  build: { assetsInlineLimit: 0 },
+  build: {
+    assetsInlineLimit: 0,
+    rolldownOptions: {
+      output: {
+        // The live channel, the topics the home page reads and what they import (Solid's runtime
+        // among it) travel as one file: the transaction and address pages share only part of it,
+        // which would otherwise split it into several small files on the first load.
+        codeSplitting: {
+          groups: [{ name: "app", test: /\/src\/lib\/(live|blocks-topic|projected-topic)\.ts$/ }],
+        },
+      },
+    },
+  },
   server: {
     // The tokens and font live in design/, beside web/.
     fs: { allow: [".."] },

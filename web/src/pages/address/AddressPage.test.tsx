@@ -1,8 +1,9 @@
 import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
 import { render } from "solid-js/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import type { AddressStats, Transaction, Utxo } from "../../lib/esplora";
+import { FakeSocket } from "../../lib/fakes";
 import { NNBSP } from "../../lib/format";
 import AddressPage from "./AddressPage";
 
@@ -15,7 +16,13 @@ type Handler = (url: string) => Response | Promise<Response>;
 type Reply = Handler | object | string | number;
 let calls: string[] = [];
 
+const disposers: (() => void)[] = [];
+beforeEach(() => {
+  FakeSocket.all = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
+});
 afterEach(() => {
+  for (const d of disposers.splice(0)) d();
   vi.unstubAllGlobals();
   clearApiCache();
   calls = [];
@@ -43,16 +50,27 @@ function open(url: string) {
   history.set({ value: url });
   const el = document.createElement("div");
   document.body.append(el);
-  render(
-    () => (
-      <MemoryRouter history={history}>
-        <Route path={["/address/:address", "/:net/address/:address"]} component={AddressPage} />
-      </MemoryRouter>
+  disposers.push(
+    render(
+      () => (
+        <MemoryRouter history={history}>
+          <Route path={["/address/:address", "/:net/address/:address"]} component={AddressPage} />
+        </MemoryRouter>
+      ),
+      el,
     ),
-    el,
   );
   return el;
 }
+
+/** The server says where the address's history stands: a new status means it changed. */
+function heard(m: object) {
+  const ws = FakeSocket.last();
+  if (!ws.sent.some((x) => (x as { op?: string }).op === "subscribe"))
+    ws.hello({ network: "mainnet" });
+  ws.receive({ topic: `address:${ME}`, type: "address", ...m });
+}
+const status = (s: string | null) => heard({ state: "watching", status: s });
 
 const text = (el: Element) => el.textContent ?? "";
 const until = (fn: () => void) => vi.waitFor(fn, { timeout: 2000 });
@@ -180,7 +198,7 @@ describe("address page", () => {
     expect([...el.querySelectorAll("button")].some((b) => text(b) === "Show 25 more")).toBe(false);
   });
 
-  it("refreshes the first page when the tab regains focus and flashes what is new", async () => {
+  it("refreshes when the address's history changes, and flashes what is new", async () => {
     let page = [tx(1, [[OTHER, 2000]], [[ME, 1000]])];
     serve({
       [`/address/${ME}`]: () => Response.json(stats()),
@@ -188,18 +206,94 @@ describe("address page", () => {
     });
     const el = open(`/address/${ME}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
+    expect(FakeSocket.last().url).toContain("/app/ws");
+    const asked = () => calls.filter((c) => c.endsWith("/txs")).length;
+    // The history loaded before the node watched the address: one more look after the first status.
+    status("s1");
+    await until(() => expect(asked()).toBe(2));
+    expect(text(el.querySelector(".address-live") as Element)).toBe("Live");
+    // The same status again is no change.
+    status("s1");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(asked()).toBe(2);
     page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
-    // Focus within the gap is ignored; after it, the page asks again.
-    window.dispatchEvent(new Event("focus"));
-    expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(1);
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now + 10_000);
-    window.dispatchEvent(new Event("focus"));
+    status("s2");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2));
     const rows = el.querySelectorAll("tbody tr");
     expect(rows[0]?.classList.contains("address-row--new")).toBe(true);
     expect(rows[1]?.classList.contains("address-row--new")).toBe(false);
-    vi.restoreAllMocks();
+    // Leaving the page lets the topic go: the last subscriber gone, the socket closes.
+    for (const d of disposers.splice(0)) d();
+    expect(FakeSocket.last().closedWith).toBe(1000);
+  });
+
+  it("asks again for a change heard while the last one is still being fetched", async () => {
+    let page = [tx(1, [[OTHER, 2000]], [[ME, 1000]])];
+    let release: (() => void) | undefined;
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats()),
+      [`/address/${ME}/txs`]: async () => {
+        const answer = page;
+        if (release === undefined && page.length === 2) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return Response.json(answer);
+      },
+    });
+    const el = open(`/address/${ME}`);
+    status("s1");
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
+    page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
+    status("s2"); // its answer is held back
+    await until(() => expect(release).toBeDefined());
+    page = [tx(3, [[OTHER, 9000]], [[ME, 7000]], false), ...page];
+    status("s3"); // heard while s2's answer is still on its way
+    release?.();
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
+  });
+
+  it("asks again when the address index has not caught up with the change yet", async () => {
+    const old = [tx(1, [[OTHER, 2000]], [[ME, 1000]])];
+    let served = 0;
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats()),
+      // The index answers with the old history once more after the status changed.
+      [`/address/${ME}/txs`]: () =>
+        Response.json(++served < 3 ? old : [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...old]),
+    });
+    const el = open(`/address/${ME}`);
+    status("s1");
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
+    status("s2");
+    await vi.waitFor(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2), {
+      timeout: 3000,
+    });
+    expect(served).toBe(3);
+  });
+
+  it("says, without alarm, when the page cannot update itself", async () => {
+    serve({ [`/address/${ME}`]: stats(), [`/address/${ME}/txs`]: [] });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("This address has never been used"));
+    expect(el.querySelector(".address-live")).toBeNull();
+    heard({ state: "refused", reason: "too_large" });
+    await until(() => expect(text(el)).toContain("too much history for the node to watch"));
+    heard({ state: "refused", reason: "server_full" });
+    await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
+    heard({ type: "refused", reason: "server_full" });
+    await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
+    heard({ state: "unavailable" });
+    await until(() => expect(text(el)).toContain("lost touch with its node"));
+    heard({ state: "refused", reason: "no_index" });
+    await until(() => expect(el.querySelector(".address-live")).toBeNull());
+    status("s1");
+    FakeSocket.last().drop(1006);
+    await until(() => expect(text(el)).toContain("The live connection dropped."));
+    expect(el.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("keeps a transaction a refresh pushes off the first page", async () => {
@@ -219,12 +313,11 @@ describe("address page", () => {
     [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
     firstPage = range(0, 24);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
-    window.dispatchEvent(new Event("focus"));
+    status("before");
+    status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
     const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
     expect(ids).toStrictEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
-    vi.restoreAllMocks();
   });
 
   it("drops a page that arrives after a refresh replaced the rows it continues", async () => {
@@ -247,8 +340,8 @@ describe("address page", () => {
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
     // Thirty new transactions arrive while the page request is in flight.
     firstPage = range(1, 25);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
-    window.dispatchEvent(new Event("focus"));
+    status("before");
+    status(`after ${String(firstPage.length)}`);
     await until(() =>
       expect(el.querySelector("tbody tr a")?.getAttribute("href")).toBe(`/tx/${txid(1)}`),
     );
@@ -258,7 +351,34 @@ describe("address page", () => {
     );
     const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
     expect(ids).toStrictEqual(range(1, 25).map((t) => `/tx/${t.txid}`));
-    vi.restoreAllMocks();
+  });
+
+  it("keeps a page on its way through a refresh that changed nothing", async () => {
+    let reorder = false;
+    const conf = (n: number) => tx(n, [[OTHER, 2000]], [[ME, 1000]]);
+    const range = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => conf(from + i));
+    let release: (r: Response) => void = () => {};
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 50))),
+      [`/address/${ME}/txs`]: () =>
+        Response.json(reorder ? [conf(2), conf(1), ...range(3, 25)] : range(1, 25)),
+      [`/address/${ME}/txs?after_txid=${txid(25)}`]: () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
+    await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
+    // The first status, which the page answers with one more look: the same history, though the
+    // node lists it in another order.
+    reorder = true;
+    status("s1");
+    await until(() => expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(2));
+    release(Response.json(range(26, 50)));
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
   });
 
   it("drops a page that arrives after a refresh, even when the last row is unchanged", async () => {
@@ -281,8 +401,8 @@ describe("address page", () => {
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
     // A reorg leaves only transaction 55: the whole history is now one row, the same last row.
     firstPage = [conf(55)];
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
-    window.dispatchEvent(new Event("focus"));
+    status("before");
+    status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     release(Response.json(range(56, 80)));
     // The reply has nothing on screen to wait for, so give it time to land.
@@ -290,7 +410,6 @@ describe("address page", () => {
       setTimeout(resolve, 50);
     });
     expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1);
-    vi.restoreAllMocks();
   });
 
   it("says plainly when an address has never been used", async () => {

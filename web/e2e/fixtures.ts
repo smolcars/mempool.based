@@ -31,6 +31,7 @@ export const test = base.extend<{
   consoleErrorsAllowed: RegExp[];
   noConsoleErrors: undefined;
   regtestRpc: RegtestRpc | null;
+  rpc: <T>(method: string, params?: unknown[]) => Promise<T>;
   mine: (blocks: number) => Promise<string[]>;
 }>({
   regtestRpc: [null, { option: true }],
@@ -45,8 +46,9 @@ export const test = base.extend<{
   // Mines blocks on the run's node and returns their hashes. Only `*.mine.e2e.ts` files may: they
   // run after every other test, so no test ever sees the chain change under it. Before such a test
   // starts, the server must have caught up with the blocks earlier ones mined.
-  mine: async ({ browser, baseURL, extraHTTPHeaders, request, regtestRpc }, use, testInfo) => {
-    const rpc = async <T>(method: string, params: unknown[] = []): Promise<T> => {
+  // The run's node's JSON-RPC, for tests that change the chain; only `*.mine.e2e.ts` files may.
+  rpc: async ({ request, regtestRpc }, use) => {
+    await use(async <T>(method: string, params: unknown[] = []): Promise<T> => {
       if (!regtestRpc) {
         throw new Error('only *.mine.e2e.ts tests may mine (docs/FRONTEND.md "Browser tests")');
       }
@@ -57,7 +59,9 @@ export const test = base.extend<{
       const body = (await res.json()) as { result: T | null; error: unknown };
       if (body.result === null) throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
       return body.result;
-    };
+    });
+  },
+  mine: async ({ browser, baseURL, extraHTTPHeaders, rpc, regtestRpc }, use, testInfo) => {
     if (regtestRpc) {
       const tip = await rpc<string>("getbestblockhash");
       const ms = await caughtUp(browser, baseURL ?? "", extraHTTPHeaders ?? {}, tip);

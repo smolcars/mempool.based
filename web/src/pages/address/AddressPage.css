@@ -331,4 +331,42 @@
       display: none;
     }
   }
+
+  /* ---- Whether the page updates itself ---- */
+  .address-live {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--space-2);
+    margin-top: calc(-1 * var(--space-3));
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .address-live__label {
+    font-weight: var(--weight-medium);
+  }
+  .address-live__icon {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    overflow: visible;
+    fill: none;
+    stroke: var(--color-text-muted);
+    stroke-width: 1.4;
+  }
+  .address-live--on .address-live__icon {
+    fill: var(--color-positive);
+    stroke: none;
+    animation: address-breathe 2.4s var(--ease-in-out) infinite;
+  }
+  @keyframes address-breathe {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .address-live--on .address-live__icon {
+      animation: none;
+    }
+  }
 }
