@@ -32,6 +32,7 @@ mempool.based is a block explorer built for rbitcoin v0.9.2. Read [`docs/ARCHITE
 - **Dependencies are a cost.** Each one adds build time and another party to trust. Do not add one for something a few lines can do: write the function. A new dependency, Rust or JavaScript, needs a case in the PR: what it does, why writing it ourselves is unreasonable, how many crates or packages it pulls in, and its features trimmed to the minimum. Prefer the standard library and what is already in the tree.
 - **Logging is structured.** Server and library code records what happened as typed events through the `logging` crate ([`docs/LOGGING.md`](docs/LOGGING.md)). No `println!`, `eprintln!`, `dbg!` or free-text message strings scattered through the code. When something is worth recording, add an event with named fields; when it is not, do not log it.
 - **Ports:** never hardcode a port in a test or script. Bind port 0 or take the port from the environment, because several agents work on one machine at once.
+- **Processes and containers:** stop only what you started, by its process id or container name. Never kill by a name pattern (`pkill`, `killall`): it also matches other builders' servers on the same machine.
 - **Fixtures:** small, public chain data only, under `fixtures/`.
 - **Comments:** explain why, in one line, when the code cannot.
 
