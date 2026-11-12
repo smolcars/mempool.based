@@ -4,6 +4,9 @@
 !Cargo.lock
 !crates/
 !web/
+!design/tokens.css
+!design/logo.svg
+!design/fonts/
 web/node_modules/
 web/dist/
 web/test-results/

@@ -15,6 +15,9 @@ WORKDIR /src/web
 COPY web/package.json web/bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
 COPY web/ ./
+# The app imports its tokens, logo and font from design/, beside web/.
+COPY design/tokens.css design/logo.svg /src/design/
+COPY design/fonts/ /src/design/fonts/
 RUN bun run build
 
 FROM ${RUST_IMAGE} AS server
