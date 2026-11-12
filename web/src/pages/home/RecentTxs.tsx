@@ -6,7 +6,7 @@ import { Hash } from "../../components/Hash";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import type { RecentTx } from "../../lib/esplora";
-import { feeRate, groupDigits } from "../../lib/format";
+import { feeRate, formatSize } from "../../lib/format";
 import { paths } from "../../lib/network";
 import type { Feed } from "./feeds";
 import { enqueueTxs } from "./mempool";
@@ -32,10 +32,11 @@ const COLUMNS: Column<RecentTx | null>[] = [
       ),
   },
   {
-    header: "Size, vB",
+    // The topic and /mempool/recent give no serialized size: this is the virtual size, in vB units.
+    header: "Virtual size",
     numeric: true,
     optional: true,
-    cell: (t) => (t ? groupDigits(t.vsize) : ""),
+    cell: (t) => (t ? formatSize(t.vsize) : ""),
   },
   {
     header: "Value, BTC",

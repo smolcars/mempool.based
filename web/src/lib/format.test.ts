@@ -7,6 +7,7 @@ import {
   feeRate,
   formatBtc,
   formatFeeRate,
+  formatFeeRatePrecise,
   formatRelative,
   formatSats,
   formatSize,
@@ -92,6 +93,22 @@ describe("BTC and sats", () => {
   it("groups sats", () => {
     expect(formatSats(167)).toBe("167");
     expect(formatSats(1_250_000)).toBe(s("1_250_000"));
+  });
+});
+
+describe("formatFeeRatePrecise", () => {
+  it("prints the node's resolution, rounding up, never down", () => {
+    expect(formatFeeRatePrecise(0.1)).toBe("0.100");
+    expect(formatFeeRatePrecise(0.101)).toBe("0.101");
+    expect(formatFeeRatePrecise(12.501)).toBe("12.501");
+    expect(formatFeeRatePrecise(0.1004)).toBe("0.101");
+    expect(formatFeeRatePrecise(Number.NaN)).toBe(MISSING);
+  });
+
+  it("bands a rate as it prints, when asked to", () => {
+    expect(feeBand(0.199)).toBe(2);
+    expect(feeBand(0.199, formatFeeRatePrecise)).toBe(1);
+    expect(feeColor(0.2, formatFeeRatePrecise)).toBe("var(--fee-2)");
   });
 });
 

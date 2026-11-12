@@ -1,5 +1,5 @@
-// What the home page computes from the mempool summary and the fee estimates.
-import type { FeeEstimates, MempoolSummary, RecentTx } from "../../lib/esplora";
+// What the home page computes from the mempool summary, and where the fee ladder puts its pins.
+import type { MempoolSummary, RecentTx } from "../../lib/esplora";
 import { FEE_BOUNDS, feeBand } from "../../lib/format";
 import type { MempoolState } from "../../lib/mempool-topics";
 
@@ -14,15 +14,6 @@ export function isMempoolSummary(v: unknown): v is MempoolSummary {
     isNum(m["total_fee"]) &&
     Array.isArray(m["fee_histogram"]) &&
     m["fee_histogram"].every((p) => Array.isArray(p) && isNum(p[0]) && isNum(p[1]))
-  );
-}
-
-export function isFeeEstimates(v: unknown): v is FeeEstimates {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    !Array.isArray(v) &&
-    Object.entries(v).every(([k, r]) => /^\d+$/.test(k) && isNum(r))
   );
 }
 
@@ -93,31 +84,6 @@ export function sharesOf(vsize: readonly number[]): FeeBandShare[] {
 /** The cheapest fee rate waiting: the last histogram entry's lower bound. */
 export function lowestRate(histogram: readonly (readonly [number, number])[]): number | undefined {
   return histogram.length > 0 ? histogram.at(-1)?.[0] : undefined;
-}
-
-/** The four priorities on the fee ladder, by confirmation target in blocks. */
-export const PRIORITIES = [
-  { name: "No rush", when: "within a day", target: 144 },
-  { name: "Low", when: "within an hour", target: 6 },
-  { name: "Medium", when: "within 30 min", target: 3 },
-  { name: "High", when: "next block", target: 1 },
-] as const;
-
-/**
- * The node's estimate for a confirmation target: the one for that target, or else for the nearest
- * shorter target it has, which asks for at least as much. Undefined when it has none that short.
- */
-export function estimateFor(estimates: FeeEstimates, target: number): number | undefined {
-  let best: number | undefined;
-  let bestTarget = 0;
-  for (const [k, rate] of Object.entries(estimates)) {
-    const t = Number(k);
-    if (t <= target && t > bestTarget) {
-      best = rate;
-      bestTarget = t;
-    }
-  }
-  return best;
 }
 
 /** The fee ladder's log scale, 0.1 to 20 sat/vB: where a rate sits, 0–1, clamped at the ends. */

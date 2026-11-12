@@ -79,6 +79,15 @@ export function formatFeeRate(rate: number): string {
   return groupDigits(rate);
 }
 
+/**
+ * A recommended fee rate at the node's resolution, 0.001 sat/vB: `0.101`, `12.501`. Rounded up,
+ * never down, so the figure shown is never less than the rate it stands for.
+ */
+export function formatFeeRatePrecise(rate: number): string {
+  if (!Number.isFinite(rate) || rate < 0) return MISSING;
+  return (Math.ceil(Number((rate * 1000).toPrecision(12))) / 1000).toFixed(3);
+}
+
 /** Fee rate in sat/vB from a fee in sats and a size in vB, or null when the size is not positive. */
 export function feeRate(feeSats: number, vsize: number): number | null {
   return vsize > 0 && Number.isFinite(feeSats) ? feeSats / vsize : null;
@@ -98,16 +107,16 @@ export const FEE_KEY_BOUNDS = [0.1, ...FEE_BOUNDS] as const;
  * The fee band (1–10) of a rate, taken from the rate as printed, so the color always agrees with
  * the number beside it: 0.1996 prints as `0.20` and takes band 2.
  */
-export function feeBand(rate: number): number {
-  const printed = Number(formatFeeRate(rate).replaceAll(NNBSP, ""));
+export function feeBand(rate: number, print: (rate: number) => string = formatFeeRate): number {
+  const printed = Number(print(rate).replaceAll(NNBSP, ""));
   if (!Number.isFinite(printed)) return 1;
   const i = FEE_BOUNDS.findIndex((bound) => printed < bound);
   return i === -1 ? 10 : i + 1;
 }
 
 /** The CSS color for a rate's band. */
-export function feeColor(rate: number): string {
-  return `var(--fee-${feeBand(rate)})`;
+export function feeColor(rate: number, print?: (rate: number) => string): string {
+  return `var(--fee-${feeBand(rate, print)})`;
 }
 
 /**

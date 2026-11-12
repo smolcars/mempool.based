@@ -99,7 +99,74 @@ test("a cold load asks for each thing once, and nothing the mempool topics send"
     JSON.stringify([...counts]),
   ).toBe(true);
   expect(counts.get("/api/blocks")).toBe(1);
-  expect(counts.get("/api/fee-estimates")).toBe(1);
   expect(counts.has("/api/mempool")).toBe(false);
   expect(counts.has("/api/mempool/recent")).toBe(false);
+  expect(counts.has("/api/v1/fees/precise")).toBe(false);
+});
+
+test("the fee panel shows what the server says now, and no number when it has none", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/regtest/");
+  const panel = page.getByRole("region", { name: "Fee to pay now" });
+  // Regtest's node makes no estimates, and the server's own wait five minutes after it starts, so
+  // this is usually no answer; compare with the route at the same moment either way.
+  await expect(async () => {
+    const res = await request.get("/regtest/api/v1/fees/precise");
+    if (res.status() === 503) {
+      await expect(panel).toContainText("No recommendation right now", { timeout: 100 });
+    } else {
+      const fees = (await res.json()) as { fastestFee: number };
+      await expect(panel).toContainText(fees.fastestFee.toFixed(3), { timeout: 100 });
+    }
+  }).toPass({ timeout: 15_000 });
+});
+
+test("the fee panel follows the fees topic: an update, the node's fallback, then none", async ({
+  page,
+}) => {
+  // The server's own answer needs five minutes of the mempool, longer than this suite: the topic's
+  // messages are played into the real socket, which carries everything else as it is.
+  let send: ((m: object) => void) | undefined;
+  await page.routeWebSocket(/\/app\/ws$/, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((m) => server.send(m));
+    server.onMessage((m) => {
+      // The server's own `fees` messages are held back, so only the played ones are seen.
+      if (typeof m === "string" && m.includes('"topic":"fees"')) return;
+      ws.send(m);
+    });
+    send = (m) => ws.send(JSON.stringify(m));
+  });
+  await page.goto("/regtest/");
+  await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible();
+  const panel = page.getByRole("region", { name: "Fee to pay now" });
+  const levels = (rates: number[], source: string) => ({
+    topic: "fees",
+    type: "fees",
+    source,
+    tip: null,
+    levels: ["high", "medium", "low", "no_rush"].map((name, i) => ({
+      name,
+      blocks: [1, 3, 6, 144][i],
+      minutes: [10, 30, 60, 1440][i],
+      rate: rates[i],
+    })),
+    min_fee_rate: 100,
+  });
+  const high = panel.getByRole("definition").last();
+
+  send?.(levels([1031, 500, 200, 100], "projected"));
+  await expect(high).toHaveText("1.031 sat/vB");
+  await expect(panel).toContainText("read from the projected blocks");
+  // The mempool filled up: the next message is the new answer.
+  send?.(levels([2501, 1031, 200, 100], "projected"));
+  await expect(high).toHaveText("2.501 sat/vB");
+  send?.(levels([3000, 1000, 500, 120], "node"));
+  await expect(high).toHaveText("3.000 sat/vB");
+  await expect(panel).toContainText("The node's own estimates");
+  send?.({ topic: "fees", type: "unavailable" });
+  await expect(panel).toContainText("No recommendation right now");
+  await expect(panel).not.toContainText("3.000");
 });

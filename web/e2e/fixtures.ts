@@ -14,12 +14,13 @@ export interface RegtestRpc {
 const MINER = "raw(00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260)";
 
 /**
- * How long the projected blocks may trail the node's tip: the mempool tracker skips full cycles
- * for up to 10 s while its probe sees no change and no tip hint came (docs/MEMPOOL.md), then the
- * mempool topics send at most every 2 s (`WS_MEMPOOL_INTERVAL_MS`); 3 s more for a busy machine.
- * A wait on it ends as soon as the page catches up, so a passing run never pays it.
+ * How long the projected blocks may trail the node. A new block's projection follows its `block`
+ * message at once, or at most 3 s later when the node is slow to serve the block (docs/WS.md "When
+ * a block is found"); a new transaction reaches it at the tracker's next cycle, at most about 1 s
+ * away, and the topic's next send, at most 2 s (`WS_MEMPOOL_INTERVAL_MS`). 3 s more for a busy
+ * machine. A wait on it ends as soon as the page catches up, so a passing run never pays it.
  */
-export const PROJECTION_LAG_MS = 15_000;
+export const PROJECTION_LAG_MS = 6_000;
 
 // Tests this worker has started, for their client addresses.
 let started = 0;
