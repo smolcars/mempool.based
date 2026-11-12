@@ -5,9 +5,10 @@
     clippy::indexing_slicing
 )]
 
+use std::collections::HashMap;
 use std::net::TcpListener as StdListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,8 @@ use lightning::bitcoin::constants::ChainHash;
 use lightning::bitcoin::hashes::Hash;
 use lightning::bitcoin::hashes::sha256d;
 use lightning::bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+use lightning::bitcoin::{BlockHash, ScriptBuf};
+use lightning::ln::chan_utils::make_funding_redeemscript;
 use lightning::ln::msgs::{
     BaseMessageHandler, ChannelAnnouncement, ChannelUpdate, CommonOpenChannelFields, Init,
     LightningError, MessageSendEvent, NodeAnnouncement, OpenChannel, QueryChannelRange,
@@ -28,9 +31,12 @@ use lightning::sign::KeysManager;
 use lightning::types::features::{ChannelFeatures, InitFeatures, NodeFeatures};
 use lightning::util::logger::{Logger, Record};
 use lightning::util::ser::Writeable;
+use node::esplora::model::{PositionedOutput, ScriptType, TxStatus, Vout};
+use node::esplora::{ChainTip, Error as NodeError, OutPosition, OutPositions, Stamped};
 use tokio::sync::broadcast;
 
-use crate::gossip::{Gossip, Graph, MAX_GOSSIP_BYTES, UtxoHook};
+use crate::chain::{self, TRUSTED_SATS, position};
+use crate::gossip::{Gossip, Graph, MAX_GOSSIP_BYTES, Replay, UtxoHook};
 use crate::log::LogSink;
 use crate::store::{self, GraphLoad};
 use crate::*;
@@ -67,6 +73,10 @@ fn now() -> u32 {
 /// A signed announcement of channel `scid` between nodes `a` and `b` (node keys a, b; funding
 /// keys a+100, b+100).
 fn channel(scid: u64, a: u8, b: u8) -> ChannelAnnouncement {
+    channel_on(chain(), scid, a, b)
+}
+
+fn channel_on(chain: ChainHash, scid: u64, a: u8, b: u8) -> ChannelAnnouncement {
     let (mut k1, mut k2) = (key(a), key(b));
     if id(&k1) > id(&k2) {
         std::mem::swap(&mut k1, &mut k2);
@@ -74,7 +84,7 @@ fn channel(scid: u64, a: u8, b: u8) -> ChannelAnnouncement {
     let (f1, f2) = (key(a + 100), key(b + 100));
     let contents = UnsignedChannelAnnouncement {
         features: ChannelFeatures::empty(),
-        chain_hash: chain(),
+        chain_hash: chain,
         short_channel_id: scid,
         node_id_1: id(&k1),
         node_id_2: id(&k2),
@@ -139,16 +149,41 @@ struct Handler {
     changes: broadcast::Receiver<Change>,
 }
 
+/// A handler whose funding lookups all succeed at once, for tests of everything but validation.
 fn handler(max_channels: usize) -> Handler {
-    let events = broadcast::channel(64).0;
-    let changes = broadcast::channel(64).0;
+    let mut config = Config::new(NET, PathBuf::new());
+    config.max_channels = max_channels;
+    let (gossip, events, changes) = gossip(&config, Replay::default());
+    gossip.lookup.trust.store(true, Ordering::Relaxed);
+    Handler {
+        gossip: Arc::into_inner(gossip).unwrap(),
+        events,
+        changes,
+    }
+}
+
+fn gossip(
+    config: &Config,
+    replay: Replay,
+) -> (
+    Arc<Gossip>,
+    broadcast::Receiver<Event>,
+    broadcast::Receiver<Change>,
+) {
+    let events = broadcast::channel(4096).0;
+    let changes = broadcast::channel(4096).0;
     let logger = Arc::new(LogSink::new(Level::Info, 20, events.clone()));
     let graph = Arc::new(Graph::new(NET, Arc::clone(&logger)));
-    Handler {
-        events: events.subscribe(),
-        changes: changes.subscribe(),
-        gossip: Gossip::new(NET, graph, logger, max_channels, None, changes, events),
-    }
+    let g = Gossip::new(
+        config,
+        graph,
+        logger,
+        None,
+        replay,
+        changes.clone(),
+        events.clone(),
+    );
+    (Arc::new(g), events.subscribe(), changes.subscribe())
 }
 
 #[test]
@@ -178,7 +213,7 @@ fn a_valid_announcement_enters_the_graph_and_is_not_relayed() {
 
     let g = h.gossip.graph().read_only();
     let c = g.channel(1).unwrap();
-    assert_eq!(c.capacity_sats, None, "unverified: no funding lookup");
+    assert_eq!(c.capacity_sats, Some(TRUSTED_SATS));
     let policy = if dir == 0 {
         &c.one_to_two
     } else {
@@ -766,7 +801,7 @@ async fn a_graph_saved_while_offline_keeps_its_caught_up_time() {
     // No peers: it never catches up, so the shutdown save must not look fresh.
     let mut config = Config::new(NET, dir.0.clone());
     config.peers.clear();
-    let (peer, _) = Peer::start(config.clone()).unwrap();
+    let (peer, _) = Peer::start(config.clone(), FakeChain::default()).unwrap();
     peer.shutdown().await.unwrap();
     let (_, load) = store::load_graph(&dir.0, NET, 10, &sink());
     let GraphLoad::Loaded { age, .. } = load else {
@@ -1050,7 +1085,9 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
     config.backoff_min = Duration::from_millis(50);
     config.sync_settle = Duration::from_millis(300);
 
-    let (peer, load) = Peer::start(config.clone()).unwrap();
+    let node = FakeChain::at(100);
+    node.add(7, &funding(1, 2), 50_000, false);
+    let (peer, load) = Peer::start(config.clone(), node.clone()).unwrap();
     assert!(matches!(load, GraphLoad::Fresh));
     let status = peer.status();
 
@@ -1058,7 +1095,12 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
     wait_for("the graph", || peer.read(|g| g.channel(7).is_some())).await;
     wait_for("synced", || status.borrow().synced).await;
     let s = status.borrow().clone();
-    assert_eq!(s.validation, Validation::Unverified);
+    assert_eq!(s.validation.verified, 1);
+    assert!(s.validation.caught_up);
+    assert_eq!(
+        peer.read(|g| g.channel(7).unwrap().capacity_sats),
+        Some(50_000)
+    );
     assert!(s.peers[0].failures >= 1 && !s.peers[0].connected);
     assert!(s.peers[1].connected);
     let n1 = peer.read(|g| {
@@ -1107,7 +1149,7 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
     wait_for("disconnected", || fake.pm.list_peers().is_empty()).await;
 
     // A restart loads the graph and reuses the identity.
-    let (again, load) = Peer::start(config).unwrap();
+    let (again, load) = Peer::start(config, node).unwrap();
     assert!(
         matches!(
             load,
@@ -1120,7 +1162,643 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
         "{load:?}"
     );
     assert_eq!(again.node_id(), us);
-    assert!(again.read(|g| g.channel(7).is_some()));
+    // The stored channel is checked again before it is shown.
     wait_for("synced from disk", || again.status().borrow().synced).await;
+    assert!(again.read(|g| g.channel(7).is_some()));
     again.shutdown().await.unwrap();
+}
+
+// Validation against a fake node.
+
+/// A fake rbitcoin answering the position routes from a table.
+#[derive(Clone, Default)]
+struct FakeChain(Arc<FakeNode>);
+
+#[derive(Default)]
+struct FakeNode {
+    outputs: Mutex<HashMap<OutPosition, PositionedOutput>>,
+    tip: AtomicU32,
+    down: AtomicBool,
+    /// When each batch request arrived and how many outputs it asked for.
+    batches: Mutex<Vec<(std::time::Instant, usize)>>,
+    tip_reads: AtomicUsize,
+}
+
+impl FakeChain {
+    fn at(tip: u32) -> Self {
+        let c = Self::default();
+        c.0.tip.store(tip, Ordering::Relaxed);
+        c
+    }
+
+    fn add(&self, scid: u64, script: &ScriptBuf, value: u64, spent: bool) {
+        let out = PositionedOutput {
+            out: Vout {
+                scriptpubkey: script.to_hex_string(),
+                scriptpubkey_asm: String::new(),
+                scriptpubkey_type: ScriptType::V0P2wsh,
+                scriptpubkey_address: None,
+                value,
+            },
+            spent,
+            status: TxStatus {
+                confirmed: true,
+                block_height: Some(position(scid).height),
+                block_hash: None,
+                block_time: None,
+            },
+        };
+        self.0.outputs.lock().unwrap().insert(position(scid), out);
+    }
+
+    fn batches(&self) -> Vec<(std::time::Instant, usize)> {
+        self.0.batches.lock().unwrap().clone()
+    }
+}
+
+impl crate::Chain for FakeChain {
+    async fn outputs(
+        &self,
+        positions: OutPositions,
+    ) -> Result<Stamped<Vec<Option<PositionedOutput>>>, NodeError> {
+        let n = &self.0;
+        if n.down.load(Ordering::Relaxed) {
+            return Err(NodeError::Unavailable("down".to_owned()));
+        }
+        n.batches
+            .lock()
+            .unwrap()
+            .push((std::time::Instant::now(), positions.as_slice().len()));
+        let map = n.outputs.lock().unwrap();
+        Ok(Stamped {
+            value: positions
+                .as_slice()
+                .iter()
+                .map(|p| map.get(p).cloned())
+                .collect(),
+            tip: Some(ChainTip {
+                hash: BlockHash::all_zeros(),
+                height: n.tip.load(Ordering::Relaxed),
+            }),
+        })
+    }
+
+    async fn tip_height(&self) -> Result<u32, NodeError> {
+        if self.0.down.load(Ordering::Relaxed) {
+            return Err(NodeError::Unavailable("down".to_owned()));
+        }
+        self.0.tip_reads.fetch_add(1, Ordering::Relaxed);
+        Ok(self.0.tip.load(Ordering::Relaxed))
+    }
+}
+
+fn scid(height: u32, index: u32, vout: u32) -> u64 {
+    u64::from(height) << 40 | u64::from(index) << 16 | u64::from(vout)
+}
+
+/// The output a channel between `a` and `b` (as built by `channel`) must be funded by.
+fn funding(a: u8, b: u8) -> ScriptBuf {
+    let s = Secp256k1::new();
+    make_funding_redeemscript(&key(a + 100).public_key(&s), &key(b + 100).public_key(&s)).to_p2wsh()
+}
+
+fn quick(f: impl FnOnce(&mut Config)) -> Config {
+    let mut c = Config::new(NET, PathBuf::new());
+    c.lookup_interval = Duration::from_millis(20);
+    f(&mut c);
+    c
+}
+
+/// A handler checking announcements against `node`, with the lookup task running.
+fn checked(config: &Config, node: &FakeChain) -> (Arc<Gossip>, broadcast::Receiver<Event>) {
+    let (g, events, _) = gossip(config, Replay::default());
+    tokio::spawn(chain::run(
+        Arc::clone(&g),
+        node.clone(),
+        config.lookup_interval,
+    ));
+    (g, events)
+}
+
+fn rejected(g: &Gossip) -> Rejected {
+    g.lookup.snapshot().rejected
+}
+
+#[tokio::test]
+async fn a_real_channel_is_accepted_with_its_capacity() {
+    let node = FakeChain::at(1000);
+    let id = scid(500, 3, 1);
+    node.add(id, &funding(1, 2), 2_500_000, false);
+    let (g, _) = checked(&quick(|_| {}), &node);
+    let ann = channel(id, 1, 2);
+    // Answered later: held, and not in the graph yet.
+    assert!(g.handle_channel_announcement(None, &ann).is_err());
+    assert_eq!(g.counters.held.load(Ordering::Relaxed), 1);
+    assert!(g.graph().read_only().channel(id).is_none());
+    // Its update waits with it.
+    let dir = u8::from(id_of(1) != ann.contents.node_id_1);
+    assert!(g.handle_channel_update(None, &update(id, 1, dir)).is_err());
+
+    wait_for("validated", || g.graph().read_only().channel(id).is_some()).await;
+    let ro = g.graph().read_only();
+    let c = ro.channel(id).unwrap();
+    assert_eq!(c.capacity_sats, Some(2_500_000));
+    assert!(
+        c.one_to_two.is_some() || c.two_to_one.is_some(),
+        "the held update applied"
+    );
+    drop(ro);
+    assert_eq!(rejected(&g).total(), 0);
+    assert_eq!(g.counters.accepted.load(Ordering::Relaxed), 1);
+    // Announced again: LDK knows it is chain-validated and asks nothing.
+    let before = node.batches().len();
+    assert!(g.handle_channel_announcement(None, &ann).is_err());
+    assert_eq!(node.batches().len(), before);
+}
+
+fn id_of(n: u8) -> NodeId {
+    id(&key(n))
+}
+
+#[tokio::test]
+async fn false_channels_are_refused_for_their_reason_and_early_ones_wait() {
+    let node = FakeChain::at(1000);
+    let (g, _) = checked(&quick(|_| {}), &node);
+    let real = scid(900, 1, 0);
+    let wrong_script = scid(900, 2, 0);
+    let missing = scid(900, 3, 0);
+    let spent = scid(900, 4, 0);
+    let shallow = scid(998, 1, 0);
+    let just_past_tip = scid(1002, 1, 0);
+    let far_future = scid(5000, 1, 0);
+    node.add(real, &funding(1, 2), 1_000, false);
+    node.add(wrong_script, &funding(3, 4), 1_000, false);
+    node.add(spent, &funding(1, 2), 1_000, true);
+    node.add(shallow, &funding(1, 2), 7_000, false);
+
+    for id in [
+        real,
+        wrong_script,
+        missing,
+        spent,
+        shallow,
+        just_past_tip,
+        far_future,
+    ] {
+        assert!(
+            g.handle_channel_announcement(None, &channel(id, 1, 2))
+                .is_err()
+        );
+    }
+    let other_chain = channel_on(
+        ChainHash::using_genesis_block(Network::Bitcoin),
+        scid(900, 5, 0),
+        1,
+        2,
+    );
+    assert!(g.handle_channel_announcement(None, &other_chain).is_err());
+
+    wait_for("lookups", || g.lookup.waiting() == 0).await;
+    let r = rejected(&g);
+    assert_eq!(
+        (r.missing, r.spent, r.wrong_script, r.wrong_chain, r.shallow),
+        (2, 1, 1, 1, 0),
+        "{r:?}"
+    );
+    let snap = g.lookup.snapshot();
+    assert_eq!(snap.early, 2, "too shallow, and a block just past the tip");
+    let in_graph = |id| g.graph().read_only().channel(id).is_some();
+    wait_for("the real one", || in_graph(real)).await;
+    for id in [
+        wrong_script,
+        missing,
+        spent,
+        shallow,
+        just_past_tip,
+        far_future,
+    ] {
+        assert!(!in_graph(id));
+    }
+
+    // A refused channel announced again is answered from the cache.
+    let before = node.batches().len();
+    assert!(
+        g.handle_channel_announcement(None, &channel(missing, 1, 2))
+            .is_err()
+    );
+    assert_eq!(node.batches().len(), before);
+    assert_eq!(rejected(&g).missing, 2);
+
+    // Three blocks later the shallow one is six deep: the next answer's tip promotes it.
+    node.0.tip.store(1003, Ordering::Relaxed);
+    let later = scid(950, 1, 0);
+    node.add(later, &funding(1, 2), 1_000, false);
+    assert!(
+        g.handle_channel_announcement(None, &channel(later, 1, 2))
+            .is_err()
+    );
+    wait_for("the shallow one", || in_graph(shallow)).await;
+    assert_eq!(
+        g.graph()
+            .read_only()
+            .channel(shallow)
+            .unwrap()
+            .capacity_sats,
+        Some(7_000)
+    );
+    // The one past the tip is still not mined: six blocks on, it is found missing.
+    node.0.tip.store(1007, Ordering::Relaxed);
+    let last = scid(951, 1, 0);
+    node.add(last, &funding(1, 2), 1_000, false);
+    assert!(
+        g.handle_channel_announcement(None, &channel(last, 1, 2))
+            .is_err()
+    );
+    wait_for("refused once deep", || rejected(&g).missing == 3).await;
+    assert_eq!(g.lookup.snapshot().early, 0);
+}
+
+#[tokio::test]
+async fn early_announcements_are_rechecked_from_the_tip_alone() {
+    let node = FakeChain::at(1000);
+    let shallow = scid(999, 1, 0);
+    node.add(shallow, &funding(1, 2), 5_000, false);
+    let (g, _) = checked(&quick(|_| {}), &node);
+    assert!(
+        g.handle_channel_announcement(None, &channel(shallow, 1, 2))
+            .is_err()
+    );
+    wait_for("early", || g.lookup.snapshot().early == 1).await;
+    node.0.tip.store(1004, Ordering::Relaxed);
+    // With nothing else to ask, the tip is read now and then (once a minute; tests, a second).
+    wait_for("promoted by the tip", || {
+        g.graph().read_only().channel(shallow).is_some()
+    })
+    .await;
+    assert!(g.graph().read_only().channel(shallow).is_some());
+    assert!(node.0.tip_reads.load(Ordering::Relaxed) >= 1);
+}
+
+#[tokio::test]
+async fn a_burst_becomes_a_few_batches_within_the_rate_limit() {
+    let node = FakeChain::at(10_000);
+    let interval = Duration::from_millis(300);
+    let config = quick(|c| c.lookup_interval = interval);
+    let anns: Vec<_> = (0..1000)
+        .map(|i| {
+            let id = scid(5000, i, 0);
+            node.add(id, &funding(1, 2), 1_000 + u64::from(i), false);
+            channel(id, 1, 2)
+        })
+        .collect();
+    let (g, _) = checked(&config, &node);
+    for a in &anns {
+        assert!(g.handle_channel_announcement(None, a).is_err());
+    }
+    wait_for("all validated", || {
+        g.graph().read_only().channels().len() == 1000
+    })
+    .await;
+    let batches = node.batches();
+    let sizes: Vec<usize> = batches.iter().map(|b| b.1).collect();
+    assert_eq!(sizes.iter().sum::<usize>(), 1000);
+    assert!(sizes.iter().all(|n| *n <= 300));
+    assert!(batches.len() <= 6, "{sizes:?}");
+    for w in batches.windows(2) {
+        assert!(
+            w[1].0 - w[0].0 >= interval,
+            "requests closer than the limit"
+        );
+    }
+    assert_eq!(g.lookup.snapshot().requests, batches.len() as u64);
+}
+
+#[tokio::test]
+async fn the_pending_queue_is_bounded() {
+    let config = quick(|c| c.max_pending = 10);
+    // No lookup task: nothing drains.
+    let (g, _, _) = gossip(&config, Replay::default());
+    for i in 0..100 {
+        assert!(
+            g.handle_channel_announcement(None, &channel(scid(10, i, 0), 1, 2))
+                .is_err()
+        );
+        if i == 9 {
+            assert!(g.processing_queue_high(), "high at max_pending");
+        }
+    }
+    let s = g.lookup.snapshot();
+    // LDK reads at most one more message per peer once high; the slack covers that.
+    assert_eq!(s.pending, 10 + 64);
+    assert_eq!(s.rejected.queue_full, 100 - 74);
+    assert_eq!(g.graph().read_only().channels().len(), 0);
+}
+
+#[tokio::test]
+async fn the_node_down_then_back_loses_nothing() {
+    let node = FakeChain::at(1000);
+    node.0.down.store(true, Ordering::Relaxed);
+    let ids: Vec<u64> = (0..3).map(|i| scid(800, i, 0)).collect();
+    for id in &ids {
+        node.add(*id, &funding(1, 2), 9_000, false);
+    }
+    let (g, mut events) = checked(&quick(|_| {}), &node);
+    for id in &ids {
+        assert!(
+            g.handle_channel_announcement(None, &channel(*id, 1, 2))
+                .is_err()
+        );
+    }
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(Event::LookupFailed { pending, .. }) = events.recv().await {
+                return pending;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(failed, 3, "the backlog is reported");
+    let s = g.lookup.snapshot();
+    assert!(s.failures >= 1 && s.pending == 3);
+    assert!(!g.processing_queue_high());
+    node.0.down.store(false, Ordering::Relaxed);
+    wait_for("validated after the node came back", || {
+        g.graph().read_only().channels().len() == 3
+    })
+    .await;
+    assert_eq!(g.lookup.snapshot().failures, 0);
+}
+
+#[tokio::test]
+async fn invented_channels_cannot_grow_memory_the_cache_or_node_load() {
+    let node = FakeChain::at(100_000);
+    let interval = Duration::from_millis(50);
+    let config = quick(|c| {
+        c.lookup_interval = interval;
+        c.max_pending = 50;
+        c.max_early = 10;
+        c.cache_entries = 200;
+    });
+    let (g, _) = checked(&config, &node);
+    let mut most = 0;
+    for i in 0..1500u32 {
+        // Some claim a block just past the tip, which looks early.
+        let height = if i % 10 == 0 { 100_001 } else { 90_000 };
+        let _ = g.handle_channel_announcement(None, &channel(scid(height, i, 0), 1, 2));
+        let s = g.lookup.snapshot();
+        most = most.max(s.pending);
+        assert!(s.early <= 10);
+        assert!(g.lookup.cache_len() <= 200);
+        if i % 100 == 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+    assert!(most <= 50 + 64);
+    wait_for("drained", || g.lookup.waiting() == 0).await;
+    assert!(g.lookup.cache_len() <= 200);
+    assert_eq!(g.graph().read_only().channels().len(), 0);
+    let batches = node.batches();
+    assert!(batches.iter().all(|b| b.1 <= 300));
+    for w in batches.windows(2) {
+        assert!(w[1].0 - w[0].0 >= interval);
+    }
+    let r = rejected(&g);
+    assert!(r.missing > 0 && r.queue_full > 0 && r.shallow > 0, "{r:?}");
+}
+
+/// A graph as the unverified peer saved it: two channels taken on signatures alone, one real and
+/// one invented, with their updates and node announcements.
+fn unverified_graph(dir: &std::path::Path) -> (u64, u64) {
+    let real = scid(700, 1, 0);
+    let invented = scid(700, 2, 0);
+    let graph = Graph::new(NET, sink());
+    for (id, a, b) in [(real, 1, 2), (invented, 3, 4)] {
+        let ann = channel(id, a, b);
+        graph
+            .update_channel_from_announcement_no_lookup(&ann)
+            .unwrap();
+        let signer = if id_of(a) == ann.contents.node_id_1 {
+            a
+        } else {
+            b
+        };
+        graph.update_channel(&update(id, signer, 0)).unwrap();
+        graph
+            .update_node_from_announcement(&node(a, "stored", 0))
+            .unwrap();
+    }
+    assert_eq!(graph.read_only().channel(real).unwrap().capacity_sats, None);
+    let bytes = graph.encode();
+    store::write_atomic(&dir.join(store::GRAPH_FILE), |f| {
+        std::io::Write::write_all(f, &bytes)
+    })
+    .unwrap();
+    (real, invented)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_graph_saved_unverified_is_checked_again_before_it_is_shown() {
+    let dir = TempDir::new();
+    let (real, invented) = unverified_graph(&dir.0);
+    let node = FakeChain::at(1000);
+    node.add(real, &funding(1, 2), 4_200_000, false);
+    let mut config = quick(|_| {});
+    config.data_dir = dir.0.clone();
+    config.peers.clear();
+
+    let (peer, load) = Peer::start(config.clone(), node.clone()).unwrap();
+    assert!(
+        matches!(load, GraphLoad::Loaded { channels: 2, .. }),
+        "{load:?}"
+    );
+    // Nothing from the file is shown before it is checked.
+    assert_eq!(peer.read(|g| g.channels().len()), 0);
+    let status = peer.status();
+    wait_for("checked and synced", || status.borrow().synced).await;
+    let v = status.borrow().validation;
+    assert_eq!((v.verified, v.unchecked, v.pending), (1, 0, 0));
+    assert_eq!(v.rejected.missing, 1);
+    peer.read(|g| {
+        let c = g.channel(real).unwrap();
+        assert_eq!(c.capacity_sats, Some(4_200_000));
+        assert!(
+            c.one_to_two.is_some() || c.two_to_one.is_some(),
+            "stored update kept"
+        );
+        let info = g
+            .node(&id_of(1))
+            .unwrap()
+            .announcement_info
+            .as_ref()
+            .unwrap();
+        assert_eq!(&info.alias().0[..6], b"stored");
+        assert!(g.channel(invented).is_none());
+        assert!(g.node(&id_of(3)).is_none());
+    });
+    assert!(peer.shutdown().await.unwrap() > 0);
+    // What is saved now is only what was verified.
+    let (g, _) = store::load_graph(&dir.0, NET, 10, &sink());
+    let g = g.unwrap();
+    assert_eq!(g.read_only().channels().len(), 1);
+    assert_eq!(
+        g.read_only().channel(real).unwrap().capacity_sats,
+        Some(4_200_000)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_while_the_node_is_down_keeps_the_file() {
+    let dir = TempDir::new();
+    unverified_graph(&dir.0);
+    let before = std::fs::read(dir.0.join(store::GRAPH_FILE)).unwrap();
+    let node = FakeChain::at(1000);
+    node.0.down.store(true, Ordering::Relaxed);
+    let mut config = quick(|_| {});
+    config.data_dir = dir.0.clone();
+    config.peers.clear();
+    let (peer, _) = Peer::start(config, node).unwrap();
+    let status = peer.status();
+    wait_for("sent for checking", || {
+        status.borrow().validation.pending == 2
+    })
+    .await;
+    assert!(!status.borrow().synced);
+    assert_eq!(peer.read(|g| g.channels().len()), 0);
+    // Stopped mid-check: the graph lacks the stored channels, so the file is kept as it was.
+    peer.shutdown().await.unwrap();
+    let after = std::fs::read(dir.0.join(store::GRAPH_FILE)).unwrap();
+    assert!(before == after, "the file was rewritten");
+}
+
+/// A graph holding channel `scid` between nodes 1 and 2, unchecked, with node 1 announced as
+/// "stored".
+fn stored_graph(scid: u64) -> Graph {
+    let graph = Graph::new(NET, sink());
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(scid, 1, 2))
+        .unwrap();
+    graph
+        .update_node_from_announcement(&node(1, "stored", 0))
+        .unwrap();
+    graph
+}
+
+fn alias_of(g: &Gossip, n: u8) -> Option<[u8; 32]> {
+    let ro = g.graph().read_only();
+    Some(ro.node(&id_of(n))?.announcement_info.as_ref()?.alias().0)
+}
+
+#[tokio::test]
+async fn a_stored_channel_found_early_keeps_the_replay_open_until_it_is_deep() {
+    let id = scid(998, 1, 0);
+    let node = FakeChain::at(1000);
+    node.add(id, &funding(1, 2), 5_000_000, false);
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
+    tokio::spawn(chain::run(
+        Arc::clone(&g),
+        node.clone(),
+        config.lookup_interval,
+    ));
+    g.replay_tick(config.max_pending);
+    wait_for("early", || g.lookup.snapshot().early == 1).await;
+    g.replay_tick(config.max_pending);
+    assert!(
+        g.replaying(),
+        "its stored node announcement is still needed"
+    );
+    node.0.tip.store(1003, Ordering::Relaxed);
+    wait_for("deep enough", || {
+        g.graph().read_only().channel(id).is_some()
+    })
+    .await;
+    g.replay_tick(config.max_pending);
+    assert_eq!(&alias_of(&g, 1).unwrap()[..6], b"stored");
+    assert!(!g.replaying());
+}
+
+#[tokio::test]
+async fn a_newer_oversized_node_announcement_waits_for_its_stored_channel() {
+    let id = scid(900, 1, 0);
+    let fake = FakeChain::at(1000);
+    fake.add(id, &funding(1, 2), 5_000_000, false);
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
+    // Newer than the stored one, and over the size limit: kept trimmed.
+    let mut big = node(1, "newer", 2000);
+    big.contents.timestamp += 10;
+    big.signature = sign(&big.contents, &key(1));
+    assert!(big.serialized_length() > MAX_GOSSIP_BYTES);
+    assert!(g.handle_node_announcement(None, &big).is_err());
+    assert_eq!(g.counters.held.load(Ordering::Relaxed), 1);
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
+    g.replay_tick(config.max_pending);
+    assert_eq!(&alias_of(&g, 1).unwrap()[..5], b"newer");
+}
+
+#[tokio::test]
+async fn a_forged_update_cannot_replace_a_stored_one() {
+    let id = scid(900, 1, 0);
+    let fake = FakeChain::at(1000);
+    fake.add(id, &funding(1, 2), 5_000_000, false);
+    let graph = stored_graph(id);
+    let ann = channel(id, 1, 2);
+    let (signer, dir) = if id_of(1) == ann.contents.node_id_1 {
+        (1, 0)
+    } else {
+        (2, 0)
+    };
+    let good = update(id, signer, dir);
+    graph.update_channel(&good).unwrap();
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    // Signed by a key that is not the channel's: refused, not kept for the replay.
+    let mut forged = update(id, 9, dir);
+    forged.contents.timestamp = u32::MAX;
+    forged.signature = sign(&forged.contents, &key(9));
+    assert!(g.handle_channel_update(None, &forged).is_err());
+    assert_eq!(g.counters.held.load(Ordering::Relaxed), 0);
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
+    let ro = g.graph().read_only();
+    let c = ro.channel(id).unwrap();
+    let policy = c.one_to_two.as_ref().or(c.two_to_one.as_ref()).unwrap();
+    assert_eq!(policy.last_update, good.contents.timestamp);
+}
+
+#[tokio::test]
+async fn stored_channels_keep_their_place_under_the_ceiling() {
+    let (a, b) = (scid(900, 1, 0), scid(900, 2, 0));
+    let fake = FakeChain::at(1000);
+    let graph = stored_graph(a);
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(b, 1, 2))
+        .unwrap();
+    for id in [a, b] {
+        fake.add(id, &funding(1, 2), 5_000_000, false);
+    }
+    let config = quick(|c| c.max_channels = 2);
+    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    // The two stored channels fill the ceiling before they are even sent.
+    let c = scid(900, 3, 0);
+    fake.add(c, &funding(1, 2), 5_000_000, false);
+    assert!(
+        g.handle_channel_announcement(None, &channel(c, 1, 2))
+            .is_err()
+    );
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    assert!(
+        g.handle_channel_announcement(None, &channel(c, 1, 2))
+            .is_err()
+    );
+    wait_for("both stored checked", || {
+        g.graph().read_only().channels().len() == 2
+    })
+    .await;
+    assert_eq!(g.counters.over_ceiling.load(Ordering::Relaxed), 2);
 }

@@ -481,6 +481,7 @@ version = "0.1.0"
 dependencies = [
  "lightning",
  "lightning-net-tokio",
+ "node",
  "tokio",
 ]
 

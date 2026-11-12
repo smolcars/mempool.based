@@ -15,7 +15,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::gossip::{Gossip, Graph};
+use crate::chain::{self, Chain};
+use crate::gossip::{Gossip, Graph, Replay};
 use crate::log::LogSink;
 use crate::store::{self, GraphLoad};
 use crate::{
@@ -66,9 +67,13 @@ struct Shared {
 }
 
 impl Peer {
-    /// Loads or creates the identity seed and the graph, then starts dialling. Must be called
-    /// inside a tokio runtime. Fails only if the data directory or the seed cannot be used.
-    pub fn start(config: Config) -> io::Result<(Self, GraphLoad)> {
+    /// Loads or creates the identity seed and the graph, then starts dialling. Funding outputs are
+    /// looked up through `chain`. Must be called inside a tokio runtime. Fails only if the data
+    /// directory or the seed cannot be used.
+    ///
+    /// A loaded graph is not shown as it is: its channels are checked again against the chain
+    /// and enter the graph as they pass ([`Validation::unchecked`] counts those still to send).
+    pub fn start(config: Config, chain: impl Chain) -> io::Result<(Self, GraphLoad)> {
         std::fs::create_dir_all(&config.data_dir)?;
         let seed = store::load_or_create_key(&config.data_dir)?;
         let now = SystemTime::now()
@@ -102,16 +107,22 @@ impl Peer {
             }
             _ => (false, None),
         };
-        let graph =
-            Arc::new(loaded.unwrap_or_else(|| Graph::new(config.network, Arc::clone(&logger))));
+        let replay = loaded.as_ref().map(Replay::from_graph).unwrap_or_default();
+        drop(loaded);
+        let graph = Arc::new(Graph::new(config.network, Arc::clone(&logger)));
         let gossip = Arc::new(Gossip::new(
-            config.network,
+            &config,
             graph,
             Arc::clone(&logger),
-            config.max_channels,
             resume_from,
+            replay,
             changes.clone(),
             events.clone(),
+        ));
+        let lookups = tokio::spawn(chain::run(
+            Arc::clone(&gossip),
+            chain,
+            config.lookup_interval,
         ));
 
         let keys = Arc::new(KeysManager::new(
@@ -134,7 +145,7 @@ impl Peer {
         ));
 
         let status = watch::channel(Status {
-            validation: Validation::Unverified,
+            validation: Validation::default(),
             synced: false,
             nodes: 0,
             channels: 0,
@@ -156,6 +167,7 @@ impl Peer {
         let task = tokio::spawn(supervise(
             Arc::clone(&shared),
             Arc::clone(&stop),
+            lookups,
             fresh_on_disk,
             caught_up_at,
         ));
@@ -263,10 +275,27 @@ fn totals(g: &Gossip) -> Totals {
         bytes: get(&c.bytes),
         accepted: get(&c.accepted),
         duplicate: get(&c.duplicate),
+        held: get(&c.held),
         rejected: get(&c.rejected),
         trimmed: get(&c.trimmed),
         oversize: get(&c.oversize),
         over_ceiling: get(&c.over_ceiling),
+    }
+}
+
+fn validation(g: &Gossip, verified: usize) -> Validation {
+    let l = g.lookup.snapshot();
+    let unchecked = g.replay_left();
+    Validation {
+        verified,
+        unchecked,
+        pending: l.pending,
+        early: l.early,
+        rejected: l.rejected,
+        caught_up: !g.replaying() && l.pending == 0,
+        node_failures: l.failures,
+        requests: l.requests,
+        outputs: l.outputs,
     }
 }
 
@@ -369,6 +398,7 @@ fn prune(shared: &Shared) -> usize {
 async fn supervise(
     shared: Arc<Shared>,
     stop: Arc<Notify>,
+    lookups: JoinHandle<()>,
     fresh_on_disk: bool,
     mut caught_up_at: SystemTime,
 ) -> io::Result<u64> {
@@ -404,6 +434,8 @@ async fn supervise(
     loop {
         tokio::select! {
             () = stop.notified() => break,
+            // Lookups resolved: let the peer manager read the gossip it held back.
+            () = shared.gossip.lookup.resolved.notified() => shared.pm.process_events(),
             Some(i) = done_rx.recv() => {
                 let now = Instant::now();
                 let Some(s) = slots.get_mut(i) else { continue };
@@ -447,21 +479,24 @@ async fn supervise(
                 }
                 shared.logger.flush();
                 shared.gossip.range_tick();
+                shared.gossip.replay_tick(config.max_pending);
 
                 let (nodes, channels) = {
                     let ro = shared.gossip.graph().read_only();
                     (ro.nodes().len(), ro.channels().len())
                 };
+                let validation = validation(&shared.gossip, channels);
                 let up = slots.iter().filter(|s| matches!(s.state, State::Up(_))).count();
 
                 let settled = |t: Instant| now.duration_since(t) >= config.sync_settle;
                 let quiet = shared.gossip.last_new_channel.lock().map(|t| settled(*t)).unwrap_or(false);
                 let drained = shared.gossip.range_pending() == 0;
-                let caught_up = up > 0 && channels > 0 && first_up.is_some_and(settled) && quiet && drained;
+                let caught_up = up > 0 && channels > 0 && first_up.is_some_and(settled) && quiet && drained
+                    && validation.caught_up;
                 if caught_up {
                     caught_up_at = SystemTime::now();
                 }
-                if !synced && (fresh_on_disk || caught_up) {
+                if !synced && validation.caught_up && (fresh_on_disk || caught_up) {
                     synced = true;
                     let _ = shared.events.send(Event::Synced {
                         after: now.duration_since(started), nodes, channels, from_disk: fresh_on_disk,
@@ -478,6 +513,7 @@ async fn supervise(
                     let _ = shared.events.send(Event::Stats(Stats {
                         nodes, channels, peers: up, totals: t,
                         pending_channels: shared.gossip.range_pending(),
+                        validation,
                         messages_per_sec: t.messages().saturating_sub(last_totals.messages()) as f64 / secs,
                         bytes_per_sec: t.bytes.saturating_sub(last_totals.bytes) as f64 / secs,
                     }));
@@ -486,7 +522,10 @@ async fn supervise(
                 }
 
                 let changes = shared.gossip.counters.accepted.load(Ordering::Relaxed) + pruned;
-                if now.duration_since(last_save) >= config.save_every && changes != saved_changes {
+                // While stored channels are still to be checked the graph lacks them, and the
+                // file on disk is the better copy.
+                let replaying = shared.gossip.replaying();
+                if now.duration_since(last_save) >= config.save_every && changes != saved_changes && !replaying {
                     // A failure is reported as an event and retried at the next period.
                     if save(&shared, caught_up_at).await.is_ok() {
                         saved_changes = changes;
@@ -495,7 +534,7 @@ async fn supervise(
                 }
 
                 shared.status.send_replace(Status {
-                    validation: Validation::Unverified,
+                    validation,
                     synced,
                     nodes,
                     channels,
@@ -519,7 +558,12 @@ async fn supervise(
             let _ = task.await;
         }
     }
+    lookups.abort();
     shared.pm.disconnect_all_peers();
+    if shared.gossip.replaying() {
+        // Keep the file: it still holds the channels not yet checked again.
+        return Ok(0);
+    }
     save(&shared, caught_up_at).await
 }
 
