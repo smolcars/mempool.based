@@ -9,14 +9,20 @@ const heights = (page: Page) =>
 
 test("mining takes the projected next block across the line and empties the projection", async ({
   page,
+  request,
   mine,
 }) => {
   await page.goto("/regtest/");
   const projected = page.getByRole("list", { name: "Projected blocks, next first" });
   const next = projected.getByRole("listitem").first();
-  await expect(next).toContainText(/Next block, projected: \d+ transactions/);
-  const label = (await next.locator(".visually-hidden").textContent()) ?? "";
-  const waiting = Number(/projected: (\d+)/.exec(label)?.[1]);
+  // The projection trails the node by a cycle or so: wait until it holds the node's whole mempool.
+  let waiting = 0;
+  await expect(async () => {
+    const node = (await (await request.get("/regtest/api/mempool")).json()) as { count: number };
+    const label = (await next.locator(".visually-hidden").textContent()) ?? "";
+    waiting = Number(/projected: (\d+) transactions/.exec(label)?.[1]);
+    expect(waiting).toBe(node.count);
+  }).toPass({ timeout: 15_000 });
   const key = await next.getAttribute("data-key");
 
   const [hash] = await mine(1);
