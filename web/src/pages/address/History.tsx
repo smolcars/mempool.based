@@ -150,23 +150,28 @@ export function History(props: {
   const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : after().full);
 
   const loadMore = async () => {
-    const list = shown();
-    const last = list?.at(-1);
-    if (!last || loadingMore()) return;
-    const asked = generation;
+    if (!shown()?.at(-1) || loadingMore()) return;
     setLoadingMore(true);
     setMoreError(undefined);
     try {
-      const page = await fetchApi<Transaction[]>(
-        network(),
-        `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
-        { signal: controller.signal },
-      );
+      // Asks again when a refresh lands first: the reader still wants the next page.
+      for (let last = shown()?.at(-1); last; last = hasNext() ? shown()?.at(-1) : undefined) {
+        const asked = generation;
+        // oxlint-disable-next-line no-await-in-loop -- one page at a time, after the last row shown
+        const page = await fetchApi<Transaction[]>(
+          network(),
+          `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
+          { signal: controller.signal },
+        );
+        // A refresh while this was in flight may have changed the history it continues (new
+        // transactions, a reorg), so the reply could leave a gap or bring back stale rows: it is
+        // dropped, and the next page is asked for after the rows the refresh left.
+        if (generation === asked) {
+          setAfter((a) => ({ ...a, txs: [...a.txs, ...page], full: pageIsFull(page, PAGE) }));
+          break;
+        }
+      }
       setLoadingMore(false);
-      // A refresh while this was in flight may have changed the history it continues (new
-      // transactions, a reorg), so the reply could leave a gap or bring back stale rows.
-      if (generation !== asked) return;
-      setAfter((a) => ({ ...a, txs: [...a.txs, ...page], full: pageIsFull(page, PAGE) }));
     } catch (e) {
       if (controller.signal.aborted) return;
       setMoreError(e);

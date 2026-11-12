@@ -313,7 +313,7 @@ describe("address page", () => {
     expect(ids).toStrictEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
   });
 
-  it("drops a page that arrives after a refresh replaced the rows it continues", async () => {
+  it("drops a page that arrives after a refresh replaced the rows it continues, and asks after the new ones", async () => {
     const conf = (n: number) => tx(n, [[OTHER, 2000]], [[ME, 1000]]);
     const range = (from: number, to: number) =>
       Array.from({ length: to - from + 1 }, (_, i) => conf(from + i));
@@ -322,6 +322,7 @@ describe("address page", () => {
     serve({
       [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 80))),
       [`/address/${ME}/txs`]: () => Response.json(firstPage),
+      [`/address/${ME}/txs?after_txid=${txid(25)}`]: range(26, 50),
       [`/address/${ME}/txs?after_txid=${txid(55)}`]: () =>
         new Promise<Response>((resolve) => {
           release = resolve;
@@ -339,11 +340,51 @@ describe("address page", () => {
       expect(el.querySelector("tbody tr a")?.getAttribute("href")).toBe(`/tx/${txid(1)}`),
     );
     release(Response.json(range(56, 80)));
-    await until(() =>
-      expect([...el.querySelectorAll("button")].map((e) => text(e))).toContain("Show 25 more"),
-    );
+    // The stale page is dropped; the page the reader asked for comes after the new rows.
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
     const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
-    expect(ids).toStrictEqual(range(1, 25).map((t) => `/tx/${t.txid}`));
+    expect(ids).toStrictEqual(range(1, 50).map((t) => `/tx/${t.txid}`));
+  });
+
+  it("still loads the page asked for when a payment arrives while it is on its way", async () => {
+    const conf = (n: number) => tx(n, [[OTHER, 2000]], [[ME, 1000]]);
+    const range = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => conf(from + i));
+    const payment = tx(999, [[OTHER, 3000]], [[ME, 2000]], false);
+    let firstPage = range(1, 25);
+    let release: (r: Response) => void = () => {};
+    let asked = 0;
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 113))),
+      [`/address/${ME}/txs`]: () => Response.json(firstPage),
+      [`/address/${ME}/txs?after_txid=${txid(25)}`]: range(26, 50),
+      [`/address/${ME}/txs?after_txid=${txid(50)}`]: () => {
+        asked++;
+        // The first ask is held until the payment has refreshed the page; the next answers.
+        return asked === 1
+          ? new Promise<Response>((resolve) => {
+              release = resolve;
+            })
+          : Response.json(range(51, 75));
+      },
+    });
+    const el = open(`/address/${ME}`);
+    const more = () => [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more");
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    more()?.click();
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
+    more()?.click();
+    await until(() => expect(asked).toBe(1));
+    // Another wallet pays the address while the third page is on its way.
+    firstPage = [payment, ...range(1, 25)];
+    status("paid");
+    await until(() =>
+      expect(text(el.querySelector("tbody tr") as Element)).toContain("Unconfirmed"),
+    );
+    release(Response.json(range(51, 75)));
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(76));
+    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    expect(ids).toStrictEqual([payment, ...range(1, 75)].map((t) => `/tx/${t.txid}`));
   });
 
   it("keeps a page on its way through a refresh that changed nothing", async () => {
@@ -403,6 +444,8 @@ describe("address page", () => {
       setTimeout(resolve, 50);
     });
     expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1);
+    // Nothing comes after the one row, so nothing more is asked.
+    expect(calls.filter((c) => c.includes("after_txid"))).toHaveLength(1);
   });
 
   it("says plainly when an address has never been used", async () => {
