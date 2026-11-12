@@ -27,7 +27,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | todo |
 | W3 | Block page: header details, paged transaction list | W1, S2 | doing |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | doing |
-| W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | todo |
+| W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | doing |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
