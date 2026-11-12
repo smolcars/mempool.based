@@ -47,16 +47,16 @@ Observed on mempool.space's public socket on 2026-11-12 (mainnet, two connection
 | `blocks` | The last 8 blocks with `extras` | Esplora; store for extras | served | M2 | ref | The node's Esplora JSON for the last 8, oldest first; no `extras` or `stale` |
 | `block` | A new block with `extras` | Electrum header push; store | served | M2 | ref | The node's Esplora JSON, at the same moment as `/app/ws`; no `extras` or `stale` |
 | `mempoolInfo` | The node's `getmempoolinfo` | rbitcoin RPC `getmempoolinfo` | served | M2 | ref | The node's `getmempoolinfo` as the tracker last read it |
-| `vBytesPerSecond` | Mempool inflow rate | Engine | planned | M3 | ref | Not computed yet |
+| `vBytesPerSecond` | Mempool inflow rate | Engine | planned | M3 | ref | Not sent. The store's once-a-minute samples have the rate (`vbytes_per_second` in `GET /api/v1/statistics/:interval`), so it needs no new data |
 | `mempool-blocks` | Projected block summaries | Engine | served | M2 | ref | `/api/v1/fees/mempool-blocks`' answer |
 | `transactions` | The latest few mempool entries | Engine | served | M2 | ref | `vsize` is the sigop-adjusted integer |
-| `fees` | Recommended fees, whole sat/vB | Engine | served | M2 | ref | `/api/v1/fees/precise`' answer: the reference's socket also sends decimals |
+| `fees` | Recommended fees | Engine | served | M2 | ref | `/api/v1/fees/precise`' answer: the reference's socket also sends decimals |
 | `da` | Difficulty adjustment progress | Engine | served | M2 | ref | `/api/v1/difficulty-adjustment`' answer |
-| `conversions` | Fiat prices | Store | planned | M3 | ref | |
+| `conversions` | Fiat prices | Store | planned | M3 | ref | Not sent; waits on the price feed, which the owner has parked |
 | `rbfSummary` | Recent replacements, in `init` | Engine | skipped | — | ref | `init` is not served |
-| `live-2h-chart` | One mempool statistics sample a minute | Engine; store | planned | M3 | ref | |
-| `loadingIndicators` | Progress of backend indexing jobs | Store backfill progress | different | M3 | ref | Ours reports backfill progress under our own keys on `/app/ws` |
-| `backend`, `backendInfo` | Backend kind and build | Server build info | different | M5 | ref | No host name or OS |
+| `live-2h-chart` | One mempool statistics sample a minute | Engine; store | planned | M3 | ref | Not sent. The sample is the newest row of `GET /api/v1/statistics/2h`, which the store already writes once a minute |
+| `loadingIndicators` | Progress of backend indexing jobs | Store backfill progress | different | M3 | ref | Not sent on either socket. A history route says how far its data reaches in its `X-Data-*` headers instead ([`API.md`](../API.md#coverage)) |
+| `backend`, `backendInfo` | Backend kind and build | Server build info | different | M5 | ref | Not sent on either socket. The version is in `/app/config`; no host name or OS |
 | `txPosition` | A tracked transaction's projected block, position and CPFP data | Engine | served | M2 | ref | `position.block` and `position.vsize` (inside the block); no `cpfp` |
 | `txConfirmed` | The txid of a tracked transaction that confirmed | Engine; Electrum | served | M2 | ref | The txid, as on the reference, in its own message |
 | `tracked-txs` | Updates for several tracked transactions | Engine | skipped | — | ref | `track-txs` is not served |
