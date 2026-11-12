@@ -1738,3 +1738,67 @@ async fn a_newer_oversized_node_announcement_waits_for_its_stored_channel() {
     g.replay_tick(config.max_pending);
     assert_eq!(&alias_of(&g, 1).unwrap()[..5], b"newer");
 }
+
+#[tokio::test]
+async fn a_forged_update_cannot_replace_a_stored_one() {
+    let id = scid(900, 1, 0);
+    let fake = FakeChain::at(1000);
+    fake.add(id, &funding(1, 2), 5_000_000, false);
+    let graph = stored_graph(id);
+    let ann = channel(id, 1, 2);
+    let (signer, dir) = if id_of(1) == ann.contents.node_id_1 {
+        (1, 0)
+    } else {
+        (2, 0)
+    };
+    let good = update(id, signer, dir);
+    graph.update_channel(&good).unwrap();
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    // Signed by a key that is not the channel's: refused, not kept for the replay.
+    let mut forged = update(id, 9, dir);
+    forged.contents.timestamp = u32::MAX;
+    forged.signature = sign(&forged.contents, &key(9));
+    assert!(g.handle_channel_update(None, &forged).is_err());
+    assert_eq!(g.counters.held.load(Ordering::Relaxed), 0);
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
+    let ro = g.graph().read_only();
+    let c = ro.channel(id).unwrap();
+    let policy = c.one_to_two.as_ref().or(c.two_to_one.as_ref()).unwrap();
+    assert_eq!(policy.last_update, good.contents.timestamp);
+}
+
+#[tokio::test]
+async fn stored_channels_keep_their_place_under_the_ceiling() {
+    let (a, b) = (scid(900, 1, 0), scid(900, 2, 0));
+    let fake = FakeChain::at(1000);
+    let graph = stored_graph(a);
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(b, 1, 2))
+        .unwrap();
+    for id in [a, b] {
+        fake.add(id, &funding(1, 2), 5_000_000, false);
+    }
+    let config = quick(|c| c.max_channels = 2);
+    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    // The two stored channels fill the ceiling before they are even sent.
+    let c = scid(900, 3, 0);
+    fake.add(c, &funding(1, 2), 5_000_000, false);
+    assert!(
+        g.handle_channel_announcement(None, &channel(c, 1, 2))
+            .is_err()
+    );
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    assert!(
+        g.handle_channel_announcement(None, &channel(c, 1, 2))
+            .is_err()
+    );
+    wait_for("both stored checked", || {
+        g.graph().read_only().channels().len() == 2
+    })
+    .await;
+    assert_eq!(g.counters.over_ceiling.load(Ordering::Relaxed), 2);
+}

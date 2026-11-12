@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use lightning::bitcoin::constants::ChainHash;
-use lightning::bitcoin::secp256k1::{PublicKey, Secp256k1, VerifyOnly};
+use lightning::bitcoin::hashes::{Hash, sha256d};
+use lightning::bitcoin::secp256k1::{Message, PublicKey, Secp256k1, VerifyOnly};
 use lightning::ln::chan_utils::make_funding_redeemscript;
 use lightning::ln::msgs::{
     BaseMessageHandler, ChannelAnnouncement, ChannelUpdate, ErrorAction, Init, LightningError,
@@ -298,7 +299,7 @@ impl Gossip {
         let room = (max_pending / 2)
             .saturating_sub(self.lookup.waiting())
             .min(REPLAY_PER_TICK);
-        let batch: Vec<Stored> = {
+        let batch: Vec<(u64, ChannelAnnouncement)> = {
             let Ok(mut r) = self.replay.lock() else {
                 return;
             };
@@ -306,11 +307,22 @@ impl Gossip {
             let at = r.order.len() - n;
             let ids: Vec<u64> = r.order.drain(at..).collect();
             r.sent.extend(&ids);
-            ids.iter().filter_map(|id| r.channels.remove(id)).collect()
+            ids.iter()
+                .filter_map(|id| Some((*id, r.channels.get(id)?.announcement.clone())))
+                .collect()
         };
-        for st in batch {
-            let _ = self.check_announcement(None, &st.announcement);
-            for u in st.updates.into_iter().flatten() {
+        for (id, announcement) in batch {
+            // Still stored, so still counted against the ceiling, until LDK holds it.
+            let _ = self.check_announcement(None, &announcement, true);
+            // Taken out only now, with any newer update kept for it meanwhile.
+            let updates = self
+                .replay
+                .lock()
+                .ok()
+                .and_then(|mut r| r.channels.remove(&id))
+                .map(|st| st.updates)
+                .unwrap_or_default();
+            for u in updates.into_iter().flatten() {
                 if self.graph().update_channel(&u).is_ok() {
                     self.changed(Change::Channel(u.contents.short_channel_id));
                 }
@@ -360,10 +372,13 @@ impl Gossip {
 
     /// Puts a channel announcement through LDK, which asks [`Lookup`] for its funding output. The
     /// ceiling counts the channels in the graph and those waiting to enter it.
+    ///
+    /// A `stored` channel (from the graph file) already holds its place under the ceiling.
     fn check_announcement(
         &self,
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
+        stored: bool,
     ) -> Result<bool, LightningError> {
         let c = &msg.contents;
         if c.chain_hash != self.chain {
@@ -372,12 +387,14 @@ impl Gossip {
         }
         let scid = c.short_channel_id;
         let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
+        // Counted under the graph's read lock: a lookup leaves `held` only after LDK has added its
+        // channel, which needs the write lock, so no channel is missed or counted in neither.
         let graph = self.graph().read_only();
-        let (known, len) = (graph.channel(scid).is_some(), graph.channels().len());
+        let known = graph.channel(scid).is_some();
+        let len = graph.channels().len() + self.lookup.held() + self.replay_left();
         drop(graph);
-        let len = len + self.lookup.held() + self.replay_left();
         // Nodes enter the graph only through channels, so this also bounds nodes at twice as many.
-        if !known && len >= self.max_channels {
+        if !known && !stored && len >= self.max_channels {
             self.counters.over_ceiling.fetch_add(1, Ordering::Relaxed);
             if !self.at_ceiling.swap(true, Ordering::Relaxed) {
                 let _ = self.events.send(Event::CeilingReached { channels: len });
@@ -413,6 +430,26 @@ impl Gossip {
         let Some(st) = r.channels.get_mut(&msg.contents.short_channel_id) else {
             return false;
         };
+        // Checked now, or a forged update with a late timestamp would replace the stored one.
+        let a = &st.announcement.contents;
+        let signer = if msg.contents.channel_flags & 1 == 0 {
+            a.node_id_1
+        } else {
+            a.node_id_2
+        };
+        let hash = sha256d::Hash::hash(&msg.contents.encode());
+        let signed = signer.as_pubkey().is_ok_and(|key| {
+            self.secp
+                .verify_ecdsa(
+                    &Message::from_digest(hash.to_byte_array()),
+                    &msg.signature,
+                    &key,
+                )
+                .is_ok()
+        });
+        if msg.contents.chain_hash != self.chain || !signed {
+            return false;
+        }
         let Some(slot) = st
             .updates
             .get_mut(usize::from(msg.contents.channel_flags & 1))
@@ -756,7 +793,7 @@ impl RoutingMessageHandler for Gossip {
             &self.counters.channel_announcements,
             msg.serialized_length(),
         )?;
-        let r = self.check_announcement(their_node_id, msg);
+        let r = self.check_announcement(their_node_id, msg, false);
         self.tally(r)
     }
 
