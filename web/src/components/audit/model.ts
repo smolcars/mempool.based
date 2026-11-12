@@ -73,7 +73,7 @@ export const CATEGORIES: readonly { kind: Kind; name: string; says: string }[] =
   {
     kind: "conflicted",
     name: "Conflicted",
-    says: "Expected, but the block spent one of its coins in another transaction.",
+    says: "Expected, but the block spent one of its coins in another transaction (or, rarely, it was replaced or dropped at that moment).",
   },
   {
     kind: "missing",
@@ -84,7 +84,7 @@ export const CATEGORIES: readonly { kind: Kind; name: string; says: string }[] =
   {
     kind: "unseen",
     name: "Unseen",
-    says: "Mined, but not in our mempool when the block came.",
+    says: "Mined, but not in any block we projected: new to us, or it arrived a moment before the block.",
   },
 ];
 

@@ -88,6 +88,8 @@
   .audit-bars__lane {
     display: flex;
     gap: 2px;
+    /* As wide as the track whatever its offset, so a share means the same width in both lanes. */
+    width: 100%;
     height: 1.25rem;
     margin-left: calc(var(--off) * 100%);
   }
