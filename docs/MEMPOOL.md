@@ -211,17 +211,47 @@ Why not the other calls:
 
 | Call | Why not, on every change |
 |---|---|
-| `getblocktemplate` | Only the first block. TEMPLATE_COST a call, against a tracker that already reads about 2.5 MB/s |
-| `getmempoolfeeratediagram` | Every chunk in order, but no txids: it cannot say which transaction is where. Our chunk count matches it (CHUNKS) |
+| `getblocktemplate` | Only the first block, and 450 ms and 4.2 MB a call (measured). At one call per update that is about 175 MB a minute, more than the tracker's own listing, for an answer we already match (below) |
+| `getmempoolfeeratediagram` | Every chunk in order, but no txids: it cannot say which transaction is where. Our chunks match it: same count at every check, and the fixture test replays its top 118 points exactly |
 | `getmempoolentry` | Has the chunk's fee and weight but not its members or order; it would have to be fetched again for every transaction whose chunk changes |
 
 ### Agreement with the node
 
-AGREEMENT
+Measured on mainnet, 2026-11-12, 53,000–56,500 transactions, read-only, with `projected_watch` scoring our first block against `getblocktemplate` every 30 s (only when the node's template sits on our tip) and against every block that arrived.
+
+**Against the node's template, 41 checks over 21 minutes:**
+
+| | By transaction | By weight |
+|---|---|---|
+| Raw: share of the template in our first block | mean 90.3%, lowest 80.6% | mean 93.9%, lowest 83.2% |
+| Tie-aware | mean 99.99%, lowest 99.74% | mean 99.98%, lowest 99.72% |
+
+Everything the two disagree on sits in one fee-rate class at the block boundary: thousands of chunks with the same rate and fee (0.124 sat/vB at the time), among which the node picks in hash-map order. "Tie-aware" counts a template transaction we placed one block later as agreeing when one of ours the template left out has the same rate and fee. Above the boundary our first block is the template, transaction for transaction.
+
+**Against real blocks** (share of the block that was in our first projected block just before it):
+
+| Block | By transaction | By weight | Tie-aware, by weight | Never reached our mempool | We had placed later |
+|---|---|---|---|---|---|
+| 975,521 | 65.8% | 71.7% | not measured | 0.22% of weight | |
+| 975,522 | 94.9% | 95.5% | 97.6% | 0.23% | 2.1% |
+| 975,523 | 84.4% | 94.8% | 98.3% | 0% | 1.7% |
+
+A miner builds from its own mempool and its own policy, breaks the same ties its own way, and some take transactions out of band, so a real block is a looser target than the node's template.
 
 ### Cost
 
-COST
+Same runs, the server and node on one private network.
+
+| | |
+|---|---|
+| First projection | 55,400 transactions: 12 cluster requests (5,571 clusters asked), 6.0 MB, 0.88 s, on top of the tracker's initial sync |
+| A typical update | one request asking about 15 clusters, a few KB, 4–6 ms; then packing, mean 19 ms, worst 172 ms, on a blocking thread |
+| Each block | one update for the block (about 17 clusters), then every cluster again: about 12 requests, 6 MB, 0.5 s |
+| Calls and bytes added to the node | 43 requests a minute and 340 KB a minute over 21 minutes with one block: about 40 KB a minute between blocks plus 6 MB a block. The tracker reads about 150 MB a minute |
+| Deltas | mean 199 records; the block's delta set 13,926 records and removed 2,664 |
+| Memory | the tracker alone 39 MB RSS; tracker and projector 80 MB at 56,469 transactions, so about 40 MB, or 700 bytes a transaction, the published projection included |
+
+Packing holds the projector's write lock, so a `position` lookup can wait for one pack. Nothing runs on the async runtime's threads but the network calls.
 
 ### The records and the stream
 
@@ -239,7 +269,7 @@ Each block also has totals: transaction count, raw weight, vsize, fees, the lowe
 
 The stream works like the tracker's: `subscribe` returns the current projection and a subscription whose first delta is the next one, deltas are numbered without gaps, and a subscriber more than 64 deltas behind gets `Lagged` and subscribes again. A delta carries the records that entered, moved to another block or changed rate (`set`), the txids that left the mempool (`removed`), both sorted by txid, and every block's new totals. Applying `removed`, then `set`, to the previous projection's records gives the next one's; a test checks this against a running tracker. Order inside a block is not in the delta: it is by rate, and a client sorts by it. Ties keep no meaningful order (see below).
 
-A new block moves nearly every record in the projected blocks one block forward: about 25,000 records, 1.2 MB, once per block. A WebSocket hub may prefer to send a fresh snapshot then.
+A new block moves nearly every record in the projected blocks one block forward: 14,000 to 25,000 records (0.7 to 1.2 MB at 49 bytes), once per block. A WebSocket hub may prefer to send a fresh snapshot then.
 
 When the tip moves, the first block of the last projection on the old tip is kept as `Expected` (six of them), so the block mined on that tip can be audited against what we expected.
 
