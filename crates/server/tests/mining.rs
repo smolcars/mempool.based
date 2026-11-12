@@ -100,8 +100,12 @@ async fn fill(dir: &Path, heights: impl Iterator<Item = u32>) {
 async fn start(dir: &Path) -> (String, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&calls);
-    let rpc = axum::Router::new().fallback(any(move || {
-        counter.fetch_add(1, Ordering::SeqCst);
+    let rpc = axum::Router::new().fallback(any(move |body: String| {
+        // The readiness check calls `getblockchaininfo` on its own schedule, whatever the
+        // requests; count only what the routes might cause.
+        if !body.contains("getblockchaininfo") {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
         async { "{}" }
     }));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

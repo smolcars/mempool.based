@@ -85,7 +85,7 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, frontend at `master` commit `5b4e45b` (2026-11-12):
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, frontend at `master` commit `4809cc7` (2026-11-12):
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
