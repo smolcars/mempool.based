@@ -912,6 +912,16 @@ async fn a_table_behind_the_node_reads_its_own_blocks_by_hash() {
     assert_eq!(r.json()[0], expected(&chain, TIP, true));
     // The page did not hold the table's tip, so it was asked for by hash.
     assert_eq!((node.calls("blocks"), node.calls("block")), (2, 1));
+    // A block the node has and the table has yet to follow: retry, never an empty list.
+    let next = mine(new.block_hash(), TIP + 1, 0);
+    node.best.lock().unwrap().push(esplora(&next, TIP + 1));
+    let r = get(&addr, &format!("{V1}/blocks/{}", TIP + 1)).await;
+    assert_eq!(
+        (r.status, r.json()),
+        (503, json!({"error": "not ready yet; retry"}))
+    );
+    let r = get(&addr, &format!("{V1}/blocks/{}", TIP + 2)).await;
+    assert_eq!((r.status, r.text()), (200, "[]"), "past the node's tip");
     // The node's new tip, where the table still holds the old one: retry once it follows.
     let r = get(&addr, &format!("{V1}/block/{}", new.block_hash())).await;
     assert_eq!(

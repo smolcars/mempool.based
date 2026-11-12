@@ -112,7 +112,9 @@ async fn from_height(ctx: &NetworkContext, start: Option<u32>) -> Response {
         if start > top.0 {
             // Past the node's tip, an empty list as on the reference; short of it, the table has
             // yet to follow the newest blocks.
-            if ctx.electrum.tip().is_some_and(|t| start <= t.height) {
+            // The node's own answer, shared with `/api/blocks/tip/height` and held for a second.
+            let (tip, _): (u32, _) = crate::esplora::json(ctx, Route::TipHeight).await?;
+            if start <= tip {
                 return Err(NOT_READY);
             }
             return Ok(reply(
@@ -145,6 +147,7 @@ async fn from_height(ctx: &NetworkContext, start: Option<u32>) -> Response {
             && start.saturating_add(ZONE) <= top.0
             && rows.iter().all(|r| r.rates.is_some());
         let (body, asked) = with_extras(ctx, store, rows).await?;
+        same_top(store, top).await?;
         let cache = if settled { SETTLED } else { CACHE };
         let source = asked.then(|| Source::Upstream(started.elapsed()));
         Ok(reply(
@@ -192,11 +195,21 @@ async fn block(State(ctx): Ctx, Path(hash): Path<String>) -> Response {
         let settled = row.height.saturating_add(ZONE) <= top.0 && row.rates.is_some();
         let (mut body, asked) = with_extras(&ctx, store, vec![row]).await?;
         let body = body.pop().ok_or(ApiError::INTERNAL)?;
+        same_top(store, top).await?;
         let cache = if settled { SETTLED } else { CACHE };
         let source = asked.then(|| Source::Upstream(started.elapsed()));
         Ok::<_, ApiError>(reply(&body, cache, top, None, "v1_block", source))
     };
     run.await.unwrap_or_else(IntoResponse::into_response)
+}
+
+/// `503` if the table's top moved since `top` was read: the rows read since could be from
+/// another chain than the tip the answer would name.
+async fn same_top(store: &Store, top: (u32, BlockHash)) -> Result<(), ApiError> {
+    match blocks::top(store).await.map_err(read)? {
+        Some(now) if now == top => Ok(()),
+        _ => Err(NOT_READY),
+    }
 }
 
 fn table(ctx: &NetworkContext) -> Result<&Store, ApiError> {

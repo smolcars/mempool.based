@@ -253,13 +253,13 @@ The backfill fills the table newest first ([`STORE.md`](STORE.md#backfill)), so 
 - **A start height or block without a row** is `404 {"error": "block not indexed yet"}`.
 - **A block the table has yet to follow:** a start height between the table's top and the node's tip, or the node's new best block while the table still holds the one it replaced, is `503 not ready yet; retry` with `Retry-After: 1`. The table follows each new tip within about a second.
 - **A block that left the best chain** is `404 {"error": "block is not on the best chain"}`.
-- **A start height past the node's tip** is `[]`, as on the reference.
+- **A start height past the node's tip** is `[]`, as on the reference. The node's tip height is asked through `/api/blocks/tip/height`'s one-second cache, so this costs at most one call a second.
 - **Rows without fee rates** (rated within `BACKFILL_FEE_RATE_DEPTH`, a year by default, and never below it) have `medianFee` and `feeRange` `null`, never `0`.
 - Without a block table (`DATA_DIR` unset) the three block routes answer `503 block extras need a block table on this server`; the summaries still work.
 
 #### Caching and reorgs
 
-An answer is read fresh from the table on each request, so a list never holds a block the table has replaced: once `follow` repairs a reorg, the next answer has the new block. `X-Bitcoin-Chain-Tip` names the table's top, the newest block the answer can include. An answer is **settled** when every block in it is buried under at least 100 more (below `follow`'s zone, where rows are no longer rewritten), is rated, and the list is complete; it is then `public, max-age=86400`. Not `immutable`: a release with a new pool list can name a block's miner differently. Everything else is `max-age=1`. The summaries are fixed by the block's hash and immutable, as `/app/block/:hash/txs`.
+An answer is read fresh from the table on each request, so a list never holds a block the table has replaced: once `follow` repairs a reorg, the next answer has the new block. The table's top is read again after the rows; if it moved meanwhile, the answer is `503 not ready yet; retry` rather than rows from one chain under the tip of another. `X-Bitcoin-Chain-Tip` names the table's top, the newest block the answer can include. An answer is **settled** when every block in it is buried under at least 100 more (below `follow`'s zone, where rows are no longer rewritten), is rated, and the list is complete; it is then `public, max-age=86400`. Not `immutable`: a release with a new pool list can name a block's miner differently. Everything else is `max-age=1`. The summaries are fixed by the block's hash and immutable, as `/app/block/:hash/txs`.
 
 #### Differences from the reference
 
