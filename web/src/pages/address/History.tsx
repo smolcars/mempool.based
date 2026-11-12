@@ -153,9 +153,12 @@ export function History(props: {
         { signal: controller.signal },
       );
       batch(() => {
+        setLoadingMore(false);
+        // A refresh while this was in flight may have replaced the rows it continues; then it
+        // would leave a gap or bring back stale rows, so it is dropped.
+        if (shown()?.at(-1)?.txid !== last.txid) return;
         setLater((l) => [...l, ...page]);
         setLastPageFull(pageIsFull(page, PAGE));
-        setLoadingMore(false);
       });
     } catch (e) {
       if (controller.signal.aborted) return;

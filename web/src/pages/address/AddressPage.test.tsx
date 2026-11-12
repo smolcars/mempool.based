@@ -225,6 +225,40 @@ describe("address page", () => {
     vi.restoreAllMocks();
   });
 
+  it("drops a page that arrives after a refresh replaced the rows it continues", async () => {
+    const conf = (n: number) => tx(n, [[OTHER, 2000]], [[ME, 1000]]);
+    const range = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => conf(from + i));
+    let firstPage = range(31, 55);
+    let release: (r: Response) => void = () => {};
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 80))),
+      [`/address/${ME}/txs`]: () => Response.json(firstPage),
+      [`/address/${ME}/txs?after_txid=${txid(55)}`]: () =>
+        new Promise<Response>((r) => {
+          release = r;
+        }),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
+    await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
+    // Thirty new transactions arrive while the page request is in flight.
+    firstPage = range(1, 25);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+    window.dispatchEvent(new Event("focus"));
+    await until(() =>
+      expect(el.querySelector("tbody tr a")?.getAttribute("href")).toBe(`/tx/${txid(1)}`),
+    );
+    release(Response.json(range(56, 80)));
+    await until(() =>
+      expect([...el.querySelectorAll("button")].map(text)).toContain("Show 25 more"),
+    );
+    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    expect(ids).toEqual(range(1, 25).map((t) => `/tx/${t.txid}`));
+    vi.restoreAllMocks();
+  });
+
   it("says plainly when an address has never been used", async () => {
     serve({ [`/address/${ME}`]: stats(part(0, 0, 0)), [`/address/${ME}/txs`]: [] });
     const el = open(`/address/${ME}`);
