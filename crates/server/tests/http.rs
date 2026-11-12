@@ -311,14 +311,31 @@ async fn paths_too_long_for_the_file_system_are_pages_or_not_found_never_errors(
         assert_eq!(r.status, 200, "{}", &path[..20]);
         assert_eq!(r.body, "<!doctype html>app-shell");
     }
-    for path in [
-        format!("/assets/{long_segment}"),
-        format!("/assets/{many_segments}"),
+    // 253 bytes is a name the file system takes, until `ServeDir` adds `.br` or `.gz` to it.
+    let near_limit = "a".repeat(253);
+    for (path, encoding) in [
+        (format!("/assets/{long_segment}"), "identity"),
+        (format!("/assets/{many_segments}"), "identity"),
+        (format!("/assets/{near_limit}"), "br"),
+        (format!("/assets/{near_limit}"), "gzip"),
     ] {
-        let r = get_path(&addr, &path).await;
+        let r = send(
+            &addr,
+            &format!("GET {path} HTTP/1.1\r\nAccept-Encoding: {encoding}"),
+            b"",
+        )
+        .await;
         assert_json_error(&r, 404, "not found");
         assert_eq!(r.header("cache-control"), Some("no-store"));
     }
+    let r = send(
+        &addr,
+        &format!("GET /{near_limit} HTTP/1.1\r\nAccept-Encoding: br"),
+        b"",
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body, "<!doctype html>app-shell");
 }
 
 #[tokio::test]

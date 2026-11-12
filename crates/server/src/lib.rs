@@ -448,11 +448,14 @@ impl App {
 }
 
 /// Whether `path` names no file under `dir` because it is too long to be one: a segment over 255
-/// bytes, or the whole over 1024 (macOS's `PATH_MAX`; Linux allows 4096). The file system answers
-/// those with an error, which `ServeDir` turns into a 500, rather than "not found". The raw path
-/// is never shorter than the one `ServeDir` decodes, so this errs towards "too long".
+/// bytes, or the whole over 1024 (macOS's `PATH_MAX`; Linux allows 4096), counting the `.br` or
+/// `.gz` that `ServeDir` adds for a compressed variant. The file system answers those with an
+/// error, which `ServeDir` turns into a 500, rather than "not found". The raw path is never
+/// shorter than the one `ServeDir` decodes, so this errs towards "too long".
 fn too_long(dir: &std::path::Path, path: &str) -> bool {
-    dir.as_os_str().len() + path.len() >= 1024 || path.split('/').any(|s| s.len() > 255)
+    const SUFFIX: usize = ".br".len();
+    dir.as_os_str().len() + path.len() + SUFFIX >= 1024
+        || path.split('/').any(|s| s.len() + SUFFIX > 255)
 }
 
 async fn healthz() -> Json<serde_json::Value> {
