@@ -143,6 +143,12 @@ async fn the_routes_answer_from_memory_in_the_references_shapes() {
     assert_eq!(r.header("x-bitcoin-chain-tip"), None);
     let age: u64 = r.header("age").unwrap().parse().unwrap();
     assert!((12..20).contains(&age), "{age}");
+    // Past their limit they are not served, whenever the task last looked.
+    ctx.fees.set(Some(Answer {
+        at: SystemTime::now() - NODE_MAX_AGE,
+        ..answer(Source::Node)
+    }));
+    assert_eq!(get_path(&addr, "/api/v1/fees/precise").await.status, 503);
 
     ctx.fees.set_blocks(Blocks {
         blocks: vec![

@@ -70,6 +70,12 @@ pub struct Rates {
 }
 
 impl Rates {
+    /// Raised to a minimum seen since: every level and the minimum at least `floor`.
+    pub fn at_least(mut self, floor: u32) -> Self {
+        self.minimum = self.minimum.max(floor);
+        self.ordered()
+    }
+
     /// Every level at least the minimum, and a faster level never below a slower one.
     fn ordered(mut self) -> Self {
         let mut below = self.minimum;

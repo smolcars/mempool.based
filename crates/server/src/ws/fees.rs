@@ -106,11 +106,16 @@ impl Fees {
         now.saturating_sub(self.wanted.load(Ordering::Relaxed)) < WANTED_FOR
     }
 
+    /// The answer to serve now. The node's estimates expire here too, not only at the task's
+    /// next tick.
     pub fn current(&self) -> Option<Answer> {
         self.answer
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+            .filter(|a| {
+                a.source == Source::Projected || a.at.elapsed().is_ok_and(|age| age < NODE_MAX_AGE)
+            })
     }
 
     pub fn blocks(&self) -> Option<Blocks> {
@@ -225,7 +230,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                         }
                         let wanted = ctx.fees.wanted(unix(now)) || ctx.hub.subscribers(Topic::Fees) > 0;
                         fetch = wanted && asked.is_none_or(|a| a.elapsed() >= NODE_EVERY);
-                        node_answer(node, now)
+                        node_answer(node, now, seen_floor(engines.as_ref()))
                     }
                 };
                 // Our own answer withdrawn, or an aged one dropped, before any wait on the node.
@@ -234,7 +239,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     asked = Some(Instant::now());
                     if let Ok(Some(r)) = tokio::time::timeout(NODE_WAIT, node_estimates(&ctx)).await {
                         node = Some((Instant::now(), r));
-                        let answer = node_answer(node, SystemTime::now());
+                        let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
                         messages += u64::from(serve(&ctx, answer, &mut published));
                     }
                 }
@@ -267,11 +272,19 @@ async fn node_estimates(ctx: &NetworkContext) -> Option<Rates> {
     fees::from_node(&est.value, floor)
 }
 
-/// The node's estimates as an answer while they are young enough to serve.
-fn node_answer(node: Option<(Instant, Rates)>, now: SystemTime) -> Option<Answer> {
+/// The minimum the tracker last saw the node accept, 0 without the engine.
+fn seen_floor(engines: Option<&Engines>) -> u32 {
+    engines
+        .and_then(|e| e.tracker.node_info())
+        .map_or(0, |i| floor_of(i.mempoolminfee))
+}
+
+/// The node's estimates as an answer while they are young enough to serve, raised to any higher
+/// minimum seen since they came.
+fn node_answer(node: Option<(Instant, Rates)>, now: SystemTime, floor: u32) -> Option<Answer> {
     node.filter(|(at, _)| at.elapsed() < NODE_MAX_AGE)
         .map(|(at, rates)| Answer {
-            rates,
+            rates: rates.at_least(floor),
             source: Source::Node,
             tip: None,
             at: now - at.elapsed(),

@@ -169,6 +169,20 @@ fn the_nodes_estimates_map_to_levels_in_order_and_above_the_floor() {
 }
 
 #[test]
+fn a_higher_minimum_seen_later_lifts_every_level() {
+    let r = Rates {
+        levels: [3_000, 150, 100, 100],
+        minimum: 100,
+    };
+    let lifted = r.at_least(2_000);
+    assert_eq!(
+        (levels(lifted), lifted.minimum),
+        ([3_000, 2_000, 2_000, 2_000], 2_000)
+    );
+    assert_eq!(r.at_least(50), r);
+}
+
+#[test]
 fn inflow_counts_whole_minutes_and_quiet_ones_as_zero() {
     let mut i = Inflow::default();
     i.record(1_000, 2_000, 400);
