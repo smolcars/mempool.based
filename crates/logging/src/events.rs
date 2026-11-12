@@ -5,15 +5,26 @@
 //! thing everywhere. An optional field that does not apply is left out of the line. No field may
 //! hold a password, a credentialed URL, or a raw request path or query.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::{Event, Level};
 
+/// `event!(Type, "name", Level)`, or `event!(Type, "name", Info, keep)` for an `info` event the
+/// ceiling never drops: only one whose rate the code fixes, whatever clients do.
 macro_rules! event {
     ($ty:ident $(<$lt:lifetime>)?, $name:literal, $level:ident) => {
         impl$(<$lt>)? Event for $ty $(<$lt>)? {
             const NAME: &'static str = $name;
             const LEVEL: Level = Level::$level;
+        }
+    };
+    ($ty:ident $(<$lt:lifetime>)?, $name:literal, Info, keep) => {
+        impl$(<$lt>)? Event for $ty $(<$lt>)? {
+            const NAME: &'static str = $name;
+            const LEVEL: Level = Level::Info;
+            const KEEP: bool = true;
         }
     };
 }
@@ -72,7 +83,7 @@ pub struct ServerStarting<'a> {
     pub backfill_busy_percent: u32,
     pub backfill_fee_rate_depth: u32,
 }
-event!(ServerStarting<'a>, "server_starting", Info);
+event!(ServerStarting<'a>, "server_starting", Info, keep);
 
 /// One network is enabled, with the node endpoints it uses. The RPC password is never here and
 /// the Esplora URL cannot hold credentials (config refuses them).
@@ -89,7 +100,7 @@ pub struct NetworkEnabled<'a> {
     /// Whether the Lightning gossip peer runs (`{NET}_LIGHTNING_ENABLED`).
     pub lightning: bool,
 }
-event!(NetworkEnabled<'a>, "network_enabled", Info);
+event!(NetworkEnabled<'a>, "network_enabled", Info, keep);
 
 /// No network is configured: only the frontend and `/healthz` are served.
 #[derive(Debug, Serialize)]
@@ -108,7 +119,7 @@ event!(WebDirMissing, "web_dir_missing", Warn);
 pub struct Listening {
     pub addr: String,
 }
-event!(Listening, "listening", Info);
+event!(Listening, "listening", Info, keep);
 
 /// A shutdown signal arrived; in-flight requests get up to the request timeout to finish.
 #[derive(Debug, Serialize)]
@@ -116,12 +127,12 @@ pub struct ShutdownRequested {
     /// `sigterm` or `ctrl_c`.
     pub signal: &'static str,
 }
-event!(ShutdownRequested, "shutdown_requested", Info);
+event!(ShutdownRequested, "shutdown_requested", Info, keep);
 
 /// The server stopped serving and the process is exiting normally.
 #[derive(Debug, Serialize)]
 pub struct ServerStopped {}
-event!(ServerStopped, "server_stopped", Info);
+event!(ServerStopped, "server_stopped", Info, keep);
 
 /// The configuration is invalid; the process exits. `error` names the variable, never its value.
 #[derive(Debug, Serialize)]
@@ -148,12 +159,17 @@ pub struct Panic<'a> {
 }
 event!(Panic<'a>, "panic", Error);
 
-/// The log queue was full and this many events were dropped. Written when it drains.
+/// Events were dropped: the queue was full (the output fell behind) or they were over the
+/// ceiling. Written by the writer itself, at most once a second, the first at once.
 #[derive(Debug, Serialize)]
-pub struct LogEventsDropped {
+pub struct LogEventsDropped<'a> {
     pub count: u64,
+    pub queue_full: u64,
+    pub over_budget: u64,
+    /// By event name; at most one entry per event type.
+    pub events: &'a BTreeMap<&'static str, u64>,
 }
-event!(LogEventsDropped, "log_events_dropped", Warn);
+event!(LogEventsDropped<'a>, "log_events_dropped", Warn);
 
 /// Connections closed at accept because their address had `CLIENT_MAX_CONNECTIONS` open. The
 /// client sees only a reset, with no response to log. Written at a total of 1, 2, 4, 8…
@@ -203,6 +219,38 @@ pub struct HttpRequest<'a> {
 }
 event!(HttpRequest<'a>, "http_request", Info);
 
+/// Requests a limit refused, summed over a window instead of one `http_request` each. Written at
+/// the end of each minute that had any. Its size is fixed whatever the number of clients.
+#[derive(Debug, Serialize)]
+pub struct RequestsRefused<'a> {
+    /// Seconds the counts cover.
+    pub window_secs: u64,
+    pub total: u64,
+    /// Of `total`, written as their own `http_request`: the first of each reason after a quiet
+    /// window.
+    pub logged: u64,
+    /// By the `refused` label of `http_request`; one entry per label at most.
+    pub reasons: &'a BTreeMap<&'static str, u64>,
+    /// By route class: `api`, `app`, `ws`, `health` or `pages`.
+    pub routes: &'a BTreeMap<&'static str, u64>,
+    /// Distinct client addresses, estimated in fixed memory: exact to a few percent up to tens
+    /// of thousands.
+    pub clients: u64,
+    /// Refusals of the most refused client, counted in fixed memory (an upper bound).
+    pub top_client_refused: u64,
+    /// That client's address, only with `LOG_CLIENT_ADDR=true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_client: Option<String>,
+    /// Refused requests that carried a forwarding header (`X-Forwarded-For`, `X-Real-IP`,
+    /// `Forwarded`) from a peer not in `TRUSTED_PROXIES`, so the header was ignored. Most of
+    /// the refusals: a proxy in front that is not configured as trusted.
+    pub untrusted_forwarded: u64,
+    /// Refused requests keyed to a trusted proxy's own address, because its header was missing
+    /// or unreadable. Most of the refusals: the proxy does not set the header configured.
+    pub proxy_keyed: u64,
+}
+event!(RequestsRefused<'a>, "requests_refused", Warn);
+
 // Node clients.
 
 /// The Electrum connection is up: handshake done, subscriptions restored.
@@ -213,7 +261,7 @@ pub struct ElectrumConnected<'a> {
     pub server: &'a str,
     pub protocol: &'a str,
 }
-event!(ElectrumConnected<'a>, "electrum_connected", Info);
+event!(ElectrumConnected<'a>, "electrum_connected", Info, keep);
 
 /// A ready Electrum connection was lost; the client reconnects with backoff.
 #[derive(Debug, Serialize)]
@@ -236,7 +284,7 @@ event!(ElectrumUnreachable, "electrum_unreachable", Warn);
 pub struct ElectrumResynced {
     pub network: &'static str,
 }
-event!(ElectrumResynced, "electrum_resynced", Info);
+event!(ElectrumResynced, "electrum_resynced", Info, keep);
 
 /// Lines from the node that were not valid JSON-RPC and were skipped. Written when the total
 /// reaches 1, 2, 4, 8…
@@ -284,7 +332,7 @@ pub struct RpcReachable {
     /// Checks that failed before this one.
     pub failures: u32,
 }
-event!(RpcReachable, "rpc_reachable", Info);
+event!(RpcReachable, "rpc_reachable", Info, keep);
 
 // WebSocket hub.
 
@@ -349,7 +397,7 @@ pub struct WsFanout {
     /// The queueing part of `duration_ms`.
     pub fanout_ms: f64,
 }
-event!(WsFanout, "ws_fanout", Info);
+event!(WsFanout, "ws_fanout", Info, keep);
 
 /// A new block's JSON could not be fetched from Esplora, so subscribers were told to resync.
 /// Written at the 1st, 2nd, 4th, 8th… failure in a row.
@@ -428,7 +476,7 @@ pub struct BlockAudited {
     /// From the start of the audit, the wait for the projection on the new block included.
     pub duration_ms: f64,
 }
-event!(BlockAudited, "block_audited", Info);
+event!(BlockAudited, "block_audited", Info, keep);
 
 /// A new block got no audit. Once per block.
 #[derive(Debug, Serialize)]
@@ -438,7 +486,7 @@ pub struct BlockAuditSkipped {
     /// `no_projection`, `stale`, `superseded` or `store`.
     pub reason: &'static str,
 }
-event!(BlockAuditSkipped, "block_audit_skipped", Info);
+event!(BlockAuditSkipped, "block_audit_skipped", Info, keep);
 
 /// Computing summaries failed at the node. Written at the 1st, 2nd, 4th, 8th… failure in a row.
 #[derive(Debug, Serialize)]
@@ -456,7 +504,7 @@ pub struct BlockSummariesRecovered {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(BlockSummariesRecovered, "block_summaries_recovered", Info);
+event!(BlockSummariesRecovered, "block_summaries_recovered", Info, keep);
 
 /// Requests for uncached summaries were refused. Written when the count for that reason on that
 /// network reaches 1, 2, 4, 8…
@@ -483,7 +531,7 @@ pub struct DifficultyComputed {
     /// The node fetches.
     pub duration_ms: f64,
 }
-event!(DifficultyComputed, "difficulty_computed", Info);
+event!(DifficultyComputed, "difficulty_computed", Info, keep);
 
 /// The difficulty-adjustment answer could not be recomputed; the last one is still served.
 /// Written at the 1st, 2nd, 4th, 8th… failure in a row.
@@ -528,7 +576,7 @@ pub struct StoreMigrationApplied<'a> {
     pub migration: &'a str,
     pub duration_ms: f64,
 }
-event!(StoreMigrationApplied<'a>, "store_migration_applied", Info);
+event!(StoreMigrationApplied<'a>, "store_migration_applied", Info, keep);
 
 /// One write held the writer for a second or more.
 #[derive(Debug, Serialize)]
@@ -591,7 +639,7 @@ pub struct BlockRowsRecovered {
     pub task: &'static str,
     pub failures: u32,
 }
-event!(BlockRowsRecovered, "block_rows_recovered", Info);
+event!(BlockRowsRecovered, "block_rows_recovered", Info, keep);
 
 /// Where the backfill stands: every minute while it works, and when it has caught up.
 #[derive(Debug, Serialize)]
@@ -609,7 +657,7 @@ pub struct BlockBackfillProgress {
     pub busy_ms: u64,
     pub bytes: u64,
 }
-event!(BlockBackfillProgress, "block_backfill_progress", Info);
+event!(BlockBackfillProgress, "block_backfill_progress", Info, keep);
 
 // The live mempool.
 
@@ -624,7 +672,7 @@ pub struct MempoolSynced {
     pub bytes: u64,
     pub calls: u32,
 }
-event!(MempoolSynced, "mempool_synced", Info);
+event!(MempoolSynced, "mempool_synced", Info, keep);
 
 /// The live mempool over the last minute, once a minute per network: the tracker's cycles, the
 /// projected blocks' updates and what the WebSocket topics sent.
@@ -661,7 +709,7 @@ pub struct MempoolSummary {
     pub ws_dropped_slow: u64,
     pub fanout_ms_max: f64,
 }
-event!(MempoolSummary, "mempool_summary", Info);
+event!(MempoolSummary, "mempool_summary", Info, keep);
 
 /// A tracker cycle failed and nothing from it was published. At the 1st, 2nd, 4th, 8th…
 /// failure in a row.
@@ -681,7 +729,7 @@ pub struct MempoolRecovered {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(MempoolRecovered, "mempool_recovered", Info);
+event!(MempoolRecovered, "mempool_recovered", Info, keep);
 
 /// The node's `mempool_sequence` went backwards: it restarted.
 #[derive(Debug, Serialize)]
@@ -712,7 +760,7 @@ pub struct ProjectionRecovered {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(ProjectionRecovered, "projection_recovered", Info);
+event!(ProjectionRecovered, "projection_recovered", Info, keep);
 
 /// A new block's way through the live mempool, from the node's announcement: when the tracker
 /// dropped what it confirmed, when the mempool topics were sent on it, and how much the
@@ -735,7 +783,7 @@ pub struct MempoolBlock {
     pub refresh_removed: usize,
     pub refresh_bytes: u64,
 }
-event!(MempoolBlock, "mempool_block", Info);
+event!(MempoolBlock, "mempool_block", Info, keep);
 
 /// The projector fell behind the tracker and rebuilt from a fresh snapshot.
 #[derive(Debug, Serialize)]
@@ -764,7 +812,7 @@ pub struct FeesSummary {
     pub inflow_minutes: usize,
     pub ws_messages: u64,
 }
-event!(FeesSummary, "fees_summary", Info);
+event!(FeesSummary, "fees_summary", Info, keep);
 
 /// Our own recommendations stopped and the node's estimates (or nothing) are served instead.
 /// `reason` is `warming_up`, `stale` or `engine_off`.
@@ -781,7 +829,7 @@ pub struct FeesFallbackEnded {
     pub network: &'static str,
     pub duration_ms: u64,
 }
-event!(FeesFallbackEnded, "fees_fallback_ended", Info);
+event!(FeesFallbackEnded, "fees_fallback_ended", Info, keep);
 
 /// A reader of the tracker's or the projector's change stream fell behind and started over
 /// from a snapshot. At a total of 1, 2, 4, 8… per network and source.
@@ -806,7 +854,7 @@ pub struct PoolsReattributed {
     pub changed: u64,
     pub duration_ms: f64,
 }
-event!(PoolsReattributed, "pools_reattributed", Info);
+event!(PoolsReattributed, "pools_reattributed", Info, keep);
 
 /// The mining answers were recomputed because the block table changed: once a block per
 /// network, and at most once a minute while the backfill adds rows.
@@ -846,7 +894,7 @@ pub struct MempoolHistoryRolledUp {
     /// The whole write: the minute's sample and the roll-up.
     pub duration_ms: f64,
 }
-event!(MempoolHistoryRolledUp, "mempool_history_rolled_up", Info);
+event!(MempoolHistoryRolledUp, "mempool_history_rolled_up", Info, keep);
 
 /// Minutes left out of the mempool history, at the 1st, 2nd, 4th, 8th… in a row: `syncing`,
 /// `stale`, `lagged`, `late`, `store_busy` or `store_failed`, for the latest.
@@ -856,7 +904,7 @@ pub struct MempoolHistorySkipped {
     pub reason: &'static str,
     pub skipped: u32,
 }
-event!(MempoolHistorySkipped, "mempool_history_skipped", Info);
+event!(MempoolHistorySkipped, "mempool_history_skipped", Info, keep);
 
 /// A minute was sampled again after `skipped` in a row were not.
 #[derive(Debug, Serialize)]
@@ -864,7 +912,7 @@ pub struct MempoolHistoryResumed {
     pub network: &'static str,
     pub skipped: u32,
 }
-event!(MempoolHistoryResumed, "mempool_history_resumed", Info);
+event!(MempoolHistoryResumed, "mempool_history_resumed", Info, keep);
 
 /// The mempool history could not be read for a request: `timed_out` past the store's read
 /// limit, or `store`. At the 1st, 2nd, 4th, 8th… failure in a row.
@@ -898,7 +946,7 @@ pub struct TrackingSummary {
     pub replacements: usize,
     pub replaced: u64,
 }
-event!(TrackingSummary, "tracking_summary", Info);
+event!(TrackingSummary, "tracking_summary", Info, keep);
 
 /// A socket was refused a transaction or address because the network follows its total already.
 /// At a total of 1, 2, 4, 8… per kind and network.
@@ -920,7 +968,7 @@ pub struct ReplacementsRestored {
     pub links: usize,
     pub duration_ms: u64,
 }
-event!(ReplacementsRestored, "replacements_restored", Info);
+event!(ReplacementsRestored, "replacements_restored", Info, keep);
 
 /// The replacement record could not be read from or written to the store. At the 1st, 2nd, 4th,
 /// 8th… failure in a row.
@@ -965,7 +1013,7 @@ pub struct LightningStarted<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<&'a str>,
 }
-event!(LightningStarted<'a>, "lightning_started", Info);
+event!(LightningStarted<'a>, "lightning_started", Info, keep);
 
 /// The gossip peer could not start (`stage` `start`: no store, an unusable data directory or
 /// node key) or stopped on its own (`run`). The rest of the server keeps running.
@@ -987,7 +1035,7 @@ pub struct LightningStopped<'a> {
     pub error: Option<&'a str>,
     pub duration_ms: f64,
 }
-event!(LightningStopped<'a>, "lightning_stopped", Info);
+event!(LightningStopped<'a>, "lightning_stopped", Info, keep);
 
 /// A Lightning peer, as configured (`<pubkey>@<ip>:<port>`), completed the handshake.
 #[derive(Debug, Serialize)]
@@ -995,7 +1043,7 @@ pub struct LightningPeerConnected {
     pub network: &'static str,
     pub peer: String,
 }
-event!(LightningPeerConnected, "lightning_peer_connected", Info);
+event!(LightningPeerConnected, "lightning_peer_connected", Info, keep);
 
 /// A connected Lightning peer went away; it is dialled again after a backoff.
 #[derive(Debug, Serialize)]
@@ -1004,7 +1052,7 @@ pub struct LightningPeerLost {
     pub peer: String,
     pub connected_secs: u64,
 }
-event!(LightningPeerLost, "lightning_peer_lost", Info);
+event!(LightningPeerLost, "lightning_peer_lost", Info, keep);
 
 /// Dialling a Lightning peer failed (TCP, timeout or handshake): at the 1st, 2nd, 4th, 8th…
 /// failure in a row.
@@ -1025,7 +1073,7 @@ pub struct LightningSynced {
     pub channels: usize,
     pub from_disk: bool,
 }
-event!(LightningSynced, "lightning_synced", Info);
+event!(LightningSynced, "lightning_synced", Info, keep);
 
 /// Once a minute while the peer runs: the graph, validation, the close-watcher, the node load
 /// both cause, and what was stored. Counts are since start unless named otherwise.
@@ -1066,7 +1114,7 @@ pub struct LightningSummary {
     pub history_records: u64,
     pub history_seq: u64,
 }
-event!(LightningSummary, "lightning_summary", Info);
+event!(LightningSummary, "lightning_summary", Info, keep);
 
 /// The graph reached its ceiling (`{NET}_LIGHTNING_MAX_CHANNELS`); new channels are refused.
 #[derive(Debug, Serialize)]
@@ -1100,7 +1148,7 @@ pub struct LightningPruned {
     pub channels: usize,
     pub nodes: usize,
 }
-event!(LightningPruned, "lightning_pruned", Info);
+event!(LightningPruned, "lightning_pruned", Info, keep);
 
 /// A funding-output request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
 /// failure in a row, with the announcements waiting.
@@ -1158,7 +1206,7 @@ pub struct LightningChannelClosed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee: Option<u64>,
 }
-event!(LightningChannelClosed, "lightning_channel_closed", Info);
+event!(LightningChannelClosed, "lightning_channel_closed", Info, keep);
 
 /// The history store fell further behind than the peer keeps: `missed` records were never seen.
 /// The open channels were stored again from the peer's current set; closes among the missed
@@ -1189,7 +1237,7 @@ pub struct LightningHistoryResumed {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(LightningHistoryResumed, "lightning_history_resumed", Info);
+event!(LightningHistoryResumed, "lightning_history_resumed", Info, keep);
 
 /// A ten-minute statistics snapshot was stored, with `skipped` slots missed before it.
 #[derive(Debug, Serialize)]
@@ -1204,7 +1252,7 @@ pub struct LightningStatsStored {
     pub rolled_hours: usize,
     pub duration_ms: f64,
 }
-event!(LightningStatsStored, "lightning_stats_stored", Info);
+event!(LightningStatsStored, "lightning_stats_stored", Info, keep);
 
 /// Snapshots were not taken: `syncing`, `late`, `store_busy` or `store_failed`. At the 1st,
 /// 2nd, 4th… in a row.
@@ -1214,7 +1262,7 @@ pub struct LightningStatsSkipped {
     pub reason: &'static str,
     pub skipped: u32,
 }
-event!(LightningStatsSkipped, "lightning_stats_skipped", Info);
+event!(LightningStatsSkipped, "lightning_stats_skipped", Info, keep);
 
 /// A line from LDK's own logger. `message` is LDK's text, at most 512 bytes, and may quote what
 /// a peer sent.
@@ -1324,7 +1372,24 @@ mod tests {
                 location: "a.rs:1",
                 thread: "main",
             }),
-            both(&LogEventsDropped { count: 3 }),
+            both(&LogEventsDropped {
+                count: 3,
+                queue_full: 1,
+                over_budget: 2,
+                events: &BTreeMap::from([("http_request", 2), ("ws_closed", 1)]),
+            }),
+            both(&RequestsRefused {
+                window_secs: 60,
+                total: 5,
+                logged: 1,
+                reasons: &BTreeMap::from([("client_rate", 4), ("origin", 1)]),
+                routes: &BTreeMap::from([("api", 4), ("ws", 1)]),
+                clients: 2,
+                top_client_refused: 4,
+                top_client: Some("192.0.2.1".into()),
+                untrusted_forwarded: 0,
+                proxy_keyed: 0,
+            }),
             both(&HttpRequest {
                 request_id: "00ff",
                 network: Some(n),

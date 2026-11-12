@@ -71,6 +71,7 @@ fn filters_levels_never_blocks_and_reports_drops() {
     let settings = Settings {
         format: Format::Json,
         level: Level::Info,
+        max_bytes_per_sec: logging::DEFAULT_MAX_BYTES_PER_SEC,
     };
     assert!(logging::init(settings, gate.clone()));
     assert!(
@@ -108,6 +109,9 @@ fn filters_levels_never_blocks_and_reports_drops() {
     let count = usize::try_from(dropped[0]["count"].as_u64().unwrap()).unwrap();
     assert!(written >= QUEUE_LINES, "a full queue is kept: {written}");
     assert_eq!(written + count, total, "every event is written or counted");
+    assert_eq!(dropped[0]["queue_full"], dropped[0]["count"]);
+    assert_eq!(dropped[0]["over_budget"], 0);
+    assert_eq!(dropped[0]["events"]["probe"], dropped[0]["count"]);
     // The summary follows the backlog it describes.
     assert_eq!(all.last().unwrap()["event"], "log_events_dropped");
 
