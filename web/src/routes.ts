@@ -1,3 +1,4 @@
+// TEMP measurement: a frontend-only change.
 // The route table. Each page declares its own routes in pages/<page>/routes.ts; add new pages here once.
 import type { RouteDefinition } from "@solidjs/router";
 import { routes as address } from "./pages/address/routes";
