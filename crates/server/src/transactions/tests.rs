@@ -470,3 +470,98 @@ async fn the_replacement_record_survives_a_restart_with_a_store() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn the_original_confirmed_after_all_keeps_its_figures_across_a_restart() {
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-pf6-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.to_str().unwrap().to_owned();
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 500, 200);
+    let start = || {
+        Server::on(
+            context_in(
+                "127.0.0.1:1",
+                "http://127.0.0.1:1",
+                true,
+                Some(&path),
+                |_| {},
+            ),
+            &mock,
+        )
+    };
+    let store_has = |s: &Server, want: usize| {
+        let store = Arc::clone(&s.ctx.blocks.as_ref().unwrap().store);
+        async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let rows = engine::replacements::db::load(&store, 10).await.unwrap();
+                if rows.len() == want && rows.iter().all(|l| l.by_tx.is_some()) {
+                    return;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "never stored");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+    };
+    let s = start();
+    s.settle().await;
+    let b = mock.send_with(&[coin(1)], 1, 1000, 200, true);
+    s.settle().await;
+    store_has(&s, 1).await;
+    drop(s);
+
+    // Restarted between the replacement and the block: a miner confirms `a` after all.
+    let s = start();
+    s.settle().await;
+    mock.mine_replaced(&[a]);
+    s.settle().await;
+    let expect = |body: &str| {
+        let v: Value = serde_json::from_str(body).unwrap();
+        let root = &v["replacements"];
+        let m = mock.get(a);
+        assert_eq!(root["tx"]["txid"], json!(a.to_string()), "{v}");
+        assert_eq!(
+            (&root["tx"]["fee"], &root["tx"]["vsize"], &root["time"]),
+            (&json!(m.fee), &json!(m.vsize), &json!(m.time)),
+            "{v}"
+        );
+        assert_eq!(root["mined"], json!(true));
+        assert_eq!(root["replaces"][0]["tx"]["txid"], json!(b.to_string()));
+    };
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while serde_json::from_str::<Value>(&rbf_of(&s, b).await.1).unwrap()["replacements"]["tx"]["txid"]
+        != json!(a.to_string())
+    {
+        assert!(tokio::time::Instant::now() < deadline, "never confirmed");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    expect(&rbf_of(&s, b).await.1);
+    expect(&rbf_of(&s, a).await.1);
+    let ctx = || State(Arc::clone(&s.ctx));
+    let recent: Value = serde_json::from_str(&answer(replacements(ctx()).await).await.1).unwrap();
+    expect(&json!({ "replacements": recent[0] }).to_string());
+    // What the transaction page reads: `b` was replaced by `a`, with `a`'s figures.
+    let app = crate::replacements::route(ctx(), Path(b.to_string()))
+        .await
+        .unwrap();
+    let app: Value = serde_json::from_str(&text(app).await.1).unwrap();
+    assert_eq!(app["replaced_by"][0]["by"], json!(a.to_string()));
+    assert_eq!(app["replaced_by"][0]["by_fee"], json!(mock.get(a).fee));
+    store_has(&s, 1).await;
+    drop(s);
+
+    // And after the block: the stored record still has them.
+    let s = start();
+    s.settle().await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while rbf_of(&s, b).await.1.contains("null,\"replaces\"")
+        || !rbf_of(&s, b).await.1.contains(&a.to_string())
+    {
+        assert!(tokio::time::Instant::now() < deadline, "never restored");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    expect(&rbf_of(&s, b).await.1);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

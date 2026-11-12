@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, HeaderName};
+use axum::http::{HeaderMap, HeaderName, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -310,6 +310,10 @@ pub struct Limiter {
     pub clients: Arc<Clients>,
     /// Static files' own table, so pages and assets never use up a client's API allowance.
     statics: Arc<Clients>,
+    /// API preflights' own table, with the API's rate, burst and concurrency: a browser sends at
+    /// most one before each API call, so an honest page is never refused a preflight while its
+    /// call would be allowed, and the preflight never spends that call's token.
+    preflights: Arc<Clients>,
     pub limits: Limits,
     in_flight: Arc<Semaphore>,
 }
@@ -323,6 +327,7 @@ impl Limiter {
                 STATIC_BURST,
                 limits.max_tracked_clients,
             ),
+            preflights: Clients::new(limits),
             limits: limits.clone(),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
         }
@@ -382,10 +387,12 @@ pub(crate) enum Checked {
 pub(crate) struct Counted;
 
 impl Limiter {
-    /// Takes `peer`'s rate token and request slot for `path` (static files' own limits, or the
-    /// API's), or says why not. Who the client is, for the refusal summary, either way.
+    /// Takes `peer`'s rate token and request slot for `path` (static files' own limits, API
+    /// preflights' own, or the API's), or says why not. Who the client is, for the refusal
+    /// summary, either way.
     pub(crate) fn check(
         &self,
+        method: &Method,
         headers: &HeaderMap,
         path: &str,
         peer: IpAddr,
@@ -400,6 +407,8 @@ impl Limiter {
         };
         let (table, max) = if is_static(path) {
             (&self.statics, STATIC_CONCURRENCY)
+        } else if method == Method::OPTIONS && crate::is_api(path) {
+            (&self.preflights, self.limits.client_requests)
         } else {
             (&self.clients, self.limits.client_requests)
         };
@@ -432,7 +441,7 @@ pub async fn limit(State(limiter): State<Arc<Limiter>>, mut req: Request, next: 
                 // share one bucket.
                 return ApiError::INTERNAL.into_response();
             };
-            match limiter.check(req.headers(), req.uri().path(), peer.ip()) {
+            match limiter.check(req.method(), req.headers(), req.uri().path(), peer.ip()) {
                 Ok((hold, addr, who)) => (Some(hold), addr, who),
                 Err((refused, who)) => {
                     let mut res = refused.into_response();
@@ -442,6 +451,10 @@ pub async fn limit(State(limiter): State<Arc<Limiter>>, mut req: Request, next: 
             }
         }
     };
+    // An admitted API preflight needs nothing more: `cors` adds its headers.
+    if req.method() == Method::OPTIONS && crate::is_api(req.uri().path()) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let mut res = admitted(&limiter, addr, req, next).await;
     if res.extensions().get::<Refused>().is_some() {
         res.extensions_mut().insert(who);
@@ -628,6 +641,44 @@ mod tests {
             axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
         );
         assert_eq!(client_addr(&h, proxy, Some(&t)), proxy);
+    }
+
+    #[test]
+    fn preflights_have_their_own_bounded_table() {
+        let limiter = Limiter::new(&Limits {
+            client_rate_per_sec: 1,
+            client_burst: 1,
+            max_tracked_clients: 2,
+            ..Limits::default()
+        });
+        let h = HeaderMap::new();
+        let check = |m: &Method, path: &str, peer: &str| limiter.check(m, &h, path, ip(peer));
+        let api = "/signet/api/tx";
+        let _a = check(&Method::OPTIONS, api, "192.0.2.1").unwrap();
+        // The preflight did not spend the call's token.
+        let _b = check(&Method::POST, api, "192.0.2.1").unwrap();
+        assert_eq!(
+            check(&Method::OPTIONS, api, "192.0.2.1")
+                .unwrap_err()
+                .0
+                .reason,
+            "client_rate"
+        );
+        let _c = check(&Method::OPTIONS, api, "192.0.2.2").unwrap();
+        // Many clients: the table stays at its size like the API's own.
+        assert_eq!(
+            check(&Method::OPTIONS, api, "192.0.2.3")
+                .unwrap_err()
+                .0
+                .reason,
+            "client_table_full"
+        );
+        assert_eq!(limiter.preflights.tracked(), 2);
+        assert_eq!(limiter.clients.tracked(), 1);
+        // `OPTIONS` outside the API is no preflight: it is counted where the path belongs.
+        let _d = check(&Method::OPTIONS, "/app/config", "192.0.2.4").unwrap();
+        assert_eq!(limiter.clients.tracked(), 2);
+        assert_eq!(limiter.preflights.tracked(), 2);
     }
 
     #[test]

@@ -480,6 +480,44 @@ async fn a_client_over_its_rate_is_refused_while_others_are_served() {
     assert_eq!(r.header("retry-after"), Some("1"));
 }
 
+#[tokio::test]
+async fn preflights_are_limited_when_the_router_is_driven_alone_too() {
+    let app = App::with_routes(
+        &config(Limits {
+            client_rate_per_sec: 1,
+            client_burst: 2,
+            ..Limits::default()
+        }),
+        probes(),
+    );
+    let preflight = |peer: &str| {
+        let req = Request::options("/api/net")
+            .header("origin", "https://wallet.example")
+            .header("access-control-request-method", "POST")
+            .extension(ConnectInfo(peer.parse::<SocketAddr>().unwrap()))
+            .body(Body::empty())
+            .unwrap();
+        app.router().oneshot(req)
+    };
+    let a = "192.0.2.1:1000";
+    for _ in 0..2 {
+        let r = preflight(a).await.unwrap();
+        assert_eq!(r.status().as_u16(), 204);
+        assert_eq!(
+            r.headers()["access-control-allow-methods"],
+            "GET, HEAD, POST"
+        );
+    }
+    let r = preflight(a).await.unwrap();
+    assert_eq!(r.status().as_u16(), 429);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    assert!(!r.headers().contains_key("access-control-allow-methods"));
+    // The calls they preceded still have their whole allowance.
+    assert_eq!(from(&app, a, "/api/net").await, 200);
+    assert_eq!(from(&app, a, "/api/net").await, 200);
+    assert_eq!(from(&app, a, "/api/net").await, 429);
+}
+
 fn trusted(proxies: &str) -> Option<TrustedProxy> {
     Some(TrustedProxy {
         header: "x-real-ip".parse().unwrap(),

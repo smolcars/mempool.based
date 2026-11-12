@@ -157,6 +157,33 @@ impl Node {
         gone
     }
 
+    /// A new block holding `ids`, on the active chain.
+    fn mine(&mut self, ids: &[Txid]) -> BlockHash {
+        let n = self;
+        let set: HashSet<Txid> = ids.iter().copied().collect();
+        let mined = n.take(&set);
+        n.next += 1;
+        let height = n.chain.len() as u32;
+        let mut block = Block {
+            header: Header {
+                version: Version::TWO,
+                prev_blockhash: n.chain.last().copied().unwrap_or(BlockHash::all_zeros()),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: height,
+                bits: CompactTarget::from_consensus(0x207f_ffff),
+                nonce: n.next,
+            },
+            txdata: std::iter::once(make(&[coin(4_000_000 + n.next)], 1, n.next))
+                .chain(mined.into_iter().map(|t| t.tx))
+                .collect(),
+        };
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+        let hash = block.block_hash();
+        n.blocks.insert(hash, block);
+        n.chain.push(hash);
+        hash
+    }
+
     /// `ids` and every mempool transaction that spends from them, transitively.
     fn with_descendants(&self, ids: &[Txid]) -> HashSet<Txid> {
         let mut all: HashSet<Txid> = ids.iter().copied().collect();
@@ -264,29 +291,32 @@ impl Mock {
 
     /// A new block holding `ids`, on the active chain.
     pub(crate) fn mine(&self, ids: &[Txid]) -> BlockHash {
+        self.node().mine(ids)
+    }
+
+    /// A new block holding `ids`, sent before but replaced since: a miner that saw them first.
+    /// What spends their inputs now leaves, with its descendants.
+    pub(crate) fn mine_replaced(&self, ids: &[Txid]) -> BlockHash {
         let mut n = self.node();
-        let set: HashSet<Txid> = ids.iter().copied().collect();
-        let mined = n.take(&set);
-        n.next += 1;
-        let height = n.chain.len() as u32;
-        let mut block = Block {
-            header: Header {
-                version: Version::TWO,
-                prev_blockhash: n.chain.last().copied().unwrap_or(BlockHash::all_zeros()),
-                merkle_root: TxMerkleNode::all_zeros(),
-                time: height,
-                bits: CompactTarget::from_consensus(0x207f_ffff),
-                nonce: n.next,
-            },
-            txdata: std::iter::once(make(&[coin(4_000_000 + n.next)], 1, n.next))
-                .chain(mined.into_iter().map(|t| t.tx))
-                .collect(),
-        };
-        block.header.merkle_root = block.compute_merkle_root().unwrap();
-        let hash = block.block_hash();
-        n.blocks.insert(hash, block);
-        n.chain.push(hash);
-        hash
+        let txs: Vec<MockTx> = ids.iter().map(|i| n.sent[i].clone()).collect();
+        let spent: Vec<OutPoint> = txs
+            .iter()
+            .flat_map(|t| t.tx.input.iter().map(|i| i.previous_output))
+            .collect();
+        let conflicts: Vec<Txid> = n
+            .txs
+            .iter()
+            .filter(|m| {
+                m.tx.input
+                    .iter()
+                    .any(|i| spent.contains(&i.previous_output))
+            })
+            .map(MockTx::id)
+            .collect();
+        let gone = n.with_descendants(&conflicts);
+        n.take(&gone);
+        n.txs.extend(txs);
+        n.mine(ids)
     }
 
     /// Disconnects the tip block: its transactions return to the mempool.

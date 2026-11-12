@@ -26,6 +26,8 @@ tower-http.workspace = true
 [dev-dependencies]
 # Already built for `ln`: the tests build a real graph to copy from.
 lightning.workspace = true
+# A feature, not a crate: paused clocks for the timing tests.
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 # Turns the WebSocket hub into an echo server for the conformance suite (dev/autobahn). Never in

@@ -521,8 +521,8 @@ impl Tracking {
                 by_tx: by_info,
                 mined,
             };
-            st.replacements.insert(link);
-            batch.links.push(link);
+            // As recorded, so the store keeps what the record filled in.
+            batch.links.push(st.replacements.insert(link));
         }
         let mut moved = false;
         for (txid, reason) in &d.removed {
