@@ -5,7 +5,7 @@ mempool.based is a block explorer built for rbitcoin v0.9.1. Read [`docs/ARCHITE
 ## Never
 
 1. **Never commit secrets or private infrastructure details.** That means `.env`, credentials, private hostnames, IP addresses and local file paths. The repo is public. Use the variable names from `.env.example`.
-2. **Never broadcast a transaction on mainnet, and never call a write RPC on a shared node.** Test writes on regtest ([`docs/REGTEST.md`](docs/REGTEST.md)).
+2. **Never broadcast a transaction on mainnet, and never call a write RPC on a shared node.** That includes probing a write route with a malformed body to see whether it exists: the request still reaches the node. Test writes on regtest ([`docs/REGTEST.md`](docs/REGTEST.md)).
 3. **Never read or copy mempool.space source code.** It is AGPL and this project is MIT. Work from its observable API behaviour and write everything in your own words.
 4. **Never weaken a rule in [`docs/SECURITY.md`](docs/SECURITY.md) to make something work.** If a rule blocks you, say so in the PR.
 5. **Never push CI over its budget.** A PR must finish its checks in under 3 minutes with a warm cache ([`docs/CI.md`](docs/CI.md)).
