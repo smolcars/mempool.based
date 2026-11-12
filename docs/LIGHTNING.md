@@ -40,9 +40,11 @@ LDK asks each peer for gossip with a `gossip_timestamp_filter` set two weeks bac
 
 Peers' graphs differ: alone, ACINQ listed 21,600 channels and Bitfinex 30,250. Asking every peer gives the union.
 
+Channels we already hold whose nodes have sent no announcement are requested too, once per node per process. A timestamp filter brings only the last two weeks of node announcements and most nodes announce less often, while a peer answering for a channel also sends its nodes' announcements. Without this, a sync from LND peers left 3,900 of 13,600 nodes with an alias; with it, 7,560. The rest never announce.
+
 **"Synced"** (`Status::synced`, `Event::Synced`) means the graph is complete enough to show: every connected peer's channel list has arrived, every channel on them has been received or given up on, and no new channel has arrived for 30 seconds, or the graph was loaded from a file caught up within the last 13 days.
 
-The graph file's modification time is set to the last moment the peer was **caught up**: connected, with every listed channel requested and no new channel for 30 seconds. It is not the time of writing, so a graph saved after a week offline does not pass for fresh. After a restart the timestamp filter starts one day before that moment instead of two weeks back, so peers that honour it resend only what is new.
+The graph file's modification time is set to the last moment the peer was **caught up**: connected, with every listed channel requested and no new channel for 30 seconds. It is not the time of writing, so a graph saved after a week offline does not pass for fresh. After a restart the timestamp filter starts an hour before that moment instead of two weeks back (LDK's own window for peers it does not fully sync), so peers that honour it resend only what is new. A day's margin would be most of the graph again: nodes refresh their channel updates about daily.
 
 ### Peers
 

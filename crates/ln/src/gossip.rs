@@ -6,7 +6,10 @@
 //! queries is also asked for every channel id it knows (`query_channel_range`), and the channels
 //! missing here are requested from it in batches (`query_short_channel_ids`), one batch at a time
 //! per peer and never the same channel from two peers at once. Peers' graphs differ (on mainnet
-//! eclair listed 21,600 channels and LND 30,250), so asking every peer gives the union.
+//! eclair listed 21,600 channels and LND 30,250), so asking every peer gives the union. Channels
+//! we hold whose nodes have sent no announcement are requested too, once per node and process: a
+//! timestamp filter brings only the last two weeks of node announcements, and most nodes announce
+//! less often, while a peer answering for a channel also sends its nodes' announcements.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -22,7 +25,9 @@ use lightning::ln::msgs::{
     MessageSendEvent, NodeAnnouncement, QueryChannelRange, QueryShortChannelIds, ReplyChannelRange,
     ReplyShortChannelIdsEnd, RoutingMessageHandler,
 };
-use lightning::routing::gossip::{NetworkGraph, NodeId, P2PGossipSync, verify_node_announcement};
+use lightning::routing::gossip::{
+    NetworkGraph, NodeId, P2PGossipSync, ReadOnlyNetworkGraph, verify_node_announcement,
+};
 use lightning::routing::utxo::UtxoLookup;
 use lightning::types::features::{InitFeatures, NodeFeatures};
 use lightning::util::ser::Writeable;
@@ -56,6 +61,10 @@ struct RangeSync {
     peers: HashMap<PublicKey, PeerRange>,
     /// Channel ids wanted from or requested of some peer. Bounded by the graph ceiling.
     queued: HashSet<u64>,
+    /// Unannounced nodes a channel was already requested for: many never announce, and asking
+    /// again on every connection would fetch their channels each time. Graph nodes only, so
+    /// bounded by twice the ceiling.
+    asked: HashSet<NodeId>,
 }
 
 #[derive(Default)]
@@ -262,7 +271,7 @@ impl Gossip {
             .filter(|(_, p)| {
                 p.in_flight.as_ref().is_some_and(|(batch, sent)| {
                     sent.elapsed() >= BATCH_TIMEOUT
-                        || batch.iter().all(|scid| graph.channel(*scid).is_some())
+                        || batch.iter().all(|scid| complete(&graph, *scid))
                 })
             })
             .map(|(id, _)| *id)
@@ -276,7 +285,7 @@ impl Gossip {
 
     /// Requests the peer's next batch of missing channels, unless one is in flight.
     fn next_batch(&self, r: &mut RangeSync, peer: PublicKey) {
-        let RangeSync { peers, queued } = r;
+        let RangeSync { peers, queued, .. } = r;
         let Some(p) = peers.get_mut(&peer) else {
             return;
         };
@@ -288,7 +297,7 @@ impl Gossip {
         while batch.len() < SCID_BATCH
             && let Some(scid) = p.wanted.pop_front()
         {
-            if graph.channel(scid).is_none() {
+            if !complete(&graph, scid) {
                 batch.push(scid);
             } else {
                 queued.remove(&scid);
@@ -307,6 +316,15 @@ impl Gossip {
             },
         });
     }
+}
+
+/// Whether we hold a channel and both its nodes' announcements: nothing to ask a peer for.
+fn complete(graph: &ReadOnlyNetworkGraph<'_>, scid: u64) -> bool {
+    graph.channel(scid).is_some_and(|c| {
+        [c.node_one, c.node_two]
+            .iter()
+            .all(|n| graph.node(n).is_some_and(|n| n.announcement_info.is_some()))
+    })
 }
 
 fn ignore(err: &str) -> LightningError {
@@ -494,7 +512,11 @@ impl RoutingMessageHandler for Gossip {
         let Ok(mut r) = self.range.lock() else {
             return Ok(());
         };
-        let RangeSync { peers, queued } = &mut *r;
+        let RangeSync {
+            peers,
+            queued,
+            asked,
+        } = &mut *r;
         let Some(p) = peers.get_mut(&their_node_id) else {
             return Err(ignore("unsolicited reply_channel_range"));
         };
@@ -510,7 +532,20 @@ impl RoutingMessageHandler for Gossip {
             if queued.len() >= self.max_channels {
                 break;
             }
-            if graph.channel(scid).is_none() && queued.insert(scid) {
+            let want = match graph.channel(scid) {
+                None => true,
+                Some(c) => {
+                    let mut new = false;
+                    for n in [c.node_one, c.node_two] {
+                        let announced = graph
+                            .node(&n)
+                            .is_some_and(|n| n.announcement_info.is_some());
+                        new |= !announced && asked.insert(n);
+                    }
+                    new
+                }
+            };
+            if want && queued.insert(scid) {
                 p.wanted.push_back(scid);
             }
         }

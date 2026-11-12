@@ -40,8 +40,10 @@ const TIMER_TICK: Duration = Duration::from_secs(10);
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
 /// A saved graph younger than this is shown at once after a restart.
 const FRESH_ON_DISK: Duration = Duration::from_secs(13 * 24 * 3600);
-/// After a restart, gossip is requested from this long before the saved graph's time.
-const RESUME_MARGIN_SECS: u64 = 24 * 3600;
+/// After a restart, gossip is requested from this long before the saved graph's time: LDK's own
+/// window for peers it does not fully sync. A day would be most of the graph again, as nodes
+/// refresh their channel updates about daily.
+const RESUME_MARGIN_SECS: u64 = 3600;
 /// A connection that lasted this long resets the peer's failure count.
 const STABLE: Duration = Duration::from_secs(60);
 
@@ -384,7 +386,11 @@ async fn supervise(
         })
         .collect();
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<usize>();
-    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    // The first tick waits a second, so a caller that subscribes right after `start` sees it.
+    let mut tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        Duration::from_secs(1),
+    );
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let (mut last_timer, mut last_stats, mut last_save) = (started, started, started);
     let mut last_prune: Option<Instant> = None;

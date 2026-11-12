@@ -235,6 +235,7 @@ pub struct Stats {
 }
 
 /// What happened, as data. The library does not log; the server turns these into log events.
+/// Events sent before a receiver subscribes are not seen by it; [`Status`] is the state.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// Sent every [`Config::stats_every`].

@@ -347,6 +347,13 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
     h.gossip
         .handle_channel_announcement(None, &channel(1, 1, 2))
         .unwrap();
+    // Channel 1 and both its nodes' announcements are held: nothing to ask for.
+    h.gossip
+        .handle_node_announcement(None, &node(1, "a", 0))
+        .unwrap();
+    h.gossip
+        .handle_node_announcement(None, &node(2, "b", 0))
+        .unwrap();
     h.gossip.get_and_clear_pending_msg_events();
     let pk = |n| key(n).public_key(&Secp256k1::new());
     let (a, b, c) = (pk(7), pk(8), pk(9));
@@ -409,7 +416,7 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
     part.number_of_blocks = 100;
     h.gossip.handle_reply_channel_range(a, part).unwrap();
     assert_eq!(h.gossip.range_pending(), 2);
-    // Channel 1 is known.
+    // Channel 1 is complete.
     h.gossip
         .handle_reply_channel_range(a, reply(vec![1, 2, 3, 4]))
         .unwrap();
@@ -435,6 +442,65 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
     assert_eq!(queries(&h), [(b, vec![8])]);
     // A peer that leaves frees what it owed.
     h.gossip.peer_disconnected(b);
+    assert_eq!(h.gossip.range_pending(), 0);
+}
+
+#[test]
+fn a_held_channel_with_unannounced_nodes_is_requested_again() {
+    let h = handler(5);
+    h.gossip
+        .handle_channel_announcement(None, &channel(1, 1, 2))
+        .unwrap();
+    h.gossip
+        .handle_node_announcement(None, &node(1, "a", 0))
+        .unwrap();
+    let a = key(7).public_key(&Secp256k1::new());
+    let mut features = InitFeatures::empty();
+    features.set_gossip_queries_optional();
+    let init = Init {
+        features,
+        networks: None,
+        remote_network_address: None,
+    };
+    h.gossip.peer_connected(a, &init, false).unwrap();
+    let reply = ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: vec![1],
+    };
+    h.gossip.handle_reply_channel_range(a, reply).unwrap();
+    assert!(
+        h.gossip
+            .get_and_clear_pending_msg_events()
+            .iter()
+            .any(|e| matches!(e,
+        MessageSendEvent::SendShortIdsQuery { msg, .. } if msg.short_channel_ids == [1]))
+    );
+    // Listed again by another peer, it is not asked for twice: node 2 may never announce.
+    let b = key(8).public_key(&Secp256k1::new());
+    h.gossip.peer_connected(b, &init, false).unwrap();
+    let reply = ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: vec![1],
+    };
+    h.gossip.handle_reply_channel_range(b, reply).unwrap();
+    assert!(
+        !h.gossip
+            .get_and_clear_pending_msg_events()
+            .iter()
+            .any(|e| matches!(e,
+        MessageSendEvent::SendShortIdsQuery { node_id, .. } if *node_id == b))
+    );
+    // Node 2's announcement arrives with the answer; the batch is then complete without an end.
+    h.gossip
+        .handle_node_announcement(None, &node(2, "b", 0))
+        .unwrap();
+    h.gossip.range_tick();
     assert_eq!(h.gossip.range_pending(), 0);
 }
 
