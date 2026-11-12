@@ -462,3 +462,418 @@ async fn snapshots_every_ten_minutes_skipping_unsynced_late_and_busy_slots() {
     drop(release);
     let _ = hold.await;
 }
+
+// The derived index and the readers it and the routes use.
+
+fn policy(fee_rate: u32, enabled: bool) -> Policy {
+    Policy {
+        fee_rate,
+        base_fee_msat: 1_000,
+        cltv_delta: 80,
+        min_htlc_msat: 1,
+        max_htlc_msat: 1_000_000,
+        enabled,
+        last_update: 1_700_000_000,
+    }
+}
+
+fn key(n: u8) -> [u8; 33] {
+    let mut k = [n; 33];
+    k[0] = 2;
+    k
+}
+
+fn gchan(scid: u64, a: u8, b: u8, capacity: u64) -> GraphChannel {
+    GraphChannel {
+        scid,
+        nodes: [key(a), key(b)],
+        capacity,
+        policies: [Some(policy(100, true)), Some(policy(1, true))],
+    }
+}
+
+fn gnode(n: u8, alias: &str) -> GraphNode {
+    GraphNode {
+        id: key(n),
+        announcement: Some(Announcement {
+            alias: alias.to_owned(),
+            color: [n, n, n],
+            addresses: vec![format!("10.0.0.{n}:9735")],
+            features: vec![0b1010_0000, 0b10],
+            last_update: 1_700_000_000,
+        }),
+    }
+}
+
+fn sopen(c: &GraphChannel, height: u32) -> Open {
+    Open {
+        scid: c.scid,
+        node_one: c.nodes[0],
+        node_two: c.nodes[1],
+        capacity: c.capacity,
+        block: block(height, 1),
+    }
+}
+
+const D: u64 = 800_003 << 40;
+
+/// The index as the server builds it: the graph's copy and the store's past.
+async fn index(s: &Store, nodes: &[GraphNode], channels: &[GraphChannel]) -> Index {
+    Index::build(nodes.to_vec(), channels.to_vec(), past(s).await.unwrap())
+}
+
+fn ids<'a>(nodes: impl Iterator<Item = &'a Node>) -> Vec<u8> {
+    nodes.map(|n| n.id[1]).collect()
+}
+
+#[tokio::test]
+async fn the_index_follows_opens_closes_reorgs_policy_updates_and_departures() {
+    let t = temp();
+    let s = &t.store;
+    let nodes = vec![gnode(1, "one"), gnode(2, "two"), gnode(3, "three")];
+    let (a, b, c) = (
+        gchan(A, 1, 2, 5_000_000),
+        gchan(B, 1, 3, 2_000_000),
+        gchan(C, 2, 3, 1_000_000),
+    );
+    let mut graph = vec![a.clone(), b.clone(), c.clone()];
+    apply(
+        s,
+        graph
+            .iter()
+            .enumerate()
+            .map(|(i, c)| Change::Opened(sopen(c, 800_000 + i as u32)))
+            .collect(),
+    )
+    .await
+    .unwrap();
+    let i = index(s, &nodes, &graph).await;
+    assert_eq!(i.len(), (3, 3));
+    let one = i.node(&key(1)).unwrap();
+    assert_eq!((one.open(), one.capacity, one.active), (2, 7_000_000, 2));
+    assert_eq!(
+        i.channels_of(one).map(|c| c.scid).collect::<Vec<_>>(),
+        [A, B]
+    );
+    assert_eq!(one.past.unwrap().first_seen, block(800_000, 1).time);
+    assert_eq!(ids(i.ranking(Rank::Capacity)), [1, 2, 3]);
+    assert_eq!(ids(i.ranking(Rank::Channels)), [1, 2, 3]);
+    assert_eq!(ids(i.ranking(Rank::Age)), [1, 2, 3]);
+
+    // An open.
+    let d = gchan(D, 3, 1, 9_000_000);
+    graph.push(d.clone());
+    apply(s, vec![Change::Opened(sopen(&d, 800_003))])
+        .await
+        .unwrap();
+    let i = index(s, &nodes, &graph).await;
+    assert_eq!(i.node(&key(1)).unwrap().open(), 3);
+    assert_eq!(ids(i.ranking(Rank::Capacity)), [1, 3, 2]);
+
+    // A close: gone from the graph, counted from the store.
+    graph.retain(|x| x.scid != B);
+    let close_b = Change::Closed(sopen(&b, 800_001), close(800_010, Kind::Cooperative, 8));
+    apply(s, vec![close_b]).await.unwrap();
+    let i = index(s, &nodes, &graph).await;
+    assert!(i.channel(B).is_none());
+    let three = i.node(&key(3)).unwrap();
+    assert_eq!(
+        (three.open(), three.past.unwrap().closed),
+        (2, [1, 0, 0, 0])
+    );
+
+    // A reorg undoes it: back in the graph and no longer counted.
+    graph.push(b.clone());
+    apply(s, vec![Change::CloseUndone(B)]).await.unwrap();
+    let i = index(s, &nodes, &graph).await;
+    let three = i.node(&key(3)).unwrap();
+    assert_eq!(
+        (three.open(), three.past.unwrap().closed),
+        (3, [0, 0, 0, 0])
+    );
+
+    // A policy update: node one disables A and raises its fee.
+    graph.iter_mut().find(|x| x.scid == A).unwrap().policies[0] = Some(policy(2_345, false));
+    let i = index(s, &nodes, &graph).await;
+    let one = i.node(&key(1)).unwrap();
+    let [incoming, outgoing] = i.fees(one);
+    assert!(
+        outgoing
+            .iter()
+            .any(|x| x.bucket == Some(2_000) && x.capacity == 5_000_000)
+    );
+    assert_eq!(incoming.iter().map(|x| x.count).sum::<u64>(), 3);
+    assert!(
+        i.channel(A).unwrap().active(),
+        "node two's direction still forwards"
+    );
+
+    // Node two leaves: its channels close.
+    graph.retain(|x| x.scid != A && x.scid != C);
+    apply(
+        s,
+        vec![
+            Change::Closed(sopen(&a, 800_000), close(800_011, Kind::Force, 9)),
+            Change::Closed(sopen(&c, 800_002), close(800_011, Kind::Other, 10)),
+        ],
+    )
+    .await
+    .unwrap();
+    let i = index(s, &nodes, &graph).await;
+    assert!(i.node(&key(2)).is_none());
+    assert!(i.search("two", 10).is_empty());
+    assert_eq!(ids(i.ranking(Rank::Channels)), [1, 3]);
+    assert_eq!(i.node(&key(1)).unwrap().past.unwrap().closed, [0, 1, 0, 0]);
+
+    // A restart reads the same store into the same index.
+    let again = Store::open(&t.dir, "regtest", Options::default()).unwrap();
+    let j = index(&again, &nodes, &graph).await;
+    assert_eq!(past(&again).await.unwrap(), past(s).await.unwrap());
+    for id in [key(1), key(3)] {
+        assert_eq!(j.node(&id), i.node(&id));
+    }
+}
+
+#[test]
+fn search_matches_keys_and_aliases_as_plain_text_within_its_cap() {
+    let markup = "<script>alert(1)</script>";
+    let mut nodes = vec![
+        gnode(1, "ACINQ"),
+        gnode(2, "acinq"),
+        gnode(3, markup),
+        gnode(4, "bad\u{fffd}name"),
+    ];
+    nodes.push(GraphNode {
+        id: key(5),
+        announcement: None,
+    });
+    let graph = vec![
+        gchan(A, 1, 5, 9_000_000),
+        gchan(B, 2, 5, 1_000_000),
+        gchan(C, 3, 5, 1_000_000),
+        gchan(D, 4, 5, 1_000_000),
+    ];
+    let i = Index::build(nodes, graph, Past::default());
+    // The impersonator matches too, after the larger node: an alias is a claim, not an identity.
+    assert_eq!(ids(i.search("AcInQ", 10).into_iter()), [1, 2]);
+    assert_eq!(ids(i.search("<script>", 10).into_iter()), [3]);
+    assert_eq!(i.search("<script>", 10)[0].alias(), Some(markup));
+    assert_eq!(ids(i.search("\u{fffd}", 10).into_iter()), [4]);
+    // Public keys by prefix, any case, before aliases.
+    assert_eq!(ids(i.search("0201", 10).into_iter()), [1]);
+    assert_eq!(ids(i.search("02", 10).into_iter()), [1, 2, 3, 4, 5]);
+    assert_eq!(i.search("02", 2).len(), 2);
+    assert_eq!(
+        ids(i.search(&hex(&key(5)).to_uppercase(), 10).into_iter()),
+        [5]
+    );
+    assert!(i.search(&"a".repeat(10_000), 10).is_empty());
+    assert!(i.search("zz", 10).is_empty());
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[test]
+fn fee_buckets_follow_the_reference_s_steps() {
+    let cases = [
+        (0, 0),
+        (7, 7),
+        (10, 10),
+        (99, 90),
+        (137, 100),
+        (999, 900),
+        (1_000, 1_000),
+        (137_000, 137_000),
+        (2_000_499, 2_000_000),
+    ];
+    for (rate, want) in cases {
+        assert_eq!(bucket(rate), want, "{rate}");
+    }
+    let mut c = gchan(A, 1, 2, 10);
+    c.policies[1] = None;
+    let i = Index::build(vec![], vec![c], Past::default());
+    let [incoming, outgoing] = i.fees(i.node(&key(1)).unwrap());
+    assert_eq!(
+        incoming,
+        [Bucket {
+            bucket: None,
+            count: 1,
+            capacity: 10
+        }]
+    );
+    assert_eq!(
+        outgoing,
+        [Bucket {
+            bucket: Some(100),
+            count: 1,
+            capacity: 10
+        }]
+    );
+}
+
+#[test]
+fn a_node_s_past_counts_what_was_open_at_each_midnight() {
+    let spans = [
+        Span {
+            open: 100,
+            close: None,
+            capacity: 5,
+        },
+        Span {
+            open: DAY + 10,
+            close: Some(2 * DAY),
+            capacity: 7,
+        },
+        Span {
+            open: 2 * DAY + 1,
+            close: None,
+            capacity: 1,
+        },
+    ];
+    let s = node_series(&spans, Some(DAY / 2), 3 * DAY + 5);
+    let got: Vec<_> = s.iter().map(|p| (p.time, p.channels, p.capacity)).collect();
+    assert_eq!(
+        got,
+        [
+            (DAY, 1, 5),
+            (2 * DAY, 1, 5),
+            (3 * DAY, 2, 6),
+            (3 * DAY + 5, 2, 6)
+        ]
+    );
+    // Before any statistics, the present only.
+    assert_eq!(node_series(&spans, None, 9 * DAY).len(), 1);
+}
+
+#[tokio::test]
+async fn funding_txids_lookups_and_a_node_s_closed_channels() {
+    let t = temp();
+    let s = &t.store;
+    let (a, b) = (open(A, 1), open(B, 1));
+    apply(
+        s,
+        vec![
+            Change::Opened(a),
+            Change::Opened(b),
+            Change::Closed(b, close(800_010, Kind::Force, 8)),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        unfunded(s, 0, 10).await.unwrap(),
+        [(A, a.block.hash), (B, b.block.hash)]
+    );
+    assert_eq!(unfunded(s, A, 10).await.unwrap(), [(B, b.block.hash)]);
+    let fa = Txid::from_byte_array([0xfa; 32]);
+    // A txid read from a block the row no longer names is not stored.
+    set_funding(
+        s,
+        vec![
+            (A, a.block.hash, fa),
+            (B, BlockHash::from_byte_array([0xee; 32]), fa),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(unfunded(s, 0, 10).await.unwrap(), [(B, b.block.hash)]);
+    assert_eq!(channel(s, A).await.unwrap().unwrap().funding_txid, Some(fa));
+    assert_eq!(channel(s, 1).await.unwrap(), None);
+
+    // By transaction: what A's funding opened and what B's close closed, each once.
+    let closing = Txid::from_byte_array([8; 32]);
+    let found = by_txids(s, vec![fa, closing, fa, Txid::from_byte_array([1; 32])])
+        .await
+        .unwrap();
+    assert_eq!(
+        found.iter().map(|c| c.open.scid).collect::<Vec<_>>(),
+        [A, B]
+    );
+
+    // A's funding block left the chain and it was found in another: the txid goes with it.
+    apply(s, vec![Change::OpenUndone(A), Change::Opened(open(A, 2))])
+        .await
+        .unwrap();
+    assert_eq!(channel(s, A).await.unwrap().unwrap().funding_txid, None);
+    set_funding(s, vec![(A, open(A, 2).block.hash, fa)])
+        .await
+        .unwrap();
+    apply(s, vec![Change::Opened(open(A, 2))]).await.unwrap();
+    assert_eq!(
+        channel(s, A).await.unwrap().unwrap().funding_txid,
+        Some(fa),
+        "an unchanged open keeps it"
+    );
+
+    // Both rows are between nodes 2 and 3; only B is closed.
+    let (total, rows) = node_closed(s, [3; 33], 0, 10).await.unwrap();
+    assert_eq!((total, rows.len(), rows[0].open.scid), (1, 1, B));
+    assert_eq!(node_closed(s, [3; 33], 5, 10).await.unwrap(), (1, vec![]));
+    assert_eq!(node_closed(s, [9; 33], 0, 10).await.unwrap(), (0, vec![]));
+    assert_eq!(node_spans(s, [2; 33]).await.unwrap().len(), 2);
+}
+
+/// Mainnet's size: 36,000 channels between 13,600 nodes.
+pub(crate) fn mainnet_graph() -> (Vec<GraphNode>, Vec<GraphChannel>) {
+    let id = |n: u32| {
+        let mut k = [0; 33];
+        k[0] = 2;
+        k[1..5].copy_from_slice(&n.to_be_bytes());
+        k
+    };
+    let nodes = (0..13_600u32)
+        .map(|n| GraphNode {
+            id: id(n),
+            announcement: Some(Announcement {
+                alias: format!("node-{n}-{}", "x".repeat((n % 20) as usize)),
+                color: [1, 2, 3],
+                addresses: vec![format!("10.0.{}.{}:9735", n / 256, n % 256)],
+                features: vec![0xa0, 0x02, 0x09],
+                last_update: 1_700_000_000,
+            }),
+        })
+        .collect();
+    // A few hubs hold many channels, as on mainnet.
+    let channels = (0..36_000u32)
+        .map(|c| GraphChannel {
+            scid: (u64::from(c) + 600_000) << 40,
+            nodes: [id(c % 50), id(50 + c % 13_550)],
+            capacity: 100_000 + u64::from(c) * 997 % 50_000_000,
+            policies: [Some(policy(c % 3_000, true)), Some(policy(1, c % 7 != 0))],
+        })
+        .collect();
+    (nodes, channels)
+}
+
+#[test]
+fn an_index_of_mainnet_s_size_builds_and_answers_quickly() {
+    let (nodes, channels) = mainnet_graph();
+    let started = std::time::Instant::now();
+    let i = Index::build(nodes, channels, Past::default());
+    let build = started.elapsed();
+    assert_eq!(i.len(), (13_600, 36_000));
+    let hub = i.ranking(Rank::Channels).next().unwrap().id;
+    let time = |f: &dyn Fn()| {
+        let t = std::time::Instant::now();
+        f();
+        t.elapsed()
+    };
+    let worst = [
+        time(&|| assert_eq!(i.node(&hub).unwrap().open(), 720)),
+        time(&|| assert!(i.channel(600_000 << 40).is_some())),
+        time(&|| assert_eq!(i.channels_of(i.node(&hub).unwrap()).take(25).count(), 25)),
+        time(&|| assert_eq!(i.fees(i.node(&hub).unwrap())[0].len(), 1)),
+        // Every alias contains "node": the longest search, capped.
+        time(&|| assert_eq!(i.search("node", 10).len(), 10)),
+        time(&|| assert_eq!(i.search("02", 10).len(), 10)),
+        time(&|| assert_eq!(i.ranking(Rank::Capacity).count(), RANKED)),
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+    // Debug build on a loaded CI runner; release is about ten times faster (docs/API.md).
+    assert!(build < Duration::from_secs(3), "{build:?}");
+    assert!(worst < Duration::from_millis(50), "{worst:?}");
+}
