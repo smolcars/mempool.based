@@ -52,7 +52,7 @@ Refined when M1 lands.
 | MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | done ([#20](https://github.com/smolcars/mempool.based/pull/20)) |
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | done ([#28](https://github.com/smolcars/mempool.based/pull/28)) |
 | MP3 | Run the mempool tracker and projected blocks inside the server, and serve them over the WebSocket: mempool totals, projected-block totals, binary per-transaction deltas, the latest transactions | MP2, S3 | done ([#35](https://github.com/smolcars/mempool.based/pull/35)) |
-| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
+| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | doing |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | doing |
 | MP6 | RBF history and CPFP or cluster view | MP1 | doing (with MP5) |
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | done ([#27](https://github.com/smolcars/mempool.based/pull/27)) |
@@ -72,8 +72,8 @@ Refined when M2 lands.
 |---|---|---|---|
 | ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | done ([#13](https://github.com/smolcars/mempool.based/pull/13)) |
 | MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | done ([#34](https://github.com/smolcars/mempool.based/pull/34)); the full mainnet backfill has not been run |
-| MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | doing |
-| MI3 | Hashrate history | MI1 | doing (with MI2) |
+| MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
+| MI3 | Hashrate history | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
