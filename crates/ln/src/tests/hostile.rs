@@ -8,6 +8,9 @@
 //! `cargo test -p ln --release -- --ignored --nocapture hostile::flood`. Each lasts under two
 //! minutes and prints what it measured.
 
+// The floods print what they measured; the attack task runs until it is aborted.
+#![allow(clippy::print_stdout, clippy::for_unbounded_range)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicU64;
 
@@ -1118,7 +1121,11 @@ fn regtest(args: &[&str]) -> String {
         .args(args)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
@@ -1130,7 +1137,11 @@ fn rpc(method: &str, params: &str) -> String {
         var("REGTEST_RPC_HOST"),
         var("REGTEST_RPC_PORT")
     );
-    let auth = format!("{}:{}", var("REGTEST_RPC_USER"), var("REGTEST_RPC_PASSWORD"));
+    let auth = format!(
+        "{}:{}",
+        var("REGTEST_RPC_USER"),
+        var("REGTEST_RPC_PASSWORD")
+    );
     let body = format!(r#"{{"jsonrpc":"1.0","id":1,"method":"{method}","params":{params}}}"#);
     let out = std::process::Command::new("curl")
         .args(["-s", "-u", &auth, "-d", &body, &url])
@@ -1160,7 +1171,11 @@ async fn regtest_chain_tricks() {
     regtest(&["mine", "2"]);
     let (h, i) = place(paid).await;
     let tx = esplora.tx_raw(paid).await.unwrap().value;
-    let vout = tx.output.iter().position(|o| o.script_pubkey == script).unwrap() as u32;
+    let vout = tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == script)
+        .unwrap() as u32;
     let real_id = scid(h, i, vout);
     // The coinbase that payment spent; an old coinbase nobody spent, paying the miner's script.
     let coin = tx.input[0].previous_output;

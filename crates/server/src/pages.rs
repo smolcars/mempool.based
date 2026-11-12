@@ -342,10 +342,10 @@ fn node(ctx: &NetworkContext, on: &str, key: &str) -> Option<Head> {
         });
     };
     // Cleaned when the index was built (`clean_alias`).
-    let name = n
-        .alias()
-        .filter(|a| !a.is_empty())
-        .map_or_else(|| hex.get(..20).unwrap_or_default().to_owned(), str::to_owned);
+    let name = n.alias().filter(|a| !a.is_empty()).map_or_else(
+        || hex.get(..20).unwrap_or_default().to_owned(),
+        str::to_owned,
+    );
     Some(Head {
         title: format!("Lightning node {name}"),
         description: format!(
