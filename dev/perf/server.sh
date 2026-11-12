@@ -11,9 +11,9 @@ dir=$1
 shift
 mkdir -p "$dir"
 eval "$(python3 "$root/dev/regtest/regtest.py" env | sed 's/^/export /')"
-bin="${CARGO_TARGET_DIR:-$root/target}/release/mempool-based"
+bin="${CARGO_TARGET_DIR:-$root/target}/release/rbitcoin-space"
 case "$bin" in /*) ;; *) bin="$root/$bin" ;; esac
-[ -x "$bin" ] || { echo "perf: build first: cargo build --release --locked -p mempool-based" >&2; exit 1; }
+[ -x "$bin" ] || { echo "perf: build first: cargo build --release --locked -p rbitcoin-space" >&2; exit 1; }
 [ -d "$root/web/dist" ] || { echo "perf: build the frontend first: (cd web && bun run build)" >&2; exit 1; }
 
 env -i PATH="$PATH" LISTEN_ADDR=127.0.0.1:0 WEB_DIR="$root/web/dist" DATA_DIR="$dir/data" LOG_FORMAT=json \

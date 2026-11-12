@@ -28,7 +28,7 @@ COIN = 1_000_000  # sats in each split coin
 
 
 def coins_file():
-    return os.path.join(tempfile.gettempdir(), f"mempool-based-activity-{regtest.project()}.json")
+    return os.path.join(tempfile.gettempdir(), f"rbitcoin-space-activity-{regtest.project()}.json")
 
 
 def prepare(outputs):

@@ -3,7 +3,7 @@
 # The server under load, on a private regtest node: every step in docs/PERFORMANCE.md "The server
 # under load", one JSON file per step in OUT. Never point it at a shared node.
 #   dev/perf/bench.sh OUT [idle] [http] [limits] [ws]     (default: all four)
-# Needs docker, python3, and the release builds: `cargo build --release --locked -p mempool-based
+# Needs docker, python3, and the release builds: `cargo build --release --locked -p rbitcoin-space
 # -p load` and `(cd web && bun run build)`. Each step is at most two minutes, with GAP seconds
 # (default 15) between steps so the machine settles. Takes about 35 minutes for all four.
 set -euo pipefail

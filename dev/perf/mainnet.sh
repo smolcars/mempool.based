@@ -14,7 +14,7 @@ out=$(mkdir -p "$1" && cd "$1" && pwd)
 minutes=$2
 reference=${3:-}
 load="${CARGO_TARGET_DIR:-$root/target}/release/load"
-bin="${CARGO_TARGET_DIR:-$root/target}/release/mempool-based"
+bin="${CARGO_TARGET_DIR:-$root/target}/release/rbitcoin-space"
 server="" client="" sampler=""
 cleanup() {
   local pid
