@@ -596,7 +596,13 @@ async fn a_slow_read_is_interrupted_and_the_connection_reused() {
         read_time_limit: Duration::from_millis(100),
         observer: Arc::new(move |e| {
             // The event names the read that ran too long.
-            if matches!(e, Event::ReadTimedOut { read: Read::Audit, .. }) {
+            if matches!(
+                e,
+                Event::ReadTimedOut {
+                    read: Read::Audit,
+                    ..
+                }
+            ) {
                 seen.fetch_add(1, Ordering::Relaxed);
             }
         }),

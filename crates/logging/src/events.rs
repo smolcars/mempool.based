@@ -71,6 +71,7 @@ pub struct ServerStarting<'a> {
     pub ws_idle_timeout_secs: u64,
     pub ws_max_block_subscriptions: usize,
     pub ws_mempool_interval_ms: u64,
+    pub ws_block_wait_secs: u64,
     pub ws_latest_txs: usize,
     pub ws_max_tracked_txs: usize,
     pub ws_max_tracked_addresses: usize,
@@ -79,6 +80,7 @@ pub struct ServerStarting<'a> {
     pub ws_position_interval_ms: u64,
     pub replacements_kept: usize,
     pub block_summary_cache_mb: usize,
+    pub answer_cache_mb: usize,
     /// Left out when `DATA_DIR` is unset and the server runs without a store.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
@@ -700,9 +702,12 @@ event!(BlockRowsRecovered, "block_rows_recovered", Info, keep);
 pub struct BlockBackfillProgress {
     pub network: &'static str,
     pub tip: u32,
-    /// Rows in the table, and how many have fee rates.
-    pub rows: u64,
-    pub rated: u64,
+    /// Rows in the table, and how many have fee rates. Left out when the count failed or timed
+    /// out, rather than repeating the last one as if nothing had moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rated: Option<u64>,
     pub totals_done: bool,
     pub rates_done: bool,
     /// Since the server started: rows added, rows rated, time spent working and bytes read.
@@ -1215,12 +1220,14 @@ event!(LightningIndexBuilt, "lightning_index_built", Info);
 /// A funding-txid request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
 /// failure in a row.
 #[derive(Debug, Serialize)]
-pub struct LightningFundingFailed<'a> {
+pub struct LightningFundingFailed {
     pub network: &'static str,
-    pub error: &'a str,
+    /// A fixed label: `timeout`, `unavailable`, `refused`, `not_found`, `malformed`, `too_big`,
+    /// `chain_moved` or `config`. Never the node's own text.
+    pub error: &'static str,
     pub failures: u32,
 }
-event!(LightningFundingFailed<'a>, "lightning_funding_failed", Warn);
+event!(LightningFundingFailed, "lightning_funding_failed", Warn);
 
 /// The graph reached its ceiling (`{NET}_LIGHTNING_MAX_CHANNELS`); new channels are refused.
 #[derive(Debug, Serialize)]
@@ -1259,23 +1266,27 @@ event!(LightningPruned, "lightning_pruned", Info, keep);
 /// A funding-output request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
 /// failure in a row, with the announcements waiting.
 #[derive(Debug, Serialize)]
-pub struct LightningLookupFailed<'a> {
+pub struct LightningLookupFailed {
     pub network: &'static str,
-    pub error: &'a str,
+    /// A fixed label: `timeout`, `unavailable`, `refused`, `not_found`, `malformed`, `too_big`,
+    /// `chain_moved` or `config`. Never the node's own text.
+    pub error: &'static str,
     pub failures: u32,
     pub pending: usize,
 }
-event!(LightningLookupFailed<'a>, "lightning_lookup_failed", Warn);
+event!(LightningLookupFailed, "lightning_lookup_failed", Warn);
 
 /// A close-watcher request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
 /// failure in a row.
 #[derive(Debug, Serialize)]
-pub struct LightningWatchFailed<'a> {
+pub struct LightningWatchFailed {
     pub network: &'static str,
-    pub error: &'a str,
+    /// A fixed label: `timeout`, `unavailable`, `refused`, `not_found`, `malformed`, `too_big`,
+    /// `chain_moved` or `config`. Never the node's own text.
+    pub error: &'static str,
     pub failures: u32,
 }
-event!(LightningWatchFailed<'a>, "lightning_watch_failed", Warn);
+event!(LightningWatchFailed, "lightning_watch_failed", Warn);
 
 /// Blocks the close-watcher had read left the best chain; what they recorded was undone.
 #[derive(Debug, Serialize)]
@@ -1450,6 +1461,7 @@ mod tests {
                 ws_idle_timeout_secs: 1,
                 ws_max_block_subscriptions: 1,
                 ws_mempool_interval_ms: 1,
+                ws_block_wait_secs: 1,
                 ws_latest_txs: 1,
                 ws_max_tracked_txs: 1,
                 ws_max_tracked_addresses: 1,
@@ -1458,6 +1470,7 @@ mod tests {
                 ws_position_interval_ms: 1,
                 replacements_kept: 1,
                 block_summary_cache_mb: 1,
+                answer_cache_mb: 1,
                 data_dir: Some("data".into()),
                 backfill_enabled: true,
                 backfill_busy_percent: 50,
@@ -1719,8 +1732,8 @@ mod tests {
             both(&BlockBackfillProgress {
                 network: n,
                 tip: 9,
-                rows: 5,
-                rated: 2,
+                rows: Some(5),
+                rated: Some(2),
                 totals_done: false,
                 rates_done: false,
                 totals_written: 5,
@@ -1991,7 +2004,7 @@ mod tests {
             }),
             both(&LightningFundingFailed {
                 network: n,
-                error: "connection refused",
+                error: "unavailable",
                 failures: 1,
             }),
             both(&LightningCeilingReached {
@@ -2131,6 +2144,58 @@ mod tests {
             assert_eq!(text.matches('\n').count(), 1, "{text}");
             assert!(text.contains(&format!(" {name}")), "{text}");
         }
+    }
+
+    #[test]
+    fn a_progress_line_without_a_count_leaves_the_counts_out() {
+        let line = crate::format::line(
+            &BlockBackfillProgress {
+                network: "mainnet",
+                tip: 9,
+                rows: None,
+                rated: None,
+                totals_done: false,
+                rates_done: false,
+                totals_written: 5,
+                rates_written: 2,
+                busy_ms: 1000,
+                bytes: 4096,
+            },
+            Format::Json,
+            UNIX_EPOCH,
+        );
+        let v: Value = serde_json::from_slice(&line).unwrap();
+        assert!(v.get("rows").is_none() && v.get("rated").is_none(), "{v}");
+        assert_eq!(v["tip"], 9);
+    }
+
+    /// Every server-wide setting in docs/CONFIG.md is in `server_starting`, under its own name
+    /// in lower case. Per-network ones are in `network_enabled` and `lightning_started`.
+    #[test]
+    fn server_starting_lists_every_setting() {
+        let (_, json, _) = samples().swap_remove(0);
+        let v: Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["event"], "server_starting");
+        let config = include_str!("../../../docs/CONFIG.md");
+        let mut checked = 0;
+        for line in config.lines() {
+            let Some(name) = line.strip_prefix("| `").and_then(|l| l.split('`').next()) else {
+                continue;
+            };
+            if name.starts_with('{')
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            {
+                continue;
+            }
+            assert!(
+                v.get(name.to_ascii_lowercase()).is_some(),
+                "{name} is a setting in docs/CONFIG.md but not in server_starting"
+            );
+            checked += 1;
+        }
+        assert!(checked > 40, "{checked}");
     }
 
     #[test]

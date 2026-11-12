@@ -170,11 +170,15 @@ fn start_backfill(ctx: &Arc<NetworkContext>, backfill: Backfill, reorgs: Reorgs)
 fn report(network: Network, e: &Event) {
     let network = network.name();
     match e {
-        Event::Progress(p) => logging::emit(&BlockBackfillProgress {
+        Event::Progress {
+            progress: p,
+            counted,
+        } => logging::emit(&BlockBackfillProgress {
             network,
             tip: p.tip,
-            rows: p.rows,
-            rated: p.rated,
+            // Left out rather than repeated: two lines' difference must be real progress.
+            rows: counted.then_some(p.rows),
+            rated: counted.then_some(p.rated),
             totals_done: p.totals_done,
             rates_done: p.rates_done,
             totals_written: p.totals_written,

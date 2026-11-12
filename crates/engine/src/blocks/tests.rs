@@ -743,6 +743,42 @@ async fn backfill_fills_every_row_below_the_zone_and_rates_the_recent_ones() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_count_that_times_out_is_reported_as_not_counted() {
+    let t = temp();
+    *t.store.time_out.lock().unwrap() = Some(crate::store::Read::BlockCounts);
+    let node = Mock::new(400);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let saw = seen.clone();
+    let observer: Arc<dyn Fn(&Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::Progress { progress, counted } = e {
+            saw.lock().unwrap().push((*counted, progress.rows));
+        }
+    });
+    let (task, mut rx) = start(&t.store, &node, options(observer));
+    until_done(&mut rx).await;
+    task.abort();
+    let seen = seen.lock().unwrap().clone();
+    // The line that marks the end was sent, without claiming a count it does not have.
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|s| *s == (false, 0)), "{seen:?}");
+
+    // Counting again: the next line carries the real numbers.
+    *t.store.time_out.lock().unwrap() = None;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let saw = seen.clone();
+    let observer: Arc<dyn Fn(&Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::Progress { progress, counted } = e {
+            saw.lock().unwrap().push((*counted, progress.rows));
+        }
+    });
+    node.set_chain(400, 405, 0);
+    let (task, mut rx) = start(&t.store, &node, options(observer));
+    rx.wait_for(|p| p.rows > 0).await.unwrap();
+    task.abort();
+    assert!(seen.lock().unwrap().iter().any(|s| s.0 && s.1 >= 300));
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_interrupted_backfill_resumes_without_redoing_work() {
     let t = temp();
     let node = Mock::new(2000);
@@ -782,7 +818,7 @@ async fn a_busy_node_gets_a_growing_pause_and_a_quiet_one_a_gentle_pace() {
         let label = match e {
             Event::Failed { failures, .. } => format!("failed {failures}"),
             Event::Recovered { failures } => format!("recovered {failures}"),
-            Event::Progress(_) => return,
+            Event::Progress { .. } => return,
         };
         seen.lock().unwrap().push(label);
     });
@@ -930,7 +966,11 @@ async fn read_benchmark() {
             .unwrap();
         time(&format!("a year's heights by time {range:?}"), s.elapsed());
         let s = Instant::now();
-        let c = t.store.read(crate::store::Read::BlockCounts, db::counts).await.unwrap();
+        let c = t
+            .store
+            .read(crate::store::Read::BlockCounts, db::counts)
+            .await
+            .unwrap();
         time(&format!("row counts {c:?}"), s.elapsed());
     }
 }

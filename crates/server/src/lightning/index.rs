@@ -14,7 +14,7 @@ use engine::lightning::{self as store_ln, Announcement, GraphChannel, GraphNode,
 use engine::store::Store;
 use logging::events::{LightningFundingFailed, LightningIndexBuilt};
 
-use super::{Lightning, short};
+use super::Lightning;
 
 /// How often the index is rebuilt: how far an answer can lag the graph, plus a build.
 pub(crate) const EVERY: Duration = Duration::from_secs(30);
@@ -227,7 +227,7 @@ pub(crate) async fn fill_funding(
                     if failures.is_power_of_two() {
                         logging::emit(&LightningFundingFailed {
                             network,
-                            error: short(&e.to_string()),
+                            error: e.label(),
                             failures,
                         });
                     }

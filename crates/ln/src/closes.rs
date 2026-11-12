@@ -577,10 +577,11 @@ struct Watcher<C> {
 
 impl<C: Chain> Watcher<C> {
     /// One request to the node: paced, timed out and counted.
-    async fn ask<T>(&self, call: impl Future<Output = Result<T, Error>>) -> Result<T, String> {
-        self.ask_found(call)
-            .await?
-            .ok_or_else(|| Error::NotFound.to_string())
+    async fn ask<T>(
+        &self,
+        call: impl Future<Output = Result<T, Error>>,
+    ) -> Result<T, &'static str> {
+        self.ask_found(call).await?.ok_or(Error::NotFound.label())
     }
 
     /// [`Self::ask`], with what the node does not know as `None` rather than an error, for the
@@ -588,7 +589,7 @@ impl<C: Chain> Watcher<C> {
     async fn ask_found<T>(
         &self,
         call: impl Future<Output = Result<T, Error>>,
-    ) -> Result<Option<T>, String> {
+    ) -> Result<Option<T>, &'static str> {
         let due = self
             .last
             .lock()
@@ -602,8 +603,8 @@ impl<C: Chain> Watcher<C> {
         match tokio::time::timeout(REQUEST_TIMEOUT, call).await {
             Ok(Ok(v)) => Ok(Some(v)),
             Ok(Err(Error::NotFound)) => Ok(None),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => Err("timeout".to_owned()),
+            Ok(Err(e)) => Err(e.label()),
+            Err(_) => Err("timeout"),
         }
     }
 
@@ -613,7 +614,7 @@ impl<C: Chain> Watcher<C> {
 
     /// Brings the block window in line with the node's best chain: undoes blocks that left it,
     /// reads new ones, or hands a gap too long to read to the catch-up.
-    async fn follow(&self) -> Result<(), String> {
+    async fn follow(&self) -> Result<(), &'static str> {
         let tip = self.ask(self.chain.tip_hash()).await?;
         let (last, low) = {
             let s = self.watch().lock();
@@ -634,14 +635,14 @@ impl<C: Chain> Watcher<C> {
         'walk: loop {
             let page = self.ask(self.chain.headers(top)).await?;
             if page.is_empty() {
-                return Err("no headers".to_owned());
+                return Err("malformed");
             }
             for h in page {
                 if new
                     .last()
                     .is_some_and(|n| n.previousblockhash != Some(h.id))
                 {
-                    return Err("the chain moved while it was read".to_owned());
+                    return Err("chain_moved");
                 }
                 first.get_or_insert_with(|| h.clone());
                 let (Some((last_height, _)), Some(low)) = (last, low) else {
@@ -667,7 +668,7 @@ impl<C: Chain> Watcher<C> {
             }
         }
         let Some(first) = first else {
-            return Err("no headers".to_owned());
+            return Err("malformed");
         };
         let Some((last_height, _)) = last else {
             // First look: start from here. Channels verified below it are checked again.
@@ -763,11 +764,11 @@ impl<C: Chain> Watcher<C> {
     }
 
     /// Reads one block on top of the window and applies the closes and penalties it holds.
-    async fn connect(&self, h: Header) -> Result<(), String> {
+    async fn connect(&self, h: Header) -> Result<(), &'static str> {
         let block = self.ask(self.chain.block(h.id)).await?;
         let last = self.watch().lock().seen.back().map(|b| b.hash);
         if block.block_hash() != h.id || Some(block.header.prev_blockhash) != last {
-            return Err("the chain moved while it was read".to_owned());
+            return Err("chain_moved");
         }
         let at = BlockRef {
             height: h.height,
@@ -880,7 +881,7 @@ impl<C: Chain> Watcher<C> {
 
     /// The closing transaction's fee: its outputs against the funding output when that is its
     /// only input, otherwise the node's word.
-    async fn fee(&self, tx: &Transaction, scid: u64) -> Result<Option<u64>, String> {
+    async fn fee(&self, tx: &Transaction, scid: u64) -> Result<Option<u64>, &'static str> {
         if tx.input.len() == 1 {
             let capacity = self.watch().lock().funding.get(&scid).map(|f| f.capacity);
             let out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -1047,7 +1048,7 @@ impl<C: Chain> Watcher<C> {
 
     /// One step of the catch-up: a batch of watched outputs checked for a spend, or one spent
     /// output's spend found.
-    async fn check(&self) -> Result<(), String> {
+    async fn check(&self) -> Result<(), &'static str> {
         // Items leave the queues once answered, so the status counts them until then. Only this
         // task takes from the front.
         let batch: Vec<u64> = {
@@ -1059,7 +1060,7 @@ impl<C: Chain> Watcher<C> {
                 .ok_or("too many positions")?;
             let r = self.ask(self.chain.outputs(positions)).await?.value;
             if r.len() != batch.len() {
-                return Err("answer of the wrong length".to_owned());
+                return Err("malformed");
             }
             {
                 let mut s = self.watch().lock();
@@ -1142,7 +1143,7 @@ impl<C: Chain> Watcher<C> {
 
     /// Finds the spend of a spent funding output through the node's spend records: the funding
     /// txid from its position, its spender, and the spending transaction. Four or five requests.
-    async fn find(&self, item: &Find) -> Result<(), String> {
+    async fn find(&self, item: &Find) -> Result<(), &'static str> {
         // What the node no longer knows (a reorg since) is dropped, not retried.
         let p = position(item.scid);
         let Some(hash) = self.ask_found(self.chain.block_hash(p.height)).await? else {
@@ -1193,7 +1194,7 @@ impl<C: Chain> Watcher<C> {
             .iter()
             .position(|i| i.previous_output == OutPoint::new(txid, p.vout))
         else {
-            return Err("the spender does not spend the output".to_owned());
+            return Err("malformed");
         };
         let fee = if tx.input.len() == 1 {
             let out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();

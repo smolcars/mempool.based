@@ -376,14 +376,18 @@ pub enum Event {
     /// doubling to 60 s); `pending` announcements wait meanwhile.
     LookupFailed {
         failures: u32,
-        error: String,
+        /// A fixed label: `timeout`, `unavailable`, `refused`, `malformed` and the others of
+        /// `node::esplora::Error::label`.
+        error: &'static str,
         pending: usize,
     },
     /// A request of the close-watcher failed. It is retried after a backoff (1 s, doubling to
     /// 60 s); nothing is lost meanwhile.
     CloseWatchFailed {
         failures: u32,
-        error: String,
+        /// A fixed label, as for [`Event::LookupFailed`], or `chain_moved` when the chain
+        /// changed under a read.
+        error: &'static str,
     },
     /// Blocks the close-watcher had read left the best chain; what they did was undone.
     Reorg {

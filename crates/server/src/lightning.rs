@@ -755,7 +755,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningLookupFailed {
                         network,
-                        error: short(&error),
+                        error,
                         failures,
                         pending,
                     });
@@ -765,7 +765,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningWatchFailed {
                         network,
-                        error: short(&error),
+                        error,
                         failures,
                     });
                 }

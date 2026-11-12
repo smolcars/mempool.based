@@ -585,8 +585,8 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
                     s.tip = Some(tip);
                     Lookup::promote(&mut s, tip);
                 }
-                Ok(Err(e)) => failed(&gossip, e.to_string()).await,
-                Err(_) => failed(&gossip, "timeout".to_owned()).await,
+                Ok(Err(e)) => failed(&gossip, e.label()).await,
+                Err(_) => failed(&gossip, "timeout").await,
             }
             continue;
         }
@@ -608,9 +608,10 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
                 value,
                 tip: Some(tip),
             })) if value.len() == batch.len() => Ok((tip.height, tip.hash, value)),
-            Ok(Ok(_)) => Err("answer without a tip stamp or of the wrong length".to_owned()),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => Err("timeout".to_owned()),
+            // Without a tip stamp, or of the wrong length.
+            Ok(Ok(_)) => Err("malformed"),
+            Ok(Err(e)) => Err(e.label()),
+            Err(_) => Err("timeout"),
         };
         let (tip, tip_hash, slots) = match answer {
             Ok(a) => a,
@@ -657,7 +658,7 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
 }
 
 /// Counts a failed request, reports it with the backlog, and waits out the backoff.
-async fn failed(gossip: &Gossip, error: String) {
+async fn failed(gossip: &Gossip, error: &'static str) {
     let (failures, pending) = {
         let mut s = gossip.lookup.lock();
         s.failures = s.failures.saturating_add(1);

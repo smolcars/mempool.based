@@ -104,6 +104,7 @@ fn started(config: &Config, log: logging::Settings) {
         ws_max_block_subscriptions: config.ws.max_block_subscriptions,
         ws_mempool_interval_ms: u64::try_from(config.ws.mempool_interval.as_millis())
             .unwrap_or(u64::MAX),
+        ws_block_wait_secs: config.ws.block_wait.as_secs(),
         ws_latest_txs: config.ws.latest_txs,
         ws_max_tracked_txs: config.ws.max_tracked_txs,
         ws_max_tracked_addresses: config.ws.max_tracked_addresses,
@@ -113,6 +114,7 @@ fn started(config: &Config, log: logging::Settings) {
             .unwrap_or(u64::MAX),
         replacements_kept: config.ws.replacements_kept,
         block_summary_cache_mb: l.summary_cache_bytes >> 20,
+        answer_cache_mb: l.answer_cache_bytes >> 20,
         data_dir: config.data_dir.as_ref().map(|d| d.display().to_string()),
         backfill_enabled: config.backfill.enabled,
         backfill_busy_percent: config.backfill.busy_percent,

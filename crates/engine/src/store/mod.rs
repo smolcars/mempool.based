@@ -330,6 +330,9 @@ pub struct Store {
     readers: Arc<Readers>,
     options: Options,
     versions: Arc<Versions>,
+    /// Tests: reads of this kind time out at once.
+    #[cfg(test)]
+    pub(crate) time_out: Mutex<Option<Read>>,
 }
 
 struct Readers {
@@ -490,6 +493,8 @@ impl Store {
             readers,
             options,
             versions,
+            #[cfg(test)]
+            time_out: Mutex::new(None),
         })
     }
 
@@ -556,6 +561,14 @@ impl Store {
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
     {
+        #[cfg(test)]
+        if *self.time_out.lock().unwrap_or_else(|e| e.into_inner()) == Some(read) {
+            (self.options.observer)(&Event::ReadTimedOut {
+                read,
+                limit: self.options.read_time_limit,
+            });
+            return Err(Error::TimedOut);
+        }
         let permit = self
             .readers
             .permits

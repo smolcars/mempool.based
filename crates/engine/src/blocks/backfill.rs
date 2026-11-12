@@ -51,8 +51,12 @@ pub struct Options {
 /// Something worth reporting. Passed to [`Options::observer`].
 #[derive(Debug)]
 pub enum Event<'a> {
-    /// Every [`TICK`] while working, and when a pass completes.
-    Progress(&'a Progress),
+    /// Every [`TICK`] while working, and when a pass completes. `counted` is false when the row
+    /// count failed or timed out: `rows` and `rated` are then the last counted, not now's.
+    Progress {
+        progress: &'a Progress,
+        counted: bool,
+    },
     /// A step failed; it is retried after a back-off. `failures` counts them in a row.
     Failed {
         tier: &'static str,
@@ -183,10 +187,14 @@ pub async fn backfill<S: Source>(
         (p.totals_done, p.rates_done) = done;
         if finished || reported.elapsed() >= TICK {
             reported = Instant::now();
-            if let Ok((rows, rated)) = store.read(Read::BlockCounts, db::counts).await {
+            let counted = store.read(Read::BlockCounts, db::counts).await;
+            if let Ok((rows, rated)) = counted {
                 (p.rows, p.rated) = (rows, rated);
             }
-            (options.observer)(&Event::Progress(&p));
+            (options.observer)(&Event::Progress {
+                progress: &p,
+                counted: counted.is_ok(),
+            });
         }
         progress.send_replace(p.clone());
         if done.0 && done.1 {
@@ -217,7 +225,9 @@ pub(super) async fn totals_step<S: Source>(
     let mut hi = cursor;
     let missing = loop {
         let lo = hi.saturating_sub(SCAN - 1);
-        let present = store.read(Read::Backfill, move |sql| db::present(sql, lo, hi)).await?;
+        let present = store
+            .read(Read::Backfill, move |sql| db::present(sql, lo, hi))
+            .await?;
         let present: std::collections::HashSet<u32> = present.into_iter().collect();
         // One run of consecutive heights, so the row checked below it is the only one under it.
         let mut missing: Vec<u32> = Vec::new();
@@ -315,7 +325,9 @@ async fn rates_step<S: Source>(
         return Ok((None, 0));
     }
     let Some((height, hash)) = store
-        .read(Read::Backfill, move |sql| db::next_unrated(sql, floor, cursor))
+        .read(Read::Backfill, move |sql| {
+            db::next_unrated(sql, floor, cursor)
+        })
         .await?
     else {
         return Ok((None, 0));
