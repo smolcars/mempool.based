@@ -108,7 +108,7 @@ def ws(dirs):
             # A last-reader time is shown only for a run whose every message reached every reader.
             if incomplete(r) != 0:
                 return None
-            x = next((v for k, v in r["messages"].items() if k == label or k.startswith(label + ":")), {}).get(key)
+            x = (r["messages"].get(label) or r["messages"].get(label + ":0") or {}).get(key)
             return x[q] if x and x["n"] else None
         print(f"| {n} | {rng([r['open'] for r in runs], '{:,}')} "
               f"| {rng([r['server']['cpu_pct_mean'] / 100 for r in runs], '{:.2f}')} / {rng([r['server']['cpu_pct_busiest_second'] / 100 for r in runs], '{:.2f}')} "

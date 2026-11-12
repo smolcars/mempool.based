@@ -691,6 +691,9 @@ async fn ws(o: Opts) -> Result<Value, String> {
         if !is_slow && every > 0 && id % every == 0 {
             want.push("projected-txs:0".to_owned());
         }
+        // The server ignores a topic named twice, so count it once.
+        want.sort();
+        want.dedup();
         let sub = json!({ "op": "subscribe", "topics": &want }).to_string();
         let ip = client_ip(id, ips);
         let (addr, path, gate) = (addr.clone(), path.clone(), Arc::clone(&gate));
