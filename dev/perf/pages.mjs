@@ -201,7 +201,8 @@ async function frames(page, start, ms) {
   const round = (x) => (x === null ? null : Math.round(x * 10) / 10);
   return {
     frames: s.length,
-    fps: round((s.length / ms) * 1000),
+    // Over the time the frames themselves cover, which includes `start()`, not over `ms`.
+    fps: round((s.length / s.reduce((a, b) => a + b, 0)) * 1000),
     p50_ms: round(p(0.5)),
     p99_ms: round(p(0.99)),
     max_ms: round(s.at(-1) ?? null),

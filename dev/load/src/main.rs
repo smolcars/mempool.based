@@ -4,15 +4,19 @@
 //! ```text
 //! load http <http://host:port> <path>... [--clients N] [--seconds S] [--ips N] [--rate R] [--pid PID]
 //! load ws <ws://host:port/path> [--sockets N] [--seconds S] [--topics a,b] [--block-every K]
-//!         [--slow N] [--ips N] [--pid PID] [--server-log FILE]
+//!         [--slow N] [--ips N] [--pid PID] [--server-log FILE] [--drain S]
 //! ```
 //!
 //! `--ips N` names each client as one of N addresses in `X-Forwarded-For` (the server must trust
 //! 127.0.0.1 for it); 0, the default, sends no header, so every client is 127.0.0.1. `--pid`
-//! samples that process's CPU time and resident memory. A JSON summary goes to stdout.
+//! samples that process's CPU time and resident memory. A JSON summary goes to stdout. An HTTP
+//! request still unanswered [`GRACE`] after `--seconds` is counted as a timeout and the run ends.
+//! A WebSocket run counts messages first seen during `--seconds`, then keeps reading for
+//! `--drain` seconds (default 15) so a late reader is still counted; a message's last-reader
+//! time is reported only when every reader subscribed to it got it.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool: printing is its output
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hasher};
 use std::io;
 use std::process::Command;
@@ -30,6 +34,11 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::Semaphore;
 
 type Sender = hyper::client::conn::http1::SendRequest<Empty<Bytes>>;
+
+/// How long past `--seconds` an HTTP request may still be in flight before it counts as a timeout.
+const GRACE: Duration = Duration::from_secs(5);
+/// A WebSocket that has not finished its upgrade and subscription by then counts as refused.
+const WS_CONNECT: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() {
@@ -251,6 +260,7 @@ struct HttpResults {
     paths: HashMap<String, PathStats>,
     connect_errors: u64,
     request_errors: u64,
+    timeouts: u64,
 }
 
 async fn connect(addr: &str) -> io::Result<Sender> {
@@ -278,6 +288,7 @@ async fn http_client(id: u64, run: Arc<HttpRun>) -> HttpResults {
     let mut sender: Option<Sender> = None;
     let mut next = Instant::now();
     let mut i = usize::try_from(id).unwrap_or(0);
+    let stop = tokio::time::Instant::from_std(run.deadline + GRACE);
     while Instant::now() < run.deadline {
         if run.rate > 0.0 {
             tokio::time::sleep_until(next.into()).await;
@@ -285,12 +296,16 @@ async fn http_client(id: u64, run: Arc<HttpRun>) -> HttpResults {
         }
         let mut s = match sender.take() {
             Some(s) if s.is_ready() => s,
-            _ => match connect(&run.addr).await {
-                Ok(s) => s,
-                Err(_) => {
+            _ => match tokio::time::timeout_at(stop, connect(&run.addr)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(_)) => {
                     out.connect_errors += 1;
                     tokio::time::sleep(Duration::from_millis(20)).await;
                     continue;
+                }
+                Err(_) => {
+                    out.timeouts += 1;
+                    break;
                 }
             },
         };
@@ -312,8 +327,13 @@ async fn http_client(id: u64, run: Arc<HttpRun>) -> HttpResults {
             let body = res.into_body().collect().await.ok()?.to_bytes();
             Some((status, body.len()))
         };
-        match answer.await {
-            Some((status, len)) => {
+        match tokio::time::timeout_at(stop, answer).await {
+            Err(_) => {
+                out.timeouts += 1;
+                break;
+            }
+            Ok(None) => out.request_errors += 1,
+            Ok(Some((status, len))) => {
                 let us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
                 let stats = out.paths.entry(path.clone()).or_default();
                 *stats.status.entry(status).or_default() += 1;
@@ -325,7 +345,6 @@ async fn http_client(id: u64, run: Arc<HttpRun>) -> HttpResults {
                 }
                 sender = Some(s);
             }
-            None => out.request_errors += 1,
         }
     }
     out
@@ -361,6 +380,7 @@ async fn http(o: Opts) -> Result<Value, String> {
         let r = t.await.map_err(|e| e.to_string())?;
         all.connect_errors += r.connect_errors;
         all.request_errors += r.request_errors;
+        all.timeouts += r.timeouts;
         for (path, s) in r.paths {
             let into = all.paths.entry(path).or_default();
             into.ok_us.extend(s.ok_us);
@@ -410,6 +430,7 @@ async fn http(o: Opts) -> Result<Value, String> {
         "status": status,
         "connect_errors": all.connect_errors,
         "request_errors": all.request_errors,
+        "timeouts": all.timeouts,
         "ok_ms": spread(ok),
         "refused_ms": spread(refused),
         "server": server,
@@ -517,7 +538,8 @@ struct Seen {
     bytes: usize,
     first_us: u64,
     last_us: u64,
-    count: usize,
+    /// Readers that got it; the same bytes read again by one reader do not move `last_us`.
+    readers: HashSet<u32>,
 }
 
 type Messages = Arc<Mutex<HashMap<u64, Seen>>>;
@@ -531,7 +553,12 @@ fn label(opcode: u8, payload: &[u8]) -> String {
     format!("{}:{}", s("topic"), s("type"))
 }
 
-async fn ws_reader(mut r: BufReader<OwnedReadHalf>, mut w: OwnedWriteHalf, seen: Messages) {
+async fn ws_reader(
+    id: u32,
+    mut r: BufReader<OwnedReadHalf>,
+    mut w: OwnedWriteHalf,
+    seen: Messages,
+) {
     let mut buf = Vec::new();
     loop {
         let Ok(opcode) = read_frame(&mut r, &mut buf).await else {
@@ -549,11 +576,12 @@ async fn ws_reader(mut r: BufReader<OwnedReadHalf>, mut w: OwnedWriteHalf, seen:
                     bytes: buf.len(),
                     first_us: at,
                     last_us: at,
-                    count: 0,
+                    readers: HashSet::new(),
                 });
-                e.count += 1;
-                e.first_us = e.first_us.min(at);
-                e.last_us = e.last_us.max(at);
+                if e.readers.insert(id) {
+                    e.first_us = e.first_us.min(at);
+                    e.last_us = e.last_us.max(at);
+                }
             }
             9 => {
                 if w.write_all(&client_frame(10, &buf)).await.is_err() {
@@ -617,6 +645,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
     let seconds = o.num("seconds", 30)?;
     let every = o.num("block-every", 0)?;
     let ips = o.num("ips", 0)?;
+    let drain = o.num("drain", 15)?;
     let topics: Vec<String> = o
         .named
         .get("topics")
@@ -642,7 +671,9 @@ async fn ws(o: Opts) -> Result<Value, String> {
         if is_slow {
             // The largest topics, so a client that does not read fills its queue soonest.
             want.extend(["projected-txs:0".to_owned(), "projected-txs:1".to_owned()]);
-        } else if every > 0 && id % every == 0 {
+        }
+        let block_topic = !is_slow && every > 0 && id % every == 0;
+        if block_topic {
             want.push("projected-txs:0".to_owned());
         }
         let sub = json!({ "op": "subscribe", "topics": want }).to_string();
@@ -656,15 +687,24 @@ async fn ws(o: Opts) -> Result<Value, String> {
         tasks.push(tokio::spawn(async move {
             let _permit = gate.acquire().await.ok()?;
             let t = Instant::now();
-            match ws_open(&addr, &path, ip.as_deref()).await {
-                Ok((r, mut w)) => {
-                    w.write_all(&client_frame(1, sub.as_bytes())).await.ok()?;
+            let open_and_subscribe = async {
+                let (r, mut w) = ws_open(&addr, &path, ip.as_deref()).await?;
+                w.write_all(&client_frame(1, sub.as_bytes()))
+                    .await
+                    .map_err(|e| e.kind().to_string())?;
+                Ok::<_, String>((r, w))
+            };
+            let opened = tokio::time::timeout(WS_CONNECT, open_and_subscribe)
+                .await
+                .unwrap_or_else(|_| Err("timeout".into()));
+            match opened {
+                Ok((r, w)) => {
                     connect_us
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(u32::try_from(t.elapsed().as_micros()).unwrap_or(u32::MAX));
                     open.fetch_add(1, Ordering::Relaxed);
-                    Some((is_slow, r, w))
+                    Some((id, is_slow, block_topic, r, w))
                 }
                 Err(code) => {
                     *refused
@@ -678,12 +718,15 @@ async fn ws(o: Opts) -> Result<Value, String> {
         }));
     }
     let mut readers = Vec::new();
+    let mut block_readers = 0usize;
     for t in tasks {
-        if let Ok(Some((is_slow, r, w))) = t.await {
+        if let Ok(Some((id, is_slow, block_topic, r, w))) = t.await {
             if is_slow {
                 held.push((r, w)); // never read
             } else {
-                readers.push(tokio::spawn(ws_reader(r, w, Arc::clone(&seen))));
+                block_readers += usize::from(block_topic);
+                let id = u32::try_from(id).unwrap_or(u32::MAX);
+                readers.push(tokio::spawn(ws_reader(id, r, w, Arc::clone(&seen))));
             }
         }
     }
@@ -696,6 +739,8 @@ async fn ws(o: Opts) -> Result<Value, String> {
     let wall = started.elapsed();
     let server = sampler.finish();
     let load_cpu = own_cpu(own, wall);
+    // Late readers of messages first seen in the window still count.
+    tokio::time::sleep(Duration::from_secs(drain)).await;
     for r in &readers {
         r.abort();
     }
@@ -717,24 +762,34 @@ async fn ws(o: Opts) -> Result<Value, String> {
         by_label.entry(s.label.clone()).or_default().push(s);
     }
     let mut messages = serde_json::Map::new();
-    for (label, list) in &by_label {
+    for (label, all) in &by_label {
+        // Every reader subscribed to it: the binary frames are `projected-txs:0`'s.
+        let expected = if label.starts_with("binary:") {
+            block_readers
+        } else {
+            readers.len()
+        };
+        let (list, incomplete): (Vec<&Seen>, Vec<&Seen>) =
+            all.iter().partition(|s| s.readers.len() >= expected);
         let spread_us: Vec<u32> = list
             .iter()
             .map(|s| u32::try_from(s.last_us - s.first_us).unwrap_or(u32::MAX))
             .collect();
         let mut entry = json!({
-            "messages": list.len(),
-            "bytes_max": list.iter().map(|s| s.bytes).max(),
-            "received_min": list.iter().map(|s| s.count).min(),
-            "received_max": list.iter().map(|s| s.count).max(),
+            "messages": all.len(),
+            "expected_readers": expected,
+            "complete": list.len(),
+            "incomplete": incomplete.len(),
+            "incomplete_received_min": incomplete.iter().map(|s| s.readers.len()).min(),
+            "bytes_max": all.iter().map(|s| s.bytes).max(),
             "first_to_last_ms": spread(spread_us),
         });
         if label == "blocks:block" {
-            // Join each block with the server's fan-out event: published at, to the last reader.
+            // Join each complete block with the server's fan-out event: published, to the last reader.
             let mut ready_to_last = Vec::new();
             let mut node_to_last = Vec::new();
             let mut node_to_queued = Vec::new();
-            for s in list {
+            for s in &list {
                 let first_ms = s.first_us as f64 / 1000.0;
                 let best = fanouts
                     .iter()
@@ -768,6 +823,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
         "connect_ms": spread(connect),
         "connected_after_s": (connected_s * 10.0).round() / 10.0,
         "seconds": seconds,
+        "drain_seconds": drain,
         "topics": topics,
         "block_topic_every": every,
         "slow_still_open_at_end": still_open_slow,

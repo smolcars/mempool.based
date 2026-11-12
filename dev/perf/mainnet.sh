@@ -15,11 +15,16 @@ minutes=$2
 reference=${3:-}
 load="${CARGO_TARGET_DIR:-$root/target}/release/load"
 bin="${CARGO_TARGET_DIR:-$root/target}/release/mempool-based"
-server="" client=""
+server="" client="" sampler=""
 cleanup() {
-  [ -n "$client" ] && kill "$client" 2>/dev/null
-  [ -n "$server" ] && kill "$server" 2>/dev/null && wait "$server" 2>/dev/null
-  return 0
+  local pid
+  for pid in "$client" "$sampler" "$server"; do
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  client="" sampler="" server=""
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -76,7 +81,6 @@ log "idle, engine off"
 start idle false
 sample "$out/idle.csv" 180
 cleanup
-server=""
 
 log "engine on for $minutes minutes"
 start live true
@@ -103,6 +107,7 @@ if [ -n "$reference" ]; then
   done >"$out/connect.csv"
 fi
 wait "$sampler"
+sampler=""
 wait "$client" || true
 client=""
 log "done; results in $out"

@@ -2,10 +2,10 @@
 # shellcheck disable=SC2034
 # The server under load, on a private regtest node: every step in docs/PERFORMANCE.md "The server
 # under load", one JSON file per step in OUT. Never point it at a shared node.
-#   dev/perf/bench.sh OUT [http|limits|ws|idle ...]     (default: all four)
+#   dev/perf/bench.sh OUT [idle] [http] [limits] [ws]     (default: all four)
 # Needs docker, python3, and the release builds: `cargo build --release --locked -p mempool-based
 # -p load` and `(cd web && bun run build)`. Each step is at most two minutes, with GAP seconds
-# (default 15) between steps so the machine settles. Takes about 20 minutes for all four.
+# (default 15) between steps so the machine settles. Takes about 35 minutes for all four.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -26,8 +26,15 @@ stop_server() {
     server=""
   fi
 }
+stop_activity() {
+  if [ -n "$activity" ]; then
+    kill "$activity" 2>/dev/null || true
+    wait "$activity" 2>/dev/null || true
+    activity=""
+  fi
+}
 cleanup() {
-  [ -n "$activity" ] && kill "$activity" 2>/dev/null
+  stop_activity
   stop_server
   python3 "$root/dev/regtest/regtest.py" down >/dev/null 2>&1 || true
 }
@@ -54,7 +61,7 @@ start() {
 
 # activity RATE BLOCK_EVERY: transactions in the background until the next call or the end.
 activity() {
-  [ -n "$activity" ] && kill "$activity" 2>/dev/null && wait "$activity" 2>/dev/null
+  stop_activity
   python3 "$perf/activity.py" flow --rate "$1" --seconds 3600 --block-every "$2" \
     2>>"$out/activity.log" &
   activity=$!
@@ -126,19 +133,30 @@ for phase in $phases; do
     # shellcheck disable=SC2086
     step limits-victims-flooded http "http://$addr" $memory $store --clients 100 --ips 100 --rate 2 --seconds 30
     wait "$flood"
+    # The flood alone, with every request logged (the default) and then with request logging off,
+    # to tell the cost of refusing from the cost of logging. The log's growth is recorded too.
+    before=$(wc -c <"$srv_log")
+    # shellcheck disable=SC2086
+    step limits-flood-logged http "http://$addr" $memory --clients 64 --seconds 30
+    echo $(($(wc -c <"$srv_log") - before)) >"$out/limits-flood-logged.logbytes"
+    start limits-unlogged LOG_REQUESTS=off
+    # shellcheck disable=SC2086
+    step limits-flood-unlogged http "http://$addr" $memory --clients 64 --seconds 30
     ;;
   ws)
     # Raised for the test: sockets in all (default 1,024). Each socket is its own client address.
     activity 20 30
     start ws WS_MAX_SOCKETS=20000
     sleep 15
-    for sockets in 100 1000 10000; do
+    for sockets in 100 1000 2000 5000 8000 10000; do
+      # The kernel's network buffers 30 s in (macOS `netstat -m`; nothing elsewhere).
+      (sleep 30 && netstat -m >"$out/ws-$sockets.netstat" 2>/dev/null) &
       step "ws-$sockets" ws "ws://$addr$r/app/ws" --sockets "$sockets" --ips "$sockets" --block-every 10 \
         --seconds 90 --server-log "$out/ws/server.log"
     done
     # Clients that never read, beside 1,000 that do.
     step ws-slow ws "ws://$addr$r/app/ws" --sockets 1000 --ips 1050 --slow 50 --block-every 10 \
-      --seconds 110 --server-log "$out/ws/server.log"
+      --seconds 90 --server-log "$out/ws/server.log"
     ;;
   esac
 done
