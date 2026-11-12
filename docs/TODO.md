@@ -71,7 +71,7 @@ Refined when M1 lands.
 | MP8 | A day-long evidence run for the fee recommendations on mainnet, scored with `fee_watch`, and tuning from it: the first run saw only four blocks, and the next-block level met its horizon in three of them. The owner agreed on 2026-11-12 | MP4 | doing: the 24-hour recording started on 2026-11-12 |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | done by FX6 ([#46](https://github.com/smolcars/mempool.based/pull/46)): the suite ran as one client, a mining test started before the server had caught up, a hover test aimed at moving squares, and one locator matched two elements |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | done ([#30](https://github.com/smolcars/mempool.based/pull/30)) |
-| WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | doing |
+| WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | done ([#54](https://github.com/smolcars/mempool.based/pull/54)); follow-ups in WS2 |
 
 ## M3 — Mining and history
 
