@@ -127,7 +127,8 @@ async function load(browser, profile, path, ready) {
   cdp.on("Network.requestWillBeSent", (e) => {
     requests++;
     if (e.type === "Script") scripts.add(e.requestId);
-    spans.set(e.requestId, { url: e.request.url, start: e.timestamp, end: null });
+    const t = e.timestamp;
+    spans.set(e.requestId, { url: e.request.url, issued: t, start: t, end: null });
   });
   // When it went out on the wire: later than its start when it waited for a free connection.
   cdp.on("Network.responseReceived", (e) => {
@@ -142,7 +143,7 @@ async function load(browser, profile, path, ready) {
     if (s) s.end = e.timestamp;
   });
   cdp.on("Network.webSocketWillSendHandshakeRequest", (e) => {
-    spans.set(e.requestId, { url: "ws", start: e.timestamp, end: null });
+    spans.set(e.requestId, { url: "ws", issued: e.timestamp, start: e.timestamp, end: null });
   });
   cdp.on("Network.webSocketHandshakeResponseReceived", (e) => {
     const s = spans.get(e.requestId);
@@ -179,7 +180,8 @@ async function load(browser, profile, path, ready) {
   // The longest run of requests, each sent only after the one before it had finished, among those
   // done before the data showed: the round trips the page waited through in a row, a wait for a
   // free connection included.
-  const t0 = Math.min(...[...spans.values()].map((s) => s.start));
+  // Elapsed times count from when the document was asked for, as `performance.now()` does.
+  const t0 = Math.min(...[...spans.values()].map((s) => s.issued));
   const done = [...spans.values()]
     .filter((s) => s.end !== null && (dataMs === null || (s.end - t0) * 1000 <= dataMs))
     .sort((a, b) => a.start - b.start);
