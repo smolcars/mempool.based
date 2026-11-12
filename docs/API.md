@@ -602,7 +602,7 @@ A tree is a replacement and everything it removed, recursively: its root is the 
 | `tx.fullRbf` | On a node that replaced something: whether one of the transactions it replaced directly did not signal. Absent on a leaf, as on the reference |
 | `fullRbf` | Whether this transaction (unless it is the root) or anything below it was replaced without signalling |
 | `interval` | Seconds from this transaction's arrival to the arrival of the one that replaced it. Absent on the root |
-| `mined`, `tx.mined` | `true` on the root once we saw it confirmed, or when it went straight into a block without our seeing it in the mempool; absent otherwise |
+| `mined`, `tx.mined` | `true` on the root while it is in a block on the best chain: seen confirmed, or gone straight into a block without our seeing it in the mempool, and kept true through a reorg whose new blocks hold it too. `null` when a reorg took its block away and where it is now is not known yet (the node could not be asked, or one reorg's reads ran out: [`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)); a client reading it as a boolean reads not mined. Absent otherwise |
 
 **`/fullrbf/replacements`** lists the trees whose root `fullRbf` is `true`. rbitcoin replaces whether or not a transaction signals, so on rbitcoin this is a filter on signalling, not on policy: every replacement here is a full-RBF replacement in the policy sense.
 
@@ -614,6 +614,7 @@ A tree is a replacement and everything it removed, recursively: its root is the 
 | A root the tracker never held | `fee`, `vsize`, `value`, `rate` and `rbf` are `null`, `time` is when we saw the replacement | It was confirmed in the block that removed the original, so we never read it. Rare: a replacement mined within one poll of arriving |
 | `tx.rate` | The transaction's own fee over its size | The reference wrote a rate adjusted for unconfirmed ancestors where it had one (24 of 39 compared on mainnet). Ours is the transaction's alone; its effective rate is `/cpfp`'s |
 | A miner confirms the transaction we saw replaced | The mined one is the newest end and replaced the other; its figures are `null` | What happened last: the block's transaction pushed out the one in our mempool. The reference keeps "B replaced A" and marks A mined |
+| A reorg | A tree's `mined` follows its root to the new chain, `null` while that is not known; a replaced transaction that the new chain confirms leaves its tree | The reference's handling of a reorg was not observed |
 | Order of a node's fields | `tx`, `time`, `interval`, `fullRbf`, `replaces`, then `mined` | The reference writes `interval` before `fullRbf` on a leaf and last on a node with children; we use one order |
 | History | The newest 10,000 replacements, from when the server first ran with the engine on | Bounded by `REPLACEMENTS_KEPT`. The reference's own retention was not observed |
 | `rbf` replaces | What `txid` replaced directly, including descendants that left with them | As above |
