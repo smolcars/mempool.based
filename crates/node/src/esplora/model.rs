@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use bitcoin::{BlockHash, TxMerkleNode, Txid};
+use bitcoin::{Amount, BlockHash, TxMerkleNode, Txid};
 use serde::Deserialize;
 
 use super::route::ScriptHash;
@@ -27,6 +27,28 @@ pub struct Block {
     /// Compact target as a number, not Core's hex string.
     pub bits: u32,
     pub difficulty: f64,
+}
+
+/// One row of `/block/:hash/txs/summary`, sent as `[txid, fee, weight, value]`: fee and total
+/// output value in sats (the coinbase's fee is 0), BIP141 weight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(from = "(Txid, u64, u32, u64)")]
+pub struct BlockTxSummary {
+    pub txid: Txid,
+    pub fee: Amount,
+    pub weight: u32,
+    pub value: Amount,
+}
+
+impl From<(Txid, u64, u32, u64)> for BlockTxSummary {
+    fn from((txid, fee, weight, value): (Txid, u64, u32, u64)) -> Self {
+        Self {
+            txid,
+            fee: Amount::from_sat(fee),
+            weight,
+            value: Amount::from_sat(value),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

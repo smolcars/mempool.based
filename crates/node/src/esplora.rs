@@ -33,8 +33,8 @@ pub use route::{
 
 use crate::http::Transport;
 use model::{
-    Block, BlockStatus, FeeEstimates, MempoolInfo, MempoolRecent, MerkleProof, Outspend,
-    PositionedOutput, ScriptInfo, Tx, TxStatus, TxSummary, Utxo,
+    Block, BlockStatus, BlockTxSummary, FeeEstimates, MempoolInfo, MempoolRecent, MerkleProof,
+    Outspend, PositionedOutput, ScriptInfo, Tx, TxStatus, TxSummary, Utxo,
 };
 
 /// The view a response was computed against: the live tip, the address-index watermark,
@@ -138,6 +138,13 @@ where
 pub struct Esplora {
     transport: Transport,
 }
+
+/// More transactions than a block can hold: the smallest transaction is 60 bytes, 240 weight
+/// units, so 4,000,000 weight holds at most 16,666.
+pub const MAX_BLOCK_TXS: usize = 20_000;
+/// Largest `/block/:hash/txs/summary` answer read: [`MAX_BLOCK_TXS`] rows of at most about 125
+/// bytes (a quoted txid, two `u64` and a `u32`). A full mainnet block is about 0.2 MB.
+pub const MAX_SUMMARY_BYTES: usize = 4 << 20;
 
 impl Esplora {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -264,6 +271,28 @@ impl Esplora {
         start: BlockTxsStart,
     ) -> Result<Stamped<Vec<Tx>>, Error> {
         self.json(Route::BlockTxs { hash, start }).await
+    }
+
+    /// Every transaction's txid, fee, weight and output value, coinbase first: rbitcoin's
+    /// `/block/:hash/txs/summary`, newer than v0.9.2. v0.9.2 answers `Rejected` (400); an unknown,
+    /// off-best-chain or pruned block is `NotFound`. An answer over [`MAX_SUMMARY_BYTES`] is
+    /// `ResponseTooBig` and one over [`MAX_BLOCK_TXS`] rows a `Decode` error.
+    pub async fn block_txs_summary(
+        &self,
+        hash: BlockHash,
+    ) -> Result<Stamped<Vec<BlockTxSummary>>, Error> {
+        self.typed(Route::BlockTxsSummary(hash), |b| {
+            if b.len() > MAX_SUMMARY_BYTES {
+                return Err(Error::ResponseTooBig);
+            }
+            let rows: Vec<BlockTxSummary> =
+                serde_json::from_slice(b).map_err(|e| Error::Decode(e.to_string()))?;
+            if rows.len() > MAX_BLOCK_TXS {
+                return Err(Error::Decode(format!("{} rows", rows.len())));
+            }
+            Ok(rows)
+        })
+        .await
     }
 
     pub async fn block_raw(&self, hash: BlockHash) -> Result<Stamped<bitcoin::Block>, Error> {
