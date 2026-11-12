@@ -1,6 +1,6 @@
 // The live channel: one WebSocket per tab and network at /app/ws (docs/WS.md), shared by every page.
 // Pages use it through `useTopic` and `useLiveStatus`; docs/FRONTEND.md "Live data" shows how.
-import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal } from "solid-js";
 import { type Network, onNetwork } from "./network";
 import { useNetwork } from "./page";
 
@@ -421,10 +421,7 @@ export function liveConnection(network: Network): LiveConnection {
  */
 export function useTopic<M>(topic: Topic<M>, handlers: TopicHandlers<M>): () => void {
   const network = useNetwork();
-  createEffect(() => {
-    const off = liveConnection(network()).add(topic, handlers);
-    onCleanup(off);
-  });
+  createEffect(network, (n) => liveConnection(n).add(topic, handlers));
   return () => liveConnection(network()).restart(topic.name);
 }
 

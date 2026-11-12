@@ -1,19 +1,6 @@
 import { useSearchParams } from "@solidjs/router";
-import {
-  batch,
-  createComputed,
-  createMemo,
-  createSignal,
-  For,
-  type JSX,
-  Match,
-  on,
-  onCleanup,
-  type Resource,
-  Show,
-  Switch,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import "../../components/Button.css";
 import { type Column, DataTable } from "../../components/DataTable";
@@ -23,7 +10,7 @@ import { Pagination } from "../../components/Pagination";
 import "../../components/SectionHeader.css";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
-import { createApi, fetchApi } from "../../lib/api";
+import { type ApiResource, createApi, fetchApi } from "../../lib/api";
 import type { AddressStats, Transaction, Utxo } from "../../lib/esplora";
 import { groupDigits, MISSING } from "../../lib/format";
 import { NETWORK_NAMES, paths } from "../../lib/network";
@@ -64,10 +51,18 @@ const plural = (n: number, one: string, many: string) =>
  * the URL (`?view=unspent`), so a link or a reload opens the same one. Loaded pages survive a
  * switch between views.
  */
+/** The pages after the first, whether the last of them was full, and which rows are new. */
+interface Later {
+  txs: Transaction[];
+  full: boolean;
+  fresh: ReadonlySet<string>;
+}
+const NOTHING_LATER: Later = { txs: [], full: true, fresh: new Set() };
+
 export function History(props: {
   address: string;
-  stats: Resource<AddressStats>;
-  first: Resource<Transaction[]>;
+  stats: ApiResource<AddressStats>;
+  first: ApiResource<Transaction[]>;
   retryFirst: () => void;
   /** Hands the page a function that refreshes what this section loaded on its own. */
   onRefresh: (refresh: () => void) => void;
@@ -102,23 +97,16 @@ export function History(props: {
   };
 
   // Transactions: the first page comes from the page (it refreshes when the history changes), later pages from here.
-  const [later, setLater] = createSignal<Transaction[]>([]);
-  const [lastPageFull, setLastPageFull] = createSignal(true);
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [moreError, setMoreError] = createSignal<unknown>();
   const controller = new AbortController();
   onCleanup(() => controller.abort());
 
   const first = () => settled(props.first);
-  const shown = createMemo(() => {
-    const f = first();
-    return f ? mergePages(f, later()) : undefined;
-  });
   const total = () => {
     const s = settled(props.stats);
     return s ? s.chain_stats.tx_count + s.mempool_stats.tx_count : undefined;
   };
-  const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : lastPageFull());
 
   // When a refresh brings a new first page, what was loaded after it stays only where it still
   // continues the fresh page, so nothing is skipped and nothing stale stays. New rows flash once.
@@ -126,8 +114,6 @@ export function History(props: {
   // Counts first pages; a page request made before the latest one is dropped when it lands.
   let generation = 0;
   let known = new Set<string>();
-  // A signal, so a row drawn before the set is worked out still takes its flash.
-  const [fresh, setFresh] = createSignal(new Set<string>());
   // What a first page says, to tell a refresh that changed nothing from one that did. In any
   // order: the node lists unconfirmed transactions in no fixed order (seen on regtest).
   const pageKey = (page: Transaction[]) => {
@@ -135,23 +121,33 @@ export function History(props: {
     // oxlint-disable-next-line unicorn/no-array-sort -- sorts the array just made; toSorted is past this lib target
     return keys.sort().join(",");
   };
-  createComputed(
-    on(first, (f) => {
-      if (!f) return;
-      // Nothing changed: pages already loaded, and one on its way, still continue it.
-      if (previous && pageKey(f) === pageKey(previous)) return;
-      generation++;
-      const ids = new Set(f.map((t) => t.txid));
-      const old = previous;
-      if (old) {
-        if (untrack(later).length === 0) setLastPageFull(pageIsFull(old, PAGE));
-        setLater(keptAfterRefresh(f, mergePages(old, untrack(later)), PAGE));
-      }
-      setFresh(new Set(old ? [...ids].filter((id) => !known.has(id)) : []));
-      known = new Set([...known, ...ids]);
-      previous = f;
-    }),
-  );
+  // The pages after the first, whether the last of them was full, and the rows that came in with
+  // the latest first page: loading more appends to them, and a new first page works them out
+  // again before any of them is shown.
+  const [after, setAfter] = createSignal<Later>((prev = NOTHING_LATER) => {
+    const f = first();
+    if (!f) return prev;
+    // Nothing changed: pages already loaded, and one on its way, still continue it.
+    if (previous && pageKey(f) === pageKey(previous)) return prev;
+    generation++;
+    const ids = new Set(f.map((t) => t.txid));
+    const old = previous;
+    const next: Later = {
+      txs: old ? keptAfterRefresh(f, mergePages(old, prev.txs), PAGE) : prev.txs,
+      full: old && prev.txs.length === 0 ? pageIsFull(old, PAGE) : prev.full,
+      fresh: new Set(old ? [...ids].filter((id) => !known.has(id)) : []),
+    };
+    known = new Set([...known, ...ids]);
+    previous = f;
+    return next;
+  });
+  const later = () => after().txs;
+  const fresh = () => after().fresh;
+  const shown = createMemo(() => {
+    const f = first();
+    return f ? mergePages(f, later()) : undefined;
+  });
+  const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : after().full);
 
   const loadMore = async () => {
     const list = shown();
@@ -166,20 +162,15 @@ export function History(props: {
         `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
         { signal: controller.signal },
       );
-      batch(() => {
-        setLoadingMore(false);
-        // A refresh while this was in flight may have changed the history it continues (new
-        // transactions, a reorg), so the reply could leave a gap or bring back stale rows.
-        if (generation !== asked) return;
-        setLater((l) => [...l, ...page]);
-        setLastPageFull(pageIsFull(page, PAGE));
-      });
+      setLoadingMore(false);
+      // A refresh while this was in flight may have changed the history it continues (new
+      // transactions, a reorg), so the reply could leave a gap or bring back stale rows.
+      if (generation !== asked) return;
+      setAfter((a) => ({ ...a, txs: [...a.txs, ...page], full: pageIsFull(page, PAGE) }));
     } catch (e) {
       if (controller.signal.aborted) return;
-      batch(() => {
-        setMoreError(e);
-        setLoadingMore(false);
-      });
+      setMoreError(e);
+      setLoadingMore(false);
     }
   };
 
@@ -187,10 +178,8 @@ export function History(props: {
   // refused this address's totals, because it refuses its unspent outputs for the same reason.
   const statsFailure = () =>
     props.stats.state === "errored" ? refusal(props.stats.error) : undefined;
-  const [opened, setOpened] = createSignal(false);
-  createComputed(() => {
-    if (view() === "unspent") setOpened(true);
-  });
+  // Once opened, stays open: the memo stops reading the view after it first turns true.
+  const opened = createMemo((was?: boolean) => was === true || view() === "unspent");
   const statsKnown = () => props.stats.state !== "unresolved" && props.stats.state !== "pending";
   const wantUtxos = () => opened() && statsKnown() && statsFailure() !== "too-large";
   const [utxos, { refetch: refetchUtxos }] = createApi<Utxo[]>(() => wantUtxos() && `${path}/utxo`);
@@ -202,8 +191,8 @@ export function History(props: {
   const asked = (state: string) =>
     state === "ready" || state === "refreshing" || state === "pending";
   props.onRefresh(() => {
-    if (asked(utxos.state)) void refetchUtxos();
-    if (asked(tip.state)) void refetchTip();
+    if (asked(utxos.state)) refetchUtxos();
+    if (asked(tip.state)) refetchTip();
   });
 
   const meta = () => {
@@ -235,7 +224,7 @@ export function History(props: {
                 class="address-tab"
                 id={`address-tab-${v.id}`}
                 aria-controls="address-panel"
-                aria-selected={view() === v.id}
+                aria-selected={view() === v.id ? "true" : "false"}
                 tabindex={view() === v.id ? 0 : -1}
                 onClick={() => select(v.id)}
               >
@@ -273,7 +262,7 @@ export function History(props: {
                         class="btn"
                         type="button"
                         onClick={() => void loadMore()}
-                        aria-disabled={loadingMore()}
+                        aria-disabled={loadingMore() ? "true" : "false"}
                       >
                         {loadingMore()
                           ? "Loading…"
@@ -302,8 +291,8 @@ export function History(props: {
                 utxos={utxos}
                 tip={tip}
                 retry={() => {
-                  if (utxos.state === "errored") void refetchUtxos();
-                  if (tip.state === "errored") void refetchTip();
+                  if (utxos.state === "errored") refetchUtxos();
+                  if (tip.state === "errored") refetchTip();
                 }}
               />
             </Match>
@@ -327,7 +316,7 @@ function When(props: { tx: Transaction }) {
 
 function Transactions(props: {
   address: string;
-  first: Resource<Transaction[]>;
+  first: ApiResource<Transaction[]>;
   retryFirst: () => void;
   shown: Transaction[] | undefined;
   total: number | undefined;
@@ -398,7 +387,7 @@ function Transactions(props: {
         </Empty>
       </Match>
       <Match when={true}>
-        <div class="address-txs" aria-busy={props.shown === undefined}>
+        <div class="address-txs" aria-busy={props.shown === undefined ? "true" : "false"}>
           <DataTable
             caption="Transactions of this address, newest first"
             columns={columns}
@@ -435,7 +424,11 @@ function Confirmations(props: { utxo: Utxo; tip: number | undefined; words?: boo
   );
 }
 
-function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry: () => void }) {
+function Unspent(props: {
+  utxos: ApiResource<Utxo[]>;
+  tip: ApiResource<string>;
+  retry: () => void;
+}) {
   const [page, setPage] = createSignal(1);
   const sorted = createMemo(() => {
     const u = settled(props.utxos);
@@ -502,7 +495,7 @@ function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry:
         </Empty>
       </Match>
       <Match when={true}>
-        <div class="address-utxos" aria-busy={sorted() === undefined}>
+        <div class="address-utxos" aria-busy={sorted() === undefined ? "true" : "false"}>
           <DataTable
             caption="Unspent outputs of this address, newest first"
             columns={columns}

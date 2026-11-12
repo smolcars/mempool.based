@@ -1,14 +1,5 @@
-import {
-  createEffect,
-  createSignal,
-  For,
-  Index,
-  type JSX,
-  on,
-  onCleanup,
-  onMount,
-  Show,
-} from "solid-js";
+import { createEffect, createSignal, For, onSettled, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
@@ -162,18 +153,22 @@ export function Flow(props: {
     });
   };
 
-  onMount(() => {
+  onSettled(() => {
     const ro = new ResizeObserver(() => draw());
     if (flowEl) ro.observe(flowEl);
-    onCleanup(() => ro.disconnect());
     requestAnimationFrame(() => {
       draw();
       requestAnimationFrame(animate);
     });
+    return () => ro.disconnect();
   });
   // Cards added or relabelled: redraw after they are laid out.
   createEffect(
-    on([inShown, outShown, props.outspends], () => requestAnimationFrame(draw), { defer: true }),
+    () => [inShown(), outShown(), props.outspends()],
+    () => {
+      requestAnimationFrame(draw);
+    },
+    { defer: true },
   );
 
   const isSel = (side: Side, index: number) =>
@@ -183,7 +178,7 @@ export function Flow(props: {
     <button
       type="button"
       class="tx-flow__open"
-      aria-expanded={isSel(side, index)}
+      aria-expanded={isSel(side, index) ? "true" : "false"}
       aria-controls="tx-inspector"
       aria-label={`Details of ${side === "in" ? "input" : "output"} ${index}`}
       onClick={() => props.onSelect({ side, index })}
@@ -217,8 +212,8 @@ export function Flow(props: {
           when={!coinbase()}
           fallback={
             <li
-              class="tx-flow__item"
-              classList={{ "is-selected": isSel("in", 0) }}
+              class={["tx-flow__item", { "is-selected": isSel("in", 0) }]}
+
               data-value={totalOut(props.tx)}
               data-kind="in"
               data-key="0"
@@ -235,8 +230,8 @@ export function Flow(props: {
           <For each={vin().slice(0, inShown())}>
             {(input, i) => (
               <li
-                class="tx-flow__item"
-                classList={{ "is-selected": isSel("in", i()) }}
+                class={["tx-flow__item", { "is-selected": isSel("in", i()) }]}
+
                 data-value={input.prevout?.value ?? 0}
                 data-key={i()}
               >
@@ -265,13 +260,13 @@ export function Flow(props: {
             )}
           </For>
           <Show when={vin().length > inShown()}>
-            {more("in", vin().length - inShown(), hiddenIn(), () => setInPresses(inPresses() + 1))}
+            {more("in", vin().length - inShown(), hiddenIn(), () => setInPresses((n) => n + 1))}
           </Show>
         </Show>
       </ul>
       <svg class="tx-flow__ribbons" ref={svgEl} viewBox={view()} aria-hidden="true">
         {/* Index keeps each path element across redraws, so a resize never restarts or cuts an animation. */}
-        <Index each={ribbons()}>
+        <For keyed={false} each={ribbons()}>
           {(r) => (
             <path
               class={`tx-ribbon tx-ribbon--${r().kind}${
@@ -285,7 +280,7 @@ export function Flow(props: {
               style={r().kind === "fee" ? { "--swatch": feeColor(rate()) } : undefined}
             />
           )}
-        </Index>
+        </For>
         <rect
           class="tx-flow__trunk"
           x={trunk().x - 3}
@@ -299,8 +294,8 @@ export function Flow(props: {
         <For each={props.tx.vout.slice(0, outShown())}>
           {(out, i) => (
             <li
-              class="tx-flow__item"
-              classList={{ "is-selected": isSel("out", i()) }}
+              class={["tx-flow__item", { "is-selected": isSel("out", i()) }]}
+
               data-value={out.value}
               data-key={i()}
             >
@@ -332,7 +327,7 @@ export function Flow(props: {
         </For>
         <Show when={props.tx.vout.length > outShown()}>
           {more("out", props.tx.vout.length - outShown(), hiddenOut(), () =>
-            setOutPresses(outPresses() + 1),
+            setOutPresses((n) => n + 1),
           )}
         </Show>
         <Show when={fee() > 0}>

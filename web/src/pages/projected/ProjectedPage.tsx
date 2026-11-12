@@ -3,16 +3,15 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  type JSX,
   lazy,
+  Loading,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
-  Suspense,
   Switch,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
@@ -147,7 +146,7 @@ function ProjectedView(props: { index: number }) {
       },
       resync: () => model.expectSnapshot(),
     });
-    onMount(() => void TxGrid.preload());
+    onSettled(() => void TxGrid.preload());
   }
 
   const off = () => state().status === "off" || txsOff();
@@ -165,9 +164,12 @@ function ProjectedView(props: { index: number }) {
   );
   const [page, setPage] = createSignal(1);
   const pageCount = () => Math.max(1, Math.ceil(sorted().length / PAGE));
-  createEffect(() => {
-    if (page() > pageCount()) setPage(pageCount());
-  });
+  createEffect(
+    () => ({ at: page(), last: pageCount() }),
+    ({ at, last }) => {
+      if (at > last) setPage(last);
+    },
+  );
   const rows = () => sorted().slice((page() - 1) * PAGE, page() * PAGE);
   const [highlight, setHighlight] = createSignal<string>();
   const rowAt = (e: Event) => {
@@ -185,16 +187,14 @@ function ProjectedView(props: { index: number }) {
   let wait: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(wait));
   createEffect(
-    on(
-      () => change()?.at,
-      (at) => {
-        clearTimeout(wait);
-        if (at === undefined) return;
-        if (!hasMap || model.txs.size === 0) setShown(at);
-        else wait = setTimeout(() => setShown(at), FOUND_WAIT_MS);
-      },
-      { defer: true },
-    ),
+    () => change()?.at,
+    (at) => {
+      clearTimeout(wait);
+      if (at === undefined) return;
+      if (!hasMap || model.txs.size === 0) setShown(at);
+      else wait = setTimeout(() => setShown(at), FOUND_WAIT_MS);
+    },
+    { defer: true },
   );
   const told = () => {
     const c = change();
@@ -202,14 +202,12 @@ function ProjectedView(props: { index: number }) {
   };
   const [announce, setAnnounce] = createSignal("");
   createEffect(
-    on(
-      shown,
-      () => {
-        const c = told();
-        if (c) setAnnounce(sentence(c.change, index));
-      },
-      { defer: true },
-    ),
+    shown,
+    () => {
+      const c = told();
+      if (c) setAnnounce(sentence(c.change, index));
+    },
+    { defer: true },
   );
 
   const expected = () => {
@@ -566,7 +564,7 @@ function Fact(props: {
   wide?: boolean;
 }) {
   return (
-    <div class="projected-fact" classList={{ "projected-fact--wide": props.wide === true }}>
+    <div class={["projected-fact", { "projected-fact--wide": props.wide === true }]}>
       <dt>{props.label}</dt>
       <dd>
         <span class="projected-fact__value">
@@ -641,11 +639,11 @@ function CoreSample(props: {
   // The frame sets once when the chain moves: the moment a guess became, or lost to, a block.
   const [setAt, setSetAt] = createSignal<number>();
   createEffect(
-    on(
-      () => props.found,
-      (at) => setSetAt(at),
-      { defer: true },
-    ),
+    () => props.found,
+    (at) => {
+      setSetAt(at);
+    },
+    { defer: true },
   );
   const where = positionName(props.index, true);
   const label = () => {
@@ -653,8 +651,8 @@ function CoreSample(props: {
     return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
   };
   return (
-    <figure class="projected-core" classList={{ "projected-core--grid": drawn() }}>
-      <div class="projected-core__frame" classList={{ "projected-core__frame--empty": empty() }}>
+    <figure class={["projected-core", { "projected-core--grid": drawn() }]}>
+      <div class={["projected-core__frame", { "projected-core__frame--empty": empty() }]}>
         <span class="projected-core__limit" aria-hidden="true">
           {isRest ? "One block's limit" : "Weight limit"}
         </span>
@@ -663,8 +661,11 @@ function CoreSample(props: {
             <Strata layers={layers()} />
           </div>
           <div
-            class="projected-core__level"
-            classList={{ "projected-core__level--high": (fill() ?? 0) > 0.85 }}
+            class={[
+              "projected-core__level",
+              { "projected-core__level--high": (fill() ?? 0) > 0.85 },
+            ]}
+
             style={{ "--fill": String(Math.max(fill() ?? 0, strataTop(layers()))) }}
           >
             <span class="num">
@@ -683,7 +684,7 @@ function CoreSample(props: {
           }
         >
           <div class="projected-core__grid">
-            <Suspense>
+            <Loading>
               <TxGrid
                 txs={props.txs ?? []}
                 capacity={MAX_WEIGHT / 4}
@@ -692,7 +693,7 @@ function CoreSample(props: {
                 highlight={props.highlight}
                 onState={setGrid}
               />
-            </Suspense>
+            </Loading>
           </div>
         </Show>
         <Show when={empty()}>
@@ -733,7 +734,10 @@ function CoreSample(props: {
           Each square is a transaction, as large as its virtual size and colored by the rate it
           would be mined at, the highest at the top left. Newcomers drop in; what is outbid or
           leaves fades where it stood.{" "}
-          <a href="#projected-txs-title">Every transaction is in the list below.</a>
+          {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
+          <a href="#projected-txs-title" rel="external">
+            Every transaction is in the list below.
+          </a>
         </Show>
         <Show when={props.block && props.block.txs > 0}>
           <span class="visually-hidden">

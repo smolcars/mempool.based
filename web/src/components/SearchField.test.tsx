@@ -1,12 +1,6 @@
-import {
-  createMemoryHistory,
-  MemoryRouter,
-  Route,
-  useLocation,
-  useNavigate,
-} from "@solidjs/router";
-import { type Component, lazy, Suspense } from "solid-js";
-import { render } from "solid-js/web";
+import { createRouter, memoryHistory, useLocation, useNavigate } from "@solidjs/router";
+import { type Component, flush, lazy, Loading } from "solid-js";
+import { type JSX, render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../lib/api";
 import { SearchField } from "./SearchField";
@@ -32,6 +26,8 @@ function setup(url = "/") {
     input.focus();
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    // A browser applies the update before the next event (the Enter) arrives.
+    flush();
   };
   const enter = () => input.form?.requestSubmit();
   return { el, input, path, type, enter };
@@ -113,6 +109,7 @@ describe("SearchField", () => {
     expect(panel()?.querySelector("q")?.textContent).toBe('<img src=x onerror="alert(1)">');
     expect(panel()?.querySelector("img")).toBeNull();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flush();
     expect(panel()).toBeNull();
     expect(input.value).toBe('<img src=x onerror="alert(1)">');
   });
@@ -172,36 +169,33 @@ describe("SearchField and navigation", () => {
         }),
     );
     let go: (path: string) => void = () => undefined;
-    const history = createMemoryHistory();
-    history.set({ value: "/" });
+    const history = memoryHistory("/");
+    const Router = createRouter({
+      routes: [
+        { path: "/", component: () => <p>home</p> },
+        { path: "/slow", component: Slow },
+        { path: "/tx/:txid", component: () => <p>tx page</p> },
+      ],
+      history,
+    });
+    function Root(props: { children?: JSX.Element }) {
+      const navigate = useNavigate();
+      go = (path) => navigate(path);
+      return (
+        <>
+          <SearchField />
+          <Loading>{props.children}</Loading>
+        </>
+      );
+    }
     const el = document.createElement("div");
     document.body.append(el);
-    const dispose = render(
-      () => (
-        <MemoryRouter
-          history={history}
-          root={(props) => {
-            const navigate = useNavigate();
-            go = (path) => navigate(path);
-            return (
-              <>
-                <SearchField />
-                <Suspense>{props.children}</Suspense>
-              </>
-            );
-          }}
-        >
-          <Route path="/" component={() => <p>home</p>} />
-          <Route path="/slow" component={Slow} />
-          <Route path="/tx/:txid" component={() => <p>tx page</p>} />
-        </MemoryRouter>
-      ),
-      el,
-    );
+    const dispose = render(() => <Router>{(page) => <Root>{page.children}</Root>}</Router>, el);
     const input = el.querySelector("input");
     if (!input) throw new Error("no input");
     input.value = TXID;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
     input.form?.requestSubmit();
     await vi.waitFor(() => expect(answer).toBeDefined());
     go("/slow");

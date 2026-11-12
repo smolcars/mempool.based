@@ -94,15 +94,15 @@ export function Strata(props: {
   const was = (layer: Layer) => props.from?.find((l) => l.band === layer.band);
   return (
     <span
-      class="strata"
-      classList={{ "strata--settle": props.settle === true, "strata--morph": !!props.from }}
+      class={["strata", { "strata--settle": props.settle === true, "strata--morph": !!props.from }]}
+
       aria-hidden="true"
     >
       <For each={props.layers}>
         {(layer, i) => (
           <span
-            class="strata__layer"
-            classList={{ "strata__layer--thin": layer.thin }}
+            class={["strata__layer", { "strata__layer--thin": layer.thin }]}
+
             style={{
               "--y": String(layer.y),
               "--h": String(layer.h),

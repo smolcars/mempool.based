@@ -1,5 +1,5 @@
 import { useParams } from "@solidjs/router";
-import { createMemo, createSignal, onMount, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatDay, formatHashrate, formatShare } from "../../components/chart/scale";
 import { DataTable } from "../../components/DataTable";
@@ -57,7 +57,7 @@ function Pool(props: { network: Network; slug: string }) {
   const weeks = createMiningData(net, () => `/v1/mining/pool/${slug}/hashrate`, isPoolWeeks);
   const s = () => stats.answer()?.value;
   usePageTitle(() => s()?.pool.name ?? "Mining pool");
-  onMount(() => void Chart.preload());
+  onSettled(() => void Chart.preload());
   const link = () => safeLink(s()?.pool.link ?? "");
   const series = createMemo(() => {
     const w = fillWeeks(weeks.answer()?.value ?? []);
@@ -122,7 +122,7 @@ function Pool(props: { network: Network; slug: string }) {
           <SectionHeader title="Blocks found" id="pool-stats-title" />
           {/* Its height is held, coverage note included, so the figures arriving move nothing. */}
           <div class="pool-stats">
-            <dl class="mining-rewards" aria-busy={!s()}>
+            <dl class="mining-rewards" aria-busy={s() ? "false" : "true"}>
               <Stat
                 label="Last 24 hours"
                 sub={s() ? `${formatShare(s()?.blockShare["24h"] ?? 0)} of blocks` : undefined}
@@ -249,11 +249,14 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
   const [more, setMore] = createSignal<"idle" | "loading" | "done" | "failed">("idle");
   const [moreError, setMoreError] = createSignal<unknown>();
   const loaded = () => [...(first.answer()?.value ?? []), ...older()];
-  const [shown, setShown] = createSignal(STEP);
+  // Counted here as well: a write reaches shown() only when the update is applied.
+  let count = STEP;
+  const [shown, setShown] = createSignal(count);
   const rows = () => loaded().slice(0, shown());
   const showMore = () => {
-    setShown((n) => n + STEP);
-    if (shown() > loaded().length && !exhausted()) loadMore();
+    count += STEP;
+    setShown(count);
+    if (count > loaded().length && !exhausted()) loadMore();
   };
   const loadMore = () => {
     const last = loaded().at(-1);

@@ -1,5 +1,5 @@
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { render } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import type { AddressStats, Transaction, Utxo } from "../../lib/esplora";
@@ -46,20 +46,13 @@ const refused = (status: number, error: string) => () => Response.json({ error }
 const never = () => new Promise<Response>(() => {});
 
 function open(url: string) {
-  const history = createMemoryHistory();
-  history.set({ value: url });
+  const Router = createRouter({
+    routes: [{ path: ["/address/:address", "/:net/address/:address"], component: AddressPage }],
+    history: memoryHistory(url),
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  disposers.push(
-    render(
-      () => (
-        <MemoryRouter history={history}>
-          <Route path={["/address/:address", "/:net/address/:address"]} component={AddressPage} />
-        </MemoryRouter>
-      ),
-      el,
-    ),
-  );
+  disposers.push(render(() => <Router>{(route) => route.children}</Router>, el));
   return el;
 }
 

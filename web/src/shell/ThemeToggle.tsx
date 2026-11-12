@@ -1,9 +1,9 @@
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import { scheme, toggleTheme, watchTheme } from "../lib/theme";
 
 /** Switches between light and dark. Picking what the OS shows goes back to following the OS. */
 export function ThemeToggle() {
-  onCleanup(watchTheme());
+  onSettled(watchTheme);
   return (
     <button
       class="icon-btn theme-toggle"

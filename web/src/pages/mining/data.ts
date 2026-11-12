@@ -1,5 +1,5 @@
 // Loading a mining route: retried while the server is not ready, checked, with its coverage.
-import { type Accessor, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
 import { ApiError, type Coverage, fetchStamped } from "../../lib/api";
 import type { Network } from "../../lib/network";
 
@@ -69,7 +69,10 @@ export function createMiningData<T>(
     );
   };
 
-  createEffect(on([network, path], load));
+  createEffect(
+    () => [network(), path()],
+    () => load(),
+  );
   onCleanup(() => controller?.abort());
   return { answer, error, loading, retry: load };
 }

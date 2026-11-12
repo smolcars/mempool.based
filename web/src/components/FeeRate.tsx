@@ -15,7 +15,7 @@ export function FeeRate(props: { rate: number; unit?: boolean; approx?: boolean 
         {props.approx ? "~" : ""}
         {formatFeeRate(props.rate)}
       </span>
-      <span classList={{ unit: true, "visually-hidden": props.unit === false }}> sat/vB</span>
+      <span class={{ unit: true, "visually-hidden": props.unit === false }}> sat/vB</span>
     </span>
   );
 }

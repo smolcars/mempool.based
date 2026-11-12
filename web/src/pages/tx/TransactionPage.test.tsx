@@ -1,5 +1,5 @@
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { render } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import type { Outspend, Transaction, TxStatus } from "../../lib/esplora";
@@ -75,20 +75,14 @@ afterEach(() => {
 });
 
 function page(path: string): HTMLElement {
-  const history = createMemoryHistory();
-  history.set({ value: path });
+  const history = memoryHistory(path);
+  const Router = createRouter({
+    routes: [{ path: ["/tx/:txid", "/regtest/tx/:txid"], component: TransactionPage }],
+    history,
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  disposers.push(
-    render(
-      () => (
-        <MemoryRouter history={history}>
-          <Route path={["/tx/:txid", "/regtest/tx/:txid"]} component={TransactionPage} />
-        </MemoryRouter>
-      ),
-      el,
-    ),
-  );
+  disposers.push(render(() => <Router>{(route) => route.children}</Router>, el));
   return el;
 }
 

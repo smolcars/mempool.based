@@ -1,4 +1,6 @@
-import { type JSX, Match, type Resource, Show, Switch } from "solid-js";
+import { Match, Show, Switch } from "solid-js";
+import type { ApiResource } from "../../lib/api";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { ErrorState } from "../../components/States";
 import type { AddressStats } from "../../lib/esplora";
@@ -43,7 +45,7 @@ const EMPTY = {
 };
 
 /** Balance, received, sent, transaction count and the unconfirmed change. */
-export function Totals(props: { stats: Resource<AddressStats>; retry: () => void }) {
+export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => void }) {
   const s = () => settled(props.stats);
   const chain = () => s()?.chain_stats ?? EMPTY;
   const pool = () => s()?.mempool_stats ?? EMPTY;
@@ -51,7 +53,7 @@ export function Totals(props: { stats: Resource<AddressStats>; retry: () => void
   const failure = () => (props.stats.state === "errored" ? refusal(props.stats.error) : undefined);
 
   return (
-    <section class="address-totals" aria-label="Totals" aria-busy={!ready()}>
+    <section class="address-totals" aria-label="Totals" aria-busy={ready() ? "false" : "true"}>
       <Switch>
         <Match when={failure() === "too-large"}>
           <Notice title="Totals are not available for this address">

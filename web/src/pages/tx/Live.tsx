@@ -1,6 +1,7 @@
 // The transaction page's live parts: where it waits, who it is mined with, what replaced it, and
 // whether the page is live. The state behind them is in state.ts.
-import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Match, Show, Switch, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
@@ -26,11 +27,15 @@ export function Follow<M>(props: {
   resync: () => void;
   again?: (restart: () => void) => void;
 }) {
-  const restart = useTopic(props.topic, {
-    message: (m) => props.message(m),
-    resync: () => props.resync(),
-  });
-  props.again?.(restart);
+  // The topic is chosen once, when it mounts.
+  const restart = useTopic(
+    untrack(() => props.topic),
+    {
+      message: (m) => props.message(m),
+      resync: () => props.resync(),
+    },
+  );
+  untrack(() => props.again)?.(restart);
   return null;
 }
 
@@ -82,8 +87,8 @@ export function Where(props: { position: Position | null; live: boolean; reserve
   const network = useNetwork();
   return (
     <section
-      class="tx-where"
-      classList={{ "tx-where--reserve": props.reserve }}
+      class={["tx-where", { "tx-where--reserve": props.reserve }]}
+
       aria-labelledby="tx-where-title"
     >
       <SectionHeader title="Where it waits" id="tx-where-title" />
@@ -106,7 +111,7 @@ export function Where(props: { position: Position | null; live: boolean; reserve
                   <div class="tx-lane__track" style={{ "--n": String(slots().length) }}>
                     <For each={slots()}>
                       {(b) => (
-                        <span class="tx-lane__slot" classList={{ "is-here": b === p().block }}>
+                        <span class={["tx-lane__slot", { "is-here": b === p().block }]}>
                           <span class="tx-lane__label num">
                             {b === 0
                               ? "Next"

@@ -1,5 +1,5 @@
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatDay, formatHashrate, formatMoment, formatShare } from "../../components/chart/scale";
 import { DataTable } from "../../components/DataTable";
@@ -76,7 +76,7 @@ function Mining(props: { network: Network }) {
     () => `/v1/mining/hashrate/${hashrateInterval(period())}`,
     isHashrates,
   );
-  onMount(() => void Chart.preload());
+  onSettled(() => void Chart.preload());
 
   return (
     <div class="wrap mining">
@@ -125,7 +125,7 @@ function NetworkNow(props: { network: Network; hashrates: MiningData<Hashrates> 
     <section class="mining-now" aria-labelledby="mining-now-title">
       <SectionHeader title="The network now" id="mining-now-title" />
       <div class="mining-now__grid">
-        <dl class="mining-now__stats" aria-busy={!h()}>
+        <dl class="mining-now__stats" aria-busy={h() ? "false" : "true"}>
           <Stat
             label="Hashrate"
             sub={
@@ -522,7 +522,7 @@ function OverTime(props: { period: Period; network: Network }) {
             <button
               type="button"
               class="btn"
-              aria-pressed={shown() === s.id}
+              aria-pressed={shown() === s.id ? "true" : "false"}
               onClick={() => setShown(s.id)}
             >
               {s.label}

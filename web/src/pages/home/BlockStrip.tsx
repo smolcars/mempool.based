@@ -1,14 +1,12 @@
 import {
   type Accessor,
-  batch,
   createEffect,
   createMemo,
   createSignal,
   For,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
   Switch,
   untrack,
@@ -147,99 +145,98 @@ export function BlockStrip(props: {
     const blocks = props.blocks();
     return { blocks, view: projectedView(props.projection(), blocks, Date.now()) };
   });
-  createEffect(() => {
-    const wait = releaseIn(props.projection(), props.blocks(), Date.now());
-    if (wait === undefined) return;
-    const t = setTimeout(() => setTick((n) => n + 1), wait + 50);
-    onCleanup(() => clearTimeout(t));
-  });
-
   createEffect(
-    on(target, ({ blocks: list, view: nextView }) => {
-      const before = untrack(shown);
-      const beforeView = untrack(view);
-      const minedSame = sameIds(before, list);
-      // The same tiles in the same places: the figures change where they stand.
-      if (minedSame && sameTiles(beforeView, nextView)) {
-        setView(nextView);
-        return;
-      }
-      const tip = list?.[0];
-      const oldTip = before?.[0]?.height ?? Number.POSITIVE_INFINITY;
-      if (before && list && tip && tip.height > oldTip) {
-        const txs = `${groupDigits(tip.tx_count)} ${tip.tx_count === 1 ? "transaction" : "transactions"}`;
-        setAnnouncement(`Block ${groupDigits(tip.height)} mined: ${txs}.`);
-      }
-      // What the new blocks were projected to be, shown until each lands.
-      const fresh: [string, ProjectedBlock][] = [];
-      if (before && list && !document.hidden) {
-        const model = untrack(props.projection);
-        for (const b of list) {
-          if (b.height <= oldTip) break;
-          const p = provisionalFor(model, list, b);
-          if (p) fresh.push([b.id, p]);
-        }
-      }
-      const fly = () => {
-        for (const [id, guess] of fresh) {
-          const [landed, setLanded] = createSignal(false);
-          crossings.set(id, { guess, landed });
-          landers.set(id, () => setLanded(true));
-        }
-      };
-      const show = () =>
-        batch(() => {
-          setShown(list);
-          setView(nextView);
-        });
-      // Nothing to animate from, or nobody to see it: just show the new state.
-      if (!list || !before || !lane || !upcoming || document.hidden || !("animate" in lane)) {
-        interrupt();
-        settleNew = !document.hidden;
-        show();
-        return;
-      }
-      // First: where everything is now, mid-animation included.
-      const first = new Map<string, DOMRect>();
-      const tiles = [...lane.children, ...upcoming.querySelectorAll(PROJECTED)].filter(
-        (el) => !el.classList.contains("home-tile--leaving"),
-      );
-      for (const el of tiles as HTMLElement[]) {
-        const id = el.dataset["id"] ?? (el.dataset["key"] ? `p${el.dataset["key"]}` : undefined);
-        if (id) first.set(id, el.getBoundingClientRect());
-      }
-      // Where a crossing block leaves from when it had no tile of its own: the next block's place.
-      const from = (
-        upcoming.querySelector(".home-tile--projected") ?? upcoming
-      ).getBoundingClientRect();
-      const keep = new Set([
-        ...list.map((b) => b.id),
-        ...nextView.tiles.map((t) => `p${t.key}`),
-        // A projected tile that becomes a mined block leaves as that block, not as a ghost.
-        ...list.map((b) => `p${b.height}`),
-      ]);
-      const out = (tiles as HTMLElement[])
-        .filter((el) => {
-          const id = el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
-          return !keep.has(id);
-        })
-        .map((el) => {
-          const parent = el.parentElement;
-          const g = el.cloneNode(true) as HTMLElement;
-          const r = el.getBoundingClientRect();
-          const box = parent?.getBoundingClientRect();
-          return { g, parent, left: box ? r.left - box.left : 0 };
-        });
-      interrupt();
-      fly();
-      // A tile that forms behind a crossing block settles in time with the crossing, below.
-      const crossingNow = !!tip && tip.height > oldTip;
-      settleNew = !crossingNow;
-      show();
-      // Solid has updated the DOM by the time this runs, and the browser has not painted yet.
-      queueMicrotask(() => sequence(first, from, out, oldTip));
-    }),
+    () => releaseIn(props.projection(), props.blocks(), Date.now()),
+    (wait) => {
+      if (wait === undefined) return undefined;
+      const t = setTimeout(() => setTick((n) => n + 1), wait + 50);
+      return () => clearTimeout(t);
+    },
   );
+
+  createEffect(target, ({ blocks: list, view: nextView }) => {
+    const before = shown();
+    const beforeView = view();
+    const minedSame = sameIds(before, list);
+    // The same tiles in the same places: the figures change where they stand.
+    if (minedSame && sameTiles(beforeView, nextView)) {
+      setView(nextView);
+      return;
+    }
+    const tip = list?.[0];
+    const oldTip = before?.[0]?.height ?? Number.POSITIVE_INFINITY;
+    if (before && list && tip && tip.height > oldTip) {
+      const txs = `${groupDigits(tip.tx_count)} ${tip.tx_count === 1 ? "transaction" : "transactions"}`;
+      setAnnouncement(`Block ${groupDigits(tip.height)} mined: ${txs}.`);
+    }
+    // What the new blocks were projected to be, shown until each lands.
+    const fresh: [string, ProjectedBlock][] = [];
+    if (before && list && !document.hidden) {
+      const model = props.projection();
+      for (const b of list) {
+        if (b.height <= oldTip) break;
+        const p = provisionalFor(model, list, b);
+        if (p) fresh.push([b.id, p]);
+      }
+    }
+    const fly = () => {
+      for (const [id, guess] of fresh) {
+        const [landed, setLanded] = createSignal(false);
+        crossings.set(id, { guess, landed });
+        landers.set(id, () => setLanded(true));
+      }
+    };
+    const show = () => {
+      setShown(list);
+      setView(nextView);
+    };
+    // Nothing to animate from, or nobody to see it: just show the new state.
+    if (!list || !before || !lane || !upcoming || document.hidden || !("animate" in lane)) {
+      interrupt();
+      settleNew = !document.hidden;
+      show();
+      return;
+    }
+    // First: where everything is now, mid-animation included.
+    const first = new Map<string, DOMRect>();
+    const tiles = [...lane.children, ...upcoming.querySelectorAll(PROJECTED)].filter(
+      (el) => !el.classList.contains("home-tile--leaving"),
+    );
+    for (const el of tiles as HTMLElement[]) {
+      const id = el.dataset["id"] ?? (el.dataset["key"] ? `p${el.dataset["key"]}` : undefined);
+      if (id) first.set(id, el.getBoundingClientRect());
+    }
+    // Where a crossing block leaves from when it had no tile of its own: the next block's place.
+    const from = (
+      upcoming.querySelector(".home-tile--projected") ?? upcoming
+    ).getBoundingClientRect();
+    const keep = new Set([
+      ...list.map((b) => b.id),
+      ...nextView.tiles.map((t) => `p${t.key}`),
+      // A projected tile that becomes a mined block leaves as that block, not as a ghost.
+      ...list.map((b) => `p${b.height}`),
+    ]);
+    const out = (tiles as HTMLElement[])
+      .filter((el) => {
+        const id = el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
+        return !keep.has(id);
+      })
+      .map((el) => {
+        const parent = el.parentElement;
+        const g = el.cloneNode(true) as HTMLElement;
+        const r = el.getBoundingClientRect();
+        const box = parent?.getBoundingClientRect();
+        return { g, parent, left: box ? r.left - box.left : 0 };
+      });
+    interrupt();
+    fly();
+    // A tile that forms behind a crossing block settles in time with the crossing, below.
+    const crossingNow = !!tip && tip.height > oldTip;
+    settleNew = !crossingNow;
+    show();
+    // Solid has updated the DOM by the time this runs, and the browser has not painted yet.
+    queueMicrotask(() => sequence(first, from, out, oldTip));
+  });
 
   function sequence(
     first: Map<string, DOMRect>,
@@ -430,7 +427,7 @@ export function BlockStrip(props: {
     if (!scroller || !nowLine) return;
     scroller.scrollLeft = nowLine.offsetLeft - scroller.clientWidth / 2 + nowLine.offsetWidth / 2;
   };
-  onMount(() => {
+  onSettled(() => {
     center();
     let width = scroller?.clientWidth ?? 0;
     const ro = new ResizeObserver(() => {
@@ -440,7 +437,7 @@ export function BlockStrip(props: {
       }
     });
     if (scroller) ro.observe(scroller);
-    onCleanup(() => ro.disconnect());
+    return () => ro.disconnect();
   });
   onCleanup(interrupt);
 
@@ -531,7 +528,7 @@ export function BlockStrip(props: {
                 class="home-strip__lane"
                 ref={lane}
                 aria-label="Mined blocks, newest first"
-                aria-busy={!shown()}
+                aria-busy={shown() ? "false" : "true"}
               >
                 <Show
                   when={shown()}
@@ -613,7 +610,6 @@ function MinedTile(props: {
       const s = summary();
       return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
     },
-    [],
     { equals: sameLayers },
   );
   const miner = () => summary()?.miner?.name;
@@ -630,8 +626,8 @@ function MinedTile(props: {
       .join(", ");
   return (
     <li
-      class="home-tile home-tile--mined"
-      classList={{ "home-tile--guessing": guessing() }}
+      class={["home-tile home-tile--mined", { "home-tile--guessing": guessing() }]}
+
       data-id={b().id}
       data-height={b().height}
     >
@@ -665,8 +661,8 @@ function MinedTile(props: {
           {/* The neutral gauge: how full the block is, until its layers arrive and settle over it. */}
           <Show when={(layers().length === 0 && !guessing()) || settle}>
             <span
-              class="home-tile__fill"
-              classList={{ "home-tile__fill--gone": layers().length > 0 }}
+              class={["home-tile__fill", { "home-tile__fill--gone": layers().length > 0 }]}
+
               style={{ "--fill": String(full()) }}
             />
           </Show>
@@ -674,8 +670,10 @@ function MinedTile(props: {
           <Show when={guess}>
             {(g) => (
               <span
-                class="home-tile__layers home-tile__guess"
-                classList={{ "home-tile__guess--gone": !guessing() }}
+                class={[
+                  "home-tile__layers home-tile__guess",
+                  { "home-tile__guess--gone": !guessing() },
+                ]}
               >
                 <Strata layers={g()} />
               </span>

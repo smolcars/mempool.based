@@ -1,5 +1,5 @@
 import { useBeforeLeave, useNavigate } from "@solidjs/router";
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { ApiError } from "../lib/api";
 import { groupDigits, truncateMiddle } from "../lib/format";
 import { NETWORK_NAMES, onNetwork, paths } from "../lib/network";
@@ -74,12 +74,10 @@ export function SearchField(props: SearchFieldProps) {
 
   // The reading is announced once typing pauses, and only when it changed: not every keystroke.
   let pause: ReturnType<typeof setTimeout> | undefined;
-  createEffect(
-    on(reading, (r) => {
-      clearTimeout(pause);
-      if (r) pause = setTimeout(() => setSaid(r.label), 900);
-    }),
-  );
+  createEffect(reading, (r) => {
+    clearTimeout(pause);
+    if (r) pause = setTimeout(() => setSaid(r.label), 900);
+  });
   onCleanup(() => clearTimeout(pause));
 
   // Every new search, edit, or navigation makes the search in flight stale.
@@ -128,12 +126,12 @@ export function SearchField(props: SearchFieldProps) {
   // A miss closes when the reader moves on: a press outside, or focus leaving the search.
   const outside = (target: EventTarget | null) =>
     target instanceof Node && root !== undefined && !root.contains(target);
-  onMount(() => {
+  onSettled(() => {
     const onPress = (e: PointerEvent) => {
       if (outside(e.target)) setMiss(undefined);
     };
     document.addEventListener("pointerdown", onPress);
-    onCleanup(() => document.removeEventListener("pointerdown", onPress));
+    return () => document.removeEventListener("pointerdown", onPress);
   });
 
   return (
@@ -164,9 +162,9 @@ export function SearchField(props: SearchFieldProps) {
           type="search"
           placeholder="Transaction, address or block"
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           enterkeyhint="search"
-          maxLength={MAX_LENGTH}
+          maxlength={MAX_LENGTH}
           aria-describedby={`${id()}-reading`}
           value={text()}
           onFocus={warm}
@@ -195,7 +193,7 @@ export function SearchField(props: SearchFieldProps) {
           >
             <Show when={reading()}>
               {(r) => (
-                <span class="search__label" classList={{ "search__label--ready": r().ready }}>
+                <span class={["search__label", { "search__label--ready": r().ready }]}>
                   {r().label}
                   <Show when={r().ready}>
                     <kbd class="search__key" title="Press Enter to search">

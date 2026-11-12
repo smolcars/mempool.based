@@ -1,5 +1,5 @@
-import { createMemoryHistory, MemoryRouter } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./routes";
 import { Shell } from "./shell/Shell";
@@ -11,18 +11,11 @@ afterEach(() => {
 
 async function open(url: string, networks = ["mainnet", "signet", "testnet4"]) {
   vi.stubGlobal("fetch", async () => Response.json({ networks, version: "0.1.0" }));
-  const history = createMemoryHistory();
-  history.set({ value: url });
+  const history = memoryHistory(url);
+  const Router = createRouter({ routes, history });
   const el = document.createElement("div");
   document.body.append(el);
-  render(
-    () => (
-      <MemoryRouter history={history} root={Shell}>
-        {routes}
-      </MemoryRouter>
-    ),
-    el,
-  );
+  render(() => <Router>{(page) => <Shell>{page.children}</Shell>}</Router>, el);
   await vi.waitFor(() => expect(el.querySelector("h1")).not.toBeNull());
   return { el, history };
 }

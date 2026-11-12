@@ -1,4 +1,5 @@
 // Stand-ins for tests: a WebSocket that lets the test play the server, and made-up blocks.
+import { flush } from "solid-js";
 import type { Block } from "./esplora";
 import type { SocketLike } from "./live";
 
@@ -37,6 +38,8 @@ export class FakeSocket implements SocketLike {
     const payload =
       typeof data === "string" || data instanceof ArrayBuffer ? data : JSON.stringify(data);
     this.onmessage?.call(this as unknown as WebSocket, { data: payload } as MessageEvent);
+    // Each message is a task of its own in a browser: its update is applied before the next.
+    flush();
   }
   hello(extra: object = {}): void {
     this.receive({ type: "hello", v: 1, network: "regtest", tip: null, ...extra });
@@ -44,6 +47,7 @@ export class FakeSocket implements SocketLike {
   /** The connection closes, from either side. */
   drop(code = 1006): void {
     this.onclose?.call(this as unknown as WebSocket, { code } as CloseEvent);
+    flush();
   }
 }
 

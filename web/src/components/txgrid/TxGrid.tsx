@@ -1,7 +1,7 @@
 // A block's transactions as packed squares, drawn with WebGL2 (docs/FRONTEND.md "Transaction
 // grid"). Loaded lazily: import it with `lazy()` so pages without a grid never fetch it.
 import { useNavigate } from "@solidjs/router";
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { formatSats, formatSize, MISSING, truncateMiddle } from "../../lib/format";
 import { onNetwork, paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
@@ -160,22 +160,20 @@ export default function TxGrid(props: TxGridProps) {
   };
 
   createEffect(
-    on(
-      () => props.txs,
-      (txs) => {
-        const first = shown.length === 0;
-        shown = txs;
-        if (first) arrived = performance.now();
-        relayout(first || !drawn ? "pour" : "change");
-      },
-    ),
+    () => props.txs,
+    (txs) => {
+      const first = shown.length === 0;
+      shown = txs;
+      if (first) arrived = performance.now();
+      relayout(first || !drawn ? "pour" : "change");
+    },
   );
 
-  onMount(() => {
+  onSettled(() => {
     renderer = Renderer.create(canvas);
     if (!renderer) {
       props.onState?.("unsupported");
-      return;
+      return undefined;
     }
     readPaint();
     const resize = new ResizeObserver(([entry]) => {
@@ -243,7 +241,7 @@ export default function TxGrid(props: TxGridProps) {
     };
     canvas.addEventListener("webglcontextlost", onLost);
     canvas.addEventListener("webglcontextrestored", onRestored);
-    onCleanup(() => {
+    return () => {
       cancelAnimationFrame(raf);
       resize.disconnect();
       theme.disconnect();
@@ -253,7 +251,7 @@ export default function TxGrid(props: TxGridProps) {
       canvas.removeEventListener("webglcontextrestored", onRestored);
       renderer = null;
       scene = new Scene(0);
-    });
+    };
   });
 
   // ---- Pointing ----
@@ -284,14 +282,12 @@ export default function TxGrid(props: TxGridProps) {
       return txid;
     });
   };
-  createEffect(
-    on(active, (id) => {
-      clearTimeout(lookup);
-      const tx = byId(id);
-      // A short rest first, so sweeping across the grid does not ask for every square passed.
-      if (tx) lookup = window.setTimeout(() => void resolve(tx).catch(() => undefined), 90);
-    }),
-  );
+  createEffect(active, (id) => {
+    clearTimeout(lookup);
+    const tx = byId(id);
+    // A short rest first, so sweeping across the grid does not ask for every square passed.
+    if (tx) lookup = window.setTimeout(() => void resolve(tx).catch(() => undefined), 90);
+  });
   onCleanup(() => clearTimeout(lookup));
 
   const open = (tx: GridTx) => {
@@ -323,12 +319,12 @@ export default function TxGrid(props: TxGridProps) {
     setTouch(true);
     setActive(tx.id);
   };
-  onMount(() => {
+  onSettled(() => {
     const away = (e: PointerEvent) => {
       if (e.target !== canvas) setActive(undefined);
     };
     document.addEventListener("pointerdown", away);
-    onCleanup(() => document.removeEventListener("pointerdown", away));
+    return () => document.removeEventListener("pointerdown", away);
   });
 
   // ---- Ring and tooltip ----
@@ -349,25 +345,29 @@ export default function TxGrid(props: TxGridProps) {
   const shownTx = () => byId(active());
 
   // Above the square where there is room, else below; always inside the frame.
-  createEffect(() => {
-    const b = box(active());
-    txids();
-    if (!b) return;
-    const w = tip.offsetWidth;
-    const h = tip.offsetHeight;
-    const gap = 8;
-    const x = Math.min(Math.max(0, b.x + b.s / 2 - w / 2), Math.max(0, width - w));
-    const above = b.y - h - gap;
-    const y = above >= 0 ? above : Math.min(b.y + b.s + gap, Math.max(0, height - h));
-    setTipAt({ x, y });
-  });
+  createEffect(
+    () => {
+      txids();
+      return box(active());
+    },
+    (b) => {
+      if (!b) return;
+      const w = tip.offsetWidth;
+      const h = tip.offsetHeight;
+      const gap = 8;
+      const x = Math.min(Math.max(0, b.x + b.s / 2 - w / 2), Math.max(0, width - w));
+      const above = b.y - h - gap;
+      const y = above >= 0 ? above : Math.min(b.y + b.s + gap, Math.max(0, height - h));
+      setTipAt({ x, y });
+    },
+  );
 
   return (
-    <div class="txgrid" classList={{ "txgrid--lost": lost() }}>
+    <div class={["txgrid", { "txgrid--lost": lost() }]}>
       <canvas
         ref={canvas}
-        class="txgrid__canvas"
-        classList={{ "txgrid__canvas--over": active() !== undefined }}
+        class={["txgrid__canvas", { "txgrid__canvas--over": active() !== undefined }]}
+
         role="img"
         aria-label={props.label}
         data-squares={rankOf().size}
@@ -391,8 +391,8 @@ export default function TxGrid(props: TxGridProps) {
       </Show>
       <div
         ref={tip}
-        class="txgrid__tip"
-        classList={{ "txgrid__tip--shown": shownTx() !== undefined }}
+        class={["txgrid__tip", { "txgrid__tip--shown": shownTx() !== undefined }]}
+
         aria-hidden="true"
         style={{ "--tip-x": `${tipAt().x}px`, "--tip-y": `${tipAt().y}px` }}
       >

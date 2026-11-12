@@ -2,19 +2,17 @@ import { useParams } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   For,
-  type JSX,
   lazy,
+  Loading,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
-  Suspense,
   Switch,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
@@ -27,7 +25,7 @@ import { TimeAgo, TimeUtc } from "../../components/Time";
 import type { GridState } from "../../components/txgrid/TxGrid";
 import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
 import type { GridTx } from "../../components/txgrid/layout";
-import { createApi, fetchApi, fetchApp, isNotFound } from "../../lib/api";
+import { createApi, createRequest, fetchApi, fetchApp, isNotFound } from "../../lib/api";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
@@ -98,7 +96,7 @@ export default function BlockPage() {
         {(e) => (
           <Show
             when={isNotFound(e())}
-            fallback={<PageError error={e()} retry={() => void byHeightCtl.refetch()} />}
+            fallback={<PageError error={e()} retry={() => byHeightCtl.refetch()} />}
           >
             <NoBlockAtHeight height={height() ?? 0} />
           </Show>
@@ -189,12 +187,14 @@ function Fact(props: {
 }) {
   return (
     <div
-      class="block-fact"
-      classList={{
-        "block-fact--wide": props.wide === true,
-        "block-fact--wide-phone": props.wide === "phone",
-        "block-fact--tall": props.tall === true,
-      }}
+      class={[
+        "block-fact",
+        {
+          "block-fact--wide": props.wide === true,
+          "block-fact--wide-phone": props.wide === "phone",
+          "block-fact--tall": props.tall === true,
+        },
+      ]}
     >
       <dt>{props.label}</dt>
       <dd>
@@ -216,34 +216,24 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   // never disagree the way a separate tip request could when a block lands between the two.
   const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
-  let summaryController: AbortController | undefined;
-  onCleanup(() => summaryController?.abort());
   // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
-  const [summary, summaryCtl] = createResource(
+  const [summary, summaryCtl] = createRequest(
     () => (props.hash ? { hash: props.hash, network: network() } : undefined),
-    async ({ hash, network: n }): Promise<BlockSummary | null> => {
-      summaryController?.abort();
-      const c = new AbortController();
-      summaryController = c;
-      const found = await fetchSummaries(n, [hash], c.signal);
+    async ({ hash, network: n }, signal): Promise<BlockSummary | null> => {
+      const found = await fetchSummaries(n, [hash], signal);
       return found.get(hash) ?? null;
     },
   );
   // Every transaction's size and fee, for the map. Retried quietly while the server is busy.
-  let gridController: AbortController | undefined;
-  onCleanup(() => gridController?.abort());
-  const [gridTxs, gridTxsCtl] = createResource(
+  const [gridTxs, gridTxsCtl] = createRequest(
     () => (props.hash ? { hash: props.hash, network: network() } : undefined),
-    async ({ hash, network: n }): Promise<GridTx[]> => {
-      gridController?.abort();
-      const c = new AbortController();
-      gridController = c;
+    async ({ hash, network: n }, signal): Promise<GridTx[]> => {
       const path = `/block/${hash}/txs`;
-      return decodeTxs(await fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal: c.signal }));
+      return decodeTxs(await fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal }));
     },
   );
   // The renderer's code downloads while the data does.
-  onMount(() => void TxGrid.preload());
+  onSettled(() => void TxGrid.preload());
   const [highlight, setHighlight] = createSignal<number>();
   const rowAt = (e: Event) => {
     const row = e.target instanceof Element ? e.target.closest("tbody tr") : null;
@@ -279,16 +269,14 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   let controller: AbortController | undefined;
   onCleanup(() => controller?.abort());
   createEffect(
-    on(
-      () => props.hash,
-      () => {
-        controller?.abort();
-        setMore([]);
-        setMoreLoading(false);
-        setMoreError(undefined);
-      },
-      { defer: true },
-    ),
+    () => props.hash,
+    () => {
+      controller?.abort();
+      setMore([]);
+      setMoreLoading(false);
+      setMoreError(undefined);
+    },
+    { defer: true },
   );
   const txs = () => {
     const f = ready(first);
@@ -335,7 +323,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const summaryRetry = () => (
     <span class="block-fact__pending">
       Could not load.{" "}
-      <button type="button" class="block-fact__retry" onClick={() => void summaryCtl.refetch()}>
+      <button type="button" class="block-fact__retry" onClick={() => summaryCtl.refetch()}>
         Try again
       </button>
     </span>
@@ -355,9 +343,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   };
   const pageError = () => failed(block) ?? failed(status);
   const retry = () => {
-    if (failed(block) !== undefined) void blockCtl.refetch();
-    if (failed(status) !== undefined) void statusCtl.refetch();
-    if (failed(first) !== undefined) void firstCtl.refetch();
+    if (failed(block) !== undefined) blockCtl.refetch();
+    if (failed(status) !== undefined) statusCtl.refetch();
+    if (failed(first) !== undefined) firstCtl.refetch();
   };
 
   const rows = (): readonly (Transaction | null)[] => {
@@ -465,7 +453,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
             settle={settle()}
             txs={ready(gridTxs)}
             txsError={failed(gridTxs)}
-            retryTxs={() => void gridTxsCtl.refetch()}
+            retryTxs={() => gridTxsCtl.refetch()}
             txid={txidOf}
             highlight={highlight()}
           />
@@ -711,7 +699,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               <ErrorState
                 title="Could not load the transactions"
                 error={failed(first)}
-                retry={() => void firstCtl.refetch()}
+                retry={() => firstCtl.refetch()}
               />
             }
           >
@@ -739,7 +727,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 <button
                   class="btn"
                   type="button"
-                  aria-disabled={moreLoading()}
+                  aria-disabled={moreLoading() ? "true" : "false"}
                   onClick={() => void loadMore()}
                 >
                   {moreLoading()
@@ -880,7 +868,7 @@ function CoreSample(props: {
     return `Map of the block's ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. The list below has every one.`;
   };
   return (
-    <figure class="block-core" classList={{ "block-core--grid": drawn() }}>
+    <figure class={["block-core", { "block-core--grid": drawn() }]}>
       <div class="block-core__frame">
         <span class="block-core__limit" aria-hidden="true">
           Weight limit
@@ -893,11 +881,14 @@ function CoreSample(props: {
         <Show when={share()} keyed>
           {(f) => (
             <div
-              class="block-core__fill"
-              classList={{
-                "block-core__fill--high": f > 0.85,
-                "block-core__fill--strata": layers().length > 0,
-              }}
+              class={[
+                "block-core__fill",
+                {
+                  "block-core__fill--high": f > 0.85,
+                  "block-core__fill--strata": layers().length > 0,
+                },
+              ]}
+
               style={{ "--fill": String(Math.max(f, strataTop(layers()))) }}
             >
               <span class="block-core__level num">{percent(f)} full</span>
@@ -906,7 +897,7 @@ function CoreSample(props: {
         </Show>
         <Show when={props.txs && grid() !== "unsupported"}>
           <div class="block-core__grid">
-            <Suspense>
+            <Loading>
               <TxGrid
                 txs={props.txs ?? []}
                 capacity={MAX_BLOCK_WEIGHT / 4}
@@ -915,14 +906,14 @@ function CoreSample(props: {
                 highlight={props.highlight}
                 onState={setGrid}
               />
-            </Suspense>
+            </Loading>
           </div>
         </Show>
       </div>
       {/* Both captions are always laid out in one cell, so the taller sets its height and the
           swap from layers to map moves nothing. */}
       <figcaption class="block-core__caption">
-        <span class="block-core__text" classList={{ "block-core__text--off": drawn() }}>
+        <span class={["block-core__text", { "block-core__text--off": drawn() }]}>
           The block fills {filled()} of its weight limit, in layers by fee rate: each is as thick as
           the virtual size paying that rate, the cheapest at the bottom.
           <Show when={grid() === "unsupported"}>
@@ -939,10 +930,13 @@ function CoreSample(props: {
             </button>
           </Show>
         </span>
-        <span class="block-core__text" classList={{ "block-core__text--off": !drawn() }}>
+        <span class={["block-core__text", { "block-core__text--off": !drawn() }]}>
           The block fills {filled()} of its weight limit. Each square is a transaction, as large as
           its virtual size and colored by its fee rate, the highest at the top left.{" "}
-          <a href="#block-txs-title">Every transaction is in the list below.</a>
+          {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
+          <a href="#block-txs-title" rel="external">
+            Every transaction is in the list below.
+          </a>
         </span>
         <Show when={described().length > 0}>
           <span class="visually-hidden"> Layers, cheapest first: {described().join("; ")}.</span>

@@ -1,4 +1,5 @@
-import { createMemo, createSignal, Index, type JSX, Show } from "solid-js";
+import { createMemo, createSignal, Show, For } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { SectionHeader } from "../../components/SectionHeader";
@@ -50,7 +51,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
           />
         }
       >
-        <dl class="home-stats" aria-busy={!m()}>
+        <dl class="home-stats" aria-busy={m() ? "false" : "true"}>
           <Stat label="Transactions">
             <Show when={m()}>{(s) => <span class="num">{groupDigits(s().count)}</span>}</Show>
           </Stat>
@@ -88,7 +89,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
               class="home-feebar__bar"
               aria-label="Waiting transactions by fee rate, cheapest first"
             >
-              <Index each={bands()}>
+              <For keyed={false} each={bands()}>
                 {(b, i) => (
                   // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- each bar takes focus and hover to show its tooltip
                   <li
@@ -114,7 +115,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
                     onBlur={() => setTipAt(undefined)}
                   />
                 )}
-              </Index>
+              </For>
             </ul>
             <Show when={m() && m()?.vsize === 0}>
               <p class="home-feebar__empty">
@@ -125,8 +126,8 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
               {(b) => (
                 <>
                   <span
-                    class="home-feebar__ring"
-                    classList={{ "home-feebar__ring--focus": focused() }}
+                    class={["home-feebar__ring", { "home-feebar__ring--focus": focused() }]}
+
                     style={{ "--x": String(b().x), "--w": String(b().share) }}
                   />
                   <p

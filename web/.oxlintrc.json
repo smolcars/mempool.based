@@ -40,9 +40,11 @@
       { "functions": false, "typedefs": false, "variables": false }
     ],
 
-    // Fights Solid: `let el!: HTMLElement` is assigned by `ref={el}`, which the rule cannot see.
+    // Fights Solid: `let el!: HTMLElement` is assigned by `ref={el}` (Solid 2 keeps this form), which
+    // the rule cannot see.
     "eslint/no-unassigned-vars": "off",
-    // Fights Solid: `const x = props.x` is how props stay reactive; destructuring breaks that.
+    // Fights Solid: `props.x` is how props stay reactive; destructuring breaks that (and Solid 2's
+    // development build warns about it).
     "eslint/prefer-destructuring": "off",
     // Wants <output> for role="status"; swapping a <p> or <div> for a form element changes layout
     // and semantics, and role="status" is valid ARIA.

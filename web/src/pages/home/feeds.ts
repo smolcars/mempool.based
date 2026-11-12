@@ -1,5 +1,5 @@
 // The home page's data: the block list kept live over the socket, and the panels polled over HTTP.
-import { type Accessor, batch, createEffect, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
 import { fetchApi } from "../../lib/api";
 import {
   applyBlock,
@@ -42,6 +42,12 @@ const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortEr
 export function createBlockFeed(network: Network, status: Accessor<LiveStatus>): Feed<Block[]> {
   const [data, setData] = createSignal<Block[]>();
   const [error, setError] = createSignal<unknown>();
+  /** The list as last set: a write reaches `data()` only when the update is applied. */
+  let current: Block[] | undefined;
+  const show = (list: Block[]) => {
+    current = list;
+    setData(list);
+  };
   let controller: AbortController | undefined;
   /** Messages that arrived while a fetch was in flight, replayed on top of its answer. */
   let queue: BlocksMessage[] | undefined;
@@ -85,18 +91,18 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
         // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
         .sort((a, b) => b.height - a.height)
         .slice(0, STRIP_MAX);
-      const shown = data();
+      const shown = current;
       const newest = list[0];
       const behindShown = !!shown?.[0] && !!newest && newest.height < shown[0].height;
       const behindExpected = !!expected && (!newest || newest.height < expected.height);
       // A list older than what is on screen is never shown; one that is ahead of it but not yet at
       // the announced tip is shown, and asked for again.
-      if (!behindShown && !sameList(shown, list)) setData(list);
+      if (!behindShown && !sameList(shown, list)) show(list);
       if ((behindShown || behindExpected) && retryLater()) return;
       staleRetries = 0;
       expected = undefined;
       // Retries ran out: take the node's word over the screen's.
-      if (behindShown) setData(list);
+      if (behindShown) show(list);
       setError(undefined);
     } catch (e) {
       if (signal.aborted || isAbort(e)) return;
@@ -111,10 +117,8 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
         controller = undefined;
         const held = queue ?? [];
         queue = undefined;
-        // One change for the strip, so held messages play as one sequence, not several at once.
-        batch(() => {
-          for (const m of held) handle(m);
-        });
+        // Applied together, so held messages reach the strip as one change, not several.
+        for (const m of held) handle(m);
         if (again) refresh();
       }
     }
@@ -128,7 +132,7 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
       else again = true;
       return;
     }
-    const shown = data();
+    const shown = current;
     if (!shown) {
       refresh();
       return;
@@ -138,10 +142,10 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
       if (next === "gap") {
         expect({ height: m.block.height, hash: m.block.id });
         refresh();
-      } else if (!sameList(shown, next)) setData(next);
+      } else if (!sameList(shown, next)) show(next);
     } else if (m.type === "reorg") {
       const next = applyReorg(shown, m.forkHeight);
-      if (next.length !== shown.length) setData(next);
+      if (next.length !== shown.length) show(next);
     } else if (m.tip && differsFrom(shown, m.tip)) {
       // Often the hub's answer to a block the node could not serve yet: wait for HTTP to have it.
       expect(m.tip);
@@ -153,12 +157,12 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
   refresh();
 
   // The socket is the fast path; HTTP keeps the strip moving while it is down.
-  createEffect(() => {
-    if (status() === "live") return;
+  createEffect(status, (s) => {
+    if (s === "live") return undefined;
     const timer = setInterval(() => {
       if (!document.hidden) refresh();
     }, FALLBACK_POLL_MS);
-    onCleanup(() => clearInterval(timer));
+    return () => clearInterval(timer);
   });
   onCleanup(() => {
     controller?.abort();
@@ -213,17 +217,17 @@ export function createPoll<T>(
     const never = lastAt === Number.NEGATIVE_INFINITY;
     if (never || (!document.hidden && Date.now() - lastAt >= everyMs)) refresh();
   };
-  createEffect(() => {
-    if (!enabled()) return;
+  createEffect(enabled, (on) => {
+    if (!on) return undefined;
     due();
     const timer = setInterval(() => {
       if (!document.hidden) refresh();
     }, everyMs);
     document.addEventListener("visibilitychange", due);
-    onCleanup(() => {
+    return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", due);
-    });
+    };
   });
   onCleanup(() => controller?.abort());
   return { data, error, refresh };

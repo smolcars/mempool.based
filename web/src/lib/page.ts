@@ -12,8 +12,11 @@ export function useNetwork(): Accessor<Network> {
 /** Sets the document title; test networks get their name in front so tabs are never ambiguous. */
 export function usePageTitle(title: () => string): void {
   const network = useNetwork();
-  createEffect(() => {
-    const net = network();
-    document.title = `${net === "mainnet" ? "" : `${NETWORK_NAMES[net]}: `}${title()} | mempool.based`;
-  });
+  createEffect(
+    () =>
+      `${network() === "mainnet" ? "" : `${NETWORK_NAMES[network()]}: `}${title()} | mempool.based`,
+    (text) => {
+      document.title = text;
+    },
+  );
 }

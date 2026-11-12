@@ -1,5 +1,5 @@
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../../lib/api";
 import { type BlockSummary, clearSummaries } from "../../lib/summary";
@@ -146,22 +146,20 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-let history = createMemoryHistory();
+let history = memoryHistory();
 
 function open(url: string) {
-  history = createMemoryHistory();
-  history.set({ value: url });
+  history = memoryHistory(url);
+  const Router = createRouter({
+    routes: [
+      { path: ["/block/:id", "/signet/block/:id"], component: BlockPage },
+      { path: ["/blocks", "/blocks/:from"], component: BlocksPage },
+    ],
+    history,
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  render(
-    () => (
-      <MemoryRouter history={history}>
-        <Route path={["/block/:id", "/signet/block/:id"]} component={BlockPage} />
-        <Route path={["/blocks", "/blocks/:from"]} component={BlocksPage} />
-      </MemoryRouter>
-    ),
-    el,
-  );
+  render(() => <Router>{(page) => page.children}</Router>, el);
   return el;
 }
 
