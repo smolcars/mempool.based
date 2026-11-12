@@ -106,7 +106,7 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 | LN3 | Channel opens and closes from blocks, with close classification | LN2 | done ([#61](https://github.com/smolcars/rbitcoin-space/pull/61)) |
 | LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | done ([#68](https://github.com/smolcars/rbitcoin-space/pull/68)) |
 | LN4b | The Lightning node, channel, search and ranking routes, in `/app` and in the `/api/v1/lightning` shapes | LN4a | done ([#72](https://github.com/smolcars/rbitcoin-space/pull/72)) |
-| W11 | Lightning pages: network statistics, node, channel, search | LN4b, W1 | todo |
+| W11 | Lightning pages: network statistics, node, channel, search | LN4b, W1 | doing |
 
 ## M5 — Parity and polish
 
