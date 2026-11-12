@@ -882,3 +882,88 @@ fn an_original_confirmed_while_its_replacement_was_not_is_no_longer_replaced() {
     assert!(r.get(&id(1)).is_none());
     assert!(r.get(&id(2)).is_some(), "what replaced 2 still stands");
 }
+
+#[test]
+fn an_intermediate_replacement_confirmed_by_a_reorg_keeps_what_it_replaced_mined() {
+    // 1 replaced by 2, 2 by 3 (unmined); a reorg's new block holds 2.
+    let (mut blocks, mut r) = chain(10);
+    r.insert(link(1, 2));
+    r.insert(link(2, 3));
+    blocks.pop();
+    blocks.push(blk(10, 110, 9, &[2]));
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(2), 10, block(110))]);
+    assert!(r.get(&id(2)).is_none(), "2 no longer stands replaced");
+    let mined = Mined::In(Some((10, block(110))));
+    assert_eq!(r.mined(&id(2)), mined);
+    // The store, replaying the changes, agrees.
+    let changes = r.take_changes();
+    let last = changes
+        .iter()
+        .rposition(|c| matches!(c, Change::Returned(t) if *t == id(2)));
+    assert!(
+        changes[last.unwrap()..].contains(&Change::Mined(id(2), mined)),
+        "{changes:?}"
+    );
+}
+
+#[tokio::test]
+async fn reads_spent_with_the_node_down_leave_the_unproven_unknown_and_say_so() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(1, 2));
+    r.confirmed(&id(2), 5, block(5));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    r.take_changes();
+    let node = Script {
+        down: true,
+        ..Script::default()
+    };
+    for _ in 0..CHECKS {
+        assert_eq!(check(&mut r, &node).await, 1);
+    }
+    // The last failed read spent the budget: 2's block is unproven, so it is unknown, and the
+    // change is there for the store and the sockets.
+    assert_eq!(r.mined(&id(2)), Mined::Unknown);
+    assert_eq!(r.take_changes(), vec![Change::Mined(id(2), Mined::Unknown)]);
+    assert_eq!(r.asks(), None);
+}
+
+#[tokio::test]
+async fn answers_dropped_after_another_reorg_do_not_spend_its_reads() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let (epoch, asks) = r.asks().unwrap();
+    // Another reorg deeper than the window before the answers land.
+    blocks.truncate(10);
+    for h in 11..=22u8 {
+        blocks.push(blk(u32::from(h), 150 + h, 149 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let stale: Vec<_> = (0..CHECKS)
+        .map(|_| (asks[0], Some(Answer::Tx(None))))
+        .collect();
+    r.answers(epoch, &stale);
+    assert_eq!(
+        r.mined(&id(4)),
+        Mined::Unknown,
+        "the stale answer is dropped"
+    );
+    let mut node = Script::default();
+    node.txs.insert(id(4), (12, block(162)));
+    assert_eq!(
+        check(&mut r, &node).await,
+        1,
+        "this reorg still has its reads"
+    );
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((12, block(162)))));
+}

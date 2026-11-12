@@ -431,6 +431,8 @@ impl Replacements {
             for t in b.txids() {
                 if self.links.contains_key(t) {
                     self.returned(t);
+                    // What it replaced is mined with it, as `follow` found.
+                    self.set_mined(*t, Mined::In(Some((b.height, b.hash))));
                     won.push((*t, b.height, b.hash));
                 }
             }
@@ -498,8 +500,7 @@ impl Replacements {
     /// The reads a check needs next, at most what is left of [`CHECKS`] for this reorg, with
     /// the epoch to hand back to [`Self::answers`]: the hash at the height of the highest mined
     /// block not proven on the best chain yet (the walk down), then where each unknown
-    /// replacement is. `None` when nothing is due. Out of reads, what is still unproven becomes
-    /// [`Mined::Unknown`].
+    /// replacement is. `None` when nothing is due, or when this reorg's reads are spent.
     pub fn asks(&mut self) -> Option<(u64, Vec<Ask>)> {
         let walk = self.unproven.and_then(|u| {
             self.links
@@ -523,11 +524,6 @@ impl Replacements {
             return None;
         }
         if self.budget == 0 {
-            if let Some(u) = self.unproven.take() {
-                for by in self.mined_below(u) {
-                    self.set_mined(by, Mined::Unknown);
-                }
-            }
             return None;
         }
         unknown.sort_unstable();
@@ -548,12 +544,13 @@ impl Replacements {
 
     /// Applies the reads made for the asks of `epoch`, each counted against [`CHECKS`]; a
     /// failed one (`None`) changes nothing, so it is asked again. Answers to an older epoch are
-    /// dropped: the reorg since re-examined everything they were about.
+    /// dropped, and not counted against this one: the reorg since re-examined everything they
+    /// were about. When the reads are spent, what is still unproven becomes [`Mined::Unknown`].
     pub fn answers(&mut self, epoch: u64, answers: &[(Ask, Option<Answer>)]) {
-        self.budget = self.budget.saturating_sub(answers.len());
         if epoch != self.epoch {
             return;
         }
+        self.budget = self.budget.saturating_sub(answers.len());
         for (ask, answer) in answers {
             match (ask, answer) {
                 (Ask::Hash(h), Some(Answer::Hash(x))) => {
@@ -574,6 +571,13 @@ impl Replacements {
                     self.set_mined(*t, b.map_or(Mined::No, |b| Mined::In(Some(b))));
                 }
                 _ => {}
+            }
+        }
+        if self.budget == 0
+            && let Some(u) = self.unproven.take()
+        {
+            for by in self.mined_below(u) {
+                self.set_mined(by, Mined::Unknown);
             }
         }
     }
