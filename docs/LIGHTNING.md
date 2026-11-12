@@ -72,8 +72,9 @@ Both live in `Config::data_dir`, which the server sets to `<DATA_DIR>/lightning/
 |---|---|---|
 | `node_key` | The 32-byte identity seed. Created on first run from `/dev/urandom` with mode `0600`; a seed readable by group or others is refused at start | 32 bytes |
 | `graph` | LDK's own serialization of the network graph | about 31 MB at 30,000 channels |
+| `verified` | The saved answers: the newest block the close-watcher had read, and each channel it watched with its funding output's value, program and block ([Restart](#restart)) | 92 bytes a channel: 3.3 MB at 36,000 |
 
-The graph is written every 10 minutes when it changed (a failed write is retried at the next period), and at shutdown, except while a loaded graph is still being checked again ([Restart](#restart)), through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, one that does not decode, one larger than 8 KB per channel of the ceiling (the most one channel's gossip can occupy, with its nodes), or one holding more channels than the ceiling (saved under a higher one), is reported (`GraphLoad::Unreadable`) and replaced at the next save.
+The graph, then the saved answers, are written every 10 minutes when the graph changed (a failed write is retried at the next period), and at shutdown, except while a loaded graph is still being checked again ([Restart](#restart)), through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, one that does not decode, one larger than 8 KB per channel of the ceiling (the most one channel's gossip can occupy, with its nodes), or one holding more channels than the ceiling (saved under a higher one), is reported (`GraphLoad::Unreadable`) and replaced at the next save.
 
 ### Interface
 
@@ -102,7 +103,7 @@ A signature proves that four keys agreed to announce a channel, not that it exis
 1. A peer sends a `channel_announcement`. Our handler refuses one for another chain, checks the ceiling, computes the script the announced bitcoin keys require and passes the message to LDK, which checks the four signatures and calls our `UtxoLookup` with the short channel id.
 2. **Cached:** if the id was looked up within the last hour, the answer is given at once (`UtxoResult::Sync`): the output if its script matches, otherwise a refusal. A channel LDK already holds as chain-validated with the same nodes is not looked up at all.
 3. **Otherwise the answer comes later** (`UtxoResult::Async`): LDK keeps the announcement waiting on a `UtxoFuture`, and holds the channel's updates and its nodes' announcements with it as they arrive. Asynchronous answers are what let lookups be batched without blocking gossip processing. The lookup joins a queue; a second announcement of the same id joins the same entry.
-4. **One task sends the queue** to `POST /block-heights/txs/outs`, up to 300 positions per request (the short channel id is the block height, transaction index and output index). There is never more than one request in flight, and at least `Config::lookup_interval` (500 ms) between the starts of two requests, retries included. A first lookup waits 50 ms so that a burst leaves as one batch.
+4. **One task sends the queue** to `POST /block-heights/txs/outs`, up to 100 positions per request (the short channel id is the block height, transaction index and output index), through the gate every Lightning request to the node shares ([Load on the node](#load-on-the-node)). The batch is taken when its turn comes, so what arrived while it waited goes with it. A first lookup waits 50 ms so that a burst leaves as one batch.
 5. **The answer is classified** against the tip height stamped on the response, and every waiting announcement is resolved through LDK. LDK then adds the channel with `capacity_sats` set and applies the updates and node announcements it held; the handler reports the changes. The peer manager is told to read again.
 
 ### States
@@ -138,27 +139,54 @@ Lightning gossip triggers these lookups, so they are bounded ([`SECURITY.md`](SE
 
 | Setting | Default | Bound |
 |---|---|---|
-| `Config::lookup_interval` | 500 ms | Requests to the node, one at a time: at most 2 a second, so at most 600 outputs a second, whatever arrives |
+| `Config::lookup_interval` | 250 ms | Least time between the starts of two requests to the node, for all of Lightning together, one at a time: at most 4 a second, so at most 400 outputs a second, whatever arrives, and fewer when the node is slow ([Load on the node](#load-on-the-node)) |
 | `Config::max_pending` | 5,000 | Announcements waiting for a lookup. At this many, `processing_queue_high` turns true and LDK holds each peer's next gossip message and stops reading from it (it also pauses its ping timeout, so the peer is not dropped) until lookups drain. Nothing is dropped; a burst is paced to the lookup rate. LDK can still hand in a message already read, so the hard limit is 64 more, beyond which announcements are refused as `queue_full` |
 | `Config::max_early` | 1,000 | Announcements held as early |
 | `Config::cache_entries` | 100,000 | Lookup results kept, found or not, oldest evicted first |
 | `Config::cache_ttl` | 1 hour | How long a result is trusted |
-| Batch size | 300 | rbitcoin's own limit for the batch route |
+| Batch size | 100 | A third of rbitcoin's limit of 300 for the batch route, so one request stays short and the node's other callers never wait long behind it |
 | Request timeout | the client's (10 s), and 30 s at most | A request that does not answer counts as failed |
 
 A held announcement costs LDK a copy of it plus the latest update per direction and node announcement per node, at most about 4 KB, so `max_pending` bounds that memory at about 20 MB. The ceiling (`max_channels`) counts channels in the graph plus those unchecked, pending, being resolved and early, so the graph cannot overshoot it when lookups resolve.
 
-**When the node is down or slow**, a failed or timed-out request puts its batch back at the head of the queue and is retried after 1 s, doubling to 60 s. `Event::LookupFailed` reports each failure with the backlog, and `Validation::node_failures` counts them in a row. The queue fills, gossip from peers waits, and once the node answers it drains. Announcements are not lost and the peer does not wedge: connections stay up and reading resumes on its own.
+**When the node is down or slow**, a failed or timed-out request puts its batch back at the head of the queue and is retried after 1 s, doubling to 60 s, and no Lightning request reaches the node for three times as long as the failed one took (30 s after the client's 10 s timeout). `Event::LookupFailed` reports each failure with the backlog, and `Validation::node_failures` counts them in a row. The queue fills, gossip from peers waits, and once the node answers it drains. Announcements are not lost and the peer does not wedge: connections stay up and reading resumes on its own.
 
-**A hostile peer cycling invented channels** costs at most one request every 500 ms to the node, at most `max_pending` waiting announcements, `max_early` early ones and `cache_entries` cached results; meanwhile honest gossip is paced along with it. It can fill the cache with its own refused ids and evict honest results, which only costs lookups again at the same bounded rate. Honest LDK, LND and CLN peers validate before relaying, so invented channels reach us only from a peer that does not.
+**A hostile peer cycling invented channels** costs at most one request every 250 ms to the node and a quarter of its time, at most `max_pending` waiting announcements, `max_early` early ones and `cache_entries` cached results; meanwhile honest gossip is paced along with it. It can fill the cache with its own refused ids and evict honest results, which only costs lookups again at the same bounded rate. Honest LDK, LND and CLN peers validate before relaying, so invented channels reach us only from a peer that does not.
+
+### Load on the node
+
+The node is shared: the explorer's own pages, other users and the backfill all ask it too, so Lightning must never be what makes it slow. Every request Lightning sends it goes through one gate (`crates/ln/src/pace.rs`): validation's lookups, the close-watcher's reads and catch-up, and the server's funding txids ([Funding transactions](#funding-transactions)).
+
+- **One request at a time** for all of Lightning, in the order they ask.
+- **At least `Config::lookup_interval` (250 ms) between two starts:** at most 4 requests a second.
+- **The node left alone three times as long as each request took:** Lightning keeps the node busy at most a quarter of the time, and a node that slows down is asked less, by itself. A request that took 1 s is followed by 3 s of nothing; one that timed out after 10 s, by 30 s.
+- **A failure** is also retried after the loop's own backoff (1 s, doubling to 60 s), and the funding fill waits while validation has lookups queued.
+- **A restart repeats nothing** the [saved answers](#restart) hold.
+
+On 2026-11-12, at a first start, `lightning_lookup_failed` reported `pending` 5,000: that is announcements waiting, not calls. Gossip delivers about 34,000 channel announcements in its first 20 s; the queue holds them up to `max_pending` and sends them a batch at a time. Two of those requests timed out, as did two funding-txid requests during the first fill, on a host at load 20 to 33.
+
+| | Before 2026-11-12 | Now |
+|---|---|---|
+| Requests in flight | Up to 3: validation, the close-watcher and the funding fill each paced only itself | 1 for all of Lightning |
+| Requests a second | Up to 24 (2, 2 and 20) | At most 4 |
+| Funding outputs a second | Up to 600, 300 a request | At most 400, 100 a request; 25 when a request takes a second |
+| Node time taken | Not bounded: each loop sent its next request as soon as its interval allowed, however long the last took | At most a quarter |
+| After a timeout | The same 300 positions again 1 s later | Nothing for 30 s, then the backoff |
+| Restart | Every stored channel checked again: 121 requests, 36,226 outputs, 62 s at the limit, twice that day | Nothing asked for the saved channels; one block read for each mined since the save |
+| First sync, 36,000 channels | Verified in 84 s, at 600 a second | 360 requests: at least 90 s; on the node measured below, whose 300-position requests took under 0.5 s, about 4 minutes; longer on a busier node, by design |
+| Funding txids, first fill | 33 minutes at 18 a second, beside validation | About 2.5 hours at 4 a second, after validation |
+
+The figures for now are the gate's bounds, proven by tests against a fake node that counts requests in flight and per second, fast and slow, and a restart with the answers saved (`crates/ln/src/tests/closes.rs`, `crates/ln/src/pace.rs`). They were not measured against mainnet: a first sync is exactly the load this is about, on a node others use.
 
 ### Restart
 
-A graph file is not trusted as it is: a file written by the unverified peer of earlier versions holds channels that were never checked, and any file may hold channels closed while the peer was down. So a loaded graph is not shown. Its channels, with their stored announcements and latest updates, and its node announcements, are taken out, and the peer starts with an empty graph. On each one-second tick, while the lookup queue is under half full (so live gossip keeps the other half), up to 2,000 stored channels are sent through the same check as gossip; their updates wait in LDK with them, and a node's stored announcement is applied once one of its channels is verified. Until then, gossip that arrives for a stored channel or node is kept with it if newer (an oversized node announcement trimmed first), and the channel-range sync does not ask peers for channels already stored or pending. A channel enters the graph only once it passes, so after a restart nothing unverified can pass as verified, and every stored channel is checked again against today's chain.
+A graph file is not trusted as it is: a file written by the unverified peer of earlier versions holds channels that were never checked, and any file may hold channels closed while the peer was down. So a loaded graph is not shown. Its channels, with their stored announcements and latest updates, and its node announcements, are taken out, and the peer starts with an empty graph. On each one-second tick, while the lookup queue is under half full (so live gossip keeps the other half), up to 2,000 stored channels are sent through the same check as gossip; their updates wait in LDK with them, and a node's stored announcement is applied once one of its channels is verified. Until then, gossip that arrives for a stored channel or node is kept with it if newer (an oversized node announcement trimmed first), and the channel-range sync does not ask peers for channels already stored or pending. A channel enters the graph only once it passes, so after a restart nothing unverified can pass as verified.
 
-While stored channels are still to be checked or answered, early ones included (until their output is six deep: twelve blocks at most), the replay stays open: the graph is not saved, at shutdown included, since the file on disk is the better copy, and `caught_up` stays false. A restart in the middle of a check therefore starts over from the same file. The file never records which channels were verified; it does not need to, since every channel is checked again at each start.
+**Saved answers.** Passing does not mean asking the node again. Every save writes `verified` after the graph ([Files](#files)): the newest block the close-watcher had read, and each channel it watched and was not about to check again, with its funding output's value, program and block. Each of those is unspent up to that block, because the watcher read every block since the channel was verified. At start, with a graph to replay, the file answers those channels' lookups as cached results, and the watcher resumes from that block: it waits for the replay to hand those channels back (two minutes at most; one handed back later is checked again), then reads the blocks mined since, as it reads any new block, so a channel closed while the server was down is found in the block that closed it. A restart therefore asks the node nothing for the channels it had verified, only the blocks since the save; channels the file does not hold are looked up as before. Down for more than ten blocks, or with the saved block no longer on the best chain, the watcher checks every watched output by position, as after any [gap](#catch-up). Either file can be the older one, and both stay true. A `verified` file for another network, with more channels than the ceiling, or whose length does not add up is ignored, and every channel is then asked of the node as on a first start.
 
-The alternative, discarding the file and resyncing from peers, was measured as the first sync below. Replaying costs only the lookups; a resync costs the same lookups plus the full gossip download.
+While stored channels are still to be checked or answered, early ones included (until their output is six deep: twelve blocks at most), the replay stays open: neither file is saved, at shutdown included, since the files on disk are the better copy, and `caught_up` stays false. A restart in the middle of a check therefore starts over from the same files.
+
+The alternative, discarding the file and resyncing from peers, was measured as the first sync below. Replaying costs only the lookups the saved answers do not cover; a resync costs every lookup plus the full gossip download.
 
 ### Measured on mainnet
 
@@ -177,7 +205,7 @@ The alternative, discarding the file and resyncing from peers, was measured as t
 
 ### Validation measured on mainnet
 
-2026-11-12, the same program and peers, release build, lookups against a synced rbitcoin v0.9.2 mainnet node on the same private network, default settings (500 ms between requests). Memory is the process's resident size; macOS compresses an idle process's pages on this busy machine, so only peaks are given.
+2026-11-12, the same program and peers, release build, lookups against a synced rbitcoin v0.9.2 mainnet node on the same private network, the settings of the time: 500 ms between requests of 300 positions, with no gate shared with the other loops and no saved answers, so a restart checked every channel again. [Load on the node](#load-on-the-node) has what changed and today's figures. Memory is the process's resident size; macOS compresses an idle process's pages on this busy machine, so only peaks are given.
 
 | | First sync, empty directory | Restart from the file it saved |
 |---|---|---|
@@ -243,13 +271,13 @@ A closed channel leaves the graph in the block that spends it, once: the watched
 
 Blocks are not read before the watcher's first tip or across a gap; the node's spend records are asked instead:
 
-- **After downtime.** The graph file's channels are all checked again at start ([Restart](#restart)). One found spent closed while the peer was down. Its spend is found in four requests: the funding block's hash and the txid at the channel's index (the funding txid), the output's spender (`/tx/:txid/outspend/:vout`, which gives the block), and the spending transaction. Its fee may need a fifth.
-- **A gap.** More than ten new blocks at once (the node was unreachable, or the server was suspended): reading them would cost more than checking every watched output by position (18 MB at mainnet's size, ten blocks' worth), so the watcher starts again from the tip and checks every watched output, 300 per request. Spent ones are looked up as above.
+- **After downtime.** With saved answers, the watcher reads on from the block it had read before the restart, so a close while down is found in its block like any other ([Restart](#restart)). Without them, the graph file's channels are all checked again at start, and one found spent closed while the peer was down. Its spend is found in four requests: the funding block's hash and the txid at the channel's index (the funding txid), the output's spender (`/tx/:txid/outspend/:vout`, which gives the block), and the spending transaction. Its fee may need a fifth.
+- **A gap.** More than ten new blocks at once (the node was unreachable, or the server was suspended): reading them would cost more than checking every watched output by position (18 MB at mainnet's size, ten blocks' worth), so the watcher starts again from the tip and checks every watched output, 100 per request. Spent ones are looked up as above.
 - **A late answer.** A channel whose lookup was answered at a tip older than the newest block read (or the block being read), or at a tip on another branch than the block read at that height, is checked again the same way, so a close in a block read before the channel was watched is not missed.
 
 A spend the catch-up finds in a block the watcher has not read on its own branch (a newer block, or another branch at a height it read) is not recorded there: the channel is watched, and reading that block records the close, with what undoes it. On another branch, the channel is also checked again, in case the watcher's branch wins. A channel queued for checking is queued once.
 
-The catch-up shares the watcher's pacing: one request at a time, at least `Config::lookup_interval` (500 ms) apart, behind the tip check. A check that fails stays queued and is retried after a backoff. `Closes::catch_up` counts what waits.
+The catch-up goes through the same gate as every Lightning request ([Load on the node](#load-on-the-node)), behind the tip check. A check that fails stays queued and is retried after a backoff. `Closes::catch_up` counts what waits.
 
 ### Reorgs
 
@@ -272,8 +300,8 @@ Nothing gossip sends changes what the watcher asks of the node: a channel enters
 | | Bound |
 |---|---|
 | Per block | The tip every 10 s (64 bytes), one page of headers, the raw block (about 1.7 MB on mainnet), one position request per input that spends a watched script, and one fee request per such input that is not alone in its transaction. Inputs that spend a watched script require that channel's keys, so this is one request per real close |
-| Rate | One request at a time, at least `Config::lookup_interval` apart: at most 2 a second, besides validation's 2 |
-| Catch-up | The same rate. Four or five requests per channel closed while down; 300 outputs per request when checking every watched output |
+| Rate | Through the gate every Lightning request shares: one at a time, at most 4 a second and a quarter of the node's time for all of Lightning together ([Load on the node](#load-on-the-node)) |
+| Catch-up | The same gate. Four or five requests per channel closed while down without saved answers; 100 outputs per request when checking every watched output |
 | Watched outputs | One entry per verified channel, so bounded by the graph's ceiling: about 200 bytes each with the script index, 7 MB at 36,000 channels, 20 MB at the 100,000 ceiling |
 | Force closes watched for a penalty | At most 10,000, the oldest dropped first, for 2,016 blocks each |
 | Block window | 100 blocks with their closes (a few hundred bytes each) |
@@ -341,7 +369,7 @@ The node, channel, search and ranking routes read an **index** of the verified g
 
 ### Funding transactions
 
-The peer never learns a channel's funding txid ([Why the script and not the outpoint](#how-closes-are-found)), but the transaction page needs to find the channels a transaction opened. So a background task asks the node once per stored channel, `/block/:hash/txid/:index` with the funding block's hash the table already holds, and stores the answer in `ln_channels.open_txid`, indexed. One small request at a time, at least 50 ms apart: on mainnet the first start filled all 36,227 channels in 33 minutes (18 a second), and after that it asks for a few hundred new channels a day. Two requests failed on a dropped connection and were retried; the three channels spot-checked against the reference carry the same funding txids. A failure is retried after 1 s, doubling to 64 s (`lightning_funding_failed`); a block that left the chain is skipped until the history moves the row. A txid is stored only while the row names the block it was read from, and an open that moves the channel to another block clears it. Requests never wait for this: until a channel's txid is known, its routes say `null` and a lookup by that txid does not find it. Closing txids come with the close and are indexed the same way.
+The peer never learns a channel's funding txid ([Why the script and not the outpoint](#how-closes-are-found)), but the transaction page needs to find the channels a transaction opened. So a background task asks the node once per stored channel, `/block/:hash/txid/:index` with the funding block's hash the table already holds, and stores the answer in `ln_channels.open_txid`, indexed. The requests go through the gate every Lightning request shares, and only while validation has no lookup queued, which goes first ([Load on the node](#load-on-the-node)): at most 4 a second, so a first fill of mainnet's 36,000 channels takes about 2.5 hours, and after that it asks for a few hundred new channels a day. Before the gate, at 18 a second beside validation, the first start filled all 36,227 channels in 33 minutes; two requests failed on a dropped connection and were retried; the three channels spot-checked against the reference carry the same funding txids. A failure is retried after 1 s, doubling to 64 s (`lightning_funding_failed`); a block that left the chain is skipped until the history moves the row. A txid is stored only while the row names the block it was read from, and an open that moves the channel to another block clears it. Requests never wait for this: until a channel's txid is known, its routes say `null` and a lookup by that txid does not find it. Closing txids come with the close and are indexed the same way.
 
 ### Still missing
 
@@ -380,7 +408,7 @@ Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a cha
 - **Memory.** So each channel and node held is bounded, and with the ceiling so are the graph's memory and its file. At mainnet's mix, 4 KB per channel, the ceiling is about 400 MB; filled by an attacker with the largest messages accepted, about twice that, and a file of at most 8 KB per channel. `Stats` reports the counts, and `Event::GraphSaved` the file's size.
 - **Disk.** Nothing gossip sends is written anywhere but the graph file, whose size follows from the ceiling.
 - **Range sync.** The channel ids wanted from peers are capped at the ceiling.
-- **Funding-output lookups** are deduplicated, cached, batched (up to 300 per request), queued in a bounded queue that pauses gossip when full, and rate-limited ([Settings and bounds](#settings-and-bounds)), so no amount of gossip can load the node beyond one request per `lookup_interval`.
+- **Funding-output lookups** are deduplicated, cached, batched (up to 100 per request), queued in a bounded queue that pauses gossip when full, and paced through one gate ([Load on the node](#load-on-the-node)), so no amount of gossip can load the node beyond one request per `lookup_interval` and a quarter of its time.
 - **The close-watcher** asks the node for each block once, and for one small request per real close, whatever gossip says ([Bounds and cost](#bounds-and-cost)).
 - Aliases, colours and addresses are kept as LDK decoded them, never interpreted, and are served and rendered as plain text.
 - The peer makes outbound connections only, never listens, never announces itself and never relays.
