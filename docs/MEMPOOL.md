@@ -232,7 +232,7 @@ Everything the two disagree on sits in one fee-rate class at the block boundary:
 
 | Block | By transaction | By weight | Tie-aware, by weight | Never reached our mempool | We had placed later |
 |---|---|---|---|---|---|
-| 975,521 | 65.8% | 71.7% | not measured | 0.22% of weight | |
+| 975,521 | 65.8% | 71.7% | not measured | 0.22% of weight | not measured |
 | 975,522 | 94.9% | 95.5% | 97.6% | 0.23% | 2.1% |
 | 975,523 | 84.4% | 94.8% | 98.3% | 0% | 1.7% |
 
