@@ -268,6 +268,7 @@ impl<'a> Session<'a> {
             ("blocks", Topic::V1Blocks),
             ("stats", Topic::V1Stats),
             ("mempool-blocks", Topic::V1MempoolBlocks),
+            ("live-2h-chart", Topic::V1LiveChart),
         ];
         for (name, topic) in all {
             if !names.contains(&name) {

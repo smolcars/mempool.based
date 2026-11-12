@@ -28,6 +28,7 @@ use tokio::task::JoinHandle;
 
 use crate::error::ApiError;
 use crate::esplora::{ApiOutcome, Source};
+use crate::ws::{Frame, Hub, Snapshot, Topic};
 use crate::{Network, NetworkContext};
 
 const NO_TABLE: ApiError = ApiError::new(
@@ -78,7 +79,10 @@ pub fn app_routes() -> Router<Arc<NetworkContext>> {
     Router::new().route("/app/mempool/history/{interval}", get(app_history))
 }
 
-async fn statistics(State(ctx): State<Arc<NetworkContext>>, Path(i): Path<String>) -> Response {
+pub(crate) async fn statistics(
+    State(ctx): State<Arc<NetworkContext>>,
+    Path(i): Path<String>,
+) -> Response {
     serve(&ctx, Shape::Reference, &i, "statistics").await
 }
 
@@ -227,27 +231,43 @@ fn reference(s: &Series, interval: Interval) -> Vec<ReferencePoint> {
     s.points
         .iter()
         .rev()
-        .map(|p| {
-            let t = &p.sums;
-            let mut vsizes = [0.0; REFERENCE_RANGES];
-            for (band, sum) in t.bands.iter().enumerate() {
-                if let Some(v) = BAND_RANGE.get(band).and_then(|r| vsizes.get_mut(*r)) {
-                    *v += mean(p, *sum);
-                }
-            }
-            let vsizes = vsizes.iter().map(|v| v.round() as u64).collect();
-            let per_second = mean(p, t.flow.in_vsize) / MINUTE as f64;
-            ReferencePoint {
-                added: p.time,
-                count: num(mean(p, t.count)),
-                vbytes_per_second: num(per_second),
-                mempool_byte_weight: short.then(|| num(4.0 * mean(p, t.vsize))),
-                total_fee: short.then(|| num(mean(p, t.fees))),
-                min_fee: num(mean(p, t.min_fee) / 1000.0),
-                vsizes,
-            }
-        })
+        .map(|p| reference_point(p, short))
         .collect()
+}
+
+/// One point in the reference's shape: an element of `/api/v1/statistics`, and the
+/// `live-2h-chart` message on `/api/v1/ws`, so the two cannot disagree.
+fn reference_point(p: &Point, short: bool) -> ReferencePoint {
+    let t = &p.sums;
+    let mut vsizes = [0.0; REFERENCE_RANGES];
+    for (band, sum) in t.bands.iter().enumerate() {
+        if let Some(v) = BAND_RANGE.get(band).and_then(|r| vsizes.get_mut(*r)) {
+            *v += mean(p, *sum);
+        }
+    }
+    let vsizes = vsizes.iter().map(|v| v.round() as u64).collect();
+    let per_second = mean(p, t.flow.in_vsize) / MINUTE as f64;
+    ReferencePoint {
+        added: p.time,
+        count: num(mean(p, t.count)),
+        vbytes_per_second: num(per_second),
+        mempool_byte_weight: short.then(|| num(4.0 * mean(p, t.vsize))),
+        total_fee: short.then(|| num(mean(p, t.fees))),
+        min_fee: num(mean(p, t.min_fee) / 1000.0),
+        vsizes,
+    }
+}
+
+/// A sample was written: sent as `live-2h-chart`, the point `/api/v1/statistics/2h` now lists
+/// first, encoded once for every socket wanting it.
+pub(crate) fn sampled(hub: &Hub, sample: &Point) {
+    let msg = json!({ "live-2h-chart": reference_point(sample, true) });
+    // No state for new subscribers: the reference sends nothing on `want`, only each new sample.
+    hub.publish(
+        Topic::V1LiveChart,
+        &Frame::text(msg.to_string().as_bytes()),
+        Snapshot::Keep,
+    );
 }
 
 /// Our own shape, for our chart: oldest first, every field a mean per sampled minute.
@@ -290,7 +310,8 @@ fn app(s: &Series, interval: Interval) -> Value {
 
 /// Starts the network's sampler when it has a store, and turns what it reports into log lines:
 /// a roll-up when one moved rows, skipped minutes at the 1st, 2nd, 4th… in a row, and the
-/// first minute sampled after them.
+/// first minute sampled after them. Each sample written is sent as `live-2h-chart` on
+/// `/api/v1/ws`.
 pub fn start(
     ctx: &NetworkContext,
     tracker: &Tracker,
@@ -299,8 +320,14 @@ pub fn start(
     let store = Arc::clone(&ctx.blocks.as_ref()?.store);
     let network = ctx.config.network;
     let written = Arc::clone(&ctx.history.written);
+    let hub = Arc::clone(&ctx.hub);
     let skipped = AtomicU32::new(0);
-    let observer = move |e: &history::Event| report(network, &written, &skipped, e);
+    let observer = move |e: &history::Event| {
+        if let history::Event::Written { sample, .. } = e {
+            sampled(&hub, sample);
+        }
+        report(network, &written, &skipped, e);
+    };
     let config = history::Config {
         observer: Arc::new(observer),
         ..history::Config::default()

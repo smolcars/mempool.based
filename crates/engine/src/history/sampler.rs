@@ -10,7 +10,7 @@ use bitcoin::Txid;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
-use super::{Flow, MINUTE, Rolled, db, sample, since_epoch};
+use super::{Flow, MINUTE, Point, Rolled, db, sample, since_epoch};
 use crate::mempool::{Delta, Removal, Subscription, Tracker};
 use crate::projected::Projector;
 use crate::store::{Error, Store};
@@ -59,6 +59,8 @@ pub enum Event {
         time: u64,
         rolled: Rolled,
         elapsed: Duration,
+        /// The row stored, for whoever pushes each new sample on.
+        sample: Box<Point>,
     },
     Skipped {
         time: u64,
@@ -202,11 +204,13 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
         let event = match (skip, min_fee) {
             (None, Some(min_fee)) => {
                 let started = Instant::now();
-                match db::record(&store, sample(time, &p, min_fee, flow), time).await {
+                let point = sample(time, &p, min_fee, flow);
+                match db::record(&store, point, time).await {
                     Ok(rolled) => Event::Written {
                         time,
                         rolled,
                         elapsed: started.elapsed(),
+                        sample: Box::new(point),
                     },
                     Err(Error::Full) => Event::Skipped {
                         time,

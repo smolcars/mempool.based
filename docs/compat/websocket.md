@@ -22,7 +22,7 @@ Observed on mempool.space's public socket on 2026-11-12 (mainnet, two connection
 | Message | Effect | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
 | `{"action":"init"}` | One snapshot: the same keys as `GET /api/v1/init-data` | Engine | skipped | — | ref | No answer. The `want` snapshots carry the same parts |
-| `{"action":"want","data":[…]}` | Subscribes to topics: `blocks`, `stats`, `mempool-blocks`, `live-2h-chart`, `watch-mempool` | Hub topics | served | M2 | ref | `blocks`, `stats`, `mempool-blocks`; other names are ignored ([`WS.md`](../WS.md#the-mempoolspace-shaped-socket-apiv1ws)) |
+| `{"action":"want","data":[…]}` | Subscribes to topics: `blocks`, `stats`, `mempool-blocks`, `live-2h-chart`, `watch-mempool` | Hub topics | served | M2 | ref | `blocks`, `stats`, `mempool-blocks`, `live-2h-chart`; other names are ignored ([`WS.md`](../WS.md#the-mempoolspace-shaped-socket-apiv1ws)) |
 | `{"action":"ping"}` | Answered with `pong` | Hub | served | M2 | ref |  |
 | `{"refresh-blocks":true}` | Resends the recent block list | Esplora `/blocks`, store for extras | skipped | — | ref | No answer. Want `blocks` again |
 | `{"track-tx":"<txid>"}` | Follows one transaction: its projected position, then confirmation | Engine; Electrum outpoint and header pushes | served | M2 | ref | One per socket; `"stop"` ends it |
@@ -54,7 +54,7 @@ Observed on mempool.space's public socket on 2026-11-12 (mainnet, two connection
 | `da` | Difficulty adjustment progress | Engine | served | M2 | ref | `/api/v1/difficulty-adjustment`' answer |
 | `conversions` | Fiat prices | Store | planned | M3 | ref | Not sent; waits on the price feed, which the owner has parked |
 | `rbfSummary` | Recent replacements, in `init` | Engine | skipped | — | ref | `init` is not served |
-| `live-2h-chart` | One mempool statistics sample a minute | Engine; store | planned | M3 | ref | Not sent. The sample is the newest row of `GET /api/v1/statistics/2h`, which the store already writes once a minute |
+| `live-2h-chart` | One mempool statistics sample a minute | Mempool history sampler | served | M3 | ref | Each sample as stored, by the serializer of `GET /api/v1/statistics/2h`; nothing on `want`, as on the reference. Stamped with the minute, and none extra after a block. Needs a data directory |
 | `loadingIndicators` | Progress of backend indexing jobs | Store backfill progress | different | M3 | ref | Not sent on either socket. A history route says how far its data reaches in its `X-Data-*` headers instead ([`API.md`](../API.md#coverage)) |
 | `backend`, `backendInfo` | Backend kind and build | Server build info | different | M5 | ref | Not sent on either socket. The version is in `/app/config`; no host name or OS |
 | `txPosition` | A tracked transaction's projected block, position and CPFP data | Engine | served | M2 | ref | `position.block` and `position.vsize` (inside the block); no `cpfp` |

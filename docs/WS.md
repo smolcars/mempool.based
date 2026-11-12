@@ -335,7 +335,7 @@ Text frames with one JSON object. An object may hold several of these keys; each
 | Message | Does |
 |---|---|
 | `{"action":"ping"}` | Answered `{"pong":true}` |
-| `{"action":"want","data":["blocks","stats","mempool-blocks"]}` | Replaces the set of parts wanted; other names are ignored. Each newly wanted part first sends its current state, then every change. `"data":[]` stops them all |
+| `{"action":"want","data":["blocks","stats","mempool-blocks","live-2h-chart"]}` | Replaces the set of parts wanted; other names are ignored. Each newly wanted part first sends its current state, then every change; `live-2h-chart` has no state and sends each new sample, as on the reference. `"data":[]` stops them all |
 | `{"track-tx":"<txid>"}` | Follows one transaction, 64 hex digits in lower case. A new one replaces the last; `{"track-tx":"stop"}` ends it |
 | `{"track-address":"<address>"}` | Follows one address of this network (bech32 in either case). A new one replaces the last; `"stop"` ends it |
 | `{"track-addresses":["<address>", …]}` | Follows a set of addresses, replacing the last set; `[]` stops it. Duplicates count once |
@@ -359,6 +359,7 @@ Every message is one JSON object in its own frame, with the key named here.
 | `{"block":{…}}` | Each new block | The same JSON, at the same moment as `/app/ws`'s `block` |
 | `{"mempoolInfo":{…},"fees":{…},"da":{…},"transactions":[…]}` | On `want`, then every `WS_MEMPOOL_INTERVAL_MS` (2 s) | Whatever of these the server has: `mempoolInfo` is the node's `getmempoolinfo` as the mempool tracker last read it, amounts in BTC; `fees` is `GET /api/v1/fees/precise`'s answer and `da` `GET /api/v1/difficulty-adjustment`'s ([`API.md`](API.md#mempoolspace-shaped-routes-apiv1)); `transactions` is the newest `WS_LATEST_TXS` transactions seen, `{txid, fee, vsize, value, rate, time}` with `rate` in sat/vB |
 | `{"mempool-blocks":[…]}` | On `want`, then when the projected blocks change | `GET /api/v1/fees/mempool-blocks`' answer. After a `block`, the next one is on that block: right behind it when the projected blocks on it are ready first, or as soon as they are. One on another block than the last `block` waits for it for at most 3 s, as on `/app/ws` |
+| `{"live-2h-chart":{"added":…,"count":…,"vbytes_per_second":…,"mempool_byte_weight":…,"total_fee":…,"min_fee":…,"vsizes":[…]}}` | Each minute's mempool history sample, as it is stored | The point `GET /api/v1/statistics/2h` lists first from then on, written by the same function ([`API.md`](API.md#mempool-statistics)). Nothing on `want`: a client reads the series over HTTP and appends these. Needs a data directory and the mempool engine; without them the part is accepted and sends nothing |
 | `{"txPosition":{"txid":"…","position":{"block":0,"vsize":1078}}}` | The followed transaction waits | `block` is the projected block, 0 for the next; `vsize` is what is mined before it inside that block. Sent when it changes, a mere shuffle at most once per `WS_POSITION_INTERVAL_MS`, from the same pass as `tx:<txid>` ([above](#following-a-transaction-or-an-address)) |
 | `{"txReplaced":{"txid":"<replacement>"}}` | It was replaced | The transaction that replaced it |
 | `{"txConfirmed":"<txid>"}` | It was mined | |
@@ -403,7 +404,7 @@ Per socket, the parts wanted count inside `WS_MAX_SUBSCRIPTIONS`; the `track-tx`
 | Transactions in address messages | The node's Esplora JSON, without the reference's own fields (`order`, `vsize`, `adjustedVsize`, `feePerVsize`, `adjustedFeePerVsize`, `effectiveFeePerVsize`, `firstSeen`, `cpfpDirty`, `clusterId`, `chunkIndex`, `cpfpChecked`, …) | Passed through from the node, never rebuilt |
 | `track-addresses` | 2 addresses per socket by default | Each address is a node subscription; raise `WS_MAX_TRACKED_ADDRESSES` to allow more |
 | `multi-address-transactions` | One address per message; `removed` always empty | Each address's message is encoded once for every socket following it |
-| Not served | `init`, `refresh-blocks`, `live-2h-chart`, `conversions`, `loadingIndicators`, `backend`, the replacement feeds (`rbfLatest`, `rbfSummary`, …), `track-txs`, `track-mempool*`, `track-mempool-block`, `utxoSpent`, `address-removed-transactions`, `rbfTransaction`, `rbfInfo` | Status and reason per message in [`compat/websocket.md`](compat/websocket.md) |
+| Not served | `init`, `refresh-blocks`, `conversions`, `loadingIndicators`, `backend`, the replacement feeds (`rbfLatest`, `rbfSummary`, …), `track-txs`, `track-mempool*`, `track-mempool-block`, `utxoSpent`, `address-removed-transactions`, `rbfTransaction`, `rbfInfo` | Status and reason per message in [`compat/websocket.md`](compat/websocket.md) |
 
 ### Cost of a compatible socket
 

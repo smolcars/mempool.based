@@ -51,14 +51,7 @@ impl Client {
 
     fn drain(&mut self) {
         while let Ok(f) = self.rx.try_recv() {
-            let b = f.as_bytes();
-            let at = match b[1] & 0x7F {
-                126 => 4,
-                127 => 10,
-                _ => 2,
-            };
-            self.seen
-                .push_back(serde_json::from_slice(&b[at..]).unwrap());
+            self.seen.push_back(decode(&f));
         }
     }
 
@@ -82,6 +75,17 @@ impl Client {
         self.drain();
         self.seen.drain(..).collect()
     }
+}
+
+/// A server frame's JSON payload.
+fn decode(f: &Frame) -> Value {
+    let b = f.as_bytes();
+    let at = match b[1] & 0x7F {
+        126 => 4,
+        127 => 10,
+        _ => 2,
+    };
+    serde_json::from_slice(&b[at..]).unwrap()
 }
 
 fn limits() -> WsLimits {
@@ -160,26 +164,21 @@ async fn client_messages_are_parsed_strictly() {
         &json!({"action": "want", "data": ["blocks", "stats", "nonsense"]}),
     );
     let subs = |t| ctx.hub.subscribers(t);
-    assert_eq!(
-        (
-            subs(Topic::V1Blocks),
-            subs(Topic::V1Stats),
-            subs(Topic::V1MempoolBlocks)
-        ),
-        (1, 1, 0)
-    );
+    let wanted = || {
+        [
+            Topic::V1Blocks,
+            Topic::V1Stats,
+            Topic::V1MempoolBlocks,
+            Topic::V1LiveChart,
+        ]
+        .map(subs)
+    };
+    assert_eq!(wanted(), [1, 1, 0, 0]);
     send(
         &mut s,
-        &json!({"action": "want", "data": ["mempool-blocks"]}),
+        &json!({"action": "want", "data": ["mempool-blocks", "live-2h-chart"]}),
     );
-    assert_eq!(
-        (
-            subs(Topic::V1Blocks),
-            subs(Topic::V1Stats),
-            subs(Topic::V1MempoolBlocks)
-        ),
-        (0, 0, 1)
-    );
+    assert_eq!(wanted(), [0, 0, 1, 1]);
 
     // One `track-tx` at a time: a new one replaces it, the same one changes nothing, `stop` ends it.
     send(&mut s, &json!({"track-tx": lower}));
@@ -242,6 +241,33 @@ async fn client_messages_are_parsed_strictly() {
     drop(s);
     assert_eq!(ctx.v1.followed(), 0);
     assert_eq!(ctx.track.tracked().0, 0);
+}
+
+#[tokio::test]
+async fn every_part_a_transaction_and_two_addresses_fit_the_subscription_cap() {
+    let ctx = context("127.0.0.1:1", true, |_| {});
+    let mut c = Client::new();
+    let c_conn = Arc::clone(&c.conn);
+    let mut s = Session::new(&ctx, &c_conn);
+    let all = ["blocks", "stats", "mempool-blocks", "live-2h-chart"];
+    send(&mut s, &json!({"action": "want", "data": all}));
+    send(&mut s, &json!({"track-tx": "ab".repeat(32)}));
+    send(
+        &mut s,
+        &json!({"track-addresses": [address(5), address(6)]}),
+    );
+    let wanted = [
+        Topic::V1Blocks,
+        Topic::V1Stats,
+        Topic::V1MempoolBlocks,
+        Topic::V1LiveChart,
+    ]
+    .map(|t| ctx.hub.subscribers(t));
+    assert_eq!(wanted, [1, 1, 1, 1]);
+    assert_eq!((ctx.track.tracked(), ctx.v1.followed()), ((1, 2), 2));
+    // Nothing refused; the default cap of 8 topics is unchanged.
+    assert!(c.all().iter().all(|m| !m.to_string().contains("-error")));
+    assert_eq!(limits().max_subscriptions, 8);
 }
 
 #[tokio::test]
@@ -619,6 +645,8 @@ async fn every_message_has_the_reference_shape() {
     // the difficulty adjustment from the routes' own serializers.
     let id: Txid = "ab".repeat(32).parse().unwrap();
     latest(&ctx.v1, [(id, 1_794_480_209, 396, 110, 87_794)].into_iter());
+    let sample = sample(engine::history::unix_now() / 60 * 60, 85_320);
+    crate::statistics::sampled(&ctx.hub, &sample);
     let mut stats = stats(ctx).unwrap();
     let rates = engine::fees::Rates {
         levels: [2_533, 1_834, 1_293, 200],
@@ -701,6 +729,7 @@ async fn every_message_has_the_reference_shape() {
             json!({"block-transactions": [esplora("tx")]}),
         ),
         ("track-addresses-error", replies[1].clone()),
+        ("live-2h-chart", live_chart(&sample)),
     ];
     let mut wrong = Vec::new();
     for (name, msg) in &ours {
@@ -717,6 +746,140 @@ async fn every_message_has_the_reference_shape() {
         .filter(|k| *k != "observed")
         .collect();
     assert_eq!(names, recorded);
+}
+
+/// A mempool history sample at minute `time` with `in_vsize` entering over the minute before.
+fn sample(time: u64, in_vsize: u64) -> engine::history::Point {
+    let mut sums = engine::history::Totals {
+        count: 73_078,
+        vsize: 33_945_214,
+        fees: 5_597_327,
+        min_fee: 100,
+        ..Default::default()
+    };
+    sums.bands[0] = 33_000_000;
+    sums.bands[4] = 900_000;
+    sums.bands[9] = 45_214;
+    sums.flow.in_vsize = in_vsize;
+    engine::history::Point {
+        time,
+        samples: 1,
+        sums,
+    }
+}
+
+/// The `live-2h-chart` message `sampled` sends for `p`, read off a subscriber.
+fn live_chart(p: &engine::history::Point) -> Value {
+    let ctx = context("127.0.0.1:1", false, |_| {});
+    let mut c = Client::new();
+    let conn = Arc::clone(&c.conn);
+    let mut s = Session::new(&ctx, &conn);
+    send(
+        &mut s,
+        &json!({"action": "want", "data": ["live-2h-chart"]}),
+    );
+    crate::statistics::sampled(&ctx.hub, p);
+    let mut all = c.all();
+    assert_eq!(all.len(), 1);
+    all.remove(0)
+}
+
+#[tokio::test]
+async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-g1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let ctx = crate::ws::track::tests::context_in(
+        "127.0.0.1:1",
+        "http://127.0.0.1:1",
+        false,
+        Some(dir.to_str().unwrap()),
+        |_| {},
+    );
+    let (mut rxs, conns): (Vec<_>, Vec<_>) = (0..3)
+        .map(|_| {
+            let c = Client::new();
+            (c.rx, c.conn)
+        })
+        .unzip();
+    let mut sessions = Vec::new();
+    for conn in &conns {
+        let mut s = Session::new(&ctx, conn);
+        send(
+            &mut s,
+            &json!({"action": "want", "data": ["live-2h-chart", "stats"]}),
+        );
+        sessions.push(s);
+    }
+    let mut other = Client::new();
+    let other_conn = Arc::clone(&other.conn);
+    let mut o = Session::new(&ctx, &other_conn);
+    send(&mut o, &json!({"action": "want", "data": ["stats"]}));
+    // Only what `live-2h-chart` sends: `stats` is published by `run`, which is not running.
+    let chart_frames = |rxs: &mut Vec<mpsc::Receiver<Frame>>| {
+        rxs.iter_mut()
+            .map(|rx| std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+
+    // Before the first sample: no chart message on `want`, as on the reference.
+    assert!(chart_frames(&mut rxs).iter().all(Vec::is_empty));
+
+    // A sample is stored and written: every subscriber gets the same frame, encoded once, and it
+    // is the point the HTTP route now lists first.
+    let now = engine::history::unix_now() / 60 * 60;
+    let p = sample(now, 85_320);
+    let store = &ctx.blocks.as_ref().unwrap().store;
+    engine::history::record(store, p, now).await.unwrap();
+    crate::statistics::sampled(&ctx.hub, &p);
+    let got = chart_frames(&mut rxs);
+    assert!(got.iter().all(|f| f.len() == 1), "one message each");
+    let first = got[0][0].as_bytes();
+    assert!(
+        got.iter()
+            .all(|f| f[0].as_bytes().as_ptr() == first.as_ptr())
+    );
+    let msg = decode(&got[0][0]);
+    let res = crate::statistics::statistics(State(Arc::clone(&ctx)), Path("2h".to_owned())).await;
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let http: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(msg, json!({ "live-2h-chart": http[0] }));
+    assert_eq!(
+        msg,
+        json!({"live-2h-chart": {
+            "added": now, "count": 73_078, "vbytes_per_second": 1_422,
+            "mempool_byte_weight": 135_780_856, "total_fee": 5_597_327, "min_fee": 0.1,
+            "vsizes": [33_000_000, 900_000, 0, 0, 0, 0, 0, 0, 45_214, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        }})
+    );
+    assert_eq!(other.all(), Vec::<Value>::new());
+
+    drop((sessions, o));
+    drop(ctx);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn without_a_data_directory_the_chart_is_wanted_but_never_comes() {
+    // No store, so no sampler: `live-2h-chart` is accepted and silent.
+    let mock = Mock::new();
+    let server = Server::start(&mock, |_| {});
+    mock.send(&[coin(1)], 1, 2_000, 200);
+    server.settle().await;
+    let ctx = &server.ctx;
+    assert!(ctx.blocks.is_none());
+    let mut c = Client::new();
+    let conn = Arc::clone(&c.conn);
+    let mut s = Session::new(ctx, &conn);
+    send(
+        &mut s,
+        &json!({"action": "want", "data": ["live-2h-chart"]}),
+    );
+    assert_eq!(ctx.hub.subscribers(Topic::V1LiveChart), 1);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(c.all(), Vec::<Value>::new());
 }
 
 #[tokio::test]
