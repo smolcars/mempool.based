@@ -627,7 +627,12 @@ function MinedTile(props: {
       .filter(Boolean)
       .join(", ");
   return (
-    <li class="home-tile home-tile--mined" data-id={b().id} data-height={b().height}>
+    <li
+      class="home-tile home-tile--mined"
+      classList={{ "home-tile--guessing": guessing() }}
+      data-id={b().id}
+      data-height={b().height}
+    >
       <Link class="home-tile__body" href={paths.block(b().id)} aria-label={label()}>
         <span class="home-tile__title num">{groupDigits(b().height)}</span>
         <span class="home-tile__fee num">

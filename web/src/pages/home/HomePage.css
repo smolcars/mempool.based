@@ -710,9 +710,10 @@
     .home-strip__pending {
       display: none;
     }
-    /* With its "~", a projected median and its unit overrun a phone's tile; the mined tiles beside
-       it carry the unit. */
-    .home-tile--projected .home-tile__fee .unit {
+    /* With its "~", a projected median and its unit overrun a phone's tile (also on a block still
+       crossing); the mined tiles beside it carry the unit. */
+    .home-tile--projected .home-tile__fee .unit,
+    .home-tile--guessing .home-tile__fee .unit {
       display: none;
     }
     .home-live {
