@@ -54,7 +54,8 @@ export function isImmutable(cacheControl: string | null): boolean {
   return /(^|,)\s*immutable\b/.test(cc) || (maxAge !== null && Number(maxAge[1]) >= 86_400);
 }
 
-export type ReplyKind = "json" | "text";
+/** `bytes` is an ArrayBuffer, for binary replies such as a block's transaction records. */
+export type ReplyKind = "json" | "text" | "bytes";
 
 // shortcut: a plain insertion-ordered map capped at CACHE_MAX entries; make it LRU if pages re-read old entries often.
 const CACHE_MAX = 256;
@@ -94,11 +95,17 @@ function readRetryAfter(headers: Headers): number | undefined {
   return Number.isFinite(s) && s >= 0 ? s : undefined;
 }
 
+const ACCEPT: Record<ReplyKind, string> = {
+  json: "application/json",
+  text: "text/plain",
+  bytes: "application/octet-stream",
+};
+
 async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { accept: kind === "json" ? "application/json" : "text/plain" },
+      headers: { accept: ACCEPT[kind] },
       ...(signal ? { signal } : {}),
     });
   } catch (e) {
@@ -111,7 +118,12 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   }
   let value: unknown;
   try {
-    value = kind === "json" ? await res.json() : (await res.text()).trim();
+    value =
+      kind === "json"
+        ? await res.json()
+        : kind === "bytes"
+          ? await res.arrayBuffer()
+          : (await res.text()).trim();
   } catch (e) {
     if (signal?.aborted) throw e;
     throw new ApiError(res.status, "The server sent a reply that could not be read.");
@@ -153,11 +165,10 @@ export function fetchStamped<T>(
 export function fetchApp<T>(
   network: Network,
   path: string,
-  options: { signal?: AbortSignal } = {},
+  options: { as?: ReplyKind; signal?: AbortSignal } = {},
 ): Promise<T> {
-  return cachedOrFetch<T>(`${onNetwork(network, "")}/app${path}`, "json", options.signal).then(
-    (r) => r.value,
-  );
+  const url = `${onNetwork(network, "")}/app${path}`;
+  return cachedOrFetch<T>(url, options.as ?? "json", options.signal).then((r) => r.value);
 }
 
 /** Retries after a refusal that says to (503, 429), this many times before giving up. */

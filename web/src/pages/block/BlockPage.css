@@ -174,14 +174,40 @@
       transform: translateY(-12px);
     }
   }
+  /* The map sits a little in from the frame's rounded edges, its squares on the floor. */
+  .block-core__grid {
+    position: absolute;
+    inset: var(--space-2);
+  }
+  /* Once the map is drawn, the stand-in layers and their labels fade from under it. */
+  .block-core__strata,
+  .block-core__fill,
+  .block-core__limit {
+    transition: opacity var(--dur-base) var(--ease-out);
+  }
+  .block-core--grid .block-core__strata,
+  .block-core--grid .block-core__fill,
+  .block-core--grid .block-core__limit {
+    opacity: 0;
+  }
   .block-core .feekey {
     margin-top: var(--space-3);
   }
   .block-core__caption {
+    display: grid;
     margin-top: var(--space-3);
     max-width: 60ch;
     font-size: var(--text-sm);
     color: var(--color-text-muted);
+  }
+  .block-core__text {
+    grid-area: 1 / 1;
+  }
+  .block-core__text--off {
+    visibility: hidden;
+  }
+  .block-core__text a {
+    color: var(--color-text);
   }
 
   .block-facts {
@@ -222,7 +248,8 @@
     color: var(--color-text-muted);
     font-weight: var(--weight-regular);
   }
-  .block-fact__retry {
+  .block-fact__retry,
+  .block-core__retry {
     padding: 0;
     border: 0;
     background: none;

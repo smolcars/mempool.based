@@ -6,10 +6,13 @@ import {
   createSignal,
   For,
   type JSX,
+  lazy,
   Match,
   on,
   onCleanup,
+  onMount,
   Show,
+  Suspense,
   Switch,
 } from "solid-js";
 import { Amount } from "../../components/Amount";
@@ -21,7 +24,10 @@ import { SectionHeader } from "../../components/SectionHeader";
 import { describeBands, Strata, strataLayers, strataTop } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
-import { createApi, fetchApi, isNotFound } from "../../lib/api";
+import type { GridState } from "../../components/txgrid/TxGrid";
+import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
+import type { GridTx } from "../../components/txgrid/layout";
+import { createApi, fetchApi, fetchApp, isNotFound, withRetry } from "../../lib/api";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
@@ -43,11 +49,15 @@ import {
   fullness,
   HALVING_INTERVAL,
   hex32,
+  MAX_BLOCK_WEIGHT,
   parseBlockId,
   shownParam,
 } from "./chain";
 import "./BlockPage.css";
 import { failed, ready, Skel } from "./parts";
+
+// WebGL and its layout load only when a block page draws them.
+const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 
 /** The API serves a block's transactions 25 at a time. */
 const PAGE = 25;
@@ -223,6 +233,37 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
       return found.get(hash) ?? null;
     },
   );
+  // Every transaction's size and fee, for the map. Retried quietly while the server is busy.
+  let gridController: AbortController | undefined;
+  onCleanup(() => gridController?.abort());
+  const [gridTxs, gridTxsCtl] = createResource(
+    () => (props.hash ? { hash: props.hash, network: network() } : undefined),
+    async ({ hash, network: n }): Promise<GridTx[]> => {
+      gridController?.abort();
+      const c = new AbortController();
+      gridController = c;
+      const path = `/block/${hash}/txs`;
+      const reply = await withRetry(
+        () => fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal: c.signal }),
+        c.signal,
+      );
+      return decodeTxs(reply);
+    },
+  );
+  // The renderer's code downloads while the data does.
+  onMount(() => void TxGrid.preload());
+  const [highlight, setHighlight] = createSignal<number>();
+  const rowAt = (e: Event) => {
+    const row = e.target instanceof Element ? e.target.closest("tbody tr") : null;
+    const i = row?.parentElement ? [...row.parentElement.children].indexOf(row) : -1;
+    setHighlight(i >= 0 && txs()?.[i] ? i : undefined);
+  };
+  const txidOf = (tx: GridTx): Promise<string> => {
+    const i = Number(tx.id);
+    const known = txs()?.[i]?.txid;
+    if (known !== undefined) return Promise.resolve(known);
+    return fetchApi<string>(network(), `/block/${props.hash ?? ""}/txid/${i}`, { as: "text" });
+  };
   // Layers arrive with a settle unless this page already had them when the block was opened.
   const settle = createMemo(() => !props.hash || !knownSummary(network(), props.hash));
 
@@ -412,7 +453,16 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
         </Show>
 
         <div class="block-layout">
-          <CoreSample weight={b()?.weight} summary={sum()} settle={settle()} />
+          <CoreSample
+            weight={b()?.weight}
+            summary={sum()}
+            settle={settle()}
+            txs={ready(gridTxs)}
+            txsError={failed(gridTxs)}
+            retryTxs={() => void gridTxsCtl.refetch()}
+            txid={txidOf}
+            highlight={highlight()}
+          />
           <div class="block-side">
             <dl class="block-facts">
               <Fact
@@ -621,7 +671,16 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               />
             }
           >
-            <DataTable caption="Transactions in this block" columns={columns} rows={rows()} />
+            {/* A row under the pointer or focus rings its square in the map above. */}
+            <div
+              class="block-txs__table"
+              onPointerOver={rowAt}
+              onFocusIn={rowAt}
+              onPointerLeave={() => setHighlight(undefined)}
+              onFocusOut={() => setHighlight(undefined)}
+            >
+              <DataTable caption="Transactions in this block" columns={columns} rows={rows()} />
+            </div>
             <div class="block-txs__more">
               <Show when={moreError()}>
                 {(e) => (
@@ -716,14 +775,19 @@ const columns = [
 ];
 
 /**
- * The block as a core sample: a frame the size of the weight limit, filled to how full the block
- * is, in layers by fee rate once its summary arrives. It holds the place of the transaction map,
- * which a later task draws, so adding the map moves nothing.
+ * The block as a core sample: a frame the size of the weight limit. Its fee layers stand in until
+ * every transaction's size and fee arrive; then the map of them is drawn into the same box, so
+ * nothing moves. The layers stay where the map cannot be drawn or its data cannot load.
  */
 function CoreSample(props: {
   weight: number | undefined;
   summary: BlockSummary | null | undefined;
   settle: boolean;
+  txs: GridTx[] | undefined;
+  txsError: unknown;
+  retryTxs: () => void;
+  txid: (tx: GridTx) => Promise<string>;
+  highlight: number | undefined;
 }) {
   const share = () => (props.weight === undefined ? undefined : fullness(props.weight));
   const layers = createMemo(() => {
@@ -733,8 +797,19 @@ function CoreSample(props: {
       : [];
   });
   const described = () => (props.summary ? describeBands(props.summary.fee_bands) : []);
+  const [grid, setGrid] = createSignal<GridState>();
+  const drawn = () => grid() === "drawn" && props.txs !== undefined;
+  const filled = () => (
+    <Show when={share() !== undefined} fallback={<Skel size="s" />}>
+      {percent(share() ?? 0)}
+    </Show>
+  );
+  const label = () => {
+    const n = props.txs?.length ?? 0;
+    return `Map of the block's ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. The list below has every one.`;
+  };
   return (
-    <figure class="block-core">
+    <figure class="block-core" classList={{ "block-core--grid": drawn() }}>
       <div class="block-core__frame">
         <span class="block-core__limit" aria-hidden="true">
           Weight limit
@@ -758,15 +833,46 @@ function CoreSample(props: {
             </div>
           )}
         </Show>
+        <Show when={props.txs && grid() !== "unsupported"}>
+          <div class="block-core__grid">
+            <Suspense>
+              <TxGrid
+                txs={props.txs ?? []}
+                capacity={MAX_BLOCK_WEIGHT / 4}
+                label={label()}
+                txid={props.txid}
+                highlight={props.highlight}
+                onState={setGrid}
+              />
+            </Suspense>
+          </div>
+        </Show>
       </div>
+      {/* Both captions are always laid out in one cell, so the taller sets its height and the
+          swap from layers to map moves nothing. */}
       <figcaption class="block-core__caption">
-        {/* The sentence is always there, so it wraps the same while the figure loads. */}
-        The block fills{" "}
-        <Show when={share() !== undefined} fallback={<Skel size="s" />}>
-          {percent(share() ?? 0)}
-        </Show>{" "}
-        of its weight limit, in layers by fee rate: each is as thick as the virtual size paying that
-        rate, the cheapest at the bottom.
+        <span class="block-core__text" classList={{ "block-core__text--off": drawn() }}>
+          The block fills {filled()} of its weight limit, in layers by fee rate: each is as thick as
+          the virtual size paying that rate, the cheapest at the bottom.
+          <Show when={grid() === "unsupported"}>
+            {" "}
+            The map of each transaction needs WebGL2, which this browser does not offer.
+          </Show>
+          <Show when={props.txsError !== undefined}>
+            {" "}
+            {props.txsError instanceof TxsFormatError && props.txsError.kind === "version"
+              ? props.txsError.message
+              : "The map of each transaction could not load."}{" "}
+            <button type="button" class="block-core__retry" onClick={() => props.retryTxs()}>
+              Try again
+            </button>
+          </Show>
+        </span>
+        <span class="block-core__text" classList={{ "block-core__text--off": !drawn() }}>
+          The block fills {filled()} of its weight limit. Each square is a transaction, as large as
+          its virtual size and colored by its fee rate, the highest at the top left.{" "}
+          <a href="#block-txs-title">Every transaction is in the list below.</a>
+        </span>
         <Show when={described().length > 0}>
           <span class="visually-hidden"> Layers, cheapest first: {described().join("; ")}.</span>
         </Show>
