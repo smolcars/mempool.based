@@ -149,6 +149,28 @@ fn shipped_migrations_are_numbered_and_unchanged() {
     }
 }
 
+/// `build.rs` reruns when a migration is added or changed: the compiled-in list is the directory
+/// as it is now, names and text. A stale build-script output fails here.
+#[test]
+fn compiled_migrations_match_the_files() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+    let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.ends_with(".sql"))
+        .map(|n| {
+            let text = std::fs::read_to_string(dir.join(&n)).unwrap();
+            (n, text)
+        })
+        .collect();
+    files.sort();
+    let compiled: Vec<(String, String)> = MIGRATIONS
+        .iter()
+        .map(|(n, t)| ((*n).to_owned(), (*t).to_owned()))
+        .collect();
+    assert_eq!(compiled, files);
+}
+
 #[tokio::test]
 async fn fresh_database_gets_every_migration_and_wal() {
     let dir = TempDir::new();
