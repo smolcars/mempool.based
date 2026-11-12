@@ -434,6 +434,9 @@ async fn malformed_lines_are_skipped_and_oversized_ones_reconnect() {
     // A reply of the wrong shape fails that request only.
     peer.reply(&req, json!({"not": "a header"})).await;
     assert!(matches!(header_req.await.unwrap(), Err(Error::Protocol(_))));
+    // The five bad lines and three bad notifications are counted for the server's log.
+    let health = client.health().borrow().clone();
+    assert_eq!((health.ready, health.skipped_lines), (true, 8));
 
     let c = client.clone();
     let header_req = tokio::spawn(async move { c.block_header(2).await });
@@ -603,11 +606,44 @@ async fn tip_follows_gaps_and_reorgs() {
     assert_eq!(next(&mut events).await, Event::Resynced);
 }
 
+#[tokio::test]
+async fn health_tracks_ready_lost_and_failed_attempts() {
+    let (mock, config) = Mock::start().await;
+    let (client, peer, _events, _) = connected(config, &mock).await;
+    let health = client.health();
+    let wait_for = |want: fn(&Health) -> bool| {
+        let mut rx = health.clone();
+        async move {
+            timeout(WAIT, rx.wait_for(want))
+                .await
+                .unwrap()
+                .unwrap()
+                .clone()
+        }
+    };
+    assert_eq!(
+        wait_for(|h| h.ready).await,
+        Health {
+            ready: true,
+            failures: 0,
+            skipped_lines: 0
+        }
+    );
+    // Lost with nothing listening: not ready, then attempts in a row pile up.
+    drop(mock);
+    drop(peer);
+    let lost = wait_for(|h| !h.ready).await;
+    assert!(lost.failures <= 1, "{lost:?}");
+    let failing = wait_for(|h| h.failures >= 3).await;
+    assert!(!failing.ready);
+}
+
 /// Read-only requests and live events against a real node. Never runs in CI:
 /// `ELECTRUM_ADDR=host:port cargo test -p node live_node -- --ignored --nocapture`.
 /// Optional: `WATCH_SCRIPTHASH`, `WATCH_OUTPOINT` (`txid:vout`, comma-separated) and `WATCH_SECS`.
 #[tokio::test]
 #[ignore = "needs a running node"]
+#[allow(clippy::print_stdout)] // a manual probe: printing is its output
 async fn live_node() {
     let addr = std::env::var("ELECTRUM_ADDR").expect("ELECTRUM_ADDR");
     let client = Client::spawn(Config::new(addr));

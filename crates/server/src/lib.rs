@@ -8,6 +8,8 @@ pub mod config;
 pub mod error;
 pub mod esplora;
 pub mod limits;
+pub mod report;
+pub mod request_log;
 mod serve;
 
 use std::future::Future;
@@ -187,7 +189,11 @@ impl App {
                 limits::limit,
             ))
             .layer(middleware::map_response(finish))
-            .layer(middleware::from_fn(cors));
+            .layer(middleware::from_fn(cors))
+            .layer(middleware::from_fn_with_state(
+                request_log::RequestLogger::new(config),
+                request_log::log_request,
+            ));
         Self { router, limiter }
     }
 
@@ -246,7 +252,9 @@ async fn cors(req: Request, next: Next) -> Response {
     } else {
         h.insert(
             ACCESS_CONTROL_EXPOSE_HEADERS,
-            HeaderValue::from_static("X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height"),
+            HeaderValue::from_static(
+                "X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height, X-Request-Id",
+            ),
         );
     }
     // Errors and refusals must not be cached: the same URL can succeed a moment later.

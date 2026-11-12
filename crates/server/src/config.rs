@@ -127,6 +127,25 @@ impl Default for Limits {
     }
 }
 
+/// Which requests get an `http_request` event (`LOG_REQUESTS`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestLog {
+    All,
+    /// Status 400 and above, which includes every refusal.
+    Failures,
+    Off,
+}
+
+impl RequestLog {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Failures => "failures",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen: SocketAddr,
@@ -136,6 +155,9 @@ pub struct Config {
     pub limits: Limits,
     /// Whether `POST /api/tx` is served (`BROADCAST_ENABLED`).
     pub broadcast: bool,
+    pub log_requests: RequestLog,
+    /// Whether request events carry the client address (`LOG_CLIENT_ADDR`).
+    pub log_client_addr: bool,
 }
 
 impl Config {
@@ -199,12 +221,26 @@ impl Config {
             Some(_) => return Err("BROADCAST_ENABLED must be true or false".into()),
         };
 
+        let log_requests = match var("LOG_REQUESTS").as_deref() {
+            None | Some("all") => RequestLog::All,
+            Some("failures") => RequestLog::Failures,
+            Some("off") => RequestLog::Off,
+            Some(_) => return Err("LOG_REQUESTS must be all, failures or off".into()),
+        };
+        let log_client_addr = match var("LOG_CLIENT_ADDR").as_deref() {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => return Err("LOG_CLIENT_ADDR must be true or false".into()),
+        };
+
         Ok(Self {
             listen,
             web_dir,
             networks,
             limits,
             broadcast,
+            log_requests,
+            log_client_addr,
         })
     }
 }
@@ -487,6 +523,18 @@ mod tests {
         assert!(parse(&[]).unwrap().broadcast);
         assert!(!parse(&[("BROADCAST_ENABLED", "false")]).unwrap().broadcast);
         assert!(parse(&[("BROADCAST_ENABLED", "no")]).is_err());
+        let c = parse(&[]).unwrap();
+        assert_eq!(
+            (c.log_requests, c.log_client_addr),
+            (RequestLog::All, false)
+        );
+        let c = parse(&[("LOG_REQUESTS", "failures"), ("LOG_CLIENT_ADDR", "true")]).unwrap();
+        assert_eq!(
+            (c.log_requests, c.log_client_addr),
+            (RequestLog::Failures, true)
+        );
+        assert!(parse(&[("LOG_REQUESTS", "some")]).is_err());
+        assert!(parse(&[("LOG_CLIENT_ADDR", "yes")]).is_err());
         assert!(parse(&[("MAX_CONNECTIONS", "99999999")]).is_err());
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");

@@ -1,6 +1,6 @@
 # Configuration
 
-The server reads its configuration from the environment once, at startup. Invalid or half-set configuration stops it with a message naming the variable; values are never echoed, so a mistyped password does not land in a log. An empty value counts as unset.
+The server reads its configuration from the environment once, at startup. Invalid or half-set configuration stops it with a message naming the variable; values are never echoed, so a mistyped password does not land in a log. The error is written as a `config_invalid` event ([`LOGGING.md`](LOGGING.md)). An empty value counts as unset.
 
 [`.env.example`](../.env.example) is a starting point. The server does not read `.env` itself; load it into the environment (`set -a; . ./.env; set +a`) or pass the variables through your process manager.
 
@@ -8,7 +8,7 @@ The server reads its configuration from the environment once, at startup. Invali
 
 | Variable | Default | What it does |
 |---|---|---|
-| `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the startup line shows which |
+| `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the `listening` event shows which |
 | `WEB_DIR` | `web/dist` | The built frontend. Nothing outside it is served |
 
 ## Networks
@@ -29,6 +29,18 @@ A network is enabled when all six of its variables are set, and disabled when no
 | Variable | Default | What it does |
 |---|---|---|
 | `BROADCAST_ENABLED` | `true` | `false` turns off `POST /api/tx` on every network (it answers `403`). Broadcast is the only write the server makes to the node; its size cap and per-client rate limit are fixed ([`API.md`](API.md#broadcast)) |
+
+## Logging
+
+What each setting changes, and the event catalogue, are in [`LOGGING.md`](LOGGING.md).
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LOG_FORMAT` | `json`, or `text` when stdout is a terminal | `json` or `text` |
+| `LOG_LEVEL` | `info` | Lowest level written: `debug`, `info`, `warn` or `error`. Events below it are not formatted at all |
+| `LOG_REQUESTS` | `all` | Which requests get an `http_request` event: `all`, `failures` (status 400 and above, which includes every refusal) or `off`. A passing `/healthz` is never logged |
+| `LOG_CLIENT_ADDR` | `false` | `true` adds the client address, as the rate limiter keys it (IPv4, or an IPv6 /64), to `http_request`. Off by default for privacy; the trade-off is in [`LOGGING.md`](LOGGING.md#why-client-addresses-are-off-by-default) |
+
 
 ## Limits
 

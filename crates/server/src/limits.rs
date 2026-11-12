@@ -15,6 +15,24 @@ use tokio::task::JoinHandle;
 use crate::config::Limits;
 use crate::error::ApiError;
 
+/// A limit said no: the error the client gets, and a fixed reason for the request log. Its
+/// response carries it as an extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refused {
+    pub error: ApiError,
+    /// `client_rate`, `client_concurrency`, `client_table_full`, `route_rate`, `server_busy` or
+    /// `timeout`.
+    pub reason: &'static str,
+}
+
+impl IntoResponse for Refused {
+    fn into_response(self) -> Response {
+        let mut res = self.error.into_response();
+        res.extensions_mut().insert(self);
+        res
+    }
+}
+
 /// What a client holds open. Each kind has its own per-client cap, passed to [`Client::hold`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Held {
@@ -96,8 +114,16 @@ impl Clients {
     }
 
     /// Takes one rate token for `client` and holds nothing.
-    pub fn take(self: &Arc<Self>, client: IpAddr) -> Result<(), ApiError> {
-        self.acquire(client, Held::Request, u32::MAX, 1.0).map(drop)
+    pub fn take(self: &Arc<Self>, client: IpAddr) -> Result<(), Refused> {
+        self.acquire(client, Held::Request, u32::MAX, 1.0)
+            .map(drop)
+            .map_err(|r| match r.reason {
+                "client_rate" => Refused {
+                    reason: "route_rate",
+                    ..r
+                },
+                _ => r,
+            })
     }
 
     /// Takes `cost` rate tokens (0 or 1) and one `kind` slot for `client`, all or nothing.
@@ -107,7 +133,7 @@ impl Clients {
         kind: Held,
         max: u32,
         cost: f64,
-    ) -> Result<Hold, ApiError> {
+    ) -> Result<Hold, Refused> {
         let now = Instant::now();
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         if !table.entries.contains_key(&client) && table.entries.len() >= self.max_entries {
@@ -118,7 +144,10 @@ impl Clients {
                 table.entries.retain(|_, e| !e.idle(now, rate, burst));
             }
             if table.entries.len() >= self.max_entries {
-                return Err(ApiError::OVERLOADED);
+                return Err(Refused {
+                    error: ApiError::OVERLOADED,
+                    reason: "client_table_full",
+                });
             }
         }
         let entry = table.entries.entry(client).or_insert(Entry {
@@ -130,7 +159,15 @@ impl Clients {
         });
         entry.refill(now, self.rate, self.burst);
         if entry.tokens < cost || *entry.count(kind) >= max {
-            return Err(ApiError::TOO_MANY_REQUESTS);
+            let reason = if entry.tokens < cost {
+                "client_rate"
+            } else {
+                "client_concurrency"
+            };
+            return Err(Refused {
+                error: ApiError::TOO_MANY_REQUESTS,
+                reason,
+            });
         }
         entry.tokens -= cost;
         *entry.count(kind) += 1;
@@ -184,7 +221,9 @@ pub struct Client {
 impl Client {
     /// Holds one `kind` slot for this client if it has fewer than `max`. No rate token is taken.
     pub fn hold(&self, kind: Held, max: u32) -> Result<Hold, ApiError> {
-        self.clients.acquire(self.addr, kind, max, 0.0)
+        self.clients
+            .acquire(self.addr, kind, max, 0.0)
+            .map_err(|r| r.error)
     }
 }
 
@@ -202,7 +241,7 @@ pub fn client_key(ip: IpAddr) -> IpAddr {
 
 /// The client address: from the trusted proxy header when one is configured and parses, else the
 /// socket peer. The last value wins because a proxy appends the address it saw to any the client sent.
-fn client_addr(
+pub(crate) fn client_addr(
     headers: &HeaderMap,
     peer: IpAddr,
     trusted: Option<&axum::http::HeaderName>,
@@ -243,7 +282,8 @@ impl Limiter {
         let max = self.limits.client_connections;
         let hold = self
             .clients
-            .acquire(client_key(peer), Held::Connection, max, 0.0)?;
+            .acquire(client_key(peer), Held::Connection, max, 0.0)
+            .map_err(|r| r.error)?;
         Ok(Some(hold))
     }
 }
@@ -278,7 +318,11 @@ pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next)
         Err(e) => return e.into_response(),
     };
     let Ok(_permit) = limiter.in_flight.clone().try_acquire_owned() else {
-        return ApiError::OVERLOADED.into_response();
+        return Refused {
+            error: ApiError::OVERLOADED,
+            reason: "server_busy",
+        }
+        .into_response();
     };
     req.extensions_mut().insert(Client {
         addr,
@@ -289,7 +333,11 @@ pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next)
     match tokio::time::timeout(limits.request_timeout, &mut task.0).await {
         Ok(Ok(res)) => res,
         Ok(Err(_)) => ApiError::INTERNAL.into_response(),
-        Err(_) => ApiError::TIMEOUT.into_response(),
+        Err(_) => Refused {
+            error: ApiError::TIMEOUT,
+            reason: "timeout",
+        }
+        .into_response(),
     }
 }
 
@@ -324,10 +372,9 @@ mod tests {
         let a = ip("192.0.2.1");
         assert!(c.acquire(a, Held::Request, 10, 1.0).is_ok());
         assert!(c.acquire(a, Held::Request, 10, 1.0).is_ok());
-        assert_eq!(
-            c.acquire(a, Held::Request, 10, 1.0).unwrap_err(),
-            ApiError::TOO_MANY_REQUESTS
-        );
+        let refused = c.acquire(a, Held::Request, 10, 1.0).unwrap_err();
+        assert_eq!(refused.error, ApiError::TOO_MANY_REQUESTS);
+        assert_eq!(refused.reason, "client_rate");
         assert!(c.acquire(ip("192.0.2.2"), Held::Request, 10, 1.0).is_ok());
     }
 
@@ -336,7 +383,10 @@ mod tests {
         let c = clients(100, 100, 10);
         let a = ip("192.0.2.1");
         let first = c.acquire(a, Held::Socket, 1, 0.0).unwrap();
-        assert!(c.acquire(a, Held::Socket, 1, 0.0).is_err());
+        assert_eq!(
+            c.acquire(a, Held::Socket, 1, 0.0).unwrap_err().reason,
+            "client_concurrency"
+        );
         assert!(c.acquire(a, Held::Request, 1, 0.0).is_ok());
         drop(first);
         assert!(c.acquire(a, Held::Socket, 1, 0.0).is_ok());
@@ -349,8 +399,9 @@ mod tests {
         let _b = c.acquire(ip("192.0.2.2"), Held::Request, 10, 0.0).unwrap();
         assert_eq!(
             c.acquire(ip("192.0.2.3"), Held::Request, 10, 0.0)
-                .unwrap_err(),
-            ApiError::OVERLOADED
+                .unwrap_err()
+                .reason,
+            "client_table_full"
         );
         assert_eq!(c.tracked(), 2);
         assert!(c.acquire(ip("192.0.2.1"), Held::Request, 10, 0.0).is_ok());
