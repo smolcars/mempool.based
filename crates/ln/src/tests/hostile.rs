@@ -227,12 +227,19 @@ impl lightning::ln::peer_handler::CustomMessageHandler for Script {
     }
 }
 
+/// The hostile peer's logger: keeps nothing, so floods measure our side, not its log.
+struct Quiet;
+
+impl Logger for Quiet {
+    fn log(&self, _: Record) {}
+}
+
 type HostilePm = PeerManager<
     lightning_net_tokio::SocketDescriptor,
     ErroringMessageHandler,
     Arc<Script>,
     IgnoringMessageHandler,
-    Arc<Lines>,
+    Arc<Quiet>,
     Arc<Script>,
     Arc<KeysManager>,
     IgnoringMessageHandler,
@@ -260,9 +267,11 @@ struct Hostile {
 impl Hostile {
     /// Listens on 127.0.0.1, port 0.
     async fn start() -> Self {
-        let lines = Arc::new(Lines(Mutex::new(Vec::new())));
         let script = Arc::new(Script::default());
-        let keys = Arc::new(KeysManager::new(&[66; 32], 1, 0, true));
+        // Each its own identity: two at once are two peers.
+        static SEEDS: AtomicU32 = AtomicU32::new(66);
+        let seed = SEEDS.fetch_add(1, Ordering::Relaxed) as u8;
+        let keys = Arc::new(KeysManager::new(&[seed; 32], 1, 0, true));
         let pm = Arc::new(HostilePm::new(
             MessageHandler {
                 chan_handler: ErroringMessageHandler::new(),
@@ -273,7 +282,7 @@ impl Hostile {
             },
             now(),
             &[9; 32],
-            lines,
+            Arc::new(Quiet),
             Arc::clone(&keys),
         ));
         // The hostile peer's own listener, reached only through the proxy.
@@ -823,7 +832,6 @@ async fn synced_despite(invent: bool, list: bool) {
         attack.abort();
         return;
     }
-    let s = status(&peer);
     assert!(up(&peer, h.addr) && up(&peer, honest.addr));
     // A peer's channel list is capped at the ceiling, whatever it claims.
     assert!(peer.gossip().range_pending() <= 2 * 100_000 + 2);
@@ -851,4 +859,249 @@ async fn a_lookup_that_never_ends_cannot_hold_the_replay_open() {
     assert_eq!(g.lookup.waiting(), 1);
     g.replay_tick(config.max_pending);
     assert!(!g.replaying(), "every stored channel was answered");
+}
+
+// Floods, at the production settings. Each prints what it measured and lasts under two minutes.
+// cargo test -p ln --release -- --ignored --nocapture hostile::flood
+
+/// This process's resident memory, MB (`ps`; the hostile peer's own buffers included).
+fn rss_mb() -> f64 {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<f64>()
+        .unwrap_or(0.0)
+        / 1024.0
+}
+
+/// Our peer at the default settings, dialling `peers`.
+fn ours_default(dir: &TempDir, peers: Vec<PeerAddr>, node: &FakeChain) -> Peer {
+    let mut config = Config::new(NET, dir.0.clone());
+    config.max_peers = peers.len();
+    config.peers = peers;
+    Peer::start(config, node.clone()).unwrap().0
+}
+
+fn report(what: &str, peer: &Peer, node: &FakeChain, started: std::time::Instant, rss0: f64) {
+    let s = status(peer);
+    let t = totals(peer);
+    let secs = started.elapsed().as_secs_f64();
+    let batches = node.batches();
+    println!(
+        "{what}: {secs:.1} s; gossip received {} ({:.0}/s, {:.1} MB); node requests {} ({:.2}/s), outputs {}; \
+         pending {} early {}; rejected {:?}; ldk rejected {} duplicate {} held {}; graph {} channels {} nodes; \
+         rss {:.0} MB (+{:.0}); peers up {}",
+        t.messages(),
+        t.messages() as f64 / secs,
+        t.bytes as f64 / 1e6,
+        batches.len(),
+        batches.len() as f64 / secs,
+        outputs_asked(node),
+        s.validation.pending,
+        s.validation.early,
+        s.validation.rejected,
+        t.rejected,
+        t.duplicate,
+        t.held,
+        s.channels,
+        s.nodes,
+        rss_mb(),
+        rss_mb() - rss0,
+        s.peers.iter().filter(|p| p.connected).count(),
+    );
+}
+
+/// Feeds `make(i)` for i = 0.. to the hostile peer for `secs`, keeping its queue short, and
+/// records the most pending lookups seen.
+async fn feed(
+    h: &Hostile,
+    peer: &Peer,
+    secs: u64,
+    make: impl Fn(u32) -> Raw + Send + Sync + 'static,
+) -> usize {
+    let make = Arc::new(make);
+    let until = std::time::Instant::now() + Duration::from_secs(secs);
+    let (mut i, mut most) = (0u32, 0);
+    while std::time::Instant::now() < until {
+        if h.queued() < 20_000 {
+            let m = Arc::clone(&make);
+            let from = i;
+            let batch = tokio::task::spawn_blocking(move || {
+                (from..from + 2000).map(|j| m(j)).collect::<Vec<_>>()
+            })
+            .await
+            .unwrap();
+            h.send(batch);
+            i += 2000;
+        }
+        most = most.max(peer.gossip().lookup.waiting());
+        if std::env::var_os("HOSTILE_TRACE").is_some() && i % 40_000 == 0 {
+            println!(
+                "TRACE i {i} queued {} inflight {} rss {:.0} MB received {}",
+                h.queued(),
+                h.script.released.load(Ordering::Relaxed) as i64
+                    - h.script.forwarded.load(Ordering::Relaxed) as i64,
+                rss_mb(),
+                totals(peer).messages()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    h.script.queue.lock().unwrap().clear();
+    most
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_one_announcement_repeated() {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let node = FakeChain::at(200);
+    let peer = ours_default(&dir, vec![h.addr], &node);
+    wait_for("connected", || up(&peer, h.addr)).await;
+    let rss0 = rss_mb();
+    let started = std::time::Instant::now();
+    let one = raw(CHANNEL_ANNOUNCEMENT, &channel(scid(100, 1, 0), 1, 2));
+    // About 7,500 a second are checked (four signatures each), so the run stops at 100 s.
+    for _ in 0..100 {
+        h.send(std::iter::repeat_n(one.clone(), 10_000));
+        while h.queued() > 20_000 && started.elapsed() < Duration::from_secs(100) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    h.script.queue.lock().unwrap().clear();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    report(
+        "one announcement repeated, 100 s",
+        &peer,
+        &node,
+        started,
+        rss0,
+    );
+    assert_eq!(outputs_asked(&node), 1);
+    peer.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_bad_signatures() {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let node = FakeChain::at(200);
+    let peer = ours_default(&dir, vec![h.addr], &node);
+    wait_for("connected", || up(&peer, h.addr)).await;
+    let rss0 = rss_mb();
+    let started = std::time::Instant::now();
+    let signed = channel(scid(100, 1, 0), 1, 2);
+    feed(&h, &peer, 30, move |i| {
+        let mut a = signed.clone();
+        a.contents.short_channel_id = scid(100, 10 + i, 0);
+        raw(CHANNEL_ANNOUNCEMENT, &a)
+    })
+    .await;
+    report("forged signatures, 30 s", &peer, &node, started, rss0);
+    assert_eq!(outputs_asked(&node), 0);
+    peer.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_distinct_invented_channels_beside_an_honest_peer() {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let other = Hostile::start().await;
+    let node = FakeChain::at(200);
+    let peer = ours_default(&dir, vec![h.addr, other.addr], &node);
+    wait_for("connected", || up(&peer, h.addr) && up(&peer, other.addr)).await;
+    let rss0 = rss_mb();
+    let started = std::time::Instant::now();
+    // Halfway, the other peer announces a real channel: how long until it is in the graph?
+    let real_id = real(&node, 1, 40, 41);
+    let honest = raw(CHANNEL_ANNOUNCEMENT, &channel(real_id, 40, 41));
+    let flood = feed(&h, &peer, 30, |i| {
+        raw(CHANNEL_ANNOUNCEMENT, &channel(scid(150, 10 + i, 0), 1, 2))
+    });
+    let watch = async {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let sent = std::time::Instant::now();
+        other.send([honest]);
+        while !peer.read(|g| g.channel(real_id).is_some()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        sent.elapsed()
+    };
+    let (most, latency) = tokio::join!(flood, watch);
+    report("invented channels, 30 s", &peer, &node, started, rss0);
+    println!("most pending {most}; the honest channel waited {latency:?}");
+    let s = status(&peer);
+    assert!(most <= 5_000 + 64);
+    assert_eq!(s.peers.iter().filter(|p| p.connected).count(), 2);
+    // At most four requests a second (the fake stamps each a few microseconds after the gate).
+    let batches = node.batches();
+    for w in batches.windows(2) {
+        assert!(w[1].0 - w[0].0 >= Duration::from_millis(245));
+    }
+    peer.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_pings_and_queries_at_a_peer_that_never_reads() {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let other = fake().await;
+    let node = FakeChain::at(200);
+    node.add(7, &funding(1, 2), 50_000, false);
+    let peer = ours_default(&dir, vec![h.addr, other.addr], &node);
+    wait_for("connected", || up(&peer, h.addr) && up(&peer, other.addr)).await;
+    let rss0 = rss_mb();
+    let started = std::time::Instant::now();
+    h.proxy.stall.store(true, Ordering::Relaxed);
+    let ping = Ping {
+        ponglen: 65_531,
+        byteslen: 0,
+    };
+    let range = QueryChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+    };
+    let mut most_rss = rss0;
+    let mut events = peer.events();
+    let mut dropped = None;
+    while started.elapsed() < Duration::from_secs(60) {
+        if h.queued() < 50_000 {
+            h.send((0..5_000).flat_map(|_| [raw(PING, &ping), raw(QUERY_CHANNEL_RANGE, &range)]));
+        }
+        most_rss = most_rss.max(rss_mb());
+        while let Ok(e) = events.try_recv() {
+            if let Event::PeerDisconnected {
+                peer,
+                connected_for,
+            } = e
+                && peer == h.addr
+            {
+                dropped.get_or_insert(connected_for);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    report(
+        "pings for 65 KB pongs and range queries, never read, 60 s",
+        &peer,
+        &node,
+        started,
+        rss0,
+    );
+    println!(
+        "dropped after {dropped:?}; read {} KB of it; most rss {most_rss:.0} MB (+{:.0}); honest peer up {}",
+        h.script.forwarded.load(Ordering::Relaxed) / 1024,
+        most_rss - rss0,
+        up(&peer, other.addr)
+    );
+    assert!(up(&peer, other.addr));
+    peer.shutdown().await.unwrap();
 }
