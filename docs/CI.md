@@ -44,7 +44,7 @@ Outside the PR path, daily and when a lockfile changes on `master`: the [depende
 
 **To accept a finding on purpose,** add it to [`dev/audit/ignore.toml`](../dev/audit/ignore.toml) with its id, the reason it does not apply to how we use the package, and the date it was reviewed. An entry without all three fails the audit, so an ignore is never silent. Remove the entry once the dependency is upgraded. A `yanked` release has no advisory id: upgrade it.
 
-**Locally,** from the repository root, with [`cargo-audit`](https://github.com/rustsec/rustsec/releases) and `bun` on `PATH`:
+**Locally,** from the repository root, with Python 3.11 or later, and [`cargo-audit`](https://github.com/rustsec/rustsec/releases) and `bun` on `PATH`:
 
 ```sh
 python3 -I dev/audit/audit.py   # exit 0: clean; 1: the issue's Markdown on stdout; 2: a tool failed
