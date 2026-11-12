@@ -38,8 +38,8 @@
   }
   .address-stats {
     display: grid;
-    /* The balance column takes what the figure needs, so the unit never drops to a second line. */
-    grid-template-columns: minmax(18rem, auto) repeat(4, minmax(0, 1fr));
+    /* Wide enough for most balances at once, so the figures beside it rarely move when it lands. */
+    grid-template-columns: minmax(22rem, auto) repeat(4, minmax(0, 1fr));
     align-items: end;
     gap: var(--space-5) var(--space-5);
   }
