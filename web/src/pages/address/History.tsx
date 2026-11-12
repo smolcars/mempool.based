@@ -251,6 +251,10 @@ export function History(props: {
           fallback={
             <Transactions
               address={props.address}
+              tooLarge={
+                statsFailure() === "too-large" ||
+                (props.first.state === "errored" && refusal(props.first.error) === "too-large")
+              }
               first={props.first}
               retryFirst={props.retryFirst}
               shown={shown()}
@@ -321,6 +325,7 @@ function When(props: { tx: Transaction }) {
 
 function Transactions(props: {
   address: string;
+  tooLarge: boolean;
   first: ApiResource<Transaction[]>;
   retryFirst: () => void;
   shown: Transaction[] | undefined;
@@ -378,6 +383,12 @@ function Transactions(props: {
 
   return (
     <Switch>
+      <Match when={props.tooLarge}>
+        <Notice title="Transactions are not available for this address">
+          The server does not list them for the same reason the node refuses the totals: the address
+          has too much history.
+        </Notice>
+      </Match>
       <Match when={props.first.state === "errored"}>
         <ErrorState
           title="Could not load this address's transactions"

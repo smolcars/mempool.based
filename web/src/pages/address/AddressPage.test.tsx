@@ -51,6 +51,10 @@ function serve(replies: Record<string, Reply>) {
 
 const refused = (status: number, error: string) => () => Response.json({ error }, { status });
 const never = () => new Promise<Response>(() => {});
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 function open(url: string) {
   const Router = createRouter({
@@ -503,12 +507,9 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("This server does not serve Mainnet."));
   });
 
-  it("shows the history of an address too large to total, and says why", async () => {
+  it("asks nothing more of an address too large to total, and says why", async () => {
     serve({
-      [`/address/${ME}`]: refused(
-        503,
-        "address history too large for this route; use the paged /txs routes",
-      ),
+      [`/address/${ME}`]: refused(503, "address history too large for this server"),
       [`/address/${ME}/txs`]: [tx(1, [[OTHER, 2000]], [[ME, 1000]])],
     });
     const el = open(`/address/${ME}?view=unspent`);
@@ -517,14 +518,52 @@ describe("address page", () => {
     expect(text(el)).toContain("Unspent outputs are not available for this address");
     expect(text(el)).toContain("There is no balance chart for this address");
     expect(el.querySelector('[role="alert"]')).toBeNull();
-    // Nor its balance history: the first summary page alone can take the node a minute.
-    expect(calls.some((c) => c.includes("/txs/summary"))).toBe(false);
-    // The unspent outputs are not asked for: the node refuses them for the same reason.
-    expect(calls.some((c) => c.endsWith("/utxo"))).toBe(false);
     const tab = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')][0];
     tab?.click();
-    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
-    expect(text(el.querySelector(".address-history .section__meta") as Element)).toBe("1 shown");
+    await until(() =>
+      expect(text(el)).toContain("Transactions are not available for this address"),
+    );
+    // Past the wait for the totals too: a page of its history can keep the node busy for a minute.
+    await sleep(1200);
+    // Not its history, its balance history or its unspent outputs: only the totals were asked.
+    expect(calls.filter((c) => c.startsWith("/api/"))).toStrictEqual([`/api/address/${ME}`]);
+    expect(el.querySelector("tbody tr .hash")).toBeNull();
+  });
+
+  it("asks for the history once the totals have answered, or after a second", async () => {
+    let answer: (r: Response) => void = () => undefined;
+    serve({
+      [`/address/${ME}`]: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+      [`/address/${ME}/txs`]: [tx(1, [[OTHER, 2000]], [[ME, 1000]])],
+    });
+    open(`/address/${ME}`);
+    await sleep(300);
+    expect(calls.some((c) => c.endsWith("/txs"))).toBe(false);
+    answer(Response.json(stats(part(1000, 0, 1))));
+    await until(() => expect(calls.some((c) => c.endsWith("/txs"))).toBe(true));
+    // Totals that never answer hold the history back for a second only.
+    calls = [];
+    document.body.replaceChildren();
+    serve({ [`/address/${OTHER}`]: never, [`/address/${OTHER}/txs`]: [] });
+    open(`/address/${OTHER}`);
+    await sleep(300);
+    expect(calls.some((c) => c.endsWith("/txs"))).toBe(false);
+    await until(() => expect(calls.some((c) => c.endsWith("/txs"))).toBe(true));
+  });
+
+  it("says why when the server refuses the history as too large", async () => {
+    serve({
+      [`/address/${ME}`]: stats(part(1000, 0, 1)),
+      [`/address/${ME}/txs`]: refused(503, "address history too large for this server"),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() =>
+      expect(text(el)).toContain("Transactions are not available for this address"),
+    );
+    expect(el.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("says the server does not index addresses, never that the address is empty", async () => {

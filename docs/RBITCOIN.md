@@ -60,6 +60,28 @@ Both measured on mainnet the same afternoon, read-only, paced at 50%, while the 
 
 When a release contains the route, raising the pin and deleting the `getblock` fallback (marked `shortcut:` in `listing.rs`) is a task of its own.
 
+## Address history cost
+
+What the address and scripthash routes cost the node as an address grows. Read from rbitcoin v0.9.2's `crates/rbitcoin-query/src/scripthash.rs` and its operator docs (`docs/operator/storage.md`, "`--max-sh-creates`"), and measured on mainnet on 2026-11-12 against a build of `master` after v0.9.2 (tip 975,591), read-only, one request at a time, while the node also served another server's backfill. A "create" is an output paying the script.
+
+| Route | Above `--max-sh-creates` (10,000 by default) | What its cost grows with |
+|---|---|---|
+| `/address/:a`, `/utxo` (and the scripthash forms) | Refused at once: `503 scripthash join exceeds --max-sh-creates (<n> creates, cap <N>)`, in 10–35 ms for every address tried (29,133 to 2,366,550 creates). Counting the creates is cheap | Below the cap, one join of every create and its spend: 0.08 to 0.46 s for addresses of 213 to 701 creates |
+| `/txs`, `/txs/chain[/:last]`, `/txs/summary[/:last]` | Served, however long it takes: the cap never applies to a page | See below |
+| `/txs/mempool` | Served | The mempool's rows for the script only (at most 50): cheap |
+
+**A page of history** (25 confirmed rows, newest first) checks every create the script has against the best chain (an in-memory lookup each, so a few seconds at most even for millions), then finds the spends that land on the page. Where its 25 rows span at most 8,064 blocks (`MAX_HISTORY_WINDOW`), it reads the inputs of every transaction in those blocks; where they span more (a dormant address), it reads the spend of every create the script has ever had. So a page costs in proportion to the blocks it spans or, for a dormant address, to the address's whole size, and a page after a cursor costs the same as the first. The first page is not special.
+
+| Address (creates) | Newest page spans | First `/txs` page |
+|---|---|---|
+| 213 | 26,122 blocks | 0.33 s, 2.3 MB |
+| 594 | about 900 blocks | 0.47 s, 0.7 MB |
+| 29,133 | 423 blocks | 10.9 s, 0.15 MB |
+| 93,135 | 129,640 blocks | 41.7 s, 0.86 MB |
+| 2,366,550, the largest found | 1,706 blocks | 10.2 s, 0.64 MB; `/txs/summary` 4.05 s straight after, its blocks then cached |
+
+Earlier the same day the address balance chart's builder saw the first summary page of a large address run past 60 s, and a 261-transaction address's fifth page take over 10 s while the node also served a backfill. An address of 1.6 million creates (`1dice8…`, refused at the cap like the rest) would, if dormant, take about 12 minutes by the 93,135-create rate; its history was not asked. Whether the node stops a page when its client hangs up is not known; the server assumes it does not ([`API.md`](API.md#protection-for-the-node)). What the server does about it: [`API.md`](API.md#very-large-addresses).
+
 ## What it does not give us
 
 | Missing | Consequence |
@@ -100,7 +122,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Batch RPC calls.** A JSON-RPC array is one HTTP request and one work-queue slot, and answers in order. 1,000 `getrawtransaction` calls in one array take about 300 ms ([`MEMPOOL.md`](MEMPOOL.md)).
 - **Ask `getblockstats` for the stats you need.** With no list it also computes its UTXO statistics, about a second per recent block; any short list of totals costs 20 to 30 ms.
 - **Compute fee-rate percentiles ourselves,** from the block listing. `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
-- **Expect 503 on huge addresses.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused. Use the paged routes and surface the limit to the user.
+- **Expect 503 on huge addresses, and slow pages on any.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused at once. Their paged history is served but can take the node tens of seconds a page, and so can a sparse small address's ([above](#address-history-cost)): the server refuses the history of an address whose totals the node refused and gives up on a page after 5 s ([`API.md`](API.md#very-large-addresses)). Surface both to the user.
 - **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
@@ -124,4 +146,5 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A compact per-block transaction listing (txid, fee, weight and value for each transaction) | Delivered upstream by [rbitcoin PR 1578](https://github.com/rbitcoin-org/rbitcoin/pull/1578), in no release yet, as `GET /block/:hash/txs/summary`, and used where the node has it ([above](#listing-a-blocks-transactions)). A year of fee-rate backfill went from about 550 GB read to about 17 GB, measured ([`STORE.md`](STORE.md#backfill)) |
 | A new tip announced only once the block can be served | Delivered upstream by [rbitcoin PR 1577](https://github.com/rbitcoin-org/rbitcoin/pull/1577), in no release yet: a just-announced block is served at the first request instead of being held 0.3 to 1.5 s |
 | Outpoint pushes for mempool spends | A transaction page could show an output being spent as it happens, without polling |
-| A paged or capped address-totals route | Addresses above `--max-sh-creates` get no totals or unspent list today, only paged history |
+| Totals for an address above the limit | Addresses above `--max-sh-creates` get no balance, totals or unspent list today, and so no balance chart: the explorer can only say the address is too large. A running total kept per script (funded and spent counts and sums, updated as each block connects and disconnects) would answer `/address/:a` in constant time for any address. A capped unspent list (the newest N, with a count of the rest) would do for `/utxo` |
+| A first page of history in bounded time | Measured on mainnet ([above](#address-history-cost)): a 25-row page costs the node in proportion to the blocks it spans (every transaction's inputs in up to 8,064 blocks) or, for a dormant address, to every create the address ever had: 10.9 s for 29,133 creates, 41.7 s for 93,135, 10.2 s for the largest found (2,366,550), and by that rate about 12 minutes for a dormant 1.6 million; later pages cost as much. The explorer can neither predict this nor stop it, so it refuses every address above the cap and gives up on any page after 5 s. What would let it show such addresses: the newest page of recent history in well under a second whatever the address's size or age, for example from the spends of the page's own creates (a spend pointer per create, or a per-script list of spend heights) instead of a scan of the blocks or of every create; and a bound the client can set on a page's work, past which the node answers with what it has or refuses, and stops |
