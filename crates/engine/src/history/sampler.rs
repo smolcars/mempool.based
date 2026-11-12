@@ -171,6 +171,10 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
                 },
             }
         }
+        let p = projector.current();
+        let min_fee = tracker.node_info().map(|i| i.mempoolminfee);
+        let (flow, whole) = watch.take();
+        // The clock after the reads, which can wait for a pack: the state must be the minute's.
         // The nearest whole minute, so a timer that fires a hair early still names this one.
         let millis = (config.clock)().as_millis();
         let minute = (millis + 30_000) / 60_000;
@@ -179,15 +183,11 @@ async fn run(tracker: Tracker, projector: Projector, store: Arc<Store>, config: 
             .unwrap_or(u64::MAX)
             .saturating_mul(MINUTE);
         if let Some((t, _)) = last.filter(|(t, _)| time <= *t) {
-            // The clock went back: this minute was already looked at. Drop the flow, and owe a
-            // whole minute past the last one before sampling again.
-            watch.take();
+            // The clock went back: this minute was already looked at. Its flow is dropped, and
+            // a whole minute past the last one is owed before sampling again.
             last = Some((t, false));
             continue;
         }
-        let p = projector.current();
-        let min_fee = tracker.node_info().map(|i| i.mempoolminfee);
-        let (flow, whole) = watch.take();
         let live = p.tip.is_some() && !p.stale && min_fee.is_some();
         let skip = match last {
             _ if p.stale => Some(Skip::Stale),
