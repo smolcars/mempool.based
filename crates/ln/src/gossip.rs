@@ -10,6 +10,10 @@
 //! we hold whose nodes have sent no announcement are requested too, once per node and process: a
 //! timestamp filter brings only the last two weeks of node announcements, and most nodes announce
 //! less often, while a peer answering for a channel also sends its nodes' announcements.
+//!
+//! Every channel announcement is checked against the chain before it enters the graph
+//! ([`crate::chain`]). A graph loaded from disk is not trusted: its channels are replayed through
+//! the same check ([`Replay`]), and are absent from the graph until they pass.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -17,13 +21,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use lightning::bitcoin::Network;
 use lightning::bitcoin::constants::ChainHash;
 use lightning::bitcoin::secp256k1::{PublicKey, Secp256k1, VerifyOnly};
+use lightning::ln::chan_utils::make_funding_redeemscript;
 use lightning::ln::msgs::{
     BaseMessageHandler, ChannelAnnouncement, ChannelUpdate, ErrorAction, Init, LightningError,
     MessageSendEvent, NodeAnnouncement, QueryChannelRange, QueryShortChannelIds, ReplyChannelRange,
-    ReplyShortChannelIdsEnd, RoutingMessageHandler,
+    ReplyShortChannelIdsEnd, RoutingMessageHandler, UnsignedNodeAnnouncement,
 };
 use lightning::routing::gossip::{
     NetworkGraph, NodeId, P2PGossipSync, ReadOnlyNetworkGraph, verify_node_announcement,
@@ -33,11 +37,11 @@ use lightning::types::features::{InitFeatures, NodeFeatures};
 use lightning::util::ser::Writeable;
 use tokio::sync::broadcast;
 
+use crate::chain::Lookup;
 use crate::log::LogSink;
-use crate::{Change, Event};
+use crate::{Change, Config, Event};
 
-/// The funding-output check LDK runs for each channel announcement. Unset in this crate: see
-/// [`crate::Validation`]. The chain-validation task passes one to [`P2PGossipSync::add_utxo_lookup`].
+/// The funding-output check LDK runs for each channel announcement: [`Lookup`].
 pub(crate) type UtxoHook = Arc<dyn UtxoLookup + Send + Sync>;
 pub(crate) type Graph = NetworkGraph<Arc<LogSink>>;
 type GossipSync = P2PGossipSync<Arc<Graph>, UtxoHook, Arc<LogSink>>;
@@ -47,6 +51,10 @@ type GossipSync = P2PGossipSync<Arc<Graph>, UtxoHook, Arc<LogSink>>;
 pub(crate) const MAX_GOSSIP_BYTES: usize = 1024;
 /// Addresses kept per node. Some real nodes announce one onion address hundreds of times.
 pub(crate) const MAX_NODE_ADDRESSES: usize = 8;
+
+/// Stored channels sent for checking per supervisor tick, at most: each costs four signature
+/// checks now and four when its lookup resolves.
+const REPLAY_PER_TICK: usize = 2000;
 
 /// Channel ids per `query_short_channel_ids`: 16 KB of ids, well inside a 65 KB message.
 const SCID_BATCH: usize = 2000;
@@ -90,6 +98,72 @@ impl RangeSync {
     }
 }
 
+/// A channel from the graph file, waiting to be checked again: its announcement and latest updates.
+pub(crate) struct Stored {
+    announcement: ChannelAnnouncement,
+    /// By direction: `channel_flags & 1`.
+    updates: [Option<ChannelUpdate>; 2],
+}
+
+/// What the graph file held, checked again after a restart. Updates and node announcements that
+/// arrive meanwhile for a stored channel or node are kept here if newer, so they are not refused
+/// for a channel LDK does not know yet.
+#[derive(Default)]
+pub(crate) struct Replay {
+    channels: HashMap<u64, Stored>,
+    /// Channel ids still to send, popped from the end.
+    order: Vec<u64>,
+    nodes: HashMap<NodeId, UnsignedNodeAnnouncement>,
+    /// Until every stored channel was sent and its lookup answered.
+    active: bool,
+}
+
+impl Replay {
+    /// Takes every channel with its stored announcement (LDK keeps it unless its extra data was
+    /// over 1 KB, which we refuse anyway) and every node announcement.
+    pub(crate) fn from_graph(graph: &Graph) -> Self {
+        let g = graph.read_only();
+        let mut r = Self::default();
+        for (scid, c) in g.channels().unordered_iter() {
+            let Some(announcement) = c.announcement_message.clone() else {
+                continue;
+            };
+            let update = |u: &Option<crate::ChannelUpdateInfo>| {
+                u.as_ref().and_then(|u| u.last_update_message.clone())
+            };
+            r.channels.insert(
+                *scid,
+                Stored {
+                    announcement,
+                    updates: [update(&c.one_to_two), update(&c.two_to_one)],
+                },
+            );
+            r.order.push(*scid);
+        }
+        for (id, n) in g.nodes().unordered_iter() {
+            if let Some(info) = &n.announcement_info {
+                r.nodes.insert(
+                    *id,
+                    UnsignedNodeAnnouncement {
+                        features: info.features().clone(),
+                        timestamp: info.last_update(),
+                        node_id: *id,
+                        rgb: info.rgb(),
+                        alias: *info.alias(),
+                        addresses: info.addresses().to_vec(),
+                        excess_address_data: Vec::new(),
+                        excess_data: Vec::new(),
+                    },
+                );
+            }
+        }
+        // Oldest channels first: popped from the end.
+        r.order.sort_unstable_by(|a, b| b.cmp(a));
+        r.active = !r.order.is_empty();
+        r
+    }
+}
+
 /// Totals since start. Read by the supervisor to compute rates.
 #[derive(Default)]
 pub(crate) struct Counters {
@@ -97,6 +171,8 @@ pub(crate) struct Counters {
     pub(crate) node_announcements: AtomicU64,
     pub(crate) channel_updates: AtomicU64,
     pub(crate) bytes: AtomicU64,
+    /// Waiting for a funding-output lookup.
+    pub(crate) held: AtomicU64,
     /// Accepted into the graph.
     pub(crate) accepted: AtomicU64,
     /// Already known.
@@ -113,6 +189,8 @@ pub(crate) struct Counters {
 
 pub(crate) struct Gossip {
     sync: GossipSync,
+    pub(crate) lookup: Arc<Lookup>,
+    replay: Mutex<Replay>,
     chain: ChainHash,
     secp: Secp256k1<VerifyOnly>,
     max_channels: usize,
@@ -128,25 +206,27 @@ pub(crate) struct Gossip {
     /// Messages of our own for the peer manager to send.
     outbox: Mutex<Vec<MessageSendEvent>>,
     changes: broadcast::Sender<Change>,
-    events: broadcast::Sender<Event>,
+    pub(crate) events: broadcast::Sender<Event>,
 }
 
 impl Gossip {
     pub(crate) fn new(
-        network: Network,
+        config: &Config,
         graph: Arc<Graph>,
         logger: Arc<LogSink>,
-        max_channels: usize,
         resume_from: Option<u32>,
+        replay: Replay,
         changes: broadcast::Sender<Change>,
         events: broadcast::Sender<Event>,
     ) -> Self {
+        let lookup = Arc::new(Lookup::new(config));
         Self {
-            // The UTXO hook is left unset: the graph is unverified (crate::Validation).
-            sync: P2PGossipSync::new(graph, None, logger),
-            chain: ChainHash::using_genesis_block(network),
+            sync: P2PGossipSync::new(graph, Some(Arc::clone(&lookup) as UtxoHook), logger),
+            lookup,
+            replay: Mutex::new(replay),
+            chain: ChainHash::using_genesis_block(config.network),
             secp: Secp256k1::verification_only(),
-            max_channels,
+            max_channels: config.max_channels,
             resume_from,
             counters: Counters::default(),
             at_ceiling: AtomicBool::new(false),
@@ -180,6 +260,191 @@ impl Gossip {
         self.range.lock().map_or(0, |r| r.asked.len())
     }
 
+    /// A channel's lookup succeeded and LDK added it: count it and tell subscribers.
+    pub(crate) fn admitted(&self, scid: u64) {
+        let nodes = self
+            .graph()
+            .read_only()
+            .channel(scid)
+            .map(|c| (c.node_one, c.node_two));
+        if let Some((one, two)) = nodes {
+            self.counters.accepted.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut t) = self.last_new_channel.lock() {
+                *t = Instant::now();
+            }
+            self.changed(Change::Channel(scid));
+            self.changed(Change::Node(one));
+            self.changed(Change::Node(two));
+        }
+    }
+
+    /// Stored channels not yet sent for checking.
+    pub(crate) fn replay_left(&self) -> usize {
+        self.replay.lock().map_or(0, |r| r.channels.len())
+    }
+
+    /// Stored channels are still to be sent or answered: the graph lacks some of the file's.
+    pub(crate) fn replaying(&self) -> bool {
+        self.replay.lock().is_ok_and(|r| r.active)
+    }
+
+    /// Sends stored channels for checking while the lookup queue is under half full, so live
+    /// gossip keeps room, then applies stored node announcements of nodes now in the graph. Once
+    /// every stored channel was sent and checked, the node announcements left (nodes with no
+    /// verified channel) are dropped.
+    pub(crate) fn replay_tick(&self, max_pending: usize) {
+        let room = (max_pending / 2)
+            .saturating_sub(self.lookup.waiting())
+            .min(REPLAY_PER_TICK);
+        let batch: Vec<Stored> = {
+            let Ok(mut r) = self.replay.lock() else {
+                return;
+            };
+            let n = r.order.len().min(room);
+            let at = r.order.len() - n;
+            let ids: Vec<u64> = r.order.drain(at..).collect();
+            ids.iter().filter_map(|id| r.channels.remove(id)).collect()
+        };
+        for st in batch {
+            let _ = self.check_announcement(None, &st.announcement);
+            for u in st.updates.into_iter().flatten() {
+                if self.graph().update_channel(&u).is_ok() {
+                    self.changed(Change::Channel(u.contents.short_channel_id));
+                }
+            }
+        }
+        // The replay lock is never held while the graph is read: gossip handlers take them the
+        // other way round.
+        let (ids, done) = {
+            let Ok(r) = self.replay.lock() else { return };
+            if !r.active {
+                return;
+            }
+            let done = r.channels.is_empty() && self.lookup.waiting() == 0;
+            (r.nodes.keys().copied().collect::<Vec<NodeId>>(), done)
+        };
+        let graph = self.graph().read_only();
+        let ids: Vec<NodeId> = ids
+            .into_iter()
+            .filter(|id| graph.node(id).is_some())
+            .collect();
+        drop(graph);
+        let ready: Vec<UnsignedNodeAnnouncement> = {
+            let Ok(mut r) = self.replay.lock() else {
+                return;
+            };
+            ids.iter().filter_map(|id| r.nodes.remove(id)).collect()
+        };
+        for n in ready {
+            if self
+                .graph()
+                .update_node_from_unsigned_announcement(&n)
+                .is_ok()
+            {
+                self.changed(Change::Node(n.node_id));
+            }
+        }
+        if done && let Ok(mut r) = self.replay.lock() {
+            r.nodes = HashMap::new();
+            r.active = false;
+        }
+    }
+
+    /// Puts a channel announcement through LDK, which asks [`Lookup`] for its funding output. The
+    /// ceiling counts the channels in the graph and those waiting to enter it.
+    fn check_announcement(
+        &self,
+        their_node_id: Option<PublicKey>,
+        msg: &ChannelAnnouncement,
+    ) -> Result<bool, LightningError> {
+        let c = &msg.contents;
+        if c.chain_hash != self.chain {
+            self.lookup.count(|r| r.wrong_chain += 1);
+            return Err(ignore("channel announced for another chain"));
+        }
+        let scid = c.short_channel_id;
+        let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
+        let graph = self.graph().read_only();
+        let (known, len) = (graph.channel(scid).is_some(), graph.channels().len());
+        drop(graph);
+        let len = len + self.lookup.held() + self.replay_left();
+        // Nodes enter the graph only through channels, so this also bounds nodes at twice as many.
+        if !known && len >= self.max_channels {
+            self.counters.over_ceiling.fetch_add(1, Ordering::Relaxed);
+            if !self.at_ceiling.swap(true, Ordering::Relaxed) {
+                let _ = self.events.send(Event::CeilingReached { channels: len });
+            }
+            return Err(ignore("graph at its ceiling"));
+        }
+        // The two-of-two the funding output must pay; LDK's own check compares the same script.
+        let script = c
+            .bitcoin_key_1
+            .as_pubkey()
+            .ok()
+            .zip(c.bitcoin_key_2.as_pubkey().ok())
+            .map(|(a, b)| make_funding_redeemscript(&a, &b).to_p2wsh());
+        self.lookup.expect(scid, script);
+        let r = self.sync.handle_channel_announcement(their_node_id, msg);
+        self.lookup.expect(scid, None);
+        if r.is_ok() {
+            if !known && let Ok(mut t) = self.last_new_channel.lock() {
+                *t = Instant::now();
+            }
+            self.changed(Change::Channel(scid));
+            self.changed(Change::Node(c.node_id_1));
+            self.changed(Change::Node(c.node_id_2));
+        }
+        r
+    }
+
+    /// Keeps a channel update for a stored channel not yet checked, if it is newer.
+    fn hold_update(&self, msg: &ChannelUpdate) -> bool {
+        let Ok(mut r) = self.replay.lock() else {
+            return false;
+        };
+        let Some(st) = r.channels.get_mut(&msg.contents.short_channel_id) else {
+            return false;
+        };
+        let Some(slot) = st
+            .updates
+            .get_mut(usize::from(msg.contents.channel_flags & 1))
+        else {
+            return false;
+        };
+        if slot
+            .as_ref()
+            .is_none_or(|u| u.contents.timestamp < msg.contents.timestamp)
+        {
+            *slot = Some(msg.clone());
+        }
+        true
+    }
+
+    /// Keeps a node announcement for a stored node not yet in the graph, if it is newer. It is
+    /// applied unsigned later, so its signature is checked here.
+    fn hold_node(&self, msg: &NodeAnnouncement) -> bool {
+        let stored = |r: &Replay| r.nodes.contains_key(&msg.contents.node_id);
+        if !self.replay.lock().is_ok_and(|r| stored(&r))
+            || self
+                .graph()
+                .read_only()
+                .node(&msg.contents.node_id)
+                .is_some()
+            || verify_node_announcement(msg, &self.secp).is_err()
+        {
+            return false;
+        }
+        let Ok(mut r) = self.replay.lock() else {
+            return false;
+        };
+        match r.nodes.get_mut(&msg.contents.node_id) {
+            Some(s) if s.timestamp < msg.contents.timestamp => *s = msg.contents.clone(),
+            Some(_) => {}
+            None => return false,
+        }
+        true
+    }
+
     pub(crate) fn at_ceiling(&self) -> bool {
         self.at_ceiling.load(Ordering::Relaxed)
     }
@@ -209,6 +474,14 @@ impl Gossip {
                 action: ErrorAction::IgnoreDuplicateGossip,
                 ..
             }) => c.duplicate.fetch_add(1, Ordering::Relaxed),
+            // LDK's words for a message waiting on a lookup (lightning 0.2.8, routing/utxo.rs).
+            Err(e)
+                if e.err == "Channel being checked async"
+                    || e.err
+                        .starts_with("Awaiting channel_announcement validation") =>
+            {
+                c.held.fetch_add(1, Ordering::Relaxed)
+            }
             Err(_) => c.rejected.fetch_add(1, Ordering::Relaxed),
         };
         r.map(|_| false)
@@ -436,6 +709,10 @@ impl RoutingMessageHandler for Gossip {
     ) -> Result<bool, LightningError> {
         let bytes = msg.serialized_length();
         self.count(&self.counters.node_announcements, bytes);
+        if bytes <= MAX_GOSSIP_BYTES && self.hold_node(msg) {
+            self.counters.held.fetch_add(1, Ordering::Relaxed);
+            return Err(ignore("held until its stored channels are checked"));
+        }
         let r = if bytes > MAX_GOSSIP_BYTES {
             self.trim(msg)
                 .ok_or_else(|| ignore("message over size limit"))?
@@ -457,28 +734,7 @@ impl RoutingMessageHandler for Gossip {
             &self.counters.channel_announcements,
             msg.serialized_length(),
         )?;
-        let scid = msg.contents.short_channel_id;
-        let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
-        let graph = self.graph().read_only();
-        let (known, len) = (graph.channel(scid).is_some(), graph.channels().len());
-        drop(graph);
-        // Nodes enter the graph only through channels, so this also bounds nodes at twice as many.
-        if !known && len >= self.max_channels {
-            self.counters.over_ceiling.fetch_add(1, Ordering::Relaxed);
-            if !self.at_ceiling.swap(true, Ordering::Relaxed) {
-                let _ = self.events.send(Event::CeilingReached { channels: len });
-            }
-            return Err(ignore("graph at its ceiling"));
-        }
-        let r = self.sync.handle_channel_announcement(their_node_id, msg);
-        if r.is_ok() {
-            if !known && let Ok(mut t) = self.last_new_channel.lock() {
-                *t = Instant::now();
-            }
-            self.changed(Change::Channel(scid));
-            self.changed(Change::Node(msg.contents.node_id_1));
-            self.changed(Change::Node(msg.contents.node_id_2));
-        }
+        let r = self.check_announcement(their_node_id, msg);
         self.tally(r)
     }
 
@@ -488,6 +744,10 @@ impl RoutingMessageHandler for Gossip {
         msg: &ChannelUpdate,
     ) -> Result<bool, LightningError> {
         self.admit(&self.counters.channel_updates, msg.serialized_length())?;
+        if self.hold_update(msg) {
+            self.counters.held.fetch_add(1, Ordering::Relaxed);
+            return Err(ignore("held until its stored channel is checked"));
+        }
         let r = self.sync.handle_channel_update(their_node_id, msg);
         if r.is_ok() {
             self.changed(Change::Channel(msg.contents.short_channel_id));
@@ -543,7 +803,14 @@ impl RoutingMessageHandler for Gossip {
                 break;
             }
             let want = match graph.channel(scid) {
-                None => true,
+                // Unless it is being checked: stored, or waiting for its lookup.
+                None => {
+                    !self.lookup.holds(scid)
+                        && !self
+                            .replay
+                            .lock()
+                            .is_ok_and(|r| r.channels.contains_key(&scid))
+                }
                 Some(c) => {
                     let mut new = false;
                     for n in [c.node_one, c.node_two] {
@@ -607,7 +874,9 @@ impl RoutingMessageHandler for Gossip {
         Err(ignore("queries are not served"))
     }
 
+    /// Ours, not LDK's: LDK counts at most 32 lookups in flight, too few to batch. While this is
+    /// true LDK holds each peer's next gossip message and stops reading from it.
     fn processing_queue_high(&self) -> bool {
-        self.sync.processing_queue_high()
+        self.lookup.queue_high()
     }
 }

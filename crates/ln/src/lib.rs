@@ -4,22 +4,26 @@
 //! listens for no inbound connection, does not announce itself and relays nothing.
 //! Design and numbers: `docs/LIGHTNING.md`.
 //!
-//! **The graph is unverified.** Channels are taken on their signatures alone; nothing checks that
-//! a funding output exists on chain, so capacities are unknown and a channel may be invented.
-//! [`Status::validation`] says so, and stays [`Validation::Unverified`] until a funding-output
-//! check is plugged into the gossip handler.
+//! **Every channel in the graph was checked against the chain** by this process: its funding
+//! output exists, is unspent, is at least six blocks deep and pays the two-of-two script of the
+//! announced keys. Its capacity ([`ChannelInfo::capacity_sats`]) is that output's value. Channels
+//! still being checked, or refused, are not in the graph; [`Status::validation`] counts them.
+//! Lookups go to rbitcoin's output-by-position routes through a [`Chain`], batched and
+//! rate-limited.
 //!
 //! ```no_run
 //! # async fn f() -> std::io::Result<()> {
 //! use ln::{Config, Peer};
 //! let config = Config::new(ln::Network::Bitcoin, "/var/lib/mempool-based/ln".into());
-//! let (peer, _loaded) = Peer::start(config)?;
+//! let chain = node::esplora::Esplora::new("http://127.0.0.1:3000").map_err(std::io::Error::other)?;
+//! let (peer, _loaded) = Peer::start(config, chain)?;
 //! let mut events = peer.events();
 //! let channels = peer.read(|g| g.channels().len());
 //! peer.shutdown().await?;
 //! # Ok(()) }
 //! ```
 
+mod chain;
 mod gossip;
 mod log;
 mod peer;
@@ -43,17 +47,64 @@ pub use lightning::routing::gossip::{
 };
 pub use lightning::util::logger::Level;
 
+pub use chain::Chain;
 pub use log::LdkRecord;
 pub use peer::Peer;
 pub use store::GraphLoad;
 
-/// Whether the graph's channels have been checked against the chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Validation {
-    /// Channels are accepted on their signatures alone: no funding output was looked up, so
-    /// [`ChannelInfo::capacity_sats`] is `None` and anyone can announce a channel that does not
-    /// exist. Do not present this graph as verified.
-    Unverified,
+/// Where chain validation stands. Every channel in the graph is verified; the rest are counted here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Validation {
+    /// Channels in the graph. Each one's funding output was found by this process: unspent, at
+    /// least six blocks deep, paying the announced keys. Its capacity is the output's value.
+    pub verified: usize,
+    /// Channels from the graph file not yet sent for checking: they are checked again after a
+    /// restart, and are not in the graph until then.
+    pub unchecked: usize,
+    /// Announcements waiting for a lookup or in one.
+    pub pending: usize,
+    /// Announcements whose funding output is not yet six blocks deep. Checked again once it is.
+    pub early: usize,
+    pub rejected: Rejected,
+    /// Nothing unchecked or pending, and the graph file fully replayed. Early announcements do
+    /// not count: they wait for blocks.
+    pub caught_up: bool,
+    /// Failed requests to the node in a row; 0 while it answers.
+    pub node_failures: u32,
+    /// Requests sent to the node since start, and funding outputs asked for in them.
+    pub requests: u64,
+    pub outputs: u64,
+}
+
+/// Channels refused by validation since start, by reason. A channel id is looked up at most once
+/// while its result is cached ([`Config::cache_ttl`]), so a channel announced again is not counted
+/// again until then.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rejected {
+    /// No output at the announced position: an invented channel.
+    pub missing: u64,
+    /// The output exists but is spent: a closed channel still being gossiped.
+    pub spent: u64,
+    /// The output does not pay the announced keys' two-of-two script. Counted per announcement.
+    pub wrong_script: u64,
+    /// Announced for another chain. Counted per announcement.
+    pub wrong_chain: u64,
+    /// Not yet six blocks deep while [`Config::max_early`] announcements already waited.
+    pub shallow: u64,
+    /// Refused unchecked because [`Config::max_pending`] lookups were already queued. Peers ask
+    /// for the channel again at their next channel-range sync.
+    pub queue_full: u64,
+}
+
+impl Rejected {
+    pub fn total(&self) -> u64 {
+        self.missing
+            + self.spent
+            + self.wrong_script
+            + self.wrong_chain
+            + self.shallow
+            + self.queue_full
+    }
 }
 
 /// A public Lightning node to connect to: its key and a clearnet address. Written
@@ -144,6 +195,18 @@ pub struct Config {
     pub log_level: Level,
     /// Most LDK records sent per second; the rest are counted in [`Event::LdkSuppressed`].
     pub log_per_second: u32,
+    /// Least time between two requests to the node for funding outputs. One request carries up to
+    /// 300 outputs, so 500 ms allows 600 lookups a second. Requests are never concurrent.
+    pub lookup_interval: Duration,
+    /// Announcements waiting for a lookup. At this many, gossip from peers waits (LDK stops
+    /// reading from them) until lookups drain; nothing is dropped.
+    pub max_pending: usize,
+    /// Announcements held because their funding output is not yet six blocks deep.
+    pub max_early: usize,
+    /// Lookup results kept, found or not, so a channel announced again is not looked up again.
+    pub cache_entries: usize,
+    /// How long a lookup result is kept.
+    pub cache_ttl: Duration,
 }
 
 impl Config {
@@ -162,6 +225,11 @@ impl Config {
             sync_settle: Duration::from_secs(30),
             log_level: Level::Info,
             log_per_second: 20,
+            lookup_interval: Duration::from_millis(500),
+            max_pending: 5_000,
+            max_early: 1_000,
+            cache_entries: 100_000,
+            cache_ttl: Duration::from_secs(3600),
         }
     }
 }
@@ -178,8 +246,9 @@ pub enum Change {
 #[derive(Clone, Debug)]
 pub struct Status {
     pub validation: Validation,
-    /// The graph is complete enough to show: loaded from a recent file, or every channel a peer
-    /// listed was requested and no new channel has arrived for [`Config::sync_settle`].
+    /// The graph is complete enough to show: validation is caught up, and the graph came from a
+    /// recent file or every channel a peer listed was requested and no new channel has arrived for
+    /// [`Config::sync_settle`].
     pub synced: bool,
     pub nodes: usize,
     pub channels: usize,
@@ -205,7 +274,11 @@ pub struct Totals {
     pub bytes: u64,
     pub accepted: u64,
     pub duplicate: u64,
-    /// Refused by LDK: invalid signature, unknown channel, older than what we have, malformed.
+    /// Waiting for a funding-output lookup: announcements, and updates and node announcements of
+    /// channels being checked. They enter the graph when the lookup succeeds.
+    pub held: u64,
+    /// Refused by LDK: invalid signature, unknown channel, older than what we have, malformed,
+    /// funding output not found.
     pub rejected: u64,
     /// Oversized node announcements kept with at most 8 distinct addresses and no unknown fields.
     pub trimmed: u64,
@@ -228,6 +301,7 @@ pub struct Stats {
     pub peers: usize,
     /// Channels a peer listed that are still to be requested from it.
     pub pending_channels: usize,
+    pub validation: Validation,
     pub totals: Totals,
     /// Gossip messages and their bytes per second since the previous `Stats`.
     pub messages_per_sec: f64,
@@ -281,5 +355,12 @@ pub enum Event {
     /// LDK records held back by the rate limit.
     LdkSuppressed {
         count: u64,
+    },
+    /// A request to the node for funding outputs failed. It is retried after a backoff (1 s,
+    /// doubling to 60 s); `pending` announcements wait meanwhile.
+    LookupFailed {
+        failures: u32,
+        error: String,
+        pending: usize,
     },
 }
