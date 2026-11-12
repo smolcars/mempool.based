@@ -86,57 +86,6 @@ export function lowestRate(histogram: readonly (readonly [number, number])[]): n
   return histogram.length > 0 ? histogram.at(-1)?.[0] : undefined;
 }
 
-/** The fee ladder's log scale, 0.1 to 20 sat/vB: where a rate sits, 0–1, clamped at the ends. */
-export const LADDER_MIN = 0.1;
-export const LADDER_MAX = 20;
-export function ladderPos(rate: number): number {
-  const lo = Math.log10(LADDER_MIN);
-  const hi = Math.log10(LADDER_MAX);
-  return (Math.log10(Math.min(LADDER_MAX, Math.max(LADDER_MIN, rate))) - lo) / (hi - lo);
-}
-
-/**
- * Stacks pin labels into rows so no two collide. A pin's stem rises from the scale to its label's
- * row; where it can, a label also keeps clear of every stem, and a stem of every label. Pins are
- * placed right to left, each in the lowest row that works; a label flips to the left of its pin
- * when it would run past the end. When no row keeps clear of the stems (close pins near the end),
- * the label only keeps clear of the other labels, so `n` pins never need more than `n` rows, and
- * the stem passes behind it (the panel draws lower rows on top). Positions and widths in px; rows
- * count up from the scale.
- */
-export function stackLabels(
-  pins: readonly { x: number; width: number }[],
-  trackWidth: number,
-  gap = 12,
-): { row: number; flip: boolean }[] {
-  const placed: { x: number; from: number; to: number; row: number }[] = [];
-  const out: { row: number; flip: boolean }[] = pins.map(() => ({ row: 0, flip: false }));
-  // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
-  const order = pins.map((_, i) => i).sort((a, b) => (pins[b]?.x ?? 0) - (pins[a]?.x ?? 0));
-  for (const i of order) {
-    const { x, width } = pins[i] ?? { x: 0, width: 0 };
-    const flip = x + width + gap > trackWidth;
-    const [from, to] = flip ? [x - width - gap, x] : [x, x + width + gap];
-    const fits = (row: number, clear: boolean) =>
-      placed.every(
-        (p) =>
-          !(p.row === row && p.from < to && from < p.to) &&
-          (!clear || !(p.row >= row && p.x > from && p.x < to)) &&
-          (!clear || !(p.row <= row && x > p.from && x < p.to)),
-      );
-    let row = 0;
-    while (row < pins.length && !fits(row, true)) row++;
-    if (row === pins.length) {
-      // Each placed label rules out one row at most, so one of the first `n` is free.
-      row = 0;
-      while (!fits(row, false)) row++;
-    }
-    placed.push({ x, from, to, row });
-    out[i] = { row, flip };
-  }
-  return out;
-}
-
 /** What the mempool panel shows, from the `mempool` topic or the polled `/mempool`. */
 export interface MempoolFigures {
   count: number;

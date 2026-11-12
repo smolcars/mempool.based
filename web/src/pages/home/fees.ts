@@ -154,3 +154,48 @@ export function createFees(
   );
   return answer;
 }
+
+/** The four levels as the panel shows them, slowest first. */
+export const PRIORITIES: readonly { level: LevelName; name: string; when: string }[] = [
+  { level: "no_rush", name: "No rush", when: "within a day" },
+  { level: "low", name: "Low", when: "within an hour" },
+  { level: "medium", name: "Medium", when: "within 30 min" },
+  { level: "high", name: "High", when: "next block" },
+];
+
+/** One answer the panel shows: levels next to each other that print the same rate read as one. */
+export interface FeeGroup {
+  /** "No rush", "No rush or low", "Any wait". */
+  name: string;
+  /** The fastest wait among them: paying the rate buys that. */
+  when: string;
+  /** How many of the four levels it stands for. */
+  span: number;
+  /** sat/vB; undefined when the answer has no rate for these levels. */
+  rate: number | undefined;
+}
+
+/** Groups the four levels, slowest first, merging neighbours whose rates print the same. */
+export function groupLevels(
+  answer: FeeAnswer | undefined,
+  print: (rate: number) => string,
+): FeeGroup[] {
+  const groups: { members: (typeof PRIORITIES)[number][]; rate: number | undefined }[] = [];
+  for (const p of PRIORITIES) {
+    const rate = answer?.levels.find((l) => l.name === p.level)?.rate;
+    const last = groups.at(-1);
+    if (last && rate !== undefined && last.rate !== undefined && print(last.rate) === print(rate))
+      last.members.push(p);
+    else groups.push({ members: [p], rate });
+  }
+  return groups.map(({ members, rate }) => {
+    const names = members.map((m, i) => (i === 0 ? m.name : m.name.toLowerCase()));
+    const name =
+      members.length === PRIORITIES.length
+        ? "Any wait"
+        : names.length === 1
+          ? (names[0] ?? "")
+          : `${names.slice(0, -1).join(", ")} or ${names.at(-1) ?? ""}`;
+    return { name, when: members.at(-1)?.when ?? "", span: members.length, rate };
+  });
+}

@@ -1,6 +1,7 @@
 import { type Accessor, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
-import { type Layer, Strata, strataLayers } from "../../components/Strata";
+import { gaugeLayers, type Layer, Strata } from "../../components/Strata";
 import { formatFeeRate, groupDigits } from "../../lib/format";
 import { Link } from "../../components/Link";
 import { type Network, paths } from "../../lib/network";
@@ -34,9 +35,9 @@ export const sameLayers = (a: readonly Layer[], b: readonly Layer[]) =>
     return !!m && m.band === l.band && Math.abs(m.y - l.y) < 1e-4 && Math.abs(m.h - l.h) < 1e-4;
   });
 
-/** A projected block's layers, as tall as it is full. */
+/** A projected block's gauge, as tall as it is full. */
 export const projectedLayers = (t: Pick<Tile, "bands" | "weight">): Layer[] =>
-  strataLayers(t.bands, Math.min(1, t.weight / MAX_WEIGHT), TILE_LAYER_MIN);
+  gaugeLayers(t.bands, Math.min(1, t.weight / MAX_WEIGHT), TILE_LAYER_MIN);
 
 /**
  * A projected block: dashed and open, its figures approximate. It opens that block's page; the
@@ -84,6 +85,9 @@ export function ProjectedTile(props: {
             <Show when={tile().txs > 0}>
               <span class="home-tile__range num">
                 {`${formatFeeRate(tile().minRate)} – ${formatFeeRate(tile().maxRate)}`}
+              </span>
+              <span class="home-tile__fees">
+                <Amount sats={tile().fees} short approx />
               </span>
             </Show>
             <span class="home-tile__strata">

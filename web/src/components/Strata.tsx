@@ -51,6 +51,23 @@ export function strataLayers(bands: readonly number[], fill: number, min: number
   });
 }
 
+/**
+ * A block tile's one quiet sign of its fees: a single layer as high as the block is full (at least
+ * `min`), in the band that holds its median vbyte. The figures beside it give the rates.
+ */
+export function gaugeLayers(bands: readonly number[], fill: number, min: number): Layer[] {
+  const sizes = bands.map((v) => (Number.isFinite(v) && v > 0 ? v : 0));
+  const total = sizes.reduce((a, b) => a + b, 0);
+  if (total === 0) return [];
+  let below = 0;
+  const median = sizes.findIndex((v) => {
+    below += v;
+    return below >= total / 2;
+  });
+  const h = Math.min(1, Math.max(Number.isFinite(fill) ? fill : 0, Math.max(0, min)));
+  return [{ band: median + 1, y: 0, h, thin: false }];
+}
+
 /** The top of a stack of layers, 0 when there are none. */
 export const strataTop = (layers: readonly Layer[]): number => {
   const last = layers.at(-1);

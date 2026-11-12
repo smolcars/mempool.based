@@ -11,9 +11,10 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
-import { type Layer, Strata, strataLayers } from "../../components/Strata";
+import { gaugeLayers, type Layer, Strata } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { useNow } from "../../lib/clock";
 import type { Block } from "../../lib/esplora";
@@ -607,7 +608,7 @@ function MinedTile(props: {
   const layers = createMemo<Layer[]>(
     () => {
       const s = summary();
-      return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
+      return s ? gaugeLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
     },
     { equals: sameLayers },
   );
@@ -654,6 +655,14 @@ function MinedTile(props: {
             </Match>
             <Match when={summary()}>Coinbase only</Match>
             <Match when={facts() === "failed"}>{fullness(b().weight)}</Match>
+          </Switch>
+        </span>
+        <span class="home-tile__fees">
+          <Switch>
+            <Match when={summary()}>{(f) => <Amount sats={f().fees} short />}</Match>
+            <Match when={guessing() && projected}>
+              {(p) => <Amount sats={p().fees} short approx />}
+            </Match>
           </Switch>
         </span>
         <span class="home-tile__strata" aria-hidden="true">
