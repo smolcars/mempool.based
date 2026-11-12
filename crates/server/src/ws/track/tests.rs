@@ -48,11 +48,11 @@ const WAIT: Duration = Duration::from_secs(10);
 // The node.
 
 #[derive(Clone)]
-struct MockTx {
-    tx: Transaction,
-    fee: u64,
-    vsize: u64,
-    time: u64,
+pub(crate) struct MockTx {
+    pub(crate) tx: Transaction,
+    pub(crate) fee: u64,
+    pub(crate) vsize: u64,
+    pub(crate) time: u64,
 }
 
 impl MockTx {
@@ -78,7 +78,7 @@ struct Node {
 }
 
 #[derive(Clone, Default)]
-struct Mock {
+pub(crate) struct Mock {
     node: Arc<Mutex<Node>>,
     /// Calls that read more than the probe: listings, detail batches, cluster batches.
     listings: Arc<AtomicUsize>,
@@ -87,7 +87,7 @@ struct Mock {
 }
 
 /// An outpoint nobody else spends.
-fn coin(n: u32) -> OutPoint {
+pub(crate) fn coin(n: u32) -> OutPoint {
     OutPoint::new(Txid::from_byte_array([0xcc; 32]), n)
 }
 
@@ -177,7 +177,7 @@ impl Node {
 }
 
 impl Mock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let m = Self::default();
         m.mine(&[]);
         m
@@ -189,7 +189,7 @@ impl Mock {
 
     /// Sends a transaction. Like the node's full RBF, whatever spends one of its inputs leaves,
     /// with its descendants.
-    fn send(&self, inputs: &[OutPoint], outputs: u32, fee: u64, vsize: u64) -> Txid {
+    pub(crate) fn send(&self, inputs: &[OutPoint], outputs: u32, fee: u64, vsize: u64) -> Txid {
         let mut n = self.node();
         n.next += 1;
         let t = MockTx {
@@ -242,7 +242,7 @@ impl Mock {
     }
 
     /// A new block holding `ids`, on the active chain.
-    fn mine(&self, ids: &[Txid]) -> BlockHash {
+    pub(crate) fn mine(&self, ids: &[Txid]) -> BlockHash {
         let mut n = self.node();
         let set: HashSet<Txid> = ids.iter().copied().collect();
         let mined = n.take(&set);
@@ -269,7 +269,7 @@ impl Mock {
     }
 
     /// Disconnects the tip block: its transactions return to the mempool.
-    fn disconnect(&self) {
+    pub(crate) fn disconnect(&self) {
         let mut n = self.node();
         let hash = n.chain.pop().unwrap();
         let back: Vec<MockTx> = n.blocks[&hash]
@@ -282,7 +282,7 @@ impl Mock {
         n.sequence += 1;
     }
 
-    fn tip(&self) -> ChainTip {
+    pub(crate) fn tip(&self) -> ChainTip {
         let n = self.node();
         ChainTip {
             hash: *n.chain.last().unwrap(),
@@ -290,7 +290,7 @@ impl Mock {
         }
     }
 
-    fn set_down(&self, down: bool) {
+    pub(crate) fn set_down(&self, down: bool) {
         self.node().down = down;
     }
 
@@ -302,7 +302,7 @@ impl Mock {
         Ok(n)
     }
 
-    fn get(&self, id: Txid) -> MockTx {
+    pub(crate) fn get(&self, id: Txid) -> MockTx {
         self.node().sent[&id].clone()
     }
 

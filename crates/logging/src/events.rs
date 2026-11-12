@@ -378,6 +378,37 @@ pub struct BlockSummaryComputed {
 }
 event!(BlockSummaryComputed, "block_summary_computed", Debug);
 
+/// A block we watched arrive was compared with the block we expected on its parent
+/// (`docs/MEMPOOL.md`, "Block audits"). Once per block.
+#[derive(Debug, Serialize)]
+pub struct BlockAudited {
+    pub network: &'static str,
+    pub height: u32,
+    /// Percent, rounded down to two decimals.
+    pub match_rate: f64,
+    pub expected_txs: u32,
+    pub matched_txs: u32,
+    pub missing_txs: u32,
+    pub displaced_txs: u32,
+    pub fresh_txs: u32,
+    pub conflicted_txs: u32,
+    pub added_txs: u32,
+    pub unseen_txs: u32,
+    /// From the start of the audit, the wait for the projection on the new block included.
+    pub duration_ms: f64,
+}
+event!(BlockAudited, "block_audited", Info);
+
+/// A new block got no audit. Once per block.
+#[derive(Debug, Serialize)]
+pub struct BlockAuditSkipped {
+    pub network: &'static str,
+    pub height: u32,
+    /// `no_projection`, `stale`, `superseded` or `store`.
+    pub reason: &'static str,
+}
+event!(BlockAuditSkipped, "block_audit_skipped", Info);
+
 /// Computing summaries failed at the node. Written at the 1st, 2nd, 4th, 8th… failure in a row.
 #[derive(Debug, Serialize)]
 pub struct BlockSummaryFailed {
@@ -996,6 +1027,25 @@ mod tests {
                 node_ms: 640.5,
                 duration_ms: 650.1,
                 cause: "request",
+            }),
+            both(&BlockAudited {
+                network: n,
+                height: 9,
+                match_rate: 99.87,
+                expected_txs: 3100,
+                matched_txs: 2900,
+                missing_txs: 3,
+                displaced_txs: 40,
+                fresh_txs: 150,
+                conflicted_txs: 7,
+                added_txs: 60,
+                unseen_txs: 1,
+                duration_ms: 12.5,
+            }),
+            both(&BlockAuditSkipped {
+                network: n,
+                height: 9,
+                reason: "no_projection",
             }),
             both(&BlockSummaryFailed {
                 network: n,

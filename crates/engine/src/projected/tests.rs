@@ -719,6 +719,11 @@ async fn a_found_block_is_projected_at_once_and_the_refresh_agrees() {
     // What we expected on the old tip is kept for the audit of the block mined on it.
     let expected = projector.expected(&h0).unwrap();
     assert_eq!(expected.tip.hash, h0);
+    // With what the audit needs: the block it gave way to, and what left with that block.
+    assert_eq!(expected.next.hash, h1);
+    assert!(!expected.stale);
+    assert_eq!(expected.left.len(), 1);
+    assert_eq!(expected.left[0].0, parent.compute_txid());
     let txs: Vec<Txid> = expected.block.txs.iter().map(|(t, _)| *t).collect();
     assert_eq!(
         txs,

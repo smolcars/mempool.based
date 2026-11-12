@@ -169,7 +169,7 @@ fn slug(s: &str) -> Result<&'static Pool, ApiError> {
 }
 
 /// Decimal digits only, as every other numeric parameter here.
-fn number<T: std::str::FromStr>(s: &str, what: &'static str) -> Result<T, ApiError> {
+pub(crate) fn number<T: std::str::FromStr>(s: &str, what: &'static str) -> Result<T, ApiError> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(ApiError::bad_request(what));
     }

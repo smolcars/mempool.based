@@ -288,7 +288,7 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 |---|---|---|
 | `poolId`, `poolUniqueId`, `unique_id`, `pool.id` | All the list's id | The reference numbers its own database rows; we have one id |
 | `regexes` | The list's tags, matched as literal text | The list has tags, not patterns |
-| `avgMatchRate`, `avgFeeDelta`, `avgBlockHealth`, `reportedHashrate`, `minerNames` | `null` | Block audits are MI4; no pool reports hashrate to us |
+| `avgMatchRate`, `avgFeeDelta`, `avgBlockHealth`, `reportedHashrate`, `minerNames` | `null` | A pool's average over its audited blocks is not computed yet ([Block audits](#block-audits) has each block's); no pool reports hashrate to us |
 | `USD` in the fee and reward series | Absent | No price feed yet (M3). The reference leaves it out the same way on a network without prices (observed on mempool.space's signet) |
 | Block series points | A fixed number of blocks a point (above) | The reference merges blocks mined close together into one point (its 715 points for a week's 895 blocks); where its point is one block, the values are equal |
 | `avgFee_*` (whole numbers) | Our size-weighted percentiles, rounded | rbitcoin's sub-sat rates round to `0`; use `/precise` |
@@ -326,6 +326,37 @@ Measured on the Apple M4 under the load described in [`STORE.md`](STORE.md#measu
 | `blocks/timestamp/:t` | 0.02 s | 0.6 ms | 0.4 ms |
 
 The 975,000-row table is synthetic (realistic sizes, the list's tags, the last year rated): `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark` fills it and times the statements; the server then runs over it as regtest with no reachable node. With every route and interval asked for, a new block costs the refresh a few seconds of reads on one of the four reader connections, once per block.
+
+### Block audits
+
+How each block we watched arrive compared with the block we expected on its parent: the method, the categories and the score are in [`MEMPOOL.md`](MEMPOOL.md#block-audits), the table in [`STORE.md`](STORE.md#audits). Code: `crates/engine/src/audit/` for the comparison and its statements, `crates/server/src/audits.rs` for the routes. They need `DATA_DIR`; without a table every route answers `503 block audits need a block table on this server`. Shapes observed on mempool.space's public API, the reference backend having audits off; never from its code.
+
+| Route | Answer | Cache |
+|---|---|---|
+| `GET /api/v1/mining/blocks/audit/score/:hash` | `{hash, matchRate, expectedFees, expectedWeight}` | immutable |
+| `GET /api/v1/mining/blocks/audit/scores[/:height]` | The same for the 16 heights ending at `:height` (the block table's top without it), lowest first; heights without an audit, or whose audit is of a block no longer on the best chain, are left out | 1 s |
+| `GET /api/v1/mining/blocks/predictions/:interval` | `[[timestamp, height, matchRate]]`, lowest height first: the audited best-chain blocks stamped within the interval (`24h` … `all`, as the mining routes) | 1 s |
+| `GET /api/v1/mining/blocks/audit/:hash`, `GET /api/v1/block/:hash/audit-summary` | `{height, id, timestamp, unseenTxs, missingTxs, addedTxs, freshTxs, displacedTxs, conflictedTxs, listsComplete, matchRate, expectedFees, expectedWeight}`, the lists as txids | immutable |
+| `GET /api/v1/block/:hash/tx/:txid/audit` | `{seen, expected, added, prioritized, conflict, accelerated, firstSeen}`, `firstSeen` only when known | immutable |
+
+`matchRate` is our score in percent, two decimals, rounded down. `expectedFees` and `expectedWeight` are our expected block's total base fees (sats) and raw weight. A block with no audit is `404 audit not available`: it arrived while the server was not watching, before it had a projection, or from a projection that was stale or for another block. Every answer that exists is fixed, so it is cached for good; a `404` is not, though it never turns into an audit later. A request is one indexed read; none asks the node.
+
+#### Differences from the reference
+
+| Field or route | Here | Why |
+|---|---|---|
+| No audit | `404 {"error": "audit not available"}` on every route | The reference answers a block without an audit with `200` and the JSON string `"null"` on `score/:hash`, and `404 Audit not available` on the summary. One honest status everywhere |
+| `template`, `version`, `templateAlgorithm` | Absent | We keep our expected block's totals and the transactions that differ from the mined block, not the whole template (a full one would be 135 KB a block) |
+| `missingTxs` | Only those our score counts against the miner (`missing`) | The left-out transactions we excuse are in `freshTxs`, `conflictedTxs` and our own `displacedTxs` |
+| `freshTxs` | Expected, left out, and accepted within 60 s of the block | On the reference the list also held transactions that were mined |
+| `addedTxs`, `unseenTxs` | Mined and not expected: in our projection for a later block, or not in it at all | Same meaning as far as observed |
+| `displacedTxs`, `conflictedTxs`, `listsComplete` | Added | Our categories with no field of theirs to put them in. `listsComplete` is `false` when the lists were capped at 1,000 transactions |
+| `prioritizedTxs`, `sigopTxs`, `fullrbfTxs`, `acceleratedTxs` | Absent | We cannot detect them (no signal reaches us, we count no sigops, rbitcoin is always full-RBF). An empty list would claim there were none |
+| Per transaction: `added` | `true` for a transaction mined and not expected | The reference answered `false` for members of its own `addedTxs` list; its meaning was not observable |
+| Per transaction: `prioritized`, `accelerated` | Always `false` | As above |
+| Per transaction: a txid in none of the lists | Answered as matched: `seen` and `expected` `true` | We keep only the lists. Like the reference, the route does not check that the transaction is in the block |
+| `scores` without a height | The 16 heights ending at the block table's top | Same as the reference |
+| `predictions` with an unknown interval | `400 invalid interval` | The reference answered every audit it had |
 
 ## Using it from the frontend
 

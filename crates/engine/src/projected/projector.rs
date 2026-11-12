@@ -96,6 +96,17 @@ pub struct Expected {
     /// The projection it came from.
     pub seq: u64,
     pub block: Arc<ProjectedBlock>,
+    /// That projection was stale: the node had stopped answering.
+    pub stale: bool,
+    /// The tip of the projection that replaced it.
+    pub next: ChainTip,
+    /// Sorted, with the rate it was placed at: every transaction in that projection that the one
+    /// on `next` no longer holds, in any block. Those in the block mined on `tip` are the ones we
+    /// had seen.
+    pub left: Arc<[(Txid, u32)]>,
+    /// When the projector learnt of `next`, Unix seconds: before it asked the node anything
+    /// for the projection on `next`.
+    pub at: u32,
 }
 
 /// What one update did and cost.
@@ -343,6 +354,11 @@ impl<S: ClusterSource> Runner<S> {
                         if failing == std::mem::replace(&mut self.tracker_failing, failing) {
                             continue;
                         }
+                        // A recovering cycle's delta is already queued: let it publish, so the
+                        // stale projection is never republished as current on the old tip.
+                        if !failing && self.tracker.read(mempool::Mempool::seq) > seq {
+                            continue;
+                        }
                         Input::Nothing
                     }
                     () = sleep_until(retry) => Input::Nothing,
@@ -373,6 +389,11 @@ impl<S: ClusterSource> Runner<S> {
         let shared = self.shared.clone();
         let (mut need, tip, mempool_seq, deltas, all) =
             blocking(&shared, move |s| apply(s, input)).await;
+        // When this update learnt its tip: an archived expectation's `at`, taken before the
+        // cluster requests so no accept time recorded since can predate it.
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
         need.extend(self.pending.drain());
         // While backing off, everything waits for the deadline, new work included.
         let backing_off = self.retry_at.is_some_and(|t| Instant::now() < t);
@@ -418,7 +439,7 @@ impl<S: ClusterSource> Runner<S> {
         let archive = self.config.archive;
         let started = Instant::now();
         let (recheck, mut stats) = blocking(&shared, move |s| {
-            let recheck = publish(s, &answers, packing, archive, tip, &mut stats);
+            let recheck = publish(s, &answers, packing, archive, (tip, at), &mut stats);
             (recheck, stats)
         })
         .await;
@@ -547,7 +568,7 @@ fn publish(
     answers: &[Cluster],
     packing: Packing,
     archive: usize,
-    tip: Option<ChainTip>,
+    (tip, at): (Option<ChainTip>, u32),
     stats: &mut UpdateStats,
 ) -> Vec<Txid> {
     let mut recheck = Vec::new();
@@ -563,14 +584,15 @@ fn publish(
         }
     }
     let (blocks, set) = s.model.pack(packing);
-    let mut removed: Vec<Txid> = s
+    let mut gone: Vec<(Txid, u32)> = s
         .current
         .blocks
         .iter()
-        .flat_map(|b| b.txs.iter().map(|(t, _)| *t))
-        .filter(|t| !s.model.contains(t))
+        .flat_map(|b| b.txs.iter().map(|(t, p)| (*t, p.rate)))
+        .filter(|(t, _)| !s.model.contains(t))
         .collect();
-    removed.sort_unstable();
+    gone.sort_unstable();
+    let removed: Vec<Txid> = gone.iter().map(|(t, _)| *t).collect();
     let summaries: Vec<_> = blocks.iter().map(|b| b.summary).collect();
     stats.txs = s.model.len();
     stats.chunks = s.model.chunks();
@@ -586,13 +608,17 @@ fn publish(
     if unchanged {
         return recheck;
     }
-    if let (Some(old), Some(first)) = (s.current.tip, s.current.blocks.first())
-        && tip.is_some_and(|t| t.hash != old.hash)
+    if let (Some(old), Some(first), Some(next)) = (s.current.tip, s.current.blocks.first(), tip)
+        && next.hash != old.hash
     {
         s.archive.push_back(Arc::new(Expected {
             tip: old,
             seq: s.current.seq,
             block: first.clone(),
+            stale: s.current.stale,
+            next,
+            left: gone.into(),
+            at,
         }));
         while s.archive.len() > archive {
             s.archive.pop_front();
