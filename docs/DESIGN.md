@@ -1,6 +1,6 @@
 # Design
 
-The design language for rbitcoin.space. The tokens live in [`design/tokens.css`](../design/tokens.css). A static prototype of the home, block and transaction pages is in [`design/prototype/`](../design/prototype/).
+The design language for rbitcoin.space. The tokens live in [`design/tokens.css`](../design/tokens.css). A static prototype of the home, block and transaction pages is in [`design/prototype/`](../design/prototype/); it predates the calmer design of the November 2026 design council and shows the earlier one, so the app, not the prototype, is the reference for how things look.
 
 ## Goal
 
@@ -211,7 +211,7 @@ Relative time ("13 min ago") in lists, with the absolute UTC time in the `title`
 
 Rules:
 
-1. **Move with `transform`, fade with `opacity`.** Never animate width, height, top or left. Bars that change size are positioned with `translateX` and sized with `scaleX` (see the mempool bar and the fee ladder).
+1. **Move with `transform`, fade with `opacity`.** Never animate width, height, top or left. Bars that change size are positioned with `translateX` and sized with `scaleX` (see the difficulty bar and the tile gauge).
 2. **Read durations from the tokens** in JavaScript too (`getComputedStyle(...).getPropertyValue("--dur-slow")`), so reduced motion applies everywhere.
 3. **Leaders move first.** When a row of things shifts, stagger from the one at the front of the movement so nothing overlaps.
 4. **One moment per event.** A new block is one sequence. Live rows get a background flash, not a slide.
@@ -222,7 +222,7 @@ Rules:
 | Scene | Drawn with | Why |
 |---|---|---|
 | Block strip (up to about 20 tiles) | DOM, CSS and the Web Animations API | Few elements; text must be selectable and accessible |
-| Mempool bar, fee ladder, flow diagram, timeline | DOM and SVG | Few elements |
+| Fee answers, waiting by fee rate, flow diagram, timeline | DOM and SVG | Few elements |
 | Hover, focus, press, tooltips, row flash | CSS transitions | |
 | A block's packed transaction grid (thousands of squares) | WebGL2 instanced quads | Too many elements for the DOM |
 | The projected-block mempool view and squares moving from mempool into a block | WebGL2 | Thousands of moving squares |
@@ -237,8 +237,8 @@ When a block is found, in 900 ms:
 2. The next projected tile crosses the line on a shallow arc (lift 14 px, scale 1.05 at the midpoint), lands in the first mined slot with a short squash (`--ease-settle`), and changes from dashed to solid. Its border shows the accent until the sequence ends.
 3. Mined tiles shift right by one slot, the farthest first. The last mined tile fades out.
 4. Projected tiles shift toward the line, the nearest first, and relabel ("Next block", "In ~20 min").
-5. A new projected tile fades in at the far end and its strata drop in one layer at a time, cheapest first, like sediment.
-6. Mempool figures, the mempool bar and the fee ladder pins update and slide to their new values.
+5. A new projected tile fades in at the far end and its gauge settles in, like sediment.
+6. Mempool figures and the fee answers update where they stand.
 7. A polite live region announces "Block 975 412 mined by …: 3 341 transactions, median fee 0.64 sat/vB."
 
 The sequence uses FLIP: measure every tile, change the DOM, then animate each tile from its old place to its new one with `transform`.
@@ -493,7 +493,7 @@ Decided while building it:
 
 1. **The tokens are already the system.** `tokens.css` is plain custom properties. A utility framework would need the same tokens restated in its config and would add a build plugin to keep them in sync.
 2. **No dependency.** Vite bundles plain CSS natively. Nothing to audit, upgrade or configure.
-3. **Most styling here is not utility-shaped.** The hard parts are the strip, the grid, the flow and the ladder: positioned, measured and animated components that are custom CSS in either approach.
+3. **Most styling here is not utility-shaped.** The hard parts are the strip, the map and the flow: positioned, measured and animated components that are custom CSS in either approach.
 4. **Solid markup stays readable.** Class names describe the component (`tile__strata`) rather than its look.
 5. **It meets the CSP.** Static CSS files only. Dynamic values go through `element.style.setProperty`, which `default-src 'self'` allows, never through `style` attributes in markup.
 
@@ -507,7 +507,7 @@ How to write it:
 
 ## Prototype
 
-`design/prototype/` holds `index.html` (home), `block.html` and `tx.html`, with plain ES modules and no build step. It needs an HTTP server, because browsers do not load fonts or modules from `file://`. From `design/`, run any static server on a free port, for example `python3 -m http.server 0`, then open `/prototype/`.
+The prototype shows the design before the council's rounds (the ten-hue fee scale, strata in every tile, the fee ladder): keep it as a record, not a target. `design/prototype/` holds `index.html` (home), `block.html` and `tx.html`, with plain ES modules and no build step. It needs an HTTP server, because browsers do not load fonts or modules from `file://`. From `design/`, run any static server on a free port, for example `python3 -m http.server 0`, then open `/prototype/`.
 
 - Each page carries `<meta http-equiv="Content-Security-Policy" content="default-src 'self'">`, so anything the real policy would block shows up as a console error.
 - URL parameters: `?network=signet|testnet4`, `?theme=light|dark`, `?autoplay=0` on the home page, `?h=<height>` on the block page, `?state=unconfirmed|replaced|confirmed` on the transaction page.
