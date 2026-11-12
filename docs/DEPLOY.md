@@ -133,7 +133,7 @@ Put a reverse proxy on the host in front of `127.0.0.1:8080`. Three things matte
 
 1. **Compress `/api` and `/app` answers in the proxy.** The server does not compress what it computes; only the frontend's files come precompressed. Uncompressed, a list of blocks is about four times larger on the wire.
 2. **Tell the server who the client is**, or every visitor shares the proxy's rate limits. The server reads the client's address from a header only when you name the header and the proxy's address ([below](#client-addresses)); until then it ignores the header, so a client cannot choose its own address ([`SECURITY.md`](SECURITY.md) rule 7).
-3. **Serve it over HTTPS, on the same origin as the WebSocket.** Browsers switch some features off on plain HTTP anywhere but `localhost`: copying to the clipboard is one, and the copy buttons then copy nothing (a fallback is coming). And `/app/ws` refuses an upgrade whose `Origin` is not the page's own host and port, so the proxy must pass the browser's `Host` through unchanged ([`SECURITY.md`](SECURITY.md) rule 21).
+3. **Serve it over HTTPS, on the same origin as the WebSocket.** Browsers switch some features off on plain HTTP anywhere but `localhost`, the clipboard API among them (the copy buttons fall back to an older way there), and anything on the path can read or change the pages. And `/app/ws` refuses an upgrade whose `Origin` is not the page's own host and port, so the proxy must pass the browser's `Host` through unchanged ([`SECURITY.md`](SECURITY.md) rule 21).
 
 ### Caddy
 
