@@ -229,8 +229,9 @@ fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|d| Instant::now() >= d)
 }
 
-/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit.
-type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool) -> Wrote + Send>;
+/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit. The
+/// job reports how it ended before it wakes its caller, so health is current when `write` returns.
+type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool, &dyn Fn(Wrote)) + Send>;
 
 /// How a job ended, for [`WriteHealth`].
 enum Wrote {
@@ -374,9 +375,8 @@ impl Store {
             .spawn(move || {
                 while let Some(job) = jobs.blocking_recv() {
                     let start = Instant::now();
-                    let wrote = job(&mut conn, &sealed);
+                    job(&mut conn, &sealed, &|wrote| record(&seen, wrote, &observer));
                     let elapsed = start.elapsed();
-                    record(&seen, wrote, &observer);
                     if elapsed >= SLOW_WRITE {
                         observer(&Event::SlowWrite {
                             elapsed,
@@ -499,7 +499,7 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let job: Job = Box::new(move |conn, sealed| {
+    let job: Job = Box::new(move |conn, sealed, report| {
         let result: Result<T, Error> = (|| {
             let t = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             sealed.store(true, Ordering::Relaxed);
@@ -515,16 +515,15 @@ where
             t.commit()?;
             Ok(value)
         })();
-        let wrote = match &result {
+        report(match &result {
             Ok(_) => Wrote::Committed,
             Err(Error::Sql(e)) => {
                 failure_kind(e).map_or(Wrote::Other, |kind| Wrote::Failed(kind, e.to_string()))
             }
             Err(_) => Wrote::Other,
-        };
+        });
         // The caller may have stopped waiting; the write stands either way.
         let _ = tx.send(result);
-        wrote
     });
     (job, rx)
 }

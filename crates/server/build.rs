@@ -33,6 +33,12 @@ fn from_git() -> Option<String> {
     let out = Command::new("git")
         .current_dir(&workspace)
         .args(["rev-parse", "HEAD", "--show-toplevel", "--absolute-git-dir"])
+        .args([
+            "--symbolic-full-name",
+            "HEAD",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -41,15 +47,19 @@ fn from_git() -> Option<String> {
     let out = String::from_utf8(out.stdout).ok()?;
     let mut lines = out.lines();
     let (head, top, git_dir) = (lines.next()?, lines.next()?, lines.next()?);
+    let (branch, common) = (lines.next()?, lines.next()?);
     if Path::new(top).canonicalize().ok()? != workspace.canonicalize().ok()? {
         return None;
     }
-    // A commit, checkout or reset moves HEAD or appends to its log; either reruns this.
-    for f in ["HEAD", "logs/HEAD"] {
-        let path = Path::new(git_dir).join(f);
-        if path.exists() {
-            println!("cargo::rerun-if-changed={}", path.display());
-        }
+    // A checkout or a detached commit moves HEAD; a commit on a branch moves only the branch's
+    // ref, loose or packed. A ref not yet loose counts as changed, so this reruns until it is.
+    let mut watched = vec![Path::new(git_dir).join("HEAD")];
+    if branch.starts_with("refs/") {
+        watched.push(Path::new(common).join(branch));
+        watched.extend(Some(Path::new(common).join("packed-refs")).filter(|p| p.exists()));
+    }
+    for path in watched {
+        println!("cargo::rerun-if-changed={}", path.display());
     }
     Some(head.to_owned())
 }
