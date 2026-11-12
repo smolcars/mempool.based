@@ -101,17 +101,19 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with FE8's block audit, whose page listens to the WebSocket while a block's facts load, after the mempool history page made `FeeRate` a chunk of its own (two more files on most pages), and after the home page's fee panel moved to the `fees` topic (one API request fewer):
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 after PF4 merged the small shared chunks into the shell's ([`FRONTEND.md`](FRONTEND.md#chunks)). The same recording of the build before it is in brackets:
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
-| Home | 22 | 3 | 1 | 1 |
-| Blocks | 19 | 13 | 0 | 2 |
-| Block | 25 | 6 | 1 | 5 |
-| Transaction | 18 | 4 | 1 | 3 |
-| Address | 22 | 5 | 1 | 4 |
-| Mining | 25 | 6 | 0 | 4 |
-| Lightning | 10 | 1 | 0 | 1 |
+| Home | 11 (23) | 3 | 1 | 1 |
+| Blocks | 11 (20) | 13 | 0 | 2 |
+| Block | 13 (26) | 6 | 1 | 5 |
+| Transaction | 10 (19) | 5 | 1 | 3 |
+| Address | 13 (23) | 5 | 1 | 4 |
+| Mining | 16 (26) | 6 | 0 | 4 |
+| Lightning | 11 (18) | 2 | 0 | 1 |
+
+At most 7 static files were in flight at once on any page (18 before).
 
 Opening a block's audit list adds two files and one API request. An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
 
@@ -122,7 +124,7 @@ Opening a block's audit list adds two files and one API request. An open home pa
 | `CLIENT_BURST` | `120` | A restored session of eight tabs loading one after another: 8 × 13 = 104 |
 | `CLIENT_RATE_PER_SEC` | `20` | Unchanged: sixty open home pages polling, or a full burst refilled in 6 seconds |
 | `WS_CLIENT_MAX_SOCKETS` | `16` | One socket per open tab; sixteen tabs |
-| Static files, fixed | 400 at once, 100 a second, 96 in flight | Sixteen cold loads of the heaviest pages (25 files) at once, and three of them with every file in flight together (75) |
+| Static files, fixed | 400 at once, 100 a second, 96 in flight | Set when the heaviest page needed 25 files: sixteen cold loads of it at once, and three of them with every file in flight together (75). The heaviest now needs 16 (mining), which the same derivation would put at 256 and 48; the limits are unchanged, which leaves that much more room for a NAT or a page that grows |
 
 `crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
 

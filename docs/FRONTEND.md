@@ -525,7 +525,24 @@ Lint, format and type checks are strict, and CI fails on any finding. OXC is the
 
 ## Testing
 
-`bun run test` runs Vitest in a happy-dom document, so logic and components are tested the same way. `bun run size` checks the first-load budget after `bun run build`: the scripts `index.html` loads, the home page's chunk, and everything they import statically. `vite.config.ts` groups `live.ts`, `blocks-topic.ts`, `projected-topic.ts` and what they import (Solid's runtime among it) into one `app` chunk: the transaction and address pages share only part of it, which would otherwise split the first load into several small files that each cost gzip overhead. CI runs typecheck, lint, test, build and size, and the browser tests below ([`CI.md`](CI.md)).
+`bun run test` runs Vitest in a happy-dom document, so logic and components are tested the same way. `bun run size` checks the first load after `bun run build`, and fails on any of three things:
+
+- **JavaScript over 100 KB gzipped:** the scripts `index.html` loads, the home page's chunk, and everything they import statically.
+- **More than 11 files on a cold home page:** the document, `boot.js`, the font, the shell's scripts and stylesheets, and the home page's code and styles as the entry's preload list names them. On a slow network each file waits for one of the browser's six connections to a site over HTTP/1.1, so a page that needs 23 small files shows its data about a second later than one that needs 11 ([`PERFORMANCE.md`](PERFORMANCE.md#4-shorten-the-pages-request-chain-on-slow-networks-done)). Raise the number only with a measurement that says the new file is worth its wait.
+- **A first stylesheet that does not open with the `reset` layer** (see [below](#chunks)).
+
+### Chunks
+
+How the build splits the code decides how many files a cold page waits for. `vite.config.ts` puts one group, `app`, beside the entry, and the shell loads both at once (the entry script, and a `modulepreload` Vite adds to `index.html`):
+
+- **In `app`:** the live channel and the topics the home page reads (`live.ts`, `blocks-topic.ts`, `projected-topic.ts`), the clock, the small components most pages use (`Amount`, `DataTable`, `FeeRate`, `Hash`, `SectionHeader`, `Strata`, `Time`), what they import (Solid's runtime among it), and the tokens and global styles. Left to the bundler, these split by which pages share them into 14 more files of under 1.5 KB each on a cold page.
+- **The tokens and global styles are in `app`** so that its stylesheet, which `index.html` links first, opens with the layer order. Layers are ordered by where each first appears; if a component's `@layer components` came first, every component would lose to the reset.
+- **Everything else stays lazy:** each page with what only it uses, and the heavy parts (the transaction grid, the charts, the audit list, the Lightning pages) only where they are used. A cold home page is 11 files, a block or transaction page 13 and 10 ([`CONFIG.md`](CONFIG.md#per-client-defaults)).
+- **The cost:** a page loads the whole group, used or not. The transaction page loads `DataTable` and `Strata` (about 2 KB) without drawing them; that is less than the headers of the files it no longer asks for.
+
+Add a component to the group only when most pages use it and it would otherwise be a file of its own on their first load.
+
+CI runs typecheck, lint, test, build and size, and the browser tests below ([`CI.md`](CI.md)).
 
 ## Browser tests
 

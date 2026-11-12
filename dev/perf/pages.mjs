@@ -129,6 +129,12 @@ async function load(browser, profile, path, ready) {
     if (e.type === "Script") scripts.add(e.requestId);
     spans.set(e.requestId, { url: e.request.url, start: e.timestamp, end: null });
   });
+  // When it went out on the wire: later than its start when it waited for a free connection.
+  cdp.on("Network.responseReceived", (e) => {
+    const s = spans.get(e.requestId);
+    const t = e.response.timing;
+    if (s && t && t.sendStart >= 0) s.start = t.requestTime + t.sendStart / 1000;
+  });
   cdp.on("Network.loadingFinished", (e) => {
     bytes += e.encodedDataLength;
     if (scripts.has(e.requestId)) jsBytes += e.encodedDataLength;
@@ -171,7 +177,8 @@ async function load(browser, profile, path, ready) {
     };
   });
   // The longest run of requests, each sent only after the one before it had finished, among those
-  // done before the data showed: the round trips the page waited through in a row.
+  // done before the data showed: the round trips the page waited through in a row, a wait for a
+  // free connection included.
   const t0 = Math.min(...[...spans.values()].map((s) => s.start));
   const done = [...spans.values()]
     .filter((s) => s.end !== null && (dataMs === null || (s.end - t0) * 1000 <= dataMs))
