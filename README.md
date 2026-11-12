@@ -21,7 +21,27 @@ Mainnet, signet and testnet4 are supported, plus regtest for development.
 
 rbitcoin already keeps the transaction index, address index, cluster mempool and per-transaction fee data in one process. An explorer built for it needs no second indexer, no second copy of the mempool and no database server.
 
-## Quick start
+## Run it
+
+You need a Linux host with Docker and its Compose plugin, on amd64 or arm64, with room for rbitcoin's chain. The compose file runs rbitcoin v0.9.2 and the explorer beside it:
+
+```sh
+VERSION=0.1.0                     # the newest release
+git clone --depth 1 --branch "v$VERSION" https://github.com/smolcars/rbitcoin-space.git
+cd rbitcoin-space/deploy
+cp .env.example .env && chmod 600 .env
+pass=$(openssl rand -hex 32)
+sed -i.bak "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env && rm .env.bak
+echo "SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space:$VERSION" >> .env
+touch rpc.cookie && chmod 600 rpc.cookie
+printf 'rbitcoin-space:%s' "$pass" > rpc.cookie
+sudo chown 10001:10001 rpc.cookie
+docker compose up -d
+```
+
+The explorer is then at `http://127.0.0.1:8080` on that host, while the node syncs. Before anyone else uses it, put it behind a reverse proxy with TLS: [`docs/DEPLOY.md`](docs/DEPLOY.md) is the operator's guide for that and for everything after, from the first backfill to upgrades.
+
+## Develop
 
 Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup) and [bun](https://bun.sh).
 
@@ -58,7 +78,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/STORE.md`](docs/STORE.md) | The SQLite store: migrations, writes, reads, backup |
 | [`docs/LOGGING.md`](docs/LOGGING.md) | Structured logging: the event catalogue and its rules |
 | [`docs/LIGHTNING.md`](docs/LIGHTNING.md) | How the Lightning explorer works |
-| [`docs/DEPLOY.md`](docs/DEPLOY.md) | The Docker image and the compose file that runs it beside rbitcoin |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Running it: the image, the compose file, TLS, the data directory, upgrades, what to watch |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Visual design |
 | [`docs/FRONTEND.md`](docs/FRONTEND.md) | Frontend structure, data layer, shared components and rules for page builders |
 | [`AGENTS.md`](AGENTS.md) | Rules for contributors, human or agent |
