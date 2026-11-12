@@ -1,12 +1,12 @@
 # Performance
 
-How fast the server and the site are, how that was measured, how they compare with the stock mempool backend and with mempool.space, and where we miss a budget. The budgets themselves are in [`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets). Measured on 2026-11-12 from `master` at `b58df2b`, release build. The scripts are in [`dev/perf/`](../dev/perf/) and [`dev/load/`](../dev/load/), and [How to reproduce](#how-to-reproduce) gives one command for each table.
+How fast the server and the site are, how that was measured, how they compare with the stock mempool backend and with mempool.space, and where we miss a budget. The budgets themselves are in [`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets). Measured on 2026-11-12 from `master` at `b58df2b`, release build; the regtest page loads again the same day after [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done). The scripts are in [`dev/perf/`](../dev/perf/) and [`dev/load/`](../dev/load/), and [How to reproduce](#how-to-reproduce) gives one command for each table.
 
 ## Summary
 
 | Budget | Measured | Verdict |
 |---|---|---|
-| First-load JavaScript, home page: 100 KB gzipped | 67.6 KB gzipped (`bun run size`); 67 KB on the wire with Brotli in Chromium | **Pass** |
+| First-load JavaScript, home page: 100 KB gzipped | 67.0 KB gzipped (`bun run size`), in 11 files with the home page's styles (the check fails past 11); 63 KB on the wire with Brotli in Chromium | **Pass** |
 | New block, from the node's Electrum announcement to the `block` message on the WebSocket: 50 ms on a node with rbitcoin PR 1577 (on v0.9.2, from when the node can serve the block) | Regtest: 0.7 to 6.1 ms from the node's notification to the last subscriber's queue, 6.1 ms with 9,962 subscribers. Mainnet, here: 12 and 91 ms after the node's upgrade (the only two blocks); on rbitcoin v0.9.2, 13 ms to over 3 s, mostly waiting for the node's Esplora, which we could not separate from our own time. Measured since in [#67](https://github.com/smolcars/rbitcoin-space/pull/67) on upgraded nodes: our `block` message 16 to 44 ms after the node's announcement on mainnet (four blocks) and 6 to 25 ms on signet, the node's own serving included ([details](#the-new-block-on-mainnet)) | **Pass** on regtest and, by #67's measurement, on upgraded mainnet nodes. Of the two upgraded-node blocks in this run, on the code before #67, one took 91 ms |
 | Cached or immutable API response, server time: 10 ms at p99 | Answers from memory: p99 0.04 ms (1 client), 0.4 ms (100), 0.8 ms (1,000). Immutable `/api/block/:hash`, which we pass through to the node uncached: p99 1.8 ms (1 client), 16 ms (100), 49 ms (1,000) on regtest; 75 to 89 ms on mainnet over the network to the node (v0.9.2) | **Pass from memory; miss for immutable pass-through** under concurrency and whenever the node is a network hop away ([proposed task 1](#1-hold-immutable-node-answers-in-memory)) |
 | Frame rate during block and mempool animations: 60 fps on a mid-range laptop | No frame interval over 16.8 ms (every frame of a 60 Hz display) through a new block on the home page and through a 601-transaction grid loading, on the machine's GPU. At 4× CPU slowdown: the block the same; the grid load had 1 or 2 intervals of 33 ms or more per run, and one run of three a 224 ms long task that four profiled runs did not reproduce. A slower CPU is not a slower GPU, so this does not stand in for a mid-range laptop | **Pass on this machine; not established on a mid-range laptop** |
@@ -14,7 +14,7 @@ How fast the server and the site are, how that was measured, how they compare wi
 | Comparison | In one line |
 |---|---|
 | The stock mempool backend, same node, same routes | Client-side, paced, over unequal paths: ours answered its `/api/v1` routes in 0.2 to 0.7 ms median on loopback; the reference in 10 to 17 ms median and 450 to 820 ms p99 over the network to its host. These are not server times. Its mining routes took 14 to 54 s, ours under 2 ms (recorded earlier, [`API.md`](API.md#mining)) |
-| mempool.space's public site, page loads | Ours moves 115 to 231 KB per cold page, 61 to 72 KB of it JavaScript; mempool.space 838 to 1,351 KB, 714 to 1,220 KB of it JavaScript. As a slow phone (4× CPU, Slow 4G): our first contentful paint at 1.7 s and data at 3.5 to 4.2 s (6.2 s for the next block's 3,400 transactions); mempool.space's first contentful paint at 6.3 to 9.1 s. Unthrottled: ours paints in 32 to 48 ms on loopback, mempool.space in 0.5 to 1.1 s across the internet |
+| mempool.space's public site, page loads | Ours moves 115 to 231 KB per cold page, 61 to 72 KB of it JavaScript; mempool.space 838 to 1,351 KB, 714 to 1,220 KB of it JavaScript. As a slow phone (4× CPU, Slow 4G): our first contentful paint at 1.7 s and data at 3.5 to 4.2 s (6.2 s for the next block's 3,400 transactions); on regtest since [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done), data at 2.9 to 3.5 s with 109 to 208 KB; mempool.space's first contentful paint at 6.3 to 9.1 s. Unthrottled: ours paints in 32 to 48 ms on loopback, mempool.space in 0.5 to 1.1 s across the internet |
 
 The three results that matter most:
 
@@ -51,11 +51,21 @@ No budget miss had a fix small and clear enough to make in this change: the one 
 - **Touches.** `crates/server/src/request_log.rs`, `limits.rs`, the event catalogue in [`LOGGING.md`](LOGGING.md).
 - **Done since.** Refusals are counted in one `requests_refused` a minute, the whole log has a ceiling, and an over-limit request is refused before it is routed ([`LOGGING.md`](LOGGING.md#what-a-client-can-make-us-write)). The same flood on the same machine, back to back with the build before: 27 to 17 µs of CPU per refusal, and 1,080 MB of log in 30 s to under 1 MB.
 
-### 4. Shorten the page's request chain on slow networks
+### 4. Shorten the page's request chain on slow networks (done)
 
 - **Evidence.** As a slow phone every page shows its data 1.9 to 2.5 s after the load event. The home page's waterfall: the HTML (0.58 s), then the entry script, font and styles (to 1.66 s), then the home chunk and 15 small JavaScript and CSS chunks requested together at 1.68 s, which fill the browser's six HTTP/1.1 connections, so `/app/config`, requested at 1.70 s, is answered only at 3.46 s. The socket opens after it and its first message arrives at 4.09 s, then the block summaries at 4.69 s. Each step costs a round trip of about 0.56 s on this profile.
 - **Expected gain.** About 1 to 1.5 s on a slow network: fetch `/app/config` from `index.html` (a preload, or the values inlined at build time), and merge the home page's small chunks. Behind a proxy that speaks HTTP/2, which a TLS deployment usually does, the six-connection queue disappears without code; these measurements are plain HTTP/1.1 to the server.
-- **Touches.** `web/index.html`, `web/vite.config.ts`, [`FRONTEND.md`](FRONTEND.md).
+- **Done since (PF4).** The cause was the number of files, not the config. Nothing a page shows waits for `/app/config` (the shell reads it for the network switch and the footer only); it was answered late because it queued behind the chunks, and the page's own code was queued with it. The small components most pages use, the clock, and the tokens and global styles now travel in the shell's `app` chunk ([`FRONTEND.md`](FRONTEND.md#chunks)), so a cold home page needs 11 files instead of 23, and `bun run size` fails past 11. Everything that queued now fits the six connections in one round. Measured back to back on the same regtest node, five cold loads each, as a slow phone (median, with the range):
+
+  | Page | Data shown ms, before | after | Longest chain, before | after | Config answered ms, before | after | Requests | KB transferred (JavaScript) |
+  |---|---|---|---|---|---|---|---|---|
+  | home | 4,170 (4,133–4,176) | 3,088 (3,081–3,117) | 6 | 4 | 3,539 | 2,316 | 26 → 14 | 129 (69) → 120 (63) |
+  | block | 4,186 (4,168–4,195) | 3,106 (3,097–3,117) | 6 | 4 | 3,987 | 2,318 | 32 → 19 | 136 (73) → 126 (67) |
+  | tx | 4,067 (4,059–4,084) | 3,101 (3,062–3,108) | 6 | 4 | 3,431 | 2,316 | 24 → 15 | 128 (72) → 123 (68) |
+
+  First contentful paint did not move (1.72 to 1.76 s), nor did anything unthrottled beyond the runs' spread. "Longest chain" is the longest run of requests each sent, on the wire, only after the one before it had finished, among those done before the data showed: a wait for a free connection counts as a step. Every page moves fewer bytes, because the headers of 11 to 13 fewer responses outweigh the code a page now loads without using (`DataTable` and `Strata` on the transaction page, about 2 KB). `bun run size`: 68.9 KB of first-load JavaScript before, 67.0 KB after. The pages look the same: 10 pages at 1280 and 393 px in light and dark, captured from both builds on one node, matched pixel for pixel.
+- **Left out.** Sending `/app/config` earlier (a preload, or the values in the HTML) would change nothing a reader sees: it is now answered 0.8 s before the data on every measured page. What remains is three round trips in a row: the entry script, the page's chunk (the entry asks for it once it runs), then the socket or the API call the page makes. Asking for the page's chunk from `boot.js` could start it one round trip earlier (about 0.5 s on this profile, not measured), but `boot.js` would need its own copy of the route table and the build's file names; not tried.
+- **HTTP/2.** Behind a proxy that speaks HTTP/2 to browsers, what is left of the connection queue goes too; the round trips stay. Not measured here.
 
 ### 5. Find what stops WebSocket delivery past 8,000 sockets
 
@@ -179,29 +189,29 @@ The server's `ws_fanout` event times a block from the node's Electrum notificati
 
 Each page is loaded cold (a fresh browser context) in headless Chromium 156 at 1280×800, five times on regtest and three on mainnet, by [`pages.mjs`](../dev/perf/pages.mjs). "Data shown" is when the page's main content shows its data (the stats and projected blocks on the home page, a known value on the others); "JS run" is Chromium's `ScriptDuration`. The slow-phone profile is Lighthouse's Slow 4G as DevTools applies it (562.5 ms per request, 1.47 Mbps down, 675 kbps up) with the CPU slowed 4×. WebGL runs on the machine's GPU through ANGLE's Metal backend; without flags headless Chromium draws it in software.
 
-**Regtest, unthrottled** (five loads each; median, with the range):
+**Regtest, unthrottled** (five loads each; median, with the range). Measured again after [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done), on the same day and machine; the mainnet tables below are from before it. The address page moved more data than in the first pass (202 against 150 KB, with less JavaScript: 59 against 62 KB) and a varying number of requests; the extra is its API answers, whose cause was not looked into:
 
 | Page | First contentful paint ms | Data shown ms | Largest contentful paint ms | KB transferred | of it JavaScript | Requests | JS run ms |
 |---|---|---|---|---|---|---|---|
-| home | 40 (32–64) | 63 (48–64) | 60 (56–76) | 132 | 67 | 26 | 10 (9–13) |
-| block | 36 (32–40) | 59 (49–68) | 68 (56–84) | 134 | 72 | 31 | 12 (10–13) |
-| tx | 40 (32–40) | 47 (42–85) | 56 (40–84) | 126 | 70 | 22 | 9 (8–9) |
-| address | 40 (32–44) | 63 (57–64) | 76 (68–80) | 150 | 62 | 27 | 11 (8–13) |
-| mining | 32 (32–36) | 46 (43–49) | 60 (52–64) | 140 | 71 | 32 | 7 (7–8) |
-| projected | 36 (32–44) | 42 (39–46) | 52 (44–64) | 121 | 70 | 26 | 3 (3–4) |
-| mempool | 36 (36–60) | 44 (42–50) | 52 (48–72) | 115 | 61 | 20 | 3 (3–4) |
+| home | 36 (32–100) | 58 (48–104) | 72 (60–132) | 120 | 63 | 14 | 12 (9–24) |
+| block | 48 (32–56) | 64 (54–89) | 80 (64–88) | 126 | 67 | 19 | 12 (11–16) |
+| tx | 44 (32–72) | 65 (47–93) | 60 (36–88) | 123 | 68 | 15 | 10 (9–13) |
+| address | 36 (32–84) | 62 (43–84) | 76 (52–96) | 202 | 59 | 24 (22–26) | 21 (17–28) |
+| mining | 40 (32–56) | 63 (42–77) | 64 (52–80) | 129 | 68 | 23 | 9 (8–28) |
+| projected | 36 | 61 (56–87) | 68 (56–96) | 113 | 65 | 14 | 20 (16–26) |
+| mempool | 36 (32–48) | 45 (41–62) | 60 (48–76) | 109 | 61 | 15 | 3 (3–4) |
 
 **Regtest, as a slow phone:**
 
 | Page | First contentful paint ms | Data shown ms | Largest contentful paint ms | KB transferred | of it JavaScript | Requests | JS run ms |
 |---|---|---|---|---|---|---|---|
-| home | 1,736 (1,728–1,740) | 4,145 (4,141–4,165) | 4,088 (4,072–4,108) | 132 | 67 | 26 | 53 (48–61) |
-| block | 1,736 (1,724–1,760) | 4,148 (4,141–4,204) | 4,168 (4,144–4,224) | 134 | 72 | 31 | 58 (49–75) |
-| tx | 1,724 (1,716–1,740) | 3,631 (3,611–3,642) | 2,996 (2,976–3,008) | 126 | 70 | 22 | 44 (38–52) |
-| address | 1,732 (1,712–1,736) | 4,079 (4,067–4,094) | 4,084 (4,072–4,100) | 112 | 62 | 27 | 45 (42–51) |
-| mining | 1,724 (1,724–1,728) | 4,062 (4,061–4,082) | 3,500 (3,496–3,508) | 140 | 71 | 32 | 36 (33–43) |
-| projected | 1,732 (1,724–1,744) | 4,128 (4,121–4,129) | 3,492 (3,476–3,512) | 121 | 70 | 26 | 24 (23–25) |
-| mempool | 1,724 (1,708–1,732) | 3,553 (3,540–3,571) | 3,560 (3,552–3,588) | 115 | 61 | 20 | 37 (35–38) |
+| home | 1,748 (1,740–1,760) | 3,088 (3,081–3,117) | 3,116 (3,084–3,124) | 120 | 63 | 14 | 86 (78–91) |
+| block | 1,752 (1,748–1,764) | 3,106 (3,097–3,117) | 3,116 (3,108–3,124) | 126 | 67 | 19 | 59 (57–65) |
+| tx | 1,760 (1,740–1,772) | 3,101 (3,062–3,108) | 2,452 (2,436–2,464) | 123 | 68 | 15 | 48 (40–51) |
+| address | 1,740 (1,740–1,744) | 2,974 (2,964–2,982) | 2,976 (2,968–2,984) | 208 | 59 | 28 (22–34) | 76 (59–79) |
+| mining | 1,744 (1,728–1,776) | 3,500 (3,470–3,533) | 2,916 (2,896–2,952) | 130 | 68 | 23 | 44 (33–49) |
+| projected | 1,768 (1,756–1,780) | 3,203 (3,050–3,278) | 2,412 (2,408–2,424) | 113 | 65 | 14 | 169 (112–206) |
+| mempool | 1,732 (1,732–1,744) | 2,921 (2,918–2,927) | 2,928 (2,920–2,928) | 109 | 61 | 15 | 17 (15–17) |
 
 **Mainnet, unthrottled** (our server on the mainnet node, three loads each; the block is 840,000 with 3,050 transactions, the next block about 3,400):
 
@@ -227,7 +237,7 @@ Each page is loaded cold (a fresh browser context) in headless Chromium 156 at 1
 | projected | 1,724 (1,724–1,732) | 6,234 (6,135–6,245) | 3,476 (3,476–3,484) | 121 | 70 | 26 | 434 (293–602) |
 | mempool | 1,716 (1,712–1,736) | 3,548 (3,524–3,564) | 3,556 (3,532–3,576) | 114 | 61 | 20 | 39 (36–42) |
 
-Every page shows its data within 2.5 s of its load event as a slow phone, and the chain of requests is why ([proposed task 4](#4-shorten-the-pages-request-chain-on-slow-networks)). The mainnet next-block page is the slowest: its 166 to 378 KB snapshot of about 3,400 transactions arrives over the socket and is decoded and listed, 94 ms of JavaScript unthrottled and 434 ms at 4×.
+As a slow phone every regtest page now shows its data 2.9 to 3.5 s after it was asked for, 0.6 to 1.1 s sooner than before [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done); the mainnet tables still show the earlier chain. The mainnet next-block page is the slowest: its 166 to 378 KB snapshot of about 3,400 transactions arrives over the socket and is decoded and listed, 94 ms of JavaScript unthrottled and 434 ms at 4×.
 
 **Frame times.** These say the animations run smoothly on this machine's GPU; they do not establish the budget's mid-range laptop, whose GPU was not measured, and the 4× CPU runs show the grid's load does stall on a slow CPU (50 to 250 ms). `requestAnimationFrame` intervals for 6 s, three times each: from mining a block while the home page is open (the new block slides in, the projected blocks and stats update), and from an in-app navigation to a block of 601 transactions until its grid has drawn.
 
@@ -294,13 +304,13 @@ With two loads the median shown is the lower of the two.
 How far the comparison can be trusted:
 
 - **mempool.space is a fleet behind a CDN; we are one process on loopback.** Unthrottled, its times include the internet round trips from this machine and ours include none, which flatters us. As a slow phone both pay the same 562.5 ms a request on top, and the difference is dominated by the bytes: 1.4 MB of JavaScript at 1.47 Mbps takes about 8 s, our 70 KB under half a second. That part holds whatever the hosting.
-- **Its CDN holds every file close and serves HTTP/2 or 3;** we served HTTP/1.1 with no proxy, which costs us the six-connection queue in [proposed task 4](#4-shorten-the-pages-request-chain-on-slow-networks). A deployment of ours behind a TLS proxy would load faster than measured here.
+- **Its CDN holds every file close and serves HTTP/2 or 3;** we served HTTP/1.1 with no proxy, which cost us the six-connection queue that [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done) has since shortened. A deployment of ours behind a TLS proxy would load faster than measured here.
 - **Under load the comparison runs the other way.** The fleet absorbs traffic one process cannot; [The server under load](#the-server-under-load) is all we can say about ours, and nothing here says how many clients mempool.space serves.
 - Two loads per page is a small sample; the spread between them is in the table.
 
 ## Regression guard
 
-`bun run size` already fails a PR whose first-load JavaScript passes 100 KB, at no cost. A latency check in the PR path would fail on noise: GitHub's shared runners, like this machine, vary by tens of percent from run to run, and the [rules](CI.md#rules-for-tests) treat a flaky check as a failing one. Proposed instead, not added: run `dev/perf/bench.sh OUT http` weekly or by hand in a scheduled workflow outside the PR path (about 8 minutes of a runner, nothing added to a PR's 3 minutes) and post the summary, so a regression shows as a trend.
+`bun run size` already fails a PR whose first-load JavaScript passes 100 KB, or whose cold home page needs more than 11 files (task 4), at no cost. A latency check in the PR path would fail on noise: GitHub's shared runners, like this machine, vary by tens of percent from run to run, and the [rules](CI.md#rules-for-tests) treat a flaky check as a failing one. Proposed instead, not added: run `dev/perf/bench.sh OUT http` weekly or by hand in a scheduled workflow outside the PR path (about 8 minutes of a runner, nothing added to a PR's 3 minutes) and post the summary, so a regression shows as a trend.
 
 ## What was not measured
 
