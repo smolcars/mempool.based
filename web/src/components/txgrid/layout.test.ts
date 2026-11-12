@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { feeBand } from "../../lib/format";
-import { type GridTx, gridSize, hitTest, type Layout, layout, MIN_SIDE, rank } from "./layout";
+import { type GridTx, gridSize, hitTest, type Layout, layout, rank } from "./layout";
 import { COINBASE_COLOR, colorOf } from "./scene";
 
 /** A repeatable pseudo-random source (mulberry32). */
@@ -35,143 +35,136 @@ function block(total: number, seed = 1): GridTx[] {
 
 const FULL = block(999_000);
 
-/** Checks the layout's own promises: no overlaps, all inside, the owner map agrees, sizes follow vsize. */
+/**
+ * Checks the layout's own promises: every rectangle inside the packed area, areas that follow vsize
+ * and add up to the packed area, and every point of the packed area inside exactly the rectangle
+ * the hit test names: together, no gaps and no overlaps.
+ */
 function check(l: Layout, txs: readonly GridTx[]) {
-  const cover = new Int32Array(l.cols * l.rows).fill(-1);
   const faults: string[] = [];
-  for (let r = 0; r < txs.length; r++) {
-    const [x, y, s] = [l.x[r] ?? -1, l.y[r] ?? -1, l.side[r] ?? 0];
-    if (s < MIN_SIDE || x < 0 || y < 0 || x + s > l.cols || y + s > l.rows) {
-      faults.push(`square ${r} at ${x},${y} side ${s} is outside`);
-      continue;
-    }
-    for (let dy = 0; dy < s; dy++) {
-      for (let dx = 0; dx < s; dx++) {
-        const cell = (y + dy) * l.cols + x + dx;
-        if (cover[cell] !== -1) faults.push(`square ${r} overlaps square ${cover[cell]}`);
-        cover[cell] = r;
-      }
-    }
-    // Area follows virtual size: the side is the exact side rounded, so within half a cell.
+  const eps = 1e-6;
+  let sum = 0;
+  for (let r = 0; r < l.order.length; r++) {
+    const [x, y, w, h] = [l.x[r] ?? -1, l.y[r] ?? -1, l.w[r] ?? 0, l.h[r] ?? 0];
+    if (x < -eps || y < l.offset - eps || x + w > l.cols + eps || y + h > l.rows + eps)
+      faults.push(`rect ${r} is outside`);
     const v = txs[l.order[r] ?? 0]?.vsize ?? 0;
-    const exact = Math.sqrt(v / l.unit);
-    if (exact >= MIN_SIDE && Math.abs(s - exact) > 0.5)
-      faults.push(`square ${r} side ${s} for ${exact}`);
+    if (Math.abs(w * h * l.unit - v) > 1e-6 * Math.max(1, v))
+      faults.push(`rect ${r} area ${w * h * l.unit} for ${v} vB`);
+    sum += w * h;
   }
-  // The hit map is exactly the squares: every cell answers with the square covering it, or none.
-  for (let cell = 0; cell < cover.length; cell++) {
-    const cx = cell % l.cols;
-    const cy = (cell - cx) / l.cols;
-    if (hitTest(l, cx + 0.5, cy + 0.5) !== cover[cell]) faults.push(`cell ${cx},${cy} hits wrong`);
+  const packed = (l.rows - l.offset) * l.cols;
+  if (Math.abs(sum - packed) > 1e-6 * Math.max(1, packed)) faults.push(`areas ${sum} of ${packed}`);
+  const steps = 157;
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < steps; j++) {
+      const cx = ((i + 0.5) / steps) * l.cols;
+      const cy = l.offset + ((j + 0.5) / steps) * (l.rows - l.offset);
+      const r = hitTest(l, cx, cy);
+      const inside =
+        r !== -1 &&
+        cx >= (l.x[r] ?? 0) - eps &&
+        cy >= (l.y[r] ?? 0) - eps &&
+        cx <= (l.x[r] ?? 0) + (l.w[r] ?? 0) + eps &&
+        cy <= (l.y[r] ?? 0) + (l.h[r] ?? 0) + eps;
+      if (packed > 1 && !inside) faults.push(`point ${cx},${cy} hits ${r}`);
+    }
   }
   expect(faults.slice(0, 5)).toStrictEqual([]);
 }
 
 describe("layout", () => {
-  it("packs a full block without overlaps, inside the frame, sized by vsize", () => {
+  it("draws a full block as one clean rectangle, no gaps and no overlaps, sized by vsize", () => {
     const l = layout(FULL, 6 / 5, 1_000_000);
+    expect(l.order).toHaveLength(FULL.length);
     check(l, FULL);
-    // A full block reaches the top of the frame, within the rounding of its sides.
-    expect(l.offset).toBeLessThan(l.rows * 0.03);
-    // Over the whole block, drawn area is the virtual size to within 3%.
-    let area = 0;
-    for (const s of l.side) area += s * s;
-    const total = FULL.reduce((sum, t) => sum + t.vsize, 0);
-    expect(Math.abs((area * l.unit) / total - 1)).toBeLessThan(0.03);
+    // A full block leaves almost nothing above it.
+    expect(l.offset / l.rows).toBeLessThan(0.002);
+  });
+
+  it("keeps ordinary transactions close to square", () => {
+    const l = layout(FULL, 6 / 5, 1_000_000);
+    const ratios = [...l.order].map((_, r) => {
+      const w = l.w[r] ?? 0;
+      const h = l.h[r] ?? 0;
+      return Math.max(w / h, h / w);
+    });
+    // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
+    ratios.sort((p, q) => p - q);
+    const at = (share: number) => ratios[Math.floor(ratios.length * share)] ?? Number.NaN;
+    // The typical rectangle is nearly square; a few at the seams between fee bands are not.
+    expect(at(0.5)).toBeLessThan(1.5);
+    expect(at(0.95)).toBeLessThan(6);
   });
 
   it("is fast enough to run on the main thread", () => {
     const start = performance.now();
-    layout(FULL, 6 / 5, 1_000_000);
-    // About 3 ms in a browser; generous here because test runners share the machine.
-    expect(performance.now() - start).toBeLessThan(200);
+    for (let i = 0; i < 10; i++) layout(FULL, 6 / 5, 1_000_000);
+    expect((performance.now() - start) / 10).toBeLessThan(20);
   });
 
   it("draws the same picture for the same block, in any input order", () => {
+    const shuffled = [...FULL];
+    const rnd = random(7);
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j] as GridTx, shuffled[i] as GridTx];
+    }
     const a = layout(FULL, 6 / 5, 1_000_000);
-    const b = layout(FULL, 6 / 5, 1_000_000);
-    expect(b).toStrictEqual(a);
-    // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a copy; toReversed is newer than the browsers we build for
-    const shuffled = [...FULL].reverse();
-    const c = layout(shuffled, 6 / 5, 1_000_000);
-    const place = (l: Layout, txs: readonly GridTx[]) => {
-      const at = new Map<GridTx["id"], string>();
-      for (let r = 0; r < txs.length; r++) {
-        at.set(txs[l.order[r] ?? 0]?.id ?? -1, `${l.x[r]},${l.y[r]},${l.side[r]}`);
-      }
-      return at;
-    };
-    expect(place(c, shuffled)).toStrictEqual(place(a, FULL));
+    const b = layout(shuffled, 6 / 5, 1_000_000);
+    const pictureOf = (l: Layout, txs: readonly GridTx[]) =>
+      [...l.order].map((i, r) => [txs[i]?.id, l.x[r], l.y[r], l.w[r], l.h[r]]);
+    expect(pictureOf(b, shuffled)).toStrictEqual(pictureOf(a, FULL));
   });
 
-  it("starts with the coinbase, then the highest fee rate, at the top left", () => {
+  it("starts with the coinbase, then the dearest fee band, at the top left", () => {
     const l = layout(FULL, 6 / 5, 1_000_000);
-    const rates = [...l.order].map((i) => {
-      const t = FULL[i];
-      return t ? t.fee / t.vsize : 0;
-    });
     expect(FULL[l.order[0] ?? -1]?.coinbase).toBe(true);
-    for (let r = 2; r < rates.length; r++) {
-      expect(rates[r]).toBeLessThanOrEqual(rates[r - 1] ?? Infinity);
-    }
-    // The coinbase's square is at the left, near the top: settling may sink it into a hole below.
-    expect(l.x[0]).toBeLessThan(l.cols * 0.05);
-    expect((l.y[0] ?? 0) - l.offset).toBeLessThan(l.rows * 0.1);
+    expect([l.x[0], l.y[0]]).toStrictEqual([0, l.offset]);
+    // By band, dearest first: within a band the colour is the same, so size orders it.
+    const bands = [...l.order].slice(1).map((i) => {
+      const t = FULL[i];
+      return t ? feeBand(t.fee / t.vsize) : 0;
+    });
+    for (let r = 1; r < bands.length; r++)
+      expect(bands[r] ?? 0).toBeLessThanOrEqual(bands[r - 1] ?? 0);
   });
 
-  it("rests every square on the floor or on another square", () => {
-    const l = layout(block(300_000, 7), 6 / 5, 1_000_000);
-    const floor = l.rows;
-    for (let r = 0; r < l.order.length; r++) {
-      const [x, y, s] = [l.x[r] ?? 0, l.y[r] ?? 0, l.side[r] ?? 0];
-      if (y + s === floor) continue;
-      const below = Array.from({ length: s }, (_, dx) => hitTest(l, x + dx + 0.5, y + s + 0.5));
-      expect(
-        below.some((b) => b !== -1),
-        `square ${r} floats`,
-      ).toBe(true);
-    }
-  });
-
-  it("fills a half-full block about half way, from the floor", () => {
-    const l = layout(block(500_000, 3), 6 / 5, 1_000_000);
-    const top = Math.min(...l.y);
-    expect(1 - top / l.rows).toBeGreaterThan(0.4);
-    expect(1 - top / l.rows).toBeLessThan(0.65);
+  it("fills a half-full block half way, from the floor, leaving the rest as one empty band", () => {
+    const half = block(500_000, 3);
+    const l = layout(half, 6 / 5, 1_000_000);
+    check(l, half);
+    const used = half.reduce((s, t) => s + t.vsize, 0);
+    expect(l.offset / l.rows).toBeCloseTo(1 - used / 1_000_000, 6);
   });
 
   it("holds at extreme frame shapes", () => {
-    const txs = block(400_000, 5);
-    for (const aspect of [1 / 20, 0.3, 1, 3, 20]) check(layout(txs, aspect, 1_000_000), txs);
-    expect(layout(txs, 20, 1_000_000).cols).toBeGreaterThan(layout(txs, 1 / 20, 1_000_000).cols);
+    for (const aspect of [1 / 40, 1 / 3, 3, 40]) check(layout(FULL, aspect, 1_000_000), FULL);
   });
 
-  it("draws a block holding only its coinbase as one square on the floor", () => {
-    const txs = [{ id: 0, vsize: 150, fee: 0, value: 5_000_000_000, coinbase: true }];
-    const l = layout(txs, 6 / 5, 1_000_000);
-    check(l, txs);
-    expect(l.side[0]).toBe(5); // sqrt(150 / 6.25) = 4.9
-    expect((l.y[0] ?? 0) + (l.side[0] ?? 0)).toBe(l.rows);
+  it("draws a block holding only its coinbase as one thin layer on the floor", () => {
+    const only = [{ id: 0, vsize: 180, fee: 0, value: 1, coinbase: true }];
+    const l = layout(only, 6 / 5, 1_000_000);
+    check(l, only);
+    expect(l.w[0]).toBeCloseTo(l.cols, 6);
+    expect((l.y[0] ?? 0) + (l.h[0] ?? 0)).toBeCloseTo(l.rows, 6);
   });
 
-  it("fits one enormous transaction beside thousands of tiny ones, the tiny ones at the smallest side", () => {
-    const txs: GridTx[] = [{ id: 0, vsize: 600_000, fee: 600_000, value: 1 }];
-    for (let i = 1; i <= 8000; i++) txs.push({ id: i, vsize: 10, fee: 20, value: 1 });
-    for (const aspect of [6 / 5, 8]) {
-      const l = layout(txs, aspect, 1_000_000);
-      check(l, txs);
-      expect(l.side[1]).toBe(MIN_SIDE);
-    }
+  it("fits one enormous transaction beside thousands of small ones", () => {
+    const txs = [...block(600_000, 5), { id: "big", vsize: 390_000, fee: 39_000, value: 1 }];
+    check(layout(txs, 6 / 5, 1_000_000), txs);
   });
 
-  it("shrinks everything to fit when there is more than the capacity", () => {
-    const txs = block(3_000_000, 9);
-    const l = layout(txs, 6 / 5, 1_000_000);
-    check(l, txs);
-    expect(l.unit).toBeGreaterThan(3_000_000 / (l.cols * l.rows));
+  it("scales everything down to fit when there is more than the capacity", () => {
+    const over = block(1_500_000, 9);
+    const l = layout(over, 6 / 5, 1_000_000);
+    check(l, over);
+    expect(l.offset).toBeCloseTo(0, 6);
   });
 
-  it("draws nothing for no transactions", () => {
+  it("draws transactions of no size as nothing, and nothing for no transactions", () => {
+    const zero = [...block(100_000, 2), { id: "zero", vsize: 0, fee: 0, value: 0 }];
+    check(layout(zero, 6 / 5, 1_000_000), zero);
     const l = layout([], 6 / 5, 1_000_000);
     expect(l.order).toHaveLength(0);
     expect(hitTest(l, 1, 1)).toBe(-1);
@@ -179,7 +172,7 @@ describe("layout", () => {
 });
 
 describe("hitTest", () => {
-  it("answers none outside the grid and above the squares", () => {
+  it("answers none outside the grid and above the rectangles", () => {
     const l = layout(block(100_000), 6 / 5, 1_000_000);
     expect(hitTest(l, -0.5, l.rows - 1)).toBe(-1);
     expect(hitTest(l, l.cols, l.rows - 1)).toBe(-1);
@@ -188,7 +181,7 @@ describe("hitTest", () => {
     expect(hitTest(l, Number.NaN, 1)).toBe(-1);
   });
 
-  it("is fast on thousands of squares", () => {
+  it("is fast on thousands of rectangles", () => {
     const l = layout(FULL, 6 / 5, 1_000_000);
     const start = performance.now();
     let found = 0;
@@ -201,13 +194,8 @@ describe("hitTest", () => {
 
 describe("gridSize", () => {
   it("keeps the grid when the frame changes by a pixel", () => {
-    expect(gridSize(600 / 500, 4000)).toStrictEqual(gridSize(601 / 500, 4000));
-    expect(gridSize(320 / 266, 4000)).toStrictEqual(gridSize(600 / 500, 4000));
-  });
-
-  it("grows with very many transactions so the smallest still fit", () => {
-    const { cols, rows } = gridSize(1, 100_000);
-    expect(cols * rows).toBeGreaterThanOrEqual(100_000 * MIN_SIDE * MIN_SIDE);
+    expect(gridSize(600 / 500)).toStrictEqual(gridSize(601 / 500));
+    expect(gridSize(320 / 266)).toStrictEqual(gridSize(600 / 500));
   });
 });
 

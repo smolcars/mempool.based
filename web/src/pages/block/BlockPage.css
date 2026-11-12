@@ -94,11 +94,25 @@
   }
 
   /* ---- Core sample and facts ---- */
+  /* The facts first, the drawing beside them; on narrow screens, the facts above it. */
   .block-layout {
     display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    gap: var(--space-7);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    grid-template-areas:
+      "side core"
+      "more core";
+    grid-template-rows: auto 1fr;
+    gap: var(--space-5);
     align-items: start;
+  }
+  .block-side {
+    grid-area: side;
+  }
+  .block-core {
+    grid-area: core;
+  }
+  .block-more {
+    grid-area: more;
   }
 
   .block-core__frame {
@@ -218,7 +232,7 @@
   }
   .block-fact {
     min-width: 0;
-    padding: var(--space-3) 0;
+    padding: var(--space-2) 0;
     border-bottom: 1px solid var(--color-line);
   }
   .block-fact--wide {
@@ -274,20 +288,17 @@
   }
   .block-tag--hex {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
   .block-tag__hidden {
     color: var(--color-text-muted);
-    font-weight: var(--weight-light);
+    font-weight: var(--weight-regular);
     letter-spacing: -0.1em;
   }
 
   .block-side__title {
-    margin-top: var(--space-6);
-    padding-bottom: var(--space-2);
-    border-bottom: 2px solid var(--color-text);
+    margin-top: var(--space-4);
     font-size: var(--text-md);
   }
   .block-facts--header {
@@ -332,7 +343,9 @@
   @media (max-width: 1040px) {
     .block-layout {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--space-6);
+      grid-template-areas: "side" "core" "more";
+      grid-template-rows: none;
+      gap: var(--space-4);
     }
   }
   @media (max-width: 640px) {

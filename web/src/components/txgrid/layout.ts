@@ -1,6 +1,8 @@
 // Packs a block's transactions into squares on a grid of cells (docs/FRONTEND.md "Transaction
 // grid"). Pure and deterministic: the same transactions and frame shape give the same picture.
 
+import { feeBand } from "../../lib/format";
+
 /** One transaction as the grid needs it. */
 export interface GridTx {
   /** Stable across changes: the index in the block for a mined block, the txid for a projected one. */
@@ -20,36 +22,32 @@ export interface GridTx {
   coinbase?: boolean;
 }
 
-/** Squares placed on a `cols` × `rows` grid. Arrays are indexed by rank: 0 is the top left. */
+/**
+ * Rectangles placed on a `cols` × `rows` grid of cells, in fractions of a cell. Arrays are indexed
+ * by rank: 0 is the top left.
+ */
 export interface Layout {
   cols: number;
   rows: number;
-  /** vB per cell: a square of side `s` stands for about `s² × unit` vB. */
+  /** vB per cell: a rectangle of `w × h` cells stands for `w × h × unit` vB. */
   unit: number;
-  /** Rows left empty above the squares, which sit on the floor of the frame like sediment. */
+  /** Rows left empty above the rectangles: the block's unused capacity. */
   offset: number;
   /** Index in the input of the transaction at each rank. */
   order: Int32Array;
-  /** Column of each square's left edge. */
-  x: Int32Array;
-  /** Row of each square's top edge, `offset` included. */
-  y: Int32Array;
-  /** Side in cells. */
-  side: Int32Array;
-  /** The rank covering each cell of the packed area (`offset` not included), or -1. */
-  owner: Int32Array;
+  /** Left edge, top edge (`offset` included), width and height of each rectangle, in cells. */
+  x: Float64Array;
+  y: Float64Array;
+  w: Float64Array;
+  h: Float64Array;
+  /** The first rank of each run, in order, and one past the last rank at the end. */
+  strips: Int32Array;
+  /** Each run's box: x, y, width, height, and 1 for a column or 0 for a row. */
+  boxes: Float64Array;
 }
 
-/** About this many cells in a frame: the median transaction gets a side of four or five. */
+/** About this many cells in a frame: it sets the frame's shape steps, not the drawing's detail. */
 export const GRID_CELLS = 160_000;
-/**
- * The smallest side drawn, in cells. A transaction smaller than this is drawn at this size, its
- * area overstated, so it stays visible and can be pointed at. At the block page's scale only
- * transactions under 14 vB would be, and none exist.
- */
-export const MIN_SIDE = 2;
-const GROW = 1.02;
-const MAX_PASSES = 40;
 
 /** A fee rate in sat/vB, 0 when the size is not positive. */
 export const rateOf = (tx: GridTx): number =>
@@ -66,9 +64,14 @@ const compareIds = (a: number | string, b: number | string): number => {
   return a < b ? -1 : a > b ? 1 : 0;
 };
 
-/** Input indices in drawing order: the coinbase, then by fee rate, highest first, then by id. */
+/**
+ * Input indices in drawing order: the coinbase, then by fee band, dearest first; within a band, whose
+ * squares share a colour, the largest first, which keeps the treemap's rectangles close to square;
+ * then by fee rate, highest first, then by id.
+ */
 export function rank(txs: readonly GridTx[]): Int32Array {
   const rates = txs.map((tx) => rateOf(tx));
+  const bands = rates.map((r) => feeBand(r));
   const order = [...txs.keys()];
   order.sort((i, j) => {
     const a = txs[i];
@@ -76,7 +79,12 @@ export function rank(txs: readonly GridTx[]): Int32Array {
     if (!a || !b) return 0;
     const coinbase = a.coinbase === true;
     if (coinbase !== (b.coinbase === true)) return coinbase ? -1 : 1;
-    return (rates[j] ?? 0) - (rates[i] ?? 0) || compareIds(a.id, b.id);
+    return (
+      (bands[j] ?? 0) - (bands[i] ?? 0) ||
+      b.vsize - a.vsize ||
+      (rates[j] ?? 0) - (rates[i] ?? 0) ||
+      compareIds(a.id, b.id)
+    );
   });
   return Int32Array.from(order);
 }
@@ -85,175 +93,133 @@ export function rank(txs: readonly GridTx[]): Int32Array {
  * The grid for a frame of this shape (width over height). The shape is rounded to steps of about
  * 4%, so a frame that changes size by a pixel or two keeps its picture and is only rescaled.
  */
-export function gridSize(aspect: number, count: number): { cols: number; rows: number } {
+export function gridSize(aspect: number): { cols: number; rows: number } {
   const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
   const q = 2 ** (Math.round(Math.log2(Math.min(64, Math.max(1 / 64, a))) * 16) / 16);
-  const cells = Math.max(GRID_CELLS, count * MIN_SIDE * MIN_SIDE * 2);
-  const cols = Math.max(1, Math.round(Math.sqrt(cells * q)));
-  return { cols, rows: Math.max(1, Math.round(cells / cols)) };
+  const cols = Math.max(1, Math.round(Math.sqrt(GRID_CELLS * q)));
+  return { cols, rows: Math.max(1, Math.round(GRID_CELLS / cols)) };
 }
 
 /**
- * First fit, row by row from the top left: each square goes in the first place it fits, so later,
- * smaller squares fill the holes beside bigger ones. Returns the row below the lowest square, or
- * -1 when they do not fit in the `owner` grid at all.
- */
-function pack(
-  side: Int32Array,
-  cols: number,
-  owner: Int32Array,
-  x: Int32Array,
-  y: Int32Array,
-): number {
-  owner.fill(-1);
-  const cells = owner.length;
-  const rows = cells / cols;
-  // Every place before `from[s]` is known not to fit a side of `s` or more: cells only fill up.
-  const from = new Int32Array(Math.max(...side, 0) + 1);
-  let bottom = 0;
-  for (let r = 0; r < side.length; r++) {
-    const s = side[r] ?? MIN_SIDE;
-    let p = from[s] ?? 0;
-    for (;;) {
-      const px = p % cols;
-      const held = owner[p] ?? -1;
-      if (held !== -1) {
-        // Step over the square in the way, to the first cell after it on this row.
-        p = p - px + (x[held] ?? 0) + (side[held] ?? 1);
-        continue;
-      }
-      if (p >= cells) return -1;
-      const py = (p - px) / cols;
-      // Rows only go down from here, so if it overflows now it overflows everywhere after.
-      if (py + s > rows) return -1;
-      if (px + s > cols) {
-        p = (py + 1) * cols;
-        continue;
-      }
-      const blocked = blocker(owner, cols, px, py, s);
-      if (blocked === -1) {
-        for (let dy = 0; dy < s; dy++)
-          owner.fill(r, (py + dy) * cols + px, (py + dy) * cols + px + s);
-        x[r] = px;
-        y[r] = py;
-        bottom = Math.max(bottom, py + s);
-        // `from` never decreases with the side, so the update stops at the first already past p.
-        for (let k = s; k < from.length && (from[k] ?? 0) < p; k++) from[k] = p;
-        break;
-      }
-      // Every start up to the blocking column would cover it too.
-      p = py * cols + blocked + 1;
-    }
-  }
-  return bottom;
-}
-
-/**
- * Lets every square drop straight down until it rests on another or on the floor, lowest first,
- * so the holes first fit leaves under big squares close up and the block's floor is flat, like
- * sediment. Squares only move down into free cells, so none overlap.
- */
-function settle(
-  owner: Int32Array,
-  cols: number,
-  floor: number,
-  x: Int32Array,
-  y: Int32Array,
-  side: Int32Array,
-): void {
-  // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
-  const ranks = [...side.keys()].sort(
-    (a, b) => (y[b] ?? 0) + (side[b] ?? 0) - ((y[a] ?? 0) + (side[a] ?? 0)) || a - b,
-  );
-  for (const r of ranks) {
-    const s = side[r] ?? 0;
-    if (s === 0) continue;
-    const px = x[r] ?? 0;
-    const top = y[r] ?? 0;
-    let below = top + s;
-    const free = (row: number) => {
-      for (let c = px; c < px + s; c++) if (owner[row * cols + c] !== -1) return false;
-      return true;
-    };
-    while (below < floor && free(below)) below++;
-    const drop = below - top - s;
-    if (drop === 0) continue;
-    for (let dy = 0; dy < s; dy++)
-      owner.fill(-1, (top + dy) * cols + px, (top + dy) * cols + px + s);
-    for (let dy = 0; dy < s; dy++) {
-      owner.fill(r, (top + drop + dy) * cols + px, (top + drop + dy) * cols + px + s);
-    }
-    y[r] = top + drop;
-  }
-}
-
-/** The rightmost occupied column met in an s × s square at (px, py), or -1 if it is all free. */
-function blocker(owner: Int32Array, cols: number, px: number, py: number, s: number): number {
-  for (let dy = 0; dy < s; dy++) {
-    const row = (py + dy) * cols;
-    for (let dx = s - 1; dx >= 0; dx--) if (owner[row + px + dx] !== -1) return px + dx;
-  }
-  return -1;
-}
-
-/**
- * Packs `txs` into a frame of shape `aspect` (width over height) that holds `capacity` vB, or the
- * transactions' total if that is more. Each square's area follows its virtual size: its side is
- * the exact side rounded to whole cells, at least {@link MIN_SIDE}. When rounding and the holes
- * first fit leaves make the squares overflow, every square shrinks a little and they are packed
- * again, so a full block fills the frame and a half-full one about half of it, from the floor up.
+ * Lays `txs` out in a frame of shape `aspect` (width over height) that holds `capacity` vB, or the
+ * transactions' total if that is more, as an ordered squarified treemap: in rank order, each run of
+ * rectangles is laid along the shorter side of the space still free, a column down its left edge
+ * or a row along its top, and the run grows while that makes its rectangles closer to square. Every
+ * rectangle's area is its virtual size and the runs tile the space exactly, so the transactions
+ * make one clean rectangle on the floor of the frame, as high as the block is full, the dearest at
+ * the top left; the empty band above it is the capacity left unused.
  */
 export function layout(txs: readonly GridTx[], aspect: number, capacity: number): Layout {
   const n = txs.length;
-  const { cols, rows } = gridSize(aspect, n);
+  const { cols, rows } = gridSize(aspect);
   const order = rank(txs);
-  const x = new Int32Array(n);
-  const y = new Int32Array(n);
-  const side = new Int32Array(n);
+  const size = (r: number) => {
+    const v = txs[order[r] ?? 0]?.vsize ?? 0;
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
   let total = 0;
-  let largest = 0;
-  for (const tx of txs) {
-    const v = Number.isFinite(tx.vsize) && tx.vsize > 0 ? tx.vsize : 0;
-    total += v;
-    largest = Math.max(largest, v);
-  }
-  const fit = Math.min(cols, rows);
-  let unit = Math.max(
-    (Math.max(capacity, total) || 1) / (cols * rows),
-    largest / (fit * fit),
-    Number.MIN_VALUE,
-  );
-  // Packed into twice the frame's height, so an overflow says by how much the squares must shrink.
-  const owner = new Int32Array(cols * rows * 2);
-  let bottom = -1;
-  for (let pass = 0; pass < MAX_PASSES; pass++) {
-    for (let r = 0; r < n; r++) {
-      const v = txs[order[r] ?? 0]?.vsize ?? 0;
-      const exact = v > 0 ? Math.sqrt(v / unit) : 0;
-      side[r] = Math.min(fit, Math.max(MIN_SIDE, Math.round(exact)));
+  for (let r = 0; r < n; r++) total += size(r);
+  const unit = Math.max(capacity, total) / (cols * rows) || 1;
+  const x = new Float64Array(n);
+  const y = new Float64Array(n);
+  const w = new Float64Array(n);
+  const h = new Float64Array(n);
+  const offset = rows - total / unit / cols;
+  const strips: number[] = [];
+  const boxes: number[] = [];
+  // The space still free.
+  let fx = 0;
+  let fy = offset;
+  let fw = cols;
+  let fh = rows - offset;
+  let start = 0;
+  while (start < n) {
+    const column = fw >= fh;
+    const side = column ? fh : fw;
+    // Grow the run while its worst rectangle gets closer to square. A run of area A along a side
+    // of length L is A / L thick; its least square rectangle is its largest or its smallest.
+    let area = 0;
+    let big = 0;
+    let small = Number.POSITIVE_INFINITY;
+    let worst = Number.POSITIVE_INFINITY;
+    let end = start;
+    while (end < n) {
+      const a = size(end) / unit;
+      const nextBig = Math.max(big, a);
+      const nextSmall = a > 0 ? Math.min(small, a) : small;
+      const t = (area + a) / side;
+      const ratio =
+        t > 0 && nextSmall < Number.POSITIVE_INFINITY
+          ? Math.max(nextBig / (t * t), (t * t) / nextSmall)
+          : 0;
+      if (end > start && area > 0 && ratio > worst) break;
+      area += a;
+      big = nextBig;
+      small = nextSmall;
+      worst = ratio;
+      end++;
     }
-    bottom = pack(side, cols, owner, x, y);
-    if (bottom !== -1 && bottom <= rows) break;
-    // Height goes as total area over width, so as 1 / unit; a little more covers the rounding.
-    unit *= bottom === -1 ? 2 : Math.max(GROW, (bottom / rows) * GROW);
+    const thick = side > 0 ? area / side : 0;
+    let along = 0;
+    for (let r = start; r < end; r++) {
+      const length = thick > 0 ? size(r) / unit / thick : 0;
+      x[r] = column ? fx : fx + along;
+      y[r] = column ? fy + along : fy;
+      w[r] = column ? thick : length;
+      h[r] = column ? length : thick;
+      along += length;
+    }
+    strips.push(start);
+    boxes.push(fx, fy, column ? thick : fw, column ? fh : thick, column ? 1 : 0);
+    if (column) {
+      fx += thick;
+      fw -= thick;
+    } else {
+      fy += thick;
+      fh -= thick;
+    }
+    start = end;
   }
-  if (bottom === -1 || bottom > rows) {
-    // Only when even the smallest squares cannot fit, which the grid's size rules out.
-    owner.fill(-1);
-    side.fill(0);
-    bottom = 0;
-  }
-  settle(owner, cols, bottom, x, y, side);
-  const offset = rows - bottom;
-  for (let r = 0; r < n; r++) y[r] = (y[r] ?? 0) + offset;
-  // Only the frame's own rows are kept for hit testing; the rest was room to measure an overflow.
-  return { cols, rows, unit, offset, order, x, y, side, owner: owner.slice(0, cols * rows) };
+  strips.push(n);
+  return {
+    cols,
+    rows,
+    unit,
+    offset,
+    order,
+    x,
+    y,
+    w,
+    h,
+    strips: Int32Array.from(strips),
+    boxes: Float64Array.from(boxes),
+  };
 }
 
-/** The rank of the square under a point given in cells, or -1 for none. */
+/** The rank of the rectangle under a point given in cells, or -1 for none. */
 export function hitTest(l: Layout, cx: number, cy: number): number {
-  const col = Math.floor(cx);
-  const row = Math.floor(cy) - l.offset;
-  if (!(col >= 0 && col < l.cols && row >= 0 && row < l.rows - l.offset)) return -1;
-  return l.owner[row * l.cols + col] ?? -1;
+  if (!(cx >= 0 && cx < l.cols && cy >= l.offset && cy < l.rows)) return -1;
+  // The runs tile the area in order, so the first whose box holds the point is the one.
+  for (let k = 0; k + 1 < l.strips.length; k++) {
+    const o = k * 5;
+    const bx = l.boxes[o] ?? 0;
+    const by = l.boxes[o + 1] ?? 0;
+    if (cx < bx || cy < by || cx >= bx + (l.boxes[o + 2] ?? 0) || cy >= by + (l.boxes[o + 3] ?? 0))
+      continue;
+    const column = l.boxes[o + 4] === 1;
+    const at = column ? l.y : l.x;
+    const v = column ? cy : cx;
+    let lo = l.strips[k] ?? 0;
+    let hi = (l.strips[k + 1] ?? lo) - 1;
+    // The last rectangle in the run starting at or before the point.
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((at[mid] ?? 0) <= v) lo = mid;
+      else hi = mid - 1;
+    }
+    const r = lo;
+    const inside = cx < (l.x[r] ?? 0) + (l.w[r] ?? 0) && cy < (l.y[r] ?? 0) + (l.h[r] ?? 0);
+    return inside ? r : -1;
+  }
+  return -1;
 }

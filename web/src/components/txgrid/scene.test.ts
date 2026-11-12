@@ -23,7 +23,7 @@ const tx = (id: number | string, vsize: number, rate: number): GridTx => ({
 const txs = [tx("a", 400, 5), tx("b", 200, 2), tx("c", 900, 0.5), tx("d", 150, 1)];
 const at = (l: ReturnType<typeof layout>, list: readonly GridTx[], id: string) => {
   const r = [...l.order].findIndex((i) => list[i]?.id === id);
-  return [l.x[r] ?? 0, l.y[r] ?? 0, l.side[r] ?? 0, 1];
+  return [l.x[r] ?? 0, l.y[r] ?? 0, l.w[r] ?? 0, l.h[r] ?? 0, 1];
 };
 const record = (s: Scene, id: string) => {
   const i = s.ids.indexOf(id);
@@ -47,9 +47,9 @@ describe("Scene", () => {
     expect(starts.at(-1)).toBe(0);
     expect(s.end).toBe(MOTION.block);
     for (const id of ["a", "b", "c", "d"]) {
-      const [x, y, side, alpha] = s.sample(s.ids.indexOf(id), 0, MOTION);
+      const [x, y, w, h, alpha] = s.sample(s.ids.indexOf(id), 0, MOTION);
       const to = at(l, txs, id);
-      expect([x, side, alpha]).toStrictEqual([to[0], to[2], 0]);
+      close([x, w, h, alpha], [to[0] ?? 0, to[2] ?? 0, to[3] ?? 0, 0]);
       expect(y).toBeLessThan(to[1] ?? 0); // above, falling
       close(s.sample(s.ids.indexOf(id), 2000, MOTION), to);
     }
@@ -61,8 +61,8 @@ describe("Scene", () => {
     s.update(l, txs, 0, "pour", REDUCED);
     expect(s.end).toBe(REDUCED.fade);
     for (const id of ["a", "b", "c", "d"]) {
-      const [x, y, side, alpha] = s.sample(s.ids.indexOf(id), 0, REDUCED);
-      expect([x, y, side, alpha]).toStrictEqual([...at(l, txs, id).slice(0, 3), 0]);
+      const [x, y, w, h, alpha] = s.sample(s.ids.indexOf(id), 0, REDUCED);
+      close([x, y, w, h, alpha], [...at(l, txs, id).slice(0, 4), 0]);
     }
   });
 
@@ -83,12 +83,12 @@ describe("Scene", () => {
     close(s.sample(c, 3000, MOTION), at(second, next, "c"));
     // Added: drops in from above, transparent at first.
     const e = s.ids.indexOf("e");
-    expect(s.sample(e, 1000, MOTION)[3]).toBe(0);
+    expect(s.sample(e, 1000, MOTION)[4]).toBe(0);
     close(s.sample(e, 3000, MOTION), at(second, next, "e"));
     // Removed: fades and shrinks where it stood.
     const a = s.ids.indexOf("a");
     close(s.sample(a, 1000, MOTION), at(first, txs, "a"));
-    expect(s.sample(a, 3000, MOTION)[3]).toBe(0);
+    expect(s.sample(a, 3000, MOTION)[4]).toBe(0);
     // Once faded, a later change forgets it.
     s.update(second, next, 5000, "change", MOTION);
     expect(s.ids).toStrictEqual(["e", "c", "b", "d"]);

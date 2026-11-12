@@ -6,6 +6,7 @@ const VERTEX = `#version 300 es
 layout(location = 0) in vec4 a_from;
 layout(location = 1) in vec4 a_to;
 layout(location = 2) in vec4 a_time;
+layout(location = 3) in vec2 a_alpha;
 uniform float u_now;
 uniform float u_cell;
 uniform vec2 u_origin;
@@ -40,17 +41,18 @@ float ease(vec4 c, float x) {
 void main() {
   float p = a_time.y > 0.0 ? clamp((u_now - a_time.x) / a_time.y, 0.0, 1.0) : 1.0;
   float e = ease(u_ease[int(a_time.z)], p);
-  vec3 r = mix(a_from.xyz, a_to.xyz, e);
-  float alpha = clamp(mix(a_from.w, a_to.w, min(1.0, p * 1.6)), 0.0, 1.0);
+  vec4 r = mix(a_from, a_to, e);
+  float alpha = clamp(mix(a_alpha.x, a_alpha.y, min(1.0, p * 1.6)), 0.0, 1.0);
   vec2 lo = u_origin + r.xy * u_cell;
-  vec2 hi = lo + r.z * u_cell;
-  // A square at rest sits on whole device pixels, so its edges and gaps are sharp.
+  vec2 hi = lo + r.zw * u_cell;
+  // A rectangle at rest sits on whole device pixels, so its edges and gaps are sharp.
   if (p >= 1.0) {
     lo = floor(lo + 0.5);
     hi = floor(hi + 0.5);
   }
-  float gap = min(floor((hi.x - lo.x) / 4.0), max(1.0, floor(u_dpr + 0.5)));
-  hi -= gap;
+  // A one-pixel seam on each side wide enough to spare it; thinner ones meet their neighbour.
+  float px = max(1.0, floor(u_dpr + 0.5));
+  hi -= min(floor((hi - lo) / 4.0), vec2(px));
   vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
   v_half = max((hi - lo) * 0.5, vec2(0.0));
   v_local = (corner - 0.5) * (hi - lo);
@@ -150,9 +152,9 @@ export class Renderer {
     const buffer = gl.createBuffer();
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, 4, gl.FLOAT, false, STRIDE * 4, i * 16);
+      gl.vertexAttribPointer(i, i < 3 ? 4 : 2, gl.FLOAT, false, STRIDE * 4, i * 16);
       gl.vertexAttribDivisor(i, 1);
     }
     gl.bindVertexArray(null);

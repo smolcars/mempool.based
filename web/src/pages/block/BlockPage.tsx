@@ -461,17 +461,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
         </Show>
 
         <div class="block-layout">
-          <CoreSample
-            weight={b()?.weight}
-            summary={sum()}
-            settle={settle()}
-            txs={ready(gridTxs)}
-            txsError={failed(gridTxs)}
-            retryTxs={() => gridTxsCtl.refetch()}
-            txid={txidOf}
-            highlight={highlight()}
-          />
-          <div class="block-side">
+          <div class="block-side panel">
             <dl class="block-facts">
               <Fact
                 label="Mined"
@@ -481,7 +471,6 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               />
               <Fact
                 label="Miner"
-                wide="phone"
                 value={
                   failed(summary) === undefined ? (
                     sum() === undefined ? undefined : (
@@ -521,31 +510,15 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 }
               />
               <Fact
-                label="Confirmations"
-                value={
-                  confirmations() === undefined ? undefined : confirmations() === null ? (
-                    MISSING
-                  ) : (
-                    <span class="num">{groupDigits(confirmations() ?? 0)}</span>
-                  )
-                }
-                sub={stale() ? "Not on the best chain" : undefined}
-              />
-              <Fact
                 label="Transactions"
                 value={b() ? <span class="num">{groupDigits(b()?.tx_count ?? 0)}</span> : undefined}
               />
               <Fact
-                label="Size"
-                value={b() ? <span class="num">{formatSize(b()?.size ?? 0, "B")}</span> : undefined}
-                sub={b() && `${formatSize(vsizeFromWeight(b()?.weight ?? 0))} virtual`}
-              />
-              <Fact
-                label="Weight"
+                label="Fullness"
                 value={
-                  b() ? <span class="num">{formatSize(b()?.weight ?? 0, "WU")}</span> : undefined
+                  b() ? <span class="num">{percent(fullness(b()?.weight ?? 0))}</span> : undefined
                 }
-                sub={b() && `${percent(fullness(b()?.weight ?? 0))} of the limit`}
+                sub={b() && `${formatSize(b()?.weight ?? 0, "WU")} of 4 MWU`}
               />
               <Fact
                 label="Median fee rate"
@@ -583,7 +556,6 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               />
               <Fact
                 label="Total fees"
-                wide="phone"
                 value={
                   failed(summary) === undefined ? (
                     sum() === undefined ? undefined : (
@@ -599,7 +571,6 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               />
               <Fact
                 label="Reward"
-                wide="phone"
                 value={
                   reward() === undefined ? undefined : reward() ? (
                     <Amount sats={reward()?.reward ?? 0} />
@@ -619,6 +590,36 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                     </>
                   ))
                 }
+              />
+            </dl>
+          </div>
+          <CoreSample
+            weight={b()?.weight}
+            summary={sum()}
+            settle={settle()}
+            txs={ready(gridTxs)}
+            txsError={failed(gridTxs)}
+            retryTxs={() => gridTxsCtl.refetch()}
+            txid={txidOf}
+            highlight={highlight()}
+          />
+          <div class="block-more panel">
+            <dl class="block-facts">
+              <Fact
+                label="Size"
+                value={b() ? <span class="num">{formatSize(b()?.size ?? 0, "B")}</span> : undefined}
+                sub={b() && `${formatSize(vsizeFromWeight(b()?.weight ?? 0))} virtual`}
+              />
+              <Fact
+                label="Confirmations"
+                value={
+                  confirmations() === undefined ? undefined : confirmations() === null ? (
+                    MISSING
+                  ) : (
+                    <span class="num">{groupDigits(confirmations() ?? 0)}</span>
+                  )
+                }
+                sub={stale() ? "Not on the best chain" : undefined}
               />
               <Fact
                 label="Coinbase tag"
@@ -697,6 +698,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               </HeaderFact>
             </dl>
           </div>
+
         </div>
 
         <Show when={props.hash && sum() === undefined}>
@@ -903,10 +905,10 @@ function CoreSample(props: {
   );
   const label = () => {
     const n = props.txs?.length ?? 0;
-    return `Map of the block's ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. The list below has every one.`;
+    return `Map of the block's ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one rectangle each, the highest fee rate at the top left. The list below has every one.`;
   };
   return (
-    <figure class={["block-core", { "block-core--grid": drawn() }]}>
+    <figure class={["block-core panel", { "block-core--grid": drawn() }]}>
       <div class="block-core__frame">
         <span class="block-core__limit" aria-hidden="true">
           Weight limit
@@ -969,8 +971,8 @@ function CoreSample(props: {
           </Show>
         </span>
         <span class={["block-core__text", { "block-core__text--off": !drawn() }]}>
-          The block fills {filled()} of its weight limit. Each square is a transaction, as large as
-          its virtual size and colored by its fee rate, the highest at the top left.{" "}
+          {filled()} full. Each rectangle is a transaction, its area its virtual size, shaded by its
+          fee rate, the dearest at the top left; any space above them was left unused.{" "}
           {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
           <a href="#block-txs-title" rel="external">
             Every transaction is in the list below.
