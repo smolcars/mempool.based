@@ -161,7 +161,8 @@ export function depthRows(bands: readonly FeeBandShare[]): DepthRow[] {
     const blocks = b.vsize / BLOCK_VSIZE;
     deep += blocks;
     const bar = b.vsize > 0 ? Math.min(1, Math.max(0, Math.log10(b.vsize / 100) / 4)) : 0;
-    return { ...b, blocks, deep, bar };
+    const { band, from, to, vsize, x, share } = b;
+    return { band, from, to, vsize, x, share, blocks, deep, bar };
   });
 }
 

@@ -507,22 +507,27 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("This server does not serve Mainnet."));
   });
 
-  it("asks nothing more of an address too large to total, and says why", async () => {
+  it("asks nothing more of an address too large to total, and says why once", async () => {
     serve({
       [`/address/${ME}`]: refused(503, "address history too large for this server"),
       [`/address/${ME}/txs`]: [tx(1, [[OTHER, 2000]], [[ME, 1000]])],
     });
     const el = open(`/address/${ME}?view=unspent`);
-    await until(() => expect(text(el)).toContain("Totals are not available for this address"));
-    expect(text(el)).toContain("exchange and mining pool addresses");
-    expect(text(el)).toContain("Unspent outputs are not available for this address");
-    expect(text(el)).toContain("There is no balance chart for this address");
-    expect(el.querySelector('[role="alert"]')).toBeNull();
-    const tab = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')][0];
-    tab?.click();
+    // Said once, at the top, naming what is missing; nothing below repeats it or promises a reload.
     await until(() =>
-      expect(text(el)).toContain("Transactions are not available for this address"),
+      expect(text(el)).toContain("This address has more history than this server adds up"),
     );
+    expect(text(el)).toContain("says nothing about how much it holds");
+    for (const repeat of [
+      "Totals are not available",
+      "no balance chart",
+      "not available for this address",
+      "Reload",
+    ]) {
+      expect(text(el)).not.toContain(repeat);
+    }
+    expect(el.querySelector('[role="tab"]')).toBeNull();
+    expect(el.querySelector('[role="alert"]')).toBeNull();
     // Past the wait for the totals too: a page of its history can keep the node busy for a minute.
     await sleep(1200);
     // Not its history, its balance history or its unspent outputs: only the totals were asked.

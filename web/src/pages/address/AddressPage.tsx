@@ -189,6 +189,13 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       <Match when={pageRefusal() === "wrong-network" && props.found}>
         {(f) => <WrongNetwork found={f()} network={network()} />}
       </Match>
+      {/* One state, said once: nothing below could be shown, so nothing below is drawn. */}
+      <Match when={tooLarge()}>
+        <Notice title="This address has more history than this server adds up">
+          Its balance, totals, balance chart and transactions are not shown here. That says nothing
+          about how much it holds: look it up with your own node or another explorer.
+        </Notice>
+      </Match>
       <Match when={true}>
         <LiveLine watch={watch()} socket={socket()} />
         <Totals stats={stats} retry={retryAll} />
