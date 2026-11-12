@@ -654,5 +654,10 @@
     .home-grid {
       gap: var(--space-6);
     }
+    /* Headers wrap, so the figures, not the units, set each column's width. */
+    .home-recent th {
+      white-space: normal;
+      vertical-align: bottom;
+    }
   }
 }
