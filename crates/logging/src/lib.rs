@@ -12,7 +12,7 @@ mod format;
 use std::io::{self, IsTerminal, Write};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
@@ -21,6 +21,8 @@ pub use format::timestamp;
 
 /// Lines waiting for the writer. Past this, events are dropped and counted.
 pub const QUEUE_LINES: usize = 4096;
+/// Longest a dropped-events count waits to be written when nothing else is logged.
+const REPORT_DROPS_EVERY: Duration = Duration::from_millis(100);
 
 /// Severity, lowest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -155,14 +157,16 @@ pub fn emit<E: Event>(event: &E) {
     }
 }
 
-/// Waits up to `limit` for every queued line to be written. For process exit; gives up rather
-/// than hang on a blocked stdout.
+/// Waits up to `limit` for every queued line, and the count of any dropped, to be written. For
+/// process exit; gives up rather than hang on a blocked stdout.
 pub fn flush(limit: Duration) {
     let Some(logger) = LOGGER.get() else {
         return;
     };
     let start = Instant::now();
-    while logger.pending.load(Ordering::Relaxed) > 0 && start.elapsed() < limit {
+    let busy =
+        || logger.pending.load(Ordering::Relaxed) > 0 || logger.dropped.load(Ordering::Relaxed) > 0;
+    while busy() && start.elapsed() < limit {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -194,9 +198,18 @@ fn write_lines(rx: Receiver<Vec<u8>>, out: impl Write) {
         return;
     };
     let mut out = io::BufWriter::with_capacity(64 << 10, out);
-    while let Ok(first) = rx.recv() {
-        let mut written = 1;
-        let _ = out.write_all(&first);
+    loop {
+        // A producer can count a drop just after the last check below and then go quiet, so
+        // wake periodically to report it rather than only when the next line arrives.
+        let mut written = 0;
+        match rx.recv_timeout(REPORT_DROPS_EVERY) {
+            Ok(first) => {
+                let _ = out.write_all(&first);
+                written += 1;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
         // Batch whatever else is queued into one flush.
         while let Ok(line) = rx.try_recv() {
             let _ = out.write_all(&line);

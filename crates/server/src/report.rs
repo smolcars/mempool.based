@@ -17,6 +17,8 @@ use crate::config::Network;
 pub fn report_electrum(network: Network, client: &electrum::Client) -> JoinHandle<()> {
     let network = network.name();
     let mut health = client.health();
+    // The client may already be up: report the current state first, not only later changes.
+    health.mark_changed();
     let mut events = client.events();
     let client = client.clone();
     tokio::spawn(async move {

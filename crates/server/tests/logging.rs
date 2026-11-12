@@ -270,3 +270,53 @@ async fn electrum_failures_are_summarised() {
         "{attempts:?}"
     );
 }
+
+#[tokio::test]
+async fn electrum_reporter_sees_a_client_that_is_already_up() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    capture();
+    // A minimal Electrum server: answers the handshake, then keeps the connection open.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (rd, mut wr) = stream.into_split();
+        let mut lines = BufReader::new(rd).lines();
+        let genesis = "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c";
+        while let Ok(Some(line)) = lines.next_line().await {
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let result = match req["method"].as_str().unwrap() {
+                "server.version" => serde_json::json!(["probe-electrum 1.0", "1.6"]),
+                "blockchain.headers.subscribe" => serde_json::json!({"height": 0, "hex": genesis}),
+                _ => Value::Null,
+            };
+            let reply = serde_json::json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+            wr.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        }
+    });
+    let client = node::electrum::Client::spawn(node::electrum::Config::new(addr));
+    let mut health = client.health();
+    tokio::time::timeout(Duration::from_secs(5), health.wait_for(|h| h.ready))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let _reporter = mempool_based::report::report_electrum(Network::Testnet4, &client);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let connected = logged()
+            .1
+            .into_iter()
+            .find(|v| v["event"] == "electrum_connected" && v["network"] == "testnet4");
+        if let Some(e) = connected {
+            assert_eq!(e["server"], "probe-electrum 1.0");
+            assert_eq!(e["protocol"], "1.6");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no electrum_connected for a ready client"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
