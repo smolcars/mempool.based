@@ -2,3 +2,4 @@
 # changes; `cargo test -p engine store` fails with the line to append when you add one.
 0001_blocks.sql 9d1160d7ae33ce36
 0002_pools.sql 18bc8596caa1e50c
+0003_audits.sql 6773cea5c9d0e61e

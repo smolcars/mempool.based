@@ -65,6 +65,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 |---|---|---|---|
 | [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column) | One row per block on the best chain | Yes, by backfill |
 | `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
+| [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
 
 ### Adding a table
 
@@ -188,6 +189,39 @@ For the mining routes, `crates/engine/src/blocks/mining.rs` (and `pool_page` in 
 Measured with `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark`, which writes 975,000 rows attributed as they go in 9 s (attribution adds about 2 µs a row).
 
 Measured on the machine and load described under [Measurements](#measurements) with `cargo test --release -p engine -- --ignored --nocapture read_benchmark`: 975,000 realistic rows written in 7 s, 295 MB.
+
+### audits
+
+One row per block audited when it arrived ([`MEMPOOL.md`](MEMPOOL.md#block-audits) has the method and the categories). The code is `crates/engine/src/audit/`.
+
+| Column | Type | Why |
+|---|---|---|
+| `hash` | 32-byte blob, key | Every per-block route asks by hash. Keyed by hash, not height, so a block that leaves the best chain keeps its audit |
+| `height` | integer, indexed | Pages of scores by height, joined to `blocks` on height and hash so only the best chain's are listed |
+| `time` | integer | The header's timestamp: the match rate over time (`predictions`) |
+| `seen_at` | integer | When we learnt of the block, Unix seconds: what `fresh` was measured from |
+| `match_rate` | real | The score, percent, two decimals |
+| `expected_*`, `actual_*` | integer × 8 | Transactions, vsize, weight and fees of the expected block and of the mined one (coinbase left out) |
+| `matched_*` … `unseen_*` | integer × 14 | Transactions and vsize of each of the seven categories |
+| `txs` | blob | The listed transactions, every category but `matched`: at most 1,000 records of 45 bytes (txid, kind, vsize, rate in sat per 1,000 vB, accept time or 0), the most telling kinds first, then highest rate. The totals count every one; a reader compares them to tell a capped list |
+
+**No audit is a missing row,** and that is a real answer: the server was not running, had no projection on the parent, or the projection was stale or for another block. Rows are written once, when the block arrives (`INSERT … ON CONFLICT DO NOTHING`): the first audit of a block stands.
+
+**Size.** About 300 bytes of totals and index, plus 45 bytes per listed transaction: 2.3 and 3.5 KB for the two mainnet blocks measured ([`MEMPOOL.md`](MEMPOOL.md#on-mainnet)), so about 150 MB a year and at most about 45 KB, for an empty block against a full expectation.
+
+**Not rebuildable.** The expectation existed only in memory at the moment the block came. Deleting the file loses every audit.
+
+#### Reading
+
+`crates/engine/src/audit/db.rs`:
+
+| Call | Returns |
+|---|---|
+| `by_hash(store, hash)` | One block's `Audit` with its listed transactions |
+| `by_hashes(store, hashes)` | Each block's totals, in order, without the lists: the block facts |
+| `scored_between(store, from, to)` | Score, expected fees and weight of the best chain's audited blocks in a height range, lowest first |
+| `scored_since(store, time)` | The same for the blocks stamped since a time |
+| `write(store, audit)` | Stores an audit unless the block has one |
 
 ## Pragmas
 

@@ -50,15 +50,15 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 | `GET /v1/block/:hash` | One block with `extras` | As above | planned | M3 | ref | Reference leaves `utxoSetSize`, `totalInputAmt`, `matchRate` null |
 | `GET /v1/block/:hash/summary` | Every tx in the block: txid, fee, vsize, value, rate, flags | rbitcoin `getblock` verbosity 2; store | planned | M2 | ref | Feeds the mined-block view. 1.2 MB for a full block. `getblock` v2 has per-tx fees: 0.8 s and 11 MB per full block over TCP |
 | `GET /v1/block/:hash/tx/:txid/summary` | One tx's summary row in a block | As above | planned | M2 | ref | |
-| `GET /v1/block/:hash/audit-summary` | Expected template against the mined block: added, missing, fresh, sigop, prioritized txs, match rate | Engine at block time; store | planned | M3 | pub | 404 `Audit not available` on the reference. Needs our template captured before each block |
-| `GET /v1/block/:hash/tx/:txid/audit` | Whether one tx was expected, seen, added, conflicting, prioritized | Store | planned | M3 | pub | |
+| `GET /v1/block/:hash/audit-summary` | Expected template against the mined block: added, missing, fresh, sigop, prioritized txs, match rate | Engine at block time; store | served | M3 | pub | 404 `Audit not available` on the reference. Our categories, no `template`, and only the lists we can detect ([`API.md`](../API.md#block-audits)) |
+| `GET /v1/block/:hash/tx/:txid/audit` | Whether one tx was expected, seen, added, conflicting, prioritized | Store | served | M3 | pub | `prioritized` and `accelerated` always `false`; a txid in none of our lists reads as matched |
 | `GET /v1/mining/blocks/timestamp/:timestamp` | The newest block stamped at or before a Unix time | Store | served | M3 | ref | Not the nearest: the reference answered the block 252 s before rather than the one 17 s after. `404` before the stored history ([`API.md`](../API.md#mining)) |
 | `GET /v1/blocks/tip/height` | Tip height | rbitcoin Esplora | planned | M5 | ref | An alias of `/api/blocks/tip/height` |
 | `GET /v1/blocks-bulk/:min[/:max]` | Many blocks with extras | — | skipped | — | ref, pub | Disabled on the reference and on mempool.space. Revisit if asked for |
 
 ## Mining
 
-Every mining route is served from the block table in our store (MI1, MI2), never from the node. The reference backend took 14–54 s for most of these; ours answer in under 2 ms once computed, and in under a second cold on a mainnet-sized table ([`API.md`](../API.md#mining)). The audit routes wait for MI4.
+Every mining route is served from the block table in our store (MI1, MI2), never from the node. The reference backend took 14–54 s for most of these; ours answer in under 2 ms once computed, and in under a second cold on a mainnet-sized table ([`API.md`](../API.md#mining)). The audit routes are served from the audits table (MI4), for the blocks we watched arrive ([`API.md`](../API.md#block-audits)).
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
@@ -76,10 +76,10 @@ Every mining route is served from the block table in our store (MI1, MI2), never
 | `GET /v1/mining/blocks/fee-rates/:interval` | Fee-rate percentiles per block over time | Store | served | M3 | ref | Our own percentiles rounded to whole sat/vB; only points whose every block is rated |
 | `GET /v1/mining/blocks/fee-rates/:interval/precise` | The same percentiles with sub-sat precision | Store | served | M3 | pub | 404 on the reference (older release). The useful form on rbitcoin's sub-sat mempool. Three decimals, as mempool.space |
 | `GET /v1/mining/blocks/sizes-weights/:interval` | Block size and weight over time | Store | served | M3 | ref | |
-| `GET /v1/mining/blocks/predictions/:interval` | Audit match rate per block over time | Store (audits) | planned | M3 | ref, pub | Empty on the reference (no audits) |
-| `GET /v1/mining/blocks/audit/score/:hash` | One block's match rate, expected fees and weight | Store (audits) | planned | M3 | ref, pub | |
-| `GET /v1/mining/blocks/audit/scores[/:height]` | Match rates for a page of blocks | Store (audits) | planned | M3 | ref, pub | |
-| `GET /v1/mining/blocks/audit/:hash` | Per-block audit detail | Store (audits) | planned | M3 | ref | 204 with no body on the reference; shape not observed |
+| `GET /v1/mining/blocks/predictions/:interval` | Audit match rate per block over time | Store (audits) | served | M3 | ref, pub | Empty on the reference (no audits). Only blocks we watched arrive |
+| `GET /v1/mining/blocks/audit/score/:hash` | One block's match rate, expected fees and weight | Store (audits) | served | M3 | ref, pub | `404` without an audit, where the public API answers `"null"` |
+| `GET /v1/mining/blocks/audit/scores[/:height]` | Match rates for a page of blocks | Store (audits) | served | M3 | ref, pub | 16 heights ending at `:height`, lowest first |
+| `GET /v1/mining/blocks/audit/:hash` | Per-block audit detail | Store (audits) | served | M3 | ref, pub | 204 with no body on the reference; on the public API the same body as `audit-summary`, and so here |
 
 ## Lightning
 

@@ -42,7 +42,7 @@ Anything else (not JSON, an unknown `op`, a missing or misspelled field, an unkn
 | Message | Meaning |
 |---|---|
 | `{"topic":"blocks","type":"block","block":{…}}` | A block joined the best chain. `block` is the node's Esplora JSON for it, exactly as `GET /api/block/:hash` returns it (`id`, `height`, `previousblockhash`, `timestamp`, `tx_count`, `size`, `weight`, …). Also the snapshot sent on subscribe: the current tip's block |
-| `{"topic":"blocks","type":"summary","summary":{…}}` | A block's fee facts and its miner, exactly as `GET /app/block/:hash/summary` returns them ([`FRONTEND.md`](FRONTEND.md#block-summaries)); `summary.id` names the block and `summary.miner` who mined it, so a new tile names its miner without asking. Sent after the `block` message for each new tip, once it is computed (well under a second on mainnet), and for older blocks the server fills in after a gap or at startup. Never a snapshot: a new subscriber fetches the facts of the tiles it shows over HTTP, from the batch route |
+| `{"topic":"blocks","type":"summary","summary":{…}}` | A block's fee facts, its miner and its audit, exactly as `GET /app/block/:hash/summary` returns them ([`FRONTEND.md`](FRONTEND.md#block-summaries)); `summary.id` names the block, `summary.miner` who mined it and `summary.audit` its health (`null` when it has no audit), so a new tile names its miner and shows its health without asking. A new block's audit is computed before this message is sent: at once on mainnet, at most 5 s later than without it. Sent after the `block` message for each new tip, once it is computed (well under a second on mainnet), and for older blocks the server fills in after a gap or at startup. Never a snapshot: a new subscriber fetches the facts of the tiles it shows over HTTP, from the batch route |
 | `{"topic":"blocks","type":"reorg","fork_height":N}` | Every block above `N` left the best chain. `block` messages for the new branch follow, in height order |
 | `{"topic":"blocks","type":"resync","tip":{"height":…,"hash":"…"}}` | Blocks may have been missed: the server lost and regained the node, or could not fetch a new block within 3 seconds. `tip` is the best block now, or `null`. After a failed fetch it is also the snapshot, until the next `block` |
 
@@ -54,7 +54,7 @@ Anything else (not JSON, an unknown `op`, a missing or misspelled field, an unkn
 
 On `reorg`, drop blocks above `fork_height`. On `resync`, compare `tip` with what is shown and, if it differs, fetch over HTTP. After a reconnect, `hello` and the subscribe snapshot give the tip again; compare as for `resync`.
 
-A `block` message is about 500 bytes whatever the block's size: transactions are not included. The server fetches each new block's JSON in one loop, whatever the number of subscribers: it asks the node's Esplora every 25 ms until the block is served, for at most 3 seconds (120 requests), then sends `resync` instead. A `summary` message is about 400 bytes. Key it by `summary.id`; one whose block is not shown can be dropped.
+A `block` message is about 500 bytes whatever the block's size: transactions are not included. The server fetches each new block's JSON in one loop, whatever the number of subscribers: it asks the node's Esplora every 25 ms until the block is served, for at most 3 seconds (120 requests), then sends `resync` instead. A `summary` message is about 700 bytes with its audit. Key it by `summary.id`; one whose block is not shown can be dropped.
 
 ### Mempool topics
 

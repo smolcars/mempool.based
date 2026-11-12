@@ -146,13 +146,15 @@ What the public API cannot give cheaply: a mined block's fee facts and every tra
   "fee_rate": {"min": 0.10071942446043165, "p10": 0.12, "p25": 0.12698412698412698,
     "median": 1.0850888512305468, "p75": 2.007012551450785, "p90": 3.150749063670412, "max": 62.10091743119266},
   "fee_bands": [367013, 9447, 153, 5069, 233233, 20986, 238267, 102460, 17310, 5453],
-  "miner": {"name": "Foundry USA", "slug": "foundryusa"}
+  "miner": {"name": "Foundry USA", "slug": "foundryusa"},
+  "audit": {"match_rate": 99.87, "expected": {"txs": 3100, "vsize": 998000, "weight": 3991200, "fees": 1500000}, …}
 }
 ```
 
 - `tx_count` counts every transaction. Everything else leaves the coinbase out, as `getblockstats` does: `fees` in sats, `vsize` and `weight` summed over the paying transactions.
 - `fee_rate` is in sat/vB, unrounded, `null` for a block holding only its coinbase. Percentiles are weighted by virtual size: `p25` is the rate of the transaction where the cheapest quarter of the block's vbytes ends. Print them with `formatFeeRate`.
 - `miner` is who mined the block, by the pool list's rules ([`API.md`](API.md#who-mined-a-block)): a payout to a listed address first, then a listed tag, else `{"name": "Unknown", "slug": "unknown"}`. `name` is the list's spelling and `slug` its pool page (`paths.pool`); a coinbase tag only selects one of the list's names and is never itself the answer. It comes from the stored row's coinbase, or from the coinbase in the `getblock` the summary already reads, so it costs no node call and a server without a block table names miners too. A server older than this field leaves it out: say the miner is not known.
+- `audit` is the block's health: its audit's totals ([Block audits](#block-audits) below), or `null` when it has none. A new block's summary is computed with its audit, so the `summary` message and the first fetch already carry it; `null` stays `null`. A server older than this field leaves it out: treat that as `null`.
 - `fee_bands` is the virtual size paying in each of the ten design bands, cheapest first: the strata. They sum to `vsize`. Each transaction is banded on its rate as printed, as `feeBand` does, so a stratum's color agrees with the numbers beside it. How full the block is comes from the block's own `weight` (Esplora) over 4,000,000.
 
 `/txs` is `application/octet-stream`, little-endian: an 8-byte header, then one 20-byte record per transaction in block order, the coinbase first.
@@ -178,6 +180,41 @@ Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUin
 - Each network computes one block at a time, and holds at most six started by clients. Past that the answer is `503` with `Retry-After: 1`. Retry: the work already admitted goes on, so a retry finds more of it cached. A cold batch of ten needs a retry or two.
 - Each client may start ten computations at once, then one every 2 s; past that `429` with `Retry-After: 2`. Cached blocks never count. A page walking back through history should fetch tiles lazily, as they scroll into view.
 - `404` is an unknown block, `400` a malformed hash or query, `502` and `504` the node failing. All are worth a "Try again".
+
+#### Block audits
+
+How a block compared with the block we expected on its parent, for the block page's expected-against-mined view and a tile's health. The method and the meaning of each category are in [`MEMPOOL.md`](MEMPOOL.md#block-audits); read it before labelling anything. Per network, under its `/app` (`crates/server/src/audits.rs`).
+
+| Route | Answer |
+|---|---|
+| `GET /app/block/:hash/audit` | The whole audit, JSON (below). `404` when the block has none, `503` on a server without a block table |
+
+The totals, the same object as the facts' `audit` (which leaves out `id`, `height`, `time`, `seen_at`, `txs` and `complete`):
+
+```json
+{
+  "id": "…", "height": 975540, "time": 1794480000, "seen_at": 1794480003,
+  "match_rate": 99.87,
+  "expected": {"txs": 3100, "vsize": 998000, "weight": 3991200, "fees": 1500000},
+  "actual": {"txs": 3150, "vsize": 997500, "weight": 3990000, "fees": 1498000},
+  "matched": {"txs": 2900, "vsize": 950000},
+  "missing": {"txs": 3, "vsize": 1200}, "displaced": {"txs": 40, "vsize": 9000},
+  "fresh": {"txs": 150, "vsize": 35000}, "conflicted": {"txs": 7, "vsize": 2000},
+  "added": {"txs": 60, "vsize": 9500}, "unseen": {"txs": 1, "vsize": 200},
+  "txs": [{"txid": "…", "kind": "missing", "vsize": 400, "rate": 1250, "first_seen": 1794479000}],
+  "complete": true
+}
+```
+
+- `match_rate` is percent with two decimals, rounded down: 100 means nothing was left out without an innocent cause. Only `missing` lowers it. Print it as is; do not round it up.
+- `expected` is our first projected block on the parent; `actual` the mined block without its coinbase. `vsize` is sigop-adjusted on the expected side and `ceil(weight / 4)` on the mined side, so the two can differ by a little for the same transactions. Fees in sats.
+- Each category is `{txs, vsize}`. `matched` + `missing` + `displaced` + `fresh` + `conflicted` is the expected block; `matched` + `added` + `unseen` the mined one.
+- `txs` lists every transaction in a category other than `matched`, the most telling first (`missing`, `unseen`, `added`, `displaced`, `conflicted`, `fresh`), highest rate first within each, at most 1,000. `complete` is `false` when that cap cut the list. `kind` is the category. `rate` is sat per 1,000 vB: the rate we placed it at for the expected kinds, its own fee over its size for `added` and `unseen`. `first_seen` (Unix seconds) is our node's accept time, present only for expected kinds still in our mempool after the block. Matched transactions are not listed: draw them from the block's own records (`/txs`) and the txids from `/api/block/:hash/txids`.
+- No audit is a state to show, not an error: "not audited: this server was not watching when it was mined" (or the projection was stale). It never appears later.
+
+**Caching.** An audit is fixed once written: success is immutable, and a `404` is `no-store` but final in practice.
+
+**Cost.** One indexed read, no node call; at most about 60 KB of JSON for a capped list.
 
 #### A transaction's relatives and replacements
 

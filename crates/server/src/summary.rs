@@ -28,10 +28,12 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use bitcoin::BlockHash;
+use engine::audit::Totals;
 use logging::events::{
     BlockSummariesRecovered, BlockSummariesRefused, BlockSummaryComputed, BlockSummaryFailed,
 };
 use node::rpc::Error as RpcError;
+use serde::Serialize;
 use serde_json::json;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
@@ -64,6 +66,8 @@ pub struct Summary {
     /// [`stats::encode_txs`].
     pub txs: Bytes,
     prev: Option<BlockHash>,
+    /// The block's audit, decided before the summary is published.
+    audit: Option<Totals>,
 }
 
 impl Summary {
@@ -303,17 +307,13 @@ async fn compute(
         // A different block under the asked hash would poison the cache for good.
         Ok(b) if b.hash != landing.hash => Err(Failure::Decode),
         Ok(b) => {
-            let summary = Arc::new(Summary {
-                facts: stats::facts(&b),
-                txs: stats::encode_txs(&b).into(),
-                prev: b.previousblockhash,
-            });
+            let txs: Bytes = stats::encode_txs(&b).into();
             logging::emit(&BlockSummaryComputed {
                 network,
                 height: b.height,
                 txs: b.tx.len(),
                 block_bytes: b.size,
-                bytes: summary.txs.len(),
+                bytes: txs.len(),
                 node_ms,
                 duration_ms: started.elapsed().as_secs_f64() * 1000.0,
                 cause: match cause {
@@ -321,7 +321,14 @@ async fn compute(
                     Cause::NewBlock => "new_block",
                 },
             });
-            Ok(summary)
+            // Before the summary is published, so its facts carry the audit from the start.
+            let audit = crate::audits::for_block(ctx, &b).await;
+            Ok(Arc::new(Summary {
+                facts: stats::facts(&b),
+                txs,
+                prev: b.previousblockhash,
+                audit,
+            }))
         }
         Err(e) => Err(Failure::from_rpc(&e)),
     };
@@ -481,7 +488,12 @@ pub async fn facts(
                 (s.facts.clone(), source)
             }
         };
-        let body = serde_json::to_vec(&facts).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        let audit = crate::audits::totals(&ctx, &[hash]).await.pop().flatten();
+        let body = serde_json::to_vec(&Published {
+            facts: &facts,
+            audit: audit.as_ref(),
+        })
+        .map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
         Ok(ok(ROUTE, "application/json", body.into(), source))
     };
     answer
@@ -560,7 +572,17 @@ pub async fn batch(
             };
             facts.push(s.facts.clone());
         }
-        let body = serde_json::to_vec(&facts).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        let ids: Vec<BlockHash> = facts.iter().map(|f| f.id).collect();
+        let audits = crate::audits::totals(&ctx, &ids).await;
+        let published: Vec<Published> = facts
+            .iter()
+            .zip(&audits)
+            .map(|(facts, audit)| Published {
+                facts,
+                audit: audit.as_ref(),
+            })
+            .collect();
+        let body = serde_json::to_vec(&published).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
         Ok(ok(ROUTE, "application/json", body.into(), source))
     };
     answer
@@ -609,7 +631,7 @@ pub async fn worker(ctx: Arc<NetworkContext>) {
                 };
                 let Some((summary, fresh)) = found else { break };
                 if depth == 0 || fresh {
-                    let msg = message(&summary.facts);
+                    let msg = message(&summary.facts, summary.audit.as_ref());
                     ctx.hub
                         .announce(Topic::Blocks, "summary", &msg, Snapshot::Keep, since);
                 }
@@ -623,9 +645,17 @@ pub async fn worker(ctx: Arc<NetworkContext>) {
 }
 
 /// The `blocks` topic's `summary` message: the facts exactly as the routes serve them, the miner
-/// included, so a new tile can name its miner without asking.
-fn message(facts: &Facts) -> serde_json::Value {
-    json!({ "topic": "blocks", "type": "summary", "summary": facts })
+/// and the audit included, so a new tile can name its miner and show its health without asking.
+fn message(facts: &Facts, audit: Option<&Totals>) -> serde_json::Value {
+    json!({ "topic": "blocks", "type": "summary", "summary": Published { facts, audit } })
+}
+
+/// A block's facts as served: [`Facts`] and its audit's totals, `null` when it has none.
+#[derive(Serialize)]
+struct Published<'a> {
+    #[serde(flatten)]
+    facts: &'a Facts,
+    audit: Option<&'a Totals>,
 }
 
 /// Summaries by hash, least recently used out first once their size passes the budget.
@@ -705,6 +735,7 @@ mod tests {
             },
             txs: vec![0; records].into(),
             prev: None,
+            audit: None,
         })
     }
 
@@ -743,9 +774,11 @@ mod tests {
             name: "Foundry USA",
             slug: "foundryusa",
         };
-        let msg = message(&facts);
+        let msg = message(&facts, None);
         assert_eq!(msg["type"], "summary");
-        assert_eq!(msg["summary"], serde_json::to_value(&facts).unwrap());
+        let mut want = serde_json::to_value(&facts).unwrap();
+        want["audit"] = serde_json::Value::Null;
+        assert_eq!(msg["summary"], want);
         assert_eq!(
             msg["summary"]["miner"],
             json!({"name": "Foundry USA", "slug": "foundryusa"})

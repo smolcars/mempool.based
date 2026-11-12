@@ -277,7 +277,7 @@ The stream works like the tracker's: `subscribe` returns the current projection 
 
 A new block moves nearly every record in the projected blocks one block forward: 14,000 to 25,000 records (0.7 to 1.2 MB at 49 bytes), once per block. A WebSocket hub may prefer to send a fresh snapshot then.
 
-When the tip moves, the first block of the last projection on the old tip is kept as `Expected` (six of them), so the block mined on that tip can be audited against what we expected.
+When the tip moves, the first block of the last projection on the old tip is kept as `Expected` (six of them), so the block mined on that tip can be audited against what we expected ([Block audits](#block-audits)). With it are whether that projection was `stale`, the tip it gave way to (`next`) and when (`at`), and `left`: every transaction it held, in any block, that the first projection on `next` no longer holds, with the rate it was placed at. That list is about one block's transactions (some 4,000, 36 bytes each on mainnet), so the six cost under a megabyte.
 
 ### Failures and odd cases
 
@@ -488,3 +488,108 @@ No mempool message on the old tip came after the `block` message, and none on th
 | Projector | the block's clusters, then every cluster | the same |
 
 So a block costs the node one more tip read (about 100 bytes) and no second fetch of its transactions. On regtest the block step made 2 calls and read 2 to 13 KB per block. On mainnet it made 2 calls and read 1.58 MB, the block the poll used to fetch, and the poll after it fetched none. The tracker's polling stayed at 210 to 255 calls and 185 to 255 MB a minute at 68,000 transactions.
+
+## Block audits
+
+Every block we watch arrive is compared with the block we expected on its parent: which transactions we expected and the miner left out, which it included that we did not expect, and a score for how closely the two agree, read as the block's health. The reference backend cannot do this on rbitcoin; we can, because the projection is packed from the node's own mining chunks ([Projected blocks](#projected-blocks)).
+
+| Part | File | Does |
+|---|---|---|
+| Method | `crates/engine/src/audit/mod.rs` | The comparison, its categories and the score. Pure: no I/O, no clock |
+| Store | `crates/engine/src/audit/db.rs` | The `audits` table ([`STORE.md`](STORE.md#audits)) |
+| In the server | `crates/server/src/audits.rs` | Runs it when a new block's summary is computed; the routes ([`API.md`](API.md#block-audits), [`FRONTEND.md`](FRONTEND.md#block-audits)) |
+
+### What is compared
+
+- **Expected:** our first projected block as it stood on the parent, the last projection published before the projector moved onto this block (`Projector::expected`).
+- **Mined:** the block's transactions, coinbase left out, with fees and sizes from the `getblock` at verbosity 2 that the block summary reads for every new block anyway.
+- **What left with the block:** every transaction in that last projection, in any block, that the first projection on this block no longer holds, with the rate we had placed it at (`Expected::left`). A mined transaction in it was in our mempool; an expected one in it that is not in the block was knocked out by the block.
+- **When the block came:** the moment the projector learnt of it, before it asked the node anything for the projection on it (`Expected::at`), the same for whoever computes the summary first. On mainnet that is about 0.7 s after Electrum's announcement ([When a block is found](#when-a-block-is-found)).
+- **When each was seen, and its weight:** the node's accept time and the raw weight from the tracker's records, read right after the block was applied.
+
+Nothing here asks the node anything.
+
+### Categories
+
+Each transaction expected or mined falls in exactly one:
+
+| Category | Expected | Mined | Precisely | Counts against the miner |
+|---|---|---|---|---|
+| `matched` | yes | yes | In both | No: agreement |
+| `conflicted` | yes | no | Left our mempool when the block was applied without being in it: the block spent one of its inputs (a double spend the miner saw first), or, rarely, it was replaced or evicted in that moment | No: excluded |
+| `fresh` | yes | no | Still in our mempool, accepted by our node less than 60 s (`RECENT_SECS`) before the block came. An accept time after the block is a newer record (it was evicted and sent again) and is not fresh | No: excluded |
+| `displaced` | yes | no | Neither of the above, could not have fitted beside everything the block holds, and the block gave its space to transactions we did not expect (`added` or `unseen`) paying at least its rate | No: agreement |
+| `missing` | yes | no | Anything else expected and left out | **Yes** |
+| `added` | no | yes | In our projection on the parent, but placed in a later block | No |
+| `unseen` | no | yes | Not in our projection on the parent at all: we had not seen it, or it arrived in the last second or so before the block | No |
+
+**The score** (`match_rate`) is a share of virtual size, in percent, rounded down to two decimals:
+
+> match rate = (matched + displaced) / (expected − fresh − conflicted)
+
+with each term the virtual size (sigop-adjusted, as the projection packs) of the expected transactions in that category. When nothing is left to count (an empty expectation, or every expected transaction fresh or conflicted) it is 100: nothing could be left out. Rounded down, so 100 is only ever a block with no `missing` transaction.
+
+Why each choice:
+
+- **By weight, not by count.** Block space is what a miner allocates. One 50 kvB consolidation left out costs the block what 200 small payments do; by count it would weigh as one.
+- **Only leaving out lowers it.** A miner who adds transactions we did not expect, in room our block would have left empty, has left nothing out. Additions are listed (`added`, `unseen`) and counted, not scored: a miner putting its own or out-of-band transactions in the place of expected ones shows as `missing` once the replacements pay less.
+- **Displacement needs a full block and an equal or better trade.** Mainnet mempools hold thousands of chunks at one rate, and at the block boundary the node and every miner pick among them in an order nobody outside can know ([Limits](#limits)). Two limits apply. First, only what could not have fitted is excused: had the miner added every left-out transaction to its block, the block would have passed its room (3,992,000 weight units, `BLOCK_WEIGHT`) by some amount, and no more than that amount is excused. This is counted in raw weight, the limit's own unit, not in the sigop-adjusted size the score weighs by, which for a sigop-heavy transaction can be many times larger. A left-out transaction the tracker no longer holds at the comparison has no known weight: it adds nothing to that amount and is never displaced. A block with space to spare excuses nothing. Second, within that, highest rates first on both sides, a left-out transaction is displaced when it fits whole in the space the block gave to transactions we did not expect paying at least its rate, less what better-paying left-out ones already took. Whole transactions only, so a small addition never excuses a large omission; the cost is at most one transaction per rate left counted against the miner. An `added` transaction counts at the rate we had placed it at, its chunk's, so a parent mined with the child that pays for it counts at their package rate. An `unseen` one counts at its own fee over its size, since we never saw its package: a parent we never saw is under-counted, never over-counted.
+- **Fresh is 60 seconds.** Pools hand out new work about every 30 s, and a transaction must also reach the pool's node. A transaction our node accepted within a minute of the block cannot fairly be expected in it. Measured from when the projector moved onto the block (our clock against the node's accept time, so the two machines' clocks must agree to a second or so), not from the header's timestamp, which the miner sets.
+- **The innocent causes this cannot see** are still counted as `missing`, which is why a perfectly honest block can score below 100: a transaction our node accepts but others' policy refuses (a large `OP_RETURN` some miners filter, say), one the miner's node never received, a pool that reserves block space below the 3,992,000 weight units we fill, a package we never saw whose parent pays less than what it displaced, a parent whose child lifted it into the block only seconds before (freshness is each transaction's own arrival, not its chunk's youngest member), and a `prioritisetransaction` that lowers one. Each audit's lists name the transactions, so a reader can look.
+
+**What we do not detect,** and so never report: sigop-limited transactions (we do not count sigops, [Limits](#limits)), prioritised or accelerated transactions (no signal reaches us), and full-RBF replacements (rbitcoin is always full-RBF).
+
+### When there is no audit
+
+An audit exists only for a block we watched arrive with a current projection on its parent; it cannot be computed later or backfilled. The routes say "audit not available", the block facts carry `audit: null`, and the log says why (`block_audit_skipped`, [`LOGGING.md`](LOGGING.md#block-summaries)):
+
+| Case | Why not |
+|---|---|
+| The projector never moved onto the block from a projection on its parent: older blocks filled in at startup or after a gap. Not logged | We did not watch it arrive |
+| `no_projection`: the block is the tip, but there is no projection on its parent, because the server started after it (the first block after a start is always this), or the projector had not reached the block within 5 s of its summary being computed | Nothing to compare with |
+| `stale`: the projection on the parent was marked stale (the node had stopped answering) | It was not the mempool when the block came |
+| `superseded`: the projection on the parent gave way to a different block (a sibling in a reorg, or a later block in a burst), or the tracker had moved past this block before the comparison | The accept times and `left` would describe another moment |
+| A summary computed and cached while the projector was more than 5 s behind the node | Its `audit: null` stays: an audit is attempted once, when the block's summary is computed |
+| `store`: the write failed | |
+| No `DATA_DIR`, or the network's mempool engine off | Nothing to store or compare; said once at startup, not per block |
+
+The stale flag survives the node's recovery: when the tracker's first good cycle after an outage already carries the new block, the projector publishes that first, so the projection archived for the parent is the stale one. An audit is computed once, when its block arrives, and the first one written stands. A block that leaves the best chain keeps its audit by hash; the pages and the series by height show only the best chain's.
+
+### Cost
+
+None on the node: the block's transactions are the summary's `getblock`, already fetched for every new block, and the rest is in memory. In the server, the comparison runs on a blocking thread under the tracker's read lock (0.2 to 26 ms on regtest, 0.7 and 1.8 ms on mainnet), then one write of about 300 bytes of totals plus 45 bytes per listed transaction, at most 1,000 (`MAX_TXS`, the most telling kinds first). The new block's summary waits for its audit, so its facts carry the audit from the start: no wait on mainnet, where the projector has moved onto the block before the `getblock` returns, and at most 5 s otherwise.
+
+### On regtest
+
+With the harness node (`docs/REGTEST.md`), its `generateblock` choosing the block's transactions:
+
+| Block | Score | Categories |
+|---|---|---|
+| The node's template, taking all 7 | 100 | 7 matched |
+| Leaves out the 1 sat/vB one of three that waited over a minute | 66.66 | 2 matched, 1 missing |
+| One transaction the node never saw, at 10 sat/vB, beside one it had, the 1 sat/vB one left out again | 50 | 1 matched, 1 unseen, 1 missing: the block had room for it, so the better-paying addition excuses nothing |
+| Empty, 3 s after an 8 sat/vB arrival | 0 | 1 fresh, 1 missing (the old 1 sat/vB one) |
+| 20 blocks mined at once, the mempool empty | 100 for those audited | 8 audited, 2 `superseded`, 2 `no_projection`; the other 8 were no longer the tip when their summaries were computed |
+| The tip when the server started | none | `no_projection` |
+
+### On mainnet
+
+2026-11-12, read-only, release build, 77,000–78,000 transactions in the mempool, two blocks audited (the block current at startup was rightly `no_projection`). mempool.space's public figures for the same blocks beside ours:
+
+| Block | Score | Matched | Missing | Displaced | Fresh | Conflicted | Added | Unseen | mempool.space |
+|---|---|---|---|---|---|---|---|---|---|
+| 975,537 | 99.93 | 4,130 | 5 | 6 | 21 | 9 | 28 | 9 | 99.76: 10 missing, 23 fresh, 26 added, 1 unseen |
+| 975,538 (Foundry USA) | 100 | 3,414 | 0 | 0 | 27 | 1 | 20 | 4 | 100: 0 missing, 28 fresh, 20 added, 0 unseen |
+
+The expected blocks agree: our expected fees and weight were within 0.15% of mempool.space's for both blocks (975,537: 6,401,659 sats and 3,991,807 WU against 6,400,089 and 3,991,797).
+
+**Reading 975,537.** mempool.space's ten missing transactions are our six `displaced` and four of our five `missing`; the fifth, a child, it did not count. The six we excuse were left out for 28 transactions we had placed in the next block and 9 we had not seen, paying at least as much, in a block with no room for both: they are the boundary trade the method excuses, and the whole gap between the two scores. Our five:
+
+- Three 99 vB transactions, each one taproot input to one P2WPKH output at exactly 6 sat/vB, first seen 3.5 to 4.7 minutes before the block, all still unconfirmed when checked. One wallet's batch; both explorers expected them. Most likely the pool's template predated them or its node had not received them.
+- A parent at 1 sat/vB and its child at 9 sat/vB, one chunk at 5.03 sat/vB. The parent was 205 s old, but the child that lifted it arrived 87 s before the block, so the package was only worth mining for 87 s: an innocent miss that our per-transaction freshness counts (see the limits above). mempool.space did not count the child.
+
+The nine `conflicted` are exactly the nine transactions the tracker saw the block replace. Of the nine `unseen`, one is a 41-output batch at exactly 5 sat/vB, which looks like a pool's own payout. mempool.space saw the others, so they show where our node was behind.
+
+**Reading 975,538.** 100 in both, with the same 20 added. Its 27 fresh transactions arrived 1 to 7 s before the block. Of our 4 unseen, one pays nothing (0 sat/vB): a miner's own or out-of-band transaction.
+
+**Cost, per block.** The audit made no node call: it took 1.8 ms and 0.7 ms after the summary's `getblock` returned, and that `getblock` (1.8 s and 3.1 s here, under the projector's refresh) and the tracker's and projector's block work were the same calls as without it. The projector had moved onto each block before that `getblock` returned, so nothing waited. Stored: 3.5 KB and 2.3 KB of listed transactions.

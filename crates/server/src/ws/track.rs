@@ -1004,4 +1004,5 @@ pub async fn follow_addresses(
 }
 
 #[cfg(test)]
-mod tests;
+// The block audit tests reuse its mock node.
+pub(crate) mod tests;

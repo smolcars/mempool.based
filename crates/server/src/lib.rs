@@ -6,6 +6,7 @@
 
 mod api_v1;
 mod app_config;
+mod audits;
 pub mod blocks;
 pub mod config;
 pub mod difficulty;
@@ -163,6 +164,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/tx/{txid}/relatives", get(relatives::route))
         .route("/app/tx/{txid}/replacements", get(replacements::route))
         .merge(api_v1::routes())
+        .merge(audits::routes())
 }
 
 /// The whole application, ready to serve.
