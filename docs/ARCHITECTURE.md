@@ -73,10 +73,10 @@ The protocol, its topics and its limits are in [`WS.md`](WS.md).
 
 1. Poll `getrawmempool` with `mempool_sequence` and diff the txid set against the last one.
 2. Fetch details only for new txids, in JSON-RPC batches.
-3. Take block boundaries and fee bands from the node's cluster chunks (`getmempoolfeeratediagram`) and its template, instead of running our own block builder.
+3. Take every chunk of every cluster from the node (`getmempoolcluster`, asked again only for clusters that changed), and pack them into projected blocks by the node's own template rule, instead of linearizing clusters ourselves.
 4. Classify removals: confirmed, replaced (naming the replacement) or evicted.
 
-The tracker's design, cadence and accuracy limits are in [`MEMPOOL.md`](MEMPOOL.md); node costs in [`RBITCOIN.md`](RBITCOIN.md).
+The tracker's and the projected blocks' design, cadence and accuracy limits are in [`MEMPOOL.md`](MEMPOOL.md); node costs in [`RBITCOIN.md`](RBITCOIN.md).
 
 ## Storage
 

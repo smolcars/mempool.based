@@ -390,6 +390,16 @@ impl Rpc {
         self.call("getmempoolcluster", [txid]).await
     }
 
+    /// `getmempoolcluster` for each txid, in one batch of at most [`MAX_BATCH`]. A txid no longer
+    /// in the mempool answers `Err(Rpc { code: -5 })` in its slot.
+    pub async fn mempool_clusters(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Result<Cluster, Error>>, Error> {
+        self.batch("getmempoolcluster", txids.iter().map(|t| [t]))
+            .await
+    }
+
     /// `getmempoolancestors`: the in-mempool ancestors of `txid`, without it.
     /// Not in the mempool: `Rpc { code: -5 }`.
     pub async fn mempool_ancestors(&self, txid: Txid) -> Result<Vec<Txid>, Error> {

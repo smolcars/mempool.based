@@ -1,0 +1,461 @@
+//! The node's mining chunks, ordered and packed into blocks the way rbitcoin builds a template.
+//! Pure: no I/O, no clock.
+
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
+use bitcoin::Txid;
+use node::esplora::ChainTip;
+use node::rpc::model::Cluster;
+
+/// Fee bands, as in `docs/DESIGN.md` "Fee scale".
+pub const BANDS: usize = 10;
+
+/// Lower bounds of bands 2 to 10 in hundredths of a sat/vB.
+const BAND_EDGES: [u64; BANDS - 1] = [20, 30, 50, 100, 150, 200, 300, 500, 1000];
+
+/// The band a rate in sat per 1,000 vB falls in, 0 to 9. The rate is first rounded to the two
+/// decimals it prints with, so the color never disagrees with the number next to it.
+pub fn band(rate: u32) -> usize {
+    let printed = (u64::from(rate) + 5) / 10;
+    BAND_EDGES.iter().filter(|e| printed >= **e).count()
+}
+
+/// The node's chunk rate: sat per 1,000 vB, rounded down, on sigop-adjusted vbytes.
+fn chunk_rate(fee: u64, adjusted_weight: u64) -> u64 {
+    match adjusted_weight.div_ceil(4) {
+        0 => 0,
+        vsize => fee.saturating_mul(1000) / vsize,
+    }
+}
+
+/// One transaction's place: 17 bytes after its 32-byte txid (`docs/MEMPOOL.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placed {
+    /// Projected block, 0 for the next one. The last block holds everything beyond the others.
+    pub block: u8,
+    /// Effective fee rate: the rate of the chunk it is mined in, in sat per 1,000 vB.
+    pub rate: u32,
+    /// Sigop-adjusted virtual size.
+    pub vsize: u32,
+    /// Its own base fee, in satoshis.
+    pub fee: u64,
+}
+
+/// Totals of one projected block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockSummary {
+    pub txs: u32,
+    /// Raw weight, which is what the block budget counts.
+    pub weight: u64,
+    /// Summed sigop-adjusted vsize.
+    pub vsize: u64,
+    /// Summed base fees, in satoshis.
+    pub fees: u64,
+    /// Effective rates in sat per 1,000 vB. The median is the rate at the middle vbyte.
+    pub min_rate: u32,
+    pub median_rate: u32,
+    pub max_rate: u32,
+    /// Vsize in each fee band, cheapest first: the strata a tile draws.
+    pub bands: [u64; BANDS],
+}
+
+/// One projected block, transactions in mining order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProjectedBlock {
+    pub summary: BlockSummary,
+    pub txs: Vec<(Txid, Placed)>,
+}
+
+/// The projected blocks at one moment. Cheap to clone: blocks are shared.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Projection {
+    /// Counts up by one per published [`Delta`]; 0 before the first.
+    pub seq: u64,
+    /// The tracker delta this reflects ([`crate::mempool::Mempool::seq`]).
+    pub mempool_seq: u64,
+    pub tip: Option<ChainTip>,
+    /// Some chunk data could not be read from the node, or the tracker is failing: this is the
+    /// last good projection, possibly behind the node.
+    pub stale: bool,
+    /// [`Config::blocks`](super::Config::blocks) blocks, the last one holding the rest.
+    pub blocks: Vec<Arc<ProjectedBlock>>,
+}
+
+/// What changed between two projections. Applying `removed`, then `set`, to the previous
+/// projection's records gives the next one's, and `blocks` are the new totals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delta {
+    pub seq: u64,
+    pub mempool_seq: u64,
+    pub tip: Option<ChainTip>,
+    pub stale: bool,
+    /// Transactions that entered, moved to another block or changed rate. Sorted by txid.
+    pub set: Vec<(Txid, Placed)>,
+    /// Transactions that left the mempool. Sorted by txid.
+    pub removed: Vec<Txid>,
+    pub blocks: Vec<BlockSummary>,
+}
+
+/// Where a transaction is in the projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub placed: Placed,
+    /// Vsize and transactions mined before it, earlier blocks included.
+    pub ahead_vsize: u64,
+    pub ahead_txs: u32,
+}
+
+/// How blocks are packed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Packing {
+    pub blocks: usize,
+    pub block_weight: u64,
+    pub min_rate: u64,
+}
+
+/// What we keep for a transaction.
+#[derive(Debug)]
+struct Tx {
+    fee: u64,
+    vsize: u32,
+    weight: u32,
+    chunk: u64,
+    pos: Option<Position>,
+}
+
+/// Mining order: the node sorts by integer rate, then fee, both descending. It breaks the
+/// remaining ties by hash-map order; we break them by age.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Key {
+    rate: Reverse<u64>,
+    fee: Reverse<u64>,
+    id: u64,
+}
+
+#[derive(Debug)]
+struct Chunk {
+    key: Key,
+    /// Raw weight of the members we know.
+    raw: u64,
+    /// Known members, in the node's linearization order.
+    txs: Vec<Txid>,
+    cluster: u64,
+    /// The block it was packed into on the last pass.
+    slot: Option<u8>,
+}
+
+/// Transactions grouped into the node's chunks, chunks into clusters.
+#[derive(Debug, Default)]
+pub(crate) struct Model {
+    txs: HashMap<Txid, Tx>,
+    chunks: HashMap<u64, Chunk>,
+    /// Chunk ids of each cluster, in linearization order.
+    clusters: HashMap<u64, Vec<u64>>,
+    order: BTreeSet<Key>,
+    next: u64,
+}
+
+impl Model {
+    pub fn len(&self) -> usize {
+        self.txs.len()
+    }
+
+    pub fn chunks(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn contains(&self, txid: &Txid) -> bool {
+        self.txs.contains_key(txid)
+    }
+
+    pub fn txids(&self) -> impl Iterator<Item = &Txid> {
+        self.txs.keys()
+    }
+
+    pub fn position(&self, txid: &Txid) -> Option<Position> {
+        self.txs.get(txid)?.pos
+    }
+
+    /// The cluster a transaction was last seen in, to ask the node once per cluster.
+    pub fn cluster_of(&self, txid: &Txid) -> Option<u64> {
+        Some(self.chunks.get(&self.txs.get(txid)?.chunk)?.cluster)
+    }
+
+    fn id(&mut self) -> u64 {
+        self.next += 1;
+        self.next
+    }
+
+    /// A new transaction, alone in its cluster until the node says otherwise.
+    pub fn add(&mut self, txid: Txid, fee: u64, vsize: u32, weight: u32) {
+        self.remove(&txid);
+        let id = self.id();
+        let key = Key {
+            rate: Reverse(chunk_rate(fee, u64::from(vsize) * 4)),
+            fee: Reverse(fee),
+            id,
+        };
+        self.chunks.insert(
+            id,
+            Chunk {
+                key,
+                raw: u64::from(weight),
+                txs: vec![txid],
+                cluster: id,
+                slot: None,
+            },
+        );
+        self.clusters.insert(id, vec![id]);
+        self.order.insert(key);
+        self.txs.insert(
+            txid,
+            Tx {
+                fee,
+                vsize,
+                weight,
+                chunk: id,
+                pos: None,
+            },
+        );
+    }
+
+    /// Removes a transaction. Returns the members of its cluster that remain, whose chunks the
+    /// node has to tell us again.
+    pub fn remove(&mut self, txid: &Txid) -> Vec<Txid> {
+        let Some(tx) = self.txs.remove(txid) else {
+            return Vec::new();
+        };
+        let cluster = self.chunks.get(&tx.chunk).map(|c| c.cluster);
+        self.unlink(txid, tx.chunk, tx.weight);
+        cluster
+            .and_then(|c| self.clusters.get(&c))
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.chunks.get(id))
+            .flat_map(|c| c.txs.iter().copied())
+            .collect()
+    }
+
+    /// Takes a transaction out of its chunk, dropping the chunk and cluster once empty.
+    fn unlink(&mut self, txid: &Txid, chunk: u64, weight: u32) {
+        let Some(c) = self.chunks.get_mut(&chunk) else {
+            return;
+        };
+        c.txs.retain(|t| t != txid);
+        c.raw = c.raw.saturating_sub(u64::from(weight));
+        if !c.txs.is_empty() {
+            return;
+        }
+        let (key, cluster) = (c.key, c.cluster);
+        self.chunks.remove(&chunk);
+        self.order.remove(&key);
+        if let Some(list) = self.clusters.get_mut(&cluster) {
+            list.retain(|id| *id != chunk);
+            if list.is_empty() {
+                self.clusters.remove(&cluster);
+            }
+        }
+    }
+
+    /// Replaces the chunks of the transactions in `cluster` with the node's. Members we do
+    /// not know (they arrived after the tracker's listing) are left out, but their fees still
+    /// count in their chunk's rate. Returns false when there were such members, so the cluster
+    /// is asked again once the tracker has caught up.
+    pub fn apply_cluster(&mut self, cluster: &Cluster) -> bool {
+        let id = self.id();
+        let (mut ids, mut complete) = (Vec::new(), true);
+        for ch in &cluster.chunks {
+            let members: Vec<Txid> = ch
+                .txs
+                .iter()
+                .filter(|t| self.txs.contains_key(*t))
+                .copied()
+                .collect();
+            complete &= members.len() == ch.txs.len();
+            if members.is_empty() {
+                continue;
+            }
+            let chunk = self.id();
+            let mut raw = 0;
+            for m in &members {
+                let Some(tx) = self.txs.get_mut(m) else {
+                    continue;
+                };
+                let (old, weight) = (tx.chunk, tx.weight);
+                tx.chunk = chunk;
+                raw += u64::from(weight);
+                self.unlink(m, old, weight);
+            }
+            // A negative chunk fee (only through `prioritisetransaction`) is never mined.
+            let fee = u64::try_from(ch.chunkfee.to_sat()).unwrap_or(0);
+            let key = Key {
+                rate: Reverse(chunk_rate(fee, ch.chunkweight)),
+                fee: Reverse(fee),
+                id: chunk,
+            };
+            self.chunks.insert(
+                chunk,
+                Chunk {
+                    key,
+                    raw,
+                    txs: members,
+                    cluster: id,
+                    slot: None,
+                },
+            );
+            self.order.insert(key);
+            ids.push(chunk);
+        }
+        if !ids.is_empty() {
+            self.clusters.insert(id, ids);
+        }
+        complete
+    }
+
+    /// The unplaced chunks of `id`'s cluster up to and including `id`: what selecting `id`
+    /// pulls in. The node pulls in only unselected ancestors; earlier chunks of a cluster
+    /// are the closest thing we know of, and are almost always ancestors or already placed.
+    fn pull(&self, id: u64, out: &mut Vec<u64>) {
+        out.clear();
+        let Some(list) = self
+            .chunks
+            .get(&id)
+            .and_then(|c| self.clusters.get(&c.cluster))
+        else {
+            out.push(id);
+            return;
+        };
+        for i in list {
+            if self.chunks.get(i).is_some_and(|c| c.slot.is_none()) {
+                out.push(*i);
+            }
+            if *i == id {
+                break;
+            }
+        }
+    }
+
+    /// Packs every chunk into blocks the way rbitcoin selects a template: best chunk first,
+    /// a chunk that does not fit is skipped and later ones still tried, chunks under the
+    /// minimum rate left out. The last block takes everything left. Returns the blocks and the
+    /// transactions whose record changed since the last pack.
+    pub fn pack(&mut self, p: Packing) -> (Vec<ProjectedBlock>, Vec<(Txid, Placed)>) {
+        let n = p.blocks.clamp(2, usize::from(u8::MAX));
+        for c in self.chunks.values_mut() {
+            c.slot = None;
+        }
+        let mut queue: Vec<u64> = self.order.iter().map(|k| k.id).collect();
+        let mut packed: Vec<(Vec<u64>, u64)> = Vec::with_capacity(n);
+        let mut pull = Vec::new();
+        for b in 0..n {
+            let last = b + 1 == n;
+            let (mut ids, mut used, mut rest) = (Vec::new(), 0u64, Vec::new());
+            for id in queue {
+                let Some(c) = self.chunks.get(&id) else {
+                    continue;
+                };
+                if c.slot.is_some() {
+                    continue;
+                }
+                if !last && c.key.rate.0 < p.min_rate {
+                    rest.push(id);
+                    continue;
+                }
+                self.pull(id, &mut pull);
+                let w: u64 = pull
+                    .iter()
+                    .filter_map(|i| self.chunks.get(i))
+                    .map(|c| c.raw)
+                    .sum();
+                if !last && used + w > p.block_weight {
+                    rest.push(id);
+                    continue;
+                }
+                used += w;
+                for i in &pull {
+                    if let Some(c) = self.chunks.get_mut(i) {
+                        c.slot = u8::try_from(b).ok();
+                        ids.push(*i);
+                    }
+                }
+            }
+            packed.push((ids, used));
+            queue = rest;
+        }
+
+        let (mut blocks, mut changed) = (Vec::with_capacity(n), Vec::new());
+        let (mut ahead_vsize, mut ahead_txs) = (0u64, 0u32);
+        for (b, (ids, weight)) in packed.into_iter().enumerate() {
+            let block = u8::try_from(b).unwrap_or(u8::MAX);
+            let mut txs = Vec::new();
+            for id in ids {
+                let Some(c) = self.chunks.get(&id) else {
+                    continue;
+                };
+                let rate = u32::try_from(c.key.rate.0).unwrap_or(u32::MAX);
+                for t in &c.txs {
+                    let Some(tx) = self.txs.get_mut(t) else {
+                        continue;
+                    };
+                    let placed = Placed {
+                        block,
+                        rate,
+                        vsize: tx.vsize,
+                        fee: tx.fee,
+                    };
+                    if tx.pos.map(|p| p.placed) != Some(placed) {
+                        changed.push((*t, placed));
+                    }
+                    tx.pos = Some(Position {
+                        placed,
+                        ahead_vsize,
+                        ahead_txs,
+                    });
+                    ahead_vsize += u64::from(tx.vsize);
+                    ahead_txs = ahead_txs.saturating_add(1);
+                    txs.push((*t, placed));
+                }
+            }
+            blocks.push(ProjectedBlock {
+                summary: summarize(&txs, weight),
+                txs,
+            });
+        }
+        changed.sort_unstable_by_key(|(t, _)| *t);
+        (blocks, changed)
+    }
+}
+
+fn summarize(txs: &[(Txid, Placed)], weight: u64) -> BlockSummary {
+    let mut s = BlockSummary {
+        txs: u32::try_from(txs.len()).unwrap_or(u32::MAX),
+        weight,
+        min_rate: u32::MAX,
+        ..BlockSummary::default()
+    };
+    for (_, p) in txs {
+        s.vsize += u64::from(p.vsize);
+        s.fees = s.fees.saturating_add(p.fee);
+        s.min_rate = s.min_rate.min(p.rate);
+        s.max_rate = s.max_rate.max(p.rate);
+        if let Some(b) = s.bands.get_mut(band(p.rate)) {
+            *b += u64::from(p.vsize);
+        }
+    }
+    if txs.is_empty() {
+        s.min_rate = 0;
+    }
+    let mut by_rate: Vec<(u32, u32)> = txs.iter().map(|(_, p)| (p.rate, p.vsize)).collect();
+    by_rate.sort_unstable();
+    let mut below = 0u64;
+    for (rate, vsize) in by_rate {
+        below += u64::from(vsize);
+        if below * 2 >= s.vsize {
+            s.median_rate = rate;
+            break;
+        }
+    }
+    s
+}

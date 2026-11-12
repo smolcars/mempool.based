@@ -47,7 +47,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/API.md`](docs/API.md) | The public Esplora API at `/api` and how it differs from the node |
 | [`docs/COMPAT.md`](docs/COMPAT.md) | Feature parity with mempool.space |
 | [`docs/RBITCOIN.md`](docs/RBITCOIN.md) | What we rely on from rbitcoin, with measurements |
-| [`docs/MEMPOOL.md`](docs/MEMPOOL.md) | How the mempool is tracked, and why each removal happened |
+| [`docs/MEMPOOL.md`](docs/MEMPOOL.md) | How the mempool is tracked, why each removal happened, and the projected blocks |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model and the rules that follow from it |
 | [`docs/WS.md`](docs/WS.md) | The WebSocket protocol at `/app/ws`: messages, topics, limits and close codes |
 | [`docs/CONFIG.md`](docs/CONFIG.md) | Every environment variable, its default and what it protects against |
