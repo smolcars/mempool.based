@@ -295,6 +295,7 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
         <DataTable
           caption={`Blocks found by ${props.name ?? "this pool"}, newest first`}
           rows={rows()}
+          rowHref={(b) => paths.block(b.id)}
           empty={<Empty title="No blocks from this pool are stored" />}
           columns={[
             {

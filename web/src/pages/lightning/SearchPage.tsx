@@ -102,6 +102,7 @@ function Found(props: { r: SearchResult; q: string }) {
             caption="Nodes that match"
             columns={nodeColumns("capacity")}
             rows={props.r.nodes}
+            rowHref={(n) => paths.lightningNode(n.id)}
           />
           <p class="ln-aside">
             Any node can announce any name, so a famous name can appear more than once: the public

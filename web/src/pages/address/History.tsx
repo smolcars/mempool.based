@@ -409,6 +409,7 @@ function Transactions(props: {
             caption="Transactions of this address, newest first"
             columns={columns}
             rows={props.shown ?? placeholders(props.total)}
+            rowHref={(t) => (t ? paths.tx(t.txid) : undefined)}
             rowClass={props.rowClass}
           />
           <Show when={props.shown === undefined}>
@@ -520,6 +521,7 @@ function Unspent(props: {
               sorted()?.slice((current() - 1) * UTXO_STEP, current() * UTXO_STEP) ??
               placeholders(undefined)
             }
+            rowHref={(u) => (u ? paths.tx(u.txid) : undefined)}
           />
         </div>
         <Show when={pageCount() > 1}>

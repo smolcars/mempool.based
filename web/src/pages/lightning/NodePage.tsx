@@ -345,6 +345,7 @@ function ChannelList(props: { rows: NodeChannel[]; closed: boolean }) {
           : "Its open channels, largest first"
       }
       columns={columns()}
+      rowHref={(c) => paths.lightningChannel(c.id)}
       rows={props.rows}
       empty={
         <Empty title={props.closed ? "No close seen" : "No open channel"}>

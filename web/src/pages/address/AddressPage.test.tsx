@@ -320,7 +320,9 @@ describe("address page", () => {
     status("before");
     status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
   });
 
@@ -353,7 +355,9 @@ describe("address page", () => {
     release(Response.json(range(56, 80)));
     // The stale page is dropped; the page the reader asked for comes after the new rows.
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual(range(1, 50).map((t) => `/tx/${t.txid}`));
   });
 
@@ -394,7 +398,9 @@ describe("address page", () => {
     );
     release(Response.json(range(51, 75)));
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(76));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual([payment, ...range(1, 75)].map((t) => `/tx/${t.txid}`));
   });
 

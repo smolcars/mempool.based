@@ -190,3 +190,35 @@ test("a confirmed transaction opens with its status, amount, fee and block", asy
   // The steps shrink to one line once it has confirmed.
   await expect(page.getByRole("list", { name: "Status" })).toHaveClass(/tx-timeline--line/);
 });
+
+test("copy and expand are a thumb's target each, apart from the address they sit beside", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/regtest/tx/${chain.txs.script_types}`);
+  const outputs = page.getByRole("list", { name: "Outputs" });
+  await expect(outputs).toBeVisible();
+  const targets = [
+    page.getByRole("button", { name: "Copy transaction ID" }),
+    outputs.getByRole("button").first(),
+  ];
+  for (const target of targets) {
+    const box = await target.boundingBox();
+    expect(box && Math.min(box.width, box.height)).toBeGreaterThanOrEqual(43.5);
+  }
+  // The expand button and the address link under it never overlap.
+  const expand = await outputs.getByRole("button").first().boundingBox();
+  const address = await outputs
+    .getByRole("listitem")
+    .first()
+    .getByRole("link")
+    .first()
+    .boundingBox();
+  if (!expand || !address) throw new Error("missing expand button or address");
+  const apart =
+    expand.y + expand.height <= address.y + 1 ||
+    address.y + address.height <= expand.y + 1 ||
+    expand.x + expand.width <= address.x + 1 ||
+    address.x + address.width <= expand.x + 1;
+  expect(apart).toBe(true);
+});

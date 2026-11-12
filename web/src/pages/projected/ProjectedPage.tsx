@@ -382,6 +382,7 @@ function ProjectedView(props: { index: number }) {
                 caption={`Transactions in ${positionName(index, true)}, highest fee rate first`}
                 columns={columns}
                 rows={rows()}
+                rowHref={(t) => paths.tx(t.id)}
                 rowClass={(tx) => (fresh().has(tx.id) ? "projected-txs__row--new" : undefined)}
                 empty={
                   <p class="projected-txs__empty">

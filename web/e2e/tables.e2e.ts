@@ -110,3 +110,22 @@ test.describe("without the web font", () => {
     }
   });
 });
+
+// Only a row's small link text was a target once: on a phone the whole row opens its item.
+test("a tap anywhere on a list's row opens its item, and the keyboard meets it once", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/blocks");
+  const table = page.getByRole("table", { name: "Recent blocks, newest first" });
+  const row = table.getByRole("row").nth(1);
+  const height = await row.getByRole("link").first().textContent();
+  // Its transaction count, far from any link.
+  await row.getByRole("cell").nth(2).click();
+  await expect(page).toHaveURL(/\/regtest\/block\/[0-9a-f]{64}$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(height ?? "-");
+  // The row's own link is hidden from the keyboard and from screen readers: one stop a row.
+  await page.goBack();
+  await expect(table.locator(".table__rowlink").first()).toHaveAttribute("tabindex", "-1");
+  await expect(table.locator(".table__rowlink").first()).toHaveAttribute("aria-hidden", "true");
+});

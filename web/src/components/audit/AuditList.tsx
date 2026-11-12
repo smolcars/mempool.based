@@ -149,6 +149,7 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
                 caption={`${categoryName(kind() ?? "missing")} transactions, highest fee rate first`}
                 columns={columns}
                 rows={rows()}
+                rowHref={(t) => paths.tx(t.txid)}
                 empty={
                   <p class="audit-list__cut">
                     None of these made the list: it stopped at {groupDigits(LIST_CAP)}.

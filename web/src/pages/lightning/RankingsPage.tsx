@@ -87,6 +87,7 @@ function Ranked(props: { network: Network; by: string }) {
                 caption={`The 100 nodes ${parseRanking(r().by).words}`}
                 columns={columns()}
                 rows={r().nodes}
+                rowHref={(n) => paths.lightningNode(n.id)}
               />
             </div>
             <p class="ln-aside">

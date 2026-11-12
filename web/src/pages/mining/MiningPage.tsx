@@ -284,6 +284,7 @@ function Pools(props: {
               <DataTable
                 caption={`Pools ranked by blocks found in ${props.period.words}`}
                 rows={rows()}
+                rowHref={(p) => paths.pool(p.slug)}
                 columns={[
                   {
                     header: "Rank",

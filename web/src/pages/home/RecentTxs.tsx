@@ -115,6 +115,7 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
           caption="The newest transactions waiting in the mempool"
           columns={COLUMNS}
           rows={rows() ?? Array.from({ length: ROWS }, () => null)}
+          rowHref={(t) => (t ? paths.tx(t.txid) : undefined)}
           rowClass={(t) => (t && fresh.has(t) ? "home-recent__new" : undefined)}
           empty={
             <Empty title="No transactions are waiting">

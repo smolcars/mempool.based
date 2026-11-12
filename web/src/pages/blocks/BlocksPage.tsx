@@ -244,6 +244,7 @@ export default function BlocksPage() {
               caption="Recent blocks, newest first"
               columns={table}
               rows={list() ?? Array.from({ length: PAGE }, () => null)}
+              rowHref={(b) => (b ? paths.block(b.id) : undefined)}
             />
           </div>
           <nav class="blocks-pager" aria-label="Block pages">

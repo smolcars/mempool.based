@@ -413,6 +413,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
       caption={props.kind === "opened" ? "The newest channels" : "The newest closes"}
       columns={columns()}
       rows={props.rows}
+      rowHref={(c) => paths.lightningChannel(c.id)}
       empty={
         props.kind === "opened" ? (
           <Empty title="No channel yet" />
@@ -428,5 +429,12 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
 }
 
 function TopTable(props: { rows: RankedNode[]; caption: string; by: "capacity" | "channels" }) {
-  return <DataTable caption={props.caption} columns={nodeColumns(props.by)} rows={props.rows} />;
+  return (
+    <DataTable
+      caption={props.caption}
+      columns={nodeColumns(props.by)}
+      rows={props.rows}
+      rowHref={(n) => paths.lightningNode(n.id)}
+    />
+  );
 }

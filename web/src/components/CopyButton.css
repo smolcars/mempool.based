@@ -1,11 +1,14 @@
 @layer components {
+  /* A 44 px target that takes a 28 px button's room, so it fits beside a hash without moving it. */
   .copy {
     position: relative;
+    isolation: isolate;
     flex: none;
     display: inline-grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: var(--touch);
+    height: var(--touch);
+    margin: -8px;
     padding: 0;
     border: 0;
     border-radius: var(--radius-m);
@@ -16,14 +19,6 @@
       color var(--dur-quick) var(--ease-out),
       background-color var(--dur-quick) var(--ease-out);
   }
-  /* A 44 px target around the small drawn button, on touch screens. */
-  @media (pointer: coarse) {
-    .copy::after {
-      content: "";
-      position: absolute;
-      inset: -8px;
-    }
-  }
   .copy svg {
     width: 15px;
     height: 15px;
@@ -31,8 +26,19 @@
     stroke: currentColor;
     stroke-width: 1.4;
   }
+  /* The drawn button is the middle 28 px; the rest is target. */
+  .copy::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    z-index: -1;
+    border-radius: var(--radius-m);
+  }
   .copy:hover {
     color: var(--color-text);
+    background: none;
+  }
+  .copy:hover::before {
     background: var(--color-surface-sunken);
   }
   .copy[data-copied] {
@@ -44,12 +50,13 @@
   .copy[data-failed] {
     color: var(--color-negative);
   }
-  /* The word over the button, clear of the value beside it, so nothing moves. */
+  /* Beside the button, over the value it copied: inside any scrolling table, so never clipped. */
   .copy__note {
     position: absolute;
-    right: 0;
-    bottom: 100%;
-    margin-bottom: var(--space-1);
+    right: calc(100% - 4px);
+    top: 50%;
+    translate: 0 -50%;
+    z-index: 2;
     padding: 2px var(--space-2);
     border-radius: var(--radius-m);
     background: var(--color-surface-raised);

@@ -50,6 +50,19 @@
   .table tbody tr:hover {
     background: var(--color-surface-sunken);
   }
+  /* A row that leads somewhere is one target: an empty link covers it, under the cells' own
+     links and buttons, which keep their place on top. */
+  .table--rows tbody tr {
+    position: relative;
+  }
+  .table__rowlink {
+    position: absolute;
+    inset: 0;
+  }
+  .table--rows tbody :is(a:not(.table__rowlink), button) {
+    position: relative;
+    z-index: 1;
+  }
   /* A row's links are a thumb's height on touch screens. */
   @media (pointer: coarse) {
     .table td {

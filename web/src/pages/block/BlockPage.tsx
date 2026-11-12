@@ -744,7 +744,12 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               onPointerLeave={() => setHighlight(undefined)}
               onFocusOut={() => setHighlight(undefined)}
             >
-              <DataTable caption="Transactions in this block" columns={columns} rows={rows()} />
+              <DataTable
+                caption="Transactions in this block"
+                columns={columns}
+                rows={rows()}
+                rowHref={(tx) => (tx ? paths.tx(tx.txid) : undefined)}
+              />
             </div>
             <div class="block-txs__more">
               <Show when={moreError()}>
