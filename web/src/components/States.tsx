@@ -34,14 +34,13 @@ export function Empty(props: { title: string; children?: JSX.Element }) {
 
 /**
  * What went wrong and how to recover. `title` names what failed: "Could not load this block".
- * `message` replaces the error's own; `action` names the button ("Try again").
+ * `message` replaces the error's own.
  */
 export function ErrorState(props: {
   title: string;
   error?: unknown;
   message?: string;
   retry?: () => void;
-  action?: string;
 }) {
   const message = () =>
     props.message ??
@@ -61,7 +60,7 @@ export function ErrorState(props: {
       <Show when={props.retry}>
         {(retry) => (
           <button class="btn" type="button" onClick={() => retry()()}>
-            {props.action ?? "Try again"}
+            Try again
           </button>
         )}
       </Show>

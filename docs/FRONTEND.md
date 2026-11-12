@@ -224,7 +224,7 @@ Import from `components/`. All of them render chain data as text only.
 | `SectionHeader title id? children?` | A section's `h2` over the 2 px rule; `children` sit at the right |
 | `Loading label?` | Waiting. Fades in only after 300 ms, so fast loads show nothing |
 | `Empty title children?` | Nothing to show, and what to do about it |
-| `ErrorState title error? message? retry? action?` | What failed, the API's message (or `message`), and a button: "Try again", or `action` |
+| `ErrorState title error? message? retry?` | What failed, the API's message (or `message`), and "Try again" |
 | `Pagination page pageCount? hasNext? onPage label` | Previous and next. Esplora's cursor-paged lists pass `hasNext` instead of `pageCount` |
 | `SearchField` | The search: reads the query as it is typed, opens its page on Enter or says why there is none. The header owns the one instance |
 | `Link href` | Internal link on the current network |

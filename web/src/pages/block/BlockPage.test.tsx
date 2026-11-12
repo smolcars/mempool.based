@@ -469,10 +469,16 @@ describe("BlockPage", () => {
     serve({
       ...normal(),
       [`/block/${HASH}/txs/0`]: {
-        body: [short, ...Array.from({ length: 24 }, (_, i) => tx(i + 1))],
+        body: [short, tx(1, { fee: 0 }), ...Array.from({ length: 23 }, (_, i) => tx(i + 2))],
       },
     });
     const el = open(`/block/${HASH}`);
+    // A transaction that pays nothing has a rate of zero, not a missing one.
+    await until(() =>
+      expect(text(el.querySelectorAll("tbody tr")[1]?.querySelectorAll("td")[1] as Element)).toBe(
+        "0.00 sat/vB",
+      ),
+    );
     await until(() => expect(fact(el, "Total fees")).toContain("0.00500000 BTC"));
     expect(fact(el, "Total fees")).toContain("500 000 sats");
     await until(() =>

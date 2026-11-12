@@ -9,7 +9,7 @@ import {
   Show,
   Suspense,
 } from "solid-js";
-import { ErrorState, Loading } from "../components/States";
+import { Empty, ErrorState, Loading } from "../components/States";
 import { CHUNK_ATTEMPTS, chunkDelay, isChunkError, retryStyles } from "../lib/chunks";
 import { fetchConfig } from "../lib/config";
 import { NETWORK_NAMES, type Network, onNetwork, stripNetwork } from "../lib/network";
@@ -187,12 +187,16 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
           />
         }
       >
-        <ErrorState
-          title="This site has been updated"
-          message="This tab still runs the version from before, and the page you opened needs files the update replaced. Reload to use the new version."
-          action="Reload"
-          retry={() => window.location.reload()}
-        />
+        {/* Not a failure, so not an alert: the one thing to do is the accented button. */}
+        <Empty title="This site has been updated">
+          <p>
+            This tab still runs the version from before, and the page you opened needs files the
+            update replaced. Reload to use the new version.
+          </p>
+          <button class="btn btn--accent" type="button" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+        </Empty>
       </Show>
     </Show>
   );

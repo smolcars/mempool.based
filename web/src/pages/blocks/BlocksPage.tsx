@@ -61,6 +61,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
   },
   {
     header: "Median fee rate, sat/vB",
+    numeric: true,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;

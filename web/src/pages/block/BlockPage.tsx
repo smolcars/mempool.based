@@ -744,8 +744,9 @@ function RateCell(props: { tx: Transaction; unit: boolean }) {
   };
   return (
     <Show when={!isCoinbase(props.tx)} fallback={<span class="muted">Coinbase</span>}>
-      <Show when={rate()} fallback={MISSING}>
-        {(r) => <FeeRate rate={r()} unit={props.unit} />}
+      {/* A rate of 0 is a rate: a transaction may pay no fee. */}
+      <Show when={rate() !== null} fallback={MISSING}>
+        <FeeRate rate={rate() ?? 0} unit={props.unit} />
       </Show>
     </Show>
   );

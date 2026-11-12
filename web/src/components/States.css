@@ -28,7 +28,7 @@
     stroke-width: 1.8;
     stroke-linecap: round;
   }
-  .state--error .btn {
+  .state .btn {
     margin-top: var(--space-2);
   }
 
