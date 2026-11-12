@@ -578,7 +578,7 @@ async fn prevouts(
         key.push_str(&format!("\n{t}:{v}"));
     }
     let list = wanted.clone();
-    let outcome = esplora::heavy_call(&ctx, &client, key, move |esplora| async move {
+    let outcome = esplora::heavy_call(&ctx, &client, key, None, move |esplora| async move {
         let deadline = std::time::Instant::now() + BATCH_DEADLINE;
         lookup(&esplora, &list, &held, deadline).await
     })

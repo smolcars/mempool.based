@@ -26,6 +26,7 @@ pub mod statistics;
 pub mod summary;
 mod transactions;
 mod v1_blocks;
+pub mod verdicts;
 pub mod ws;
 
 use std::future::Future;
