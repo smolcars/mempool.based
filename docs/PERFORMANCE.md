@@ -9,7 +9,7 @@ How fast the server and the site are, how that was measured, how they compare wi
 | First-load JavaScript, home page: 100 KB gzipped | 67.6 KB gzipped (`bun run size`); 67 KB on the wire with Brotli in Chromium | **Pass** |
 | New block, from the node being able to serve it to the WebSocket send: 50 ms | Regtest: 0.7 to 6.1 ms from the node's notification to the last subscriber's queue, 6.1 ms with 9,962 subscribers. Mainnet: 12 and 91 ms after the node's upgrade (the only two blocks); on rbitcoin v0.9.2, 13 ms to over 3 s, mostly waiting for the node's Esplora to serve the block, which the budget excludes but which we could not separate from our own time ([details](#the-new-block-on-mainnet)) | **Pass on regtest; not established on mainnet** |
 | Cached or immutable API response, server time: 10 ms at p99 | Answers from memory: p99 0.04 ms (1 client), 0.4 ms (100), 0.8 ms (1,000). Immutable `/api/block/:hash`, which we pass through to the node uncached: p99 1.8 ms (1 client), 16 ms (100), 49 ms (1,000) on regtest; 75 to 89 ms on mainnet over the network to the node (v0.9.2) | **Pass from memory; miss for immutable pass-through** under concurrency and whenever the node is a network hop away ([proposed task 1](#1-hold-immutable-node-answers-in-memory)) |
-| Frame rate during block and mempool animations: 60 fps on a mid-range laptop | No frame interval over 16.8 ms (every frame of a 60 Hz display) through a new block on the home page and through a 601-transaction grid loading, on the machine's GPU. At 4× CPU slowdown: the block the same; the grid load had 1 or 2 intervals of 33 ms or more per run, and one run of three a 224 ms long task that four profiled runs did not reproduce | **Pass** |
+| Frame rate during block and mempool animations: 60 fps on a mid-range laptop | No frame interval over 16.8 ms (every frame of a 60 Hz display) through a new block on the home page and through a 601-transaction grid loading, on the machine's GPU. At 4× CPU slowdown: the block the same; the grid load had 1 or 2 intervals of 33 ms or more per run, and one run of three a 224 ms long task that four profiled runs did not reproduce. A slower CPU is not a slower GPU, so this does not stand in for a mid-range laptop | **Pass on this machine; not established on a mid-range laptop** |
 
 | Comparison | In one line |
 |---|---|
@@ -19,7 +19,7 @@ How fast the server and the site are, how that was measured, how they compare wi
 The three results that matter most:
 
 1. **Answers from memory hold up; answers that touch the store or the node do not stay under 10 ms with many clients.** One process served 70,000 requests a second from memory at 100 concurrent clients with server time under 0.5 ms at p99. Routes that read the store (`/api/v1/blocks`, a block's summary) cost 8 ms of server time at 100 clients and 46 ms at 1,000, almost all of it building and serializing the same answer again for every request ([proposed task 2](#2-build-store-answers-once-per-tip)).
-2. **Up to 8,000 sockets every update reached every reader within 57 ms; at 10,000 on this machine delivery broke down, and the cause is not pinned.** The server still queued each block to all 10,000 sockets in 2.3 to 5.8 ms on under a sixth of a core, but in both 10,000-socket runs many readers had not received messages by the end of the run (one block reached only 2 of 9,962). Kernel network buffers climbed from 10,900 to 80,000 of 89,450 in use with both ends of 20,000 connections on one machine, so buffer pressure is the likely cause; a delay in the server's per-socket writers is not ruled out ([proposed task 5](#5-find-what-stops-websocket-delivery-past-8000-sockets)).
+2. **Up to 8,000 sockets every update reached every reader: a block within 57 ms of being queued, mempool and projected-block updates within 69 and 83 ms of their first reader. At 10,000 on this machine delivery broke down, and the cause is not pinned.** The server still queued each block to all 10,000 sockets in 2.3 to 5.8 ms on under a sixth of a core, but in both 10,000-socket runs many readers had not received messages by the end of the run (one block reached only 2 of 9,962). Kernel network buffers climbed from 10,900 to 80,000 of 89,450 in use with both ends of 20,000 connections on one machine, so buffer pressure is the likely cause; a delay in the server's per-socket writers is not ruled out ([proposed task 5](#5-find-what-stops-websocket-delivery-past-8000-sockets)).
 3. **A single client that floods the API costs us about 28 µs of CPU and one log line per refusal.** The limits work: the flood's 103,000 to 126,000 requests a second were refused in 0.005 ms of server time each, and ordinary clients beside it were never refused. But that is 3.4 to 3.8 cores, and the log grew by 772 to 911 MB in 30 s ([proposed task 3](#3-count-refusals-instead-of-logging-each)).
 
 ## Where we miss, and what to do
@@ -142,15 +142,15 @@ Every limit at its default; two passes, ranges across them.
 
 Every socket subscribes to `blocks`, `mempool`, `projected` and `transactions` (the home page), and one in ten also to `projected-txs:0`. Regtest takes 20 transactions a second and a block every 30 s; each step runs 90 s. Each message is identified by its bytes, which every subscriber shares, so the load generator knows which sockets read it and when the first and the last did; for blocks it joins that with the server's `ws_fanout` event, which says when the message was queued (log timestamps are to the millisecond). A last-reader time means something only if every subscriber got the message: in every run up to 8,000 sockets, every message reached every reader (checked from the recorded counts); in the 10,000-socket runs they did not, so that row gives counts instead.
 
-Two passes of 90 s for 100, 1,000 and 10,000 sockets. The 2,000, 5,000 and 8,000 rows are single 40-second runs made afterwards to find the knee, under the same activity. "Queued" is the server's own time to put a block on every subscriber's queue (`fanout_ms`); the reader times are as the load generator saw them.
+Two passes of 90 s for 100, 1,000 and 10,000 sockets. The 2,000, 5,000 and 8,000 rows are single 40-second runs made afterwards to find the knee, under the same activity but with the home page's topics only: no socket subscribed to `projected-txs:0`, so those rows carry less traffic than the others and are not directly comparable with them. `bench.sh` now runs every step with the same subscriptions. "Queued" is the server's own time to put a block on every subscriber's queue (`fanout_ms`); the reader times are as the load generator saw them.
 
 | Sockets | Block queued to all, ms | Block, queued → last reader, ms (max) | Mempool update, first → last reader, ms (median / max) | Server CPU, mean / busiest second | Server RSS MB |
 |---|---|---|---|---|---|
 | 100 | 0.01–0.07 | 1.3 | 0.5 / 2.0–4.5 | 0.003 / 0.02 cores | 17–35 |
 | 1,000 | 0.12–1.1 | 7.3–7.5 | 6.2 / 12–15 | 0.02 / 0.10 | 23–35 |
-| 2,000 | 1.0 | 11 | 16 / 29 | | |
-| 5,000 | 2.4 | 34 | 28 / 49 | | |
-| 8,000 (7,929 opened) | 9.3 | 57 | 45 / 69 | 0.13 / 0.65 | 76 |
+| 2,000, home topics only | 1.0 | 11 | 16 / 29 | | |
+| 5,000, home topics only | 2.4 | 34 | 28 / 49 | | |
+| 8,000 (7,929 opened), home topics only | 9.3 | 57 | 45 / 69 | 0.13 / 0.65 | 76 |
 | 10,000 (9,646 to 10,000 opened) | 2.3–5.8 | Incomplete: blocks reached 2 to 9,012 of 9,962 readers (pass 1) and 372 to 8,306 of 10,000 (pass 2) by the end of the run | Incomplete: some updates reached a single reader | 0.06–0.15 / 0.6–1.0 | 81–96 |
 
 A `projected-txs:0` delta reached its last reader within 7 ms at 100 sockets and 24 ms at 1,000. Resident memory is the process's high-water mark and carries over from earlier steps on the same server; at 9,962 sockets it was 81 MB against 17 MB at 100, about 6.5 KB a socket. The load generator used under 0.1 core throughout.
@@ -228,7 +228,7 @@ Each page is loaded cold (a fresh browser context) in headless Chromium 156 at 1
 
 Every page shows its data within 2.5 s of its load event as a slow phone, and the chain of requests is why ([proposed task 4](#4-shorten-the-pages-request-chain-on-slow-networks)). The mainnet next-block page is the slowest: its 166 to 378 KB snapshot of about 3,400 transactions arrives over the socket and is decoded and listed, 94 ms of JavaScript unthrottled and 434 ms at 4×.
 
-**Frame times.** `requestAnimationFrame` intervals for 6 s, three times each: from mining a block while the home page is open (the new block slides in, the projected blocks and stats update), and from an in-app navigation to a block of 601 transactions until its grid has drawn.
+**Frame times.** These say the animations run smoothly on this machine's GPU; they do not establish the budget's mid-range laptop, whose GPU was not measured, and the 4× CPU runs show the grid's load does stall on a slow CPU (50 to 250 ms). `requestAnimationFrame` intervals for 6 s, three times each: from mining a block while the home page is open (the new block slides in, the projected blocks and stats update), and from an in-app navigation to a block of 601 transactions until its grid has drawn.
 
 | | Through a new block on the home page | Through a block's grid loading (601 transactions) |
 |---|---|---|
@@ -306,7 +306,7 @@ How far the comparison can be trusted:
 - A quiet machine: every server number carries the noise of other builds.
 - Linux, a server whose clients are on other machines, and TLS or HTTP/2 through a proxy.
 - The reference backend under load, or on this machine: see above.
-- A mid-range laptop's GPU, or a real phone; the browser profiles stand in for them.
+- A mid-range laptop's GPU, or a real phone. The slow-phone profile slows the CPU and the network only.
 - The `/api/v1/ws` socket, the Lightning pages, and Firefox or Safari.
 - Signet and testnet4.
 

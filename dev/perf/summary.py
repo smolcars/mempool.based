@@ -87,6 +87,15 @@ def limits(dirs):
               f"| {rng([r['refused_ms']['p50'] for r in runs])} / {rng([r['refused_ms']['p99'] for r in runs])} | {rng(cpu, '{:.1f}')} |")
 
 
+def incomplete(r):
+    """Messages that missed a reader, or None when an older result cannot tell."""
+    msgs = r["messages"].values()
+    if all("incomplete" in v for v in msgs):
+        return sum(v["incomplete"] for v in msgs)
+    # Older results count deliveries without saying how many readers each topic had.
+    return None
+
+
 def ws(dirs):
     # Last-reader times cover only messages every subscribed reader got; "incomplete" counts the rest.
     print("| Sockets | Open | Server CPU mean / busiest s (cores) | Server RSS MB | Messages incomplete | Block: published → last reader p50 / max ms | Block: node → last reader max ms | mempool: first → last reader p50 / max ms | projected-txs:0 delta first → last p50 / max ms | Load tool CPU (cores) |")
@@ -96,12 +105,15 @@ def ws(dirs):
         if not runs:
             continue
         def m(r, label, key, q):
-            x = r["messages"].get(label, {}).get(key)
+            # A last-reader time is shown only for a run whose every message reached every reader.
+            if incomplete(r) != 0:
+                return None
+            x = next((v for k, v in r["messages"].items() if k == label or k.startswith(label + ":")), {}).get(key)
             return x[q] if x and x["n"] else None
         print(f"| {n} | {rng([r['open'] for r in runs], '{:,}')} "
               f"| {rng([r['server']['cpu_pct_mean'] / 100 for r in runs], '{:.2f}')} / {rng([r['server']['cpu_pct_busiest_second'] / 100 for r in runs], '{:.2f}')} "
               f"| {rng([r['server']['rss_mb_max'] for r in runs])} "
-              f"| {rng([sum(v.get('incomplete', 0) for v in r['messages'].values()) for r in runs], '{:,}')} "
+              f"| {rng([incomplete(r) for r in runs], '{:,}')} "
               f"| {rng([m(r, 'blocks:block', 'published_to_last_ms', 'p50') for r in runs])} / {rng([m(r, 'blocks:block', 'published_to_last_ms', 'max') for r in runs])} "
               f"| {rng([m(r, 'blocks:block', 'node_to_last_ms', 'max') for r in runs])} "
               f"| {rng([m(r, 'mempool:mempool', 'first_to_last_ms', 'p50') for r in runs])} / {rng([m(r, 'mempool:mempool', 'first_to_last_ms', 'max') for r in runs])} "

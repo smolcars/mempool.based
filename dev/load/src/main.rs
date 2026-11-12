@@ -291,6 +291,9 @@ async fn http_client(id: u64, run: Arc<HttpRun>) -> HttpResults {
     let stop = tokio::time::Instant::from_std(run.deadline + GRACE);
     while Instant::now() < run.deadline {
         if run.rate > 0.0 {
+            if next >= run.deadline {
+                break;
+            }
             tokio::time::sleep_until(next.into()).await;
             next += Duration::from_secs_f64(1.0 / run.rate);
         }
@@ -535,6 +538,8 @@ async fn ws_open(
 /// One distinct message, identified by its bytes: every subscriber gets the same ones.
 struct Seen {
     label: String,
+    /// The topic it belongs to, which says how many readers should get it.
+    topic: String,
     bytes: usize,
     first_us: u64,
     last_us: u64,
@@ -544,13 +549,20 @@ struct Seen {
 
 type Messages = Arc<Mutex<HashMap<u64, Seen>>>;
 
-fn label(opcode: u8, payload: &[u8]) -> String {
+/// A message's label (topic and type, or binary kind and block) and its topic.
+fn label(opcode: u8, payload: &[u8]) -> (String, String) {
     if opcode == 2 {
-        return format!("binary:{}", payload.first().copied().unwrap_or(0));
+        // Byte 0 is the kind, byte 2 the projected block (docs/WS.md, binary frames).
+        let kind = payload.first().copied().unwrap_or(0);
+        let block = payload.get(2).copied().unwrap_or(0);
+        return (
+            format!("binary:{kind}:{block}"),
+            format!("projected-txs:{block}"),
+        );
     }
     let v: Value = serde_json::from_slice(payload).unwrap_or(Value::Null);
     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("-").to_owned();
-    format!("{}:{}", s("topic"), s("type"))
+    (format!("{}:{}", s("topic"), s("type")), s("topic"))
 }
 
 async fn ws_reader(
@@ -571,12 +583,16 @@ async fn ws_reader(
                 h.write(&buf);
                 let key = h.finish();
                 let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
-                let e = seen.entry(key).or_insert_with(|| Seen {
-                    label: label(opcode, &buf),
-                    bytes: buf.len(),
-                    first_us: at,
-                    last_us: at,
-                    readers: HashSet::new(),
+                let e = seen.entry(key).or_insert_with(|| {
+                    let (label, topic) = label(opcode, &buf);
+                    Seen {
+                        label,
+                        topic,
+                        bytes: buf.len(),
+                        first_us: at,
+                        last_us: at,
+                        readers: HashSet::new(),
+                    }
                 });
                 if e.readers.insert(id) {
                     e.first_us = e.first_us.min(at);
@@ -672,11 +688,10 @@ async fn ws(o: Opts) -> Result<Value, String> {
             // The largest topics, so a client that does not read fills its queue soonest.
             want.extend(["projected-txs:0".to_owned(), "projected-txs:1".to_owned()]);
         }
-        let block_topic = !is_slow && every > 0 && id % every == 0;
-        if block_topic {
+        if !is_slow && every > 0 && id % every == 0 {
             want.push("projected-txs:0".to_owned());
         }
-        let sub = json!({ "op": "subscribe", "topics": want }).to_string();
+        let sub = json!({ "op": "subscribe", "topics": &want }).to_string();
         let ip = client_ip(id, ips);
         let (addr, path, gate) = (addr.clone(), path.clone(), Arc::clone(&gate));
         let (open, refused, connect_us) = (
@@ -704,7 +719,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(u32::try_from(t.elapsed().as_micros()).unwrap_or(u32::MAX));
                     open.fetch_add(1, Ordering::Relaxed);
-                    Some((id, is_slow, block_topic, r, w))
+                    Some((id, is_slow, want, r, w))
                 }
                 Err(code) => {
                     *refused
@@ -718,13 +733,16 @@ async fn ws(o: Opts) -> Result<Value, String> {
         }));
     }
     let mut readers = Vec::new();
-    let mut block_readers = 0usize;
+    // Readers subscribed to each topic: how many should get each of its messages.
+    let mut topic_readers: HashMap<String, usize> = HashMap::new();
     for t in tasks {
-        if let Ok(Some((id, is_slow, block_topic, r, w))) = t.await {
+        if let Ok(Some((id, is_slow, want, r, w))) = t.await {
             if is_slow {
                 held.push((r, w)); // never read
             } else {
-                block_readers += usize::from(block_topic);
+                for topic in want {
+                    *topic_readers.entry(topic).or_default() += 1;
+                }
                 let id = u32::try_from(id).unwrap_or(u32::MAX);
                 readers.push(tokio::spawn(ws_reader(id, r, w, Arc::clone(&seen))));
             }
@@ -762,22 +780,22 @@ async fn ws(o: Opts) -> Result<Value, String> {
         by_label.entry(s.label.clone()).or_default().push(s);
     }
     let mut messages = serde_json::Map::new();
+    let expected = |s: &Seen| {
+        topic_readers
+            .get(&s.topic)
+            .copied()
+            .unwrap_or(readers.len())
+    };
     for (label, all) in &by_label {
-        // Every reader subscribed to it: the binary frames are `projected-txs:0`'s.
-        let expected = if label.starts_with("binary:") {
-            block_readers
-        } else {
-            readers.len()
-        };
         let (list, incomplete): (Vec<&Seen>, Vec<&Seen>) =
-            all.iter().partition(|s| s.readers.len() >= expected);
+            all.iter().partition(|s| s.readers.len() >= expected(s));
         let spread_us: Vec<u32> = list
             .iter()
             .map(|s| u32::try_from(s.last_us - s.first_us).unwrap_or(u32::MAX))
             .collect();
         let mut entry = json!({
             "messages": all.len(),
-            "expected_readers": expected,
+            "expected_readers": all.first().map(|s| expected(s)),
             "complete": list.len(),
             "incomplete": incomplete.len(),
             "incomplete_received_min": incomplete.iter().map(|s| s.readers.len()).min(),
@@ -880,6 +898,18 @@ mod tests {
             1
         );
         assert_eq!(buf, payload);
+    }
+
+    #[test]
+    fn messages_are_labelled_by_their_topic() {
+        assert_eq!(
+            label(2, &[2, 1, 1, 0]),
+            ("binary:2:1".into(), "projected-txs:1".into())
+        );
+        assert_eq!(
+            label(1, br#"{"topic":"blocks","type":"block"}"#),
+            ("blocks:block".into(), "blocks".into())
+        );
     }
 
     #[test]
