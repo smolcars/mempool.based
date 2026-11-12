@@ -194,6 +194,36 @@ pub async fn scored_between(store: &Store, from: u32, to: u32) -> Result<Vec<Sco
         .await
 }
 
+/// One pool's audited blocks over a height range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PoolHealth {
+    pub pool: u16,
+    pub audited: u32,
+    /// The mean of their match rates, percent.
+    pub match_rate: f64,
+}
+
+/// Each pool's audited best-chain blocks at heights `from..=to` and their mean match rate, for
+/// pools with at least one. One grouped read over the audits, joined to the block table as the
+/// pages are, so a block that left the best chain counts for nobody.
+pub async fn pool_health(store: &Store, from: u32, to: u32) -> Result<Vec<PoolHealth>, Error> {
+    store
+        .read(move |sql| {
+            let mut stmt = sql.prepare(
+                "SELECT b.pool, count(*), avg(a.match_rate) FROM audits a JOIN blocks b                  ON b.height = a.height AND b.hash = a.hash WHERE a.height BETWEEN ?1 AND ?2                  GROUP BY b.pool ORDER BY b.pool",
+            )?;
+            let rows = stmt.query_map(params![from, to], |r| {
+                Ok(PoolHealth {
+                    pool: get(r, 0)?,
+                    audited: get(r, 1)?,
+                    match_rate: r.get(2)?,
+                })
+            })?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+}
+
 /// Scores of the best chain's blocks stamped at or after `since` (Unix seconds), lowest first.
 pub async fn scored_since(store: &Store, since: u64) -> Result<Vec<Scored>, Error> {
     store

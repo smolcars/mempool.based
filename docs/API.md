@@ -393,13 +393,22 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 |---|---|---|
 | `poolId`, `poolUniqueId`, `unique_id`, `pool.id` | All the list's id | The reference numbers its own database rows; we have one id |
 | `regexes` | The list's tags, matched as literal text | The list has tags, not patterns |
-| `avgMatchRate`, `avgFeeDelta`, `avgBlockHealth`, `reportedHashrate`, `minerNames` | `null` | A pool's average over its audited blocks is not computed yet ([Block audits](#block-audits) has each block's); no pool reports hashrate to us |
+| `avgMatchRate`, `avgBlockHealth` | The mean match rate of the pool's audited blocks, two decimals: in the period for `avgMatchRate`, in the whole stored history for `avgBlockHealth`; `null` when it has none | Only blocks this server watched arrive are audited ([Block health](#block-health)). The reference answers `null` for a pool with no audited block too |
+| `avgFeeDelta`, `reportedHashrate`, `minerNames` | `null` | The reference's fee delta is a string whose unit we could not tell from its answers; no pool reports hashrate to us |
 | `USD` in the fee and reward series | Absent | No price feed yet (M3). The reference leaves it out the same way on a network without prices (observed on mempool.space's signet) |
 | Block series points | A fixed number of blocks a point (above) | The reference merges blocks mined close together into one point (its 715 points for a week's 895 blocks); where its point is one block, the values are equal |
 | `avgFee_*` (whole numbers) | Our size-weighted percentiles, rounded | rbitcoin's sub-sat rates round to `0`; use `/precise` |
 | Pool blocks | `id`, `height`, `timestamp`, `difficulty`, `tx_count`, `size`, `weight`, and `extras` with `totalFees`, `medianFee`, `feeRange`, `reward`, `pool`, `avgFee`, `avgFeeRate`, `coinbaseRaw`, `coinbaseAddress`, `coinbaseAddresses`, `coinbaseSignature` (the first payout script's assembly) and `coinbaseSignatureAscii` | The block table holds no header fields (version, bits, nonce, merkle root, previous hash, median time) and no per-transaction totals; asking the node would be a call per request. `medianFee` and `feeRange` are `null` until the block is rated, with three decimals |
 | `blocks/timestamp` | At or before the time | The reference answered the same way, not with the nearest block |
 | Coverage | `X-Data-*` headers | Not on the reference, whose history is complete |
+
+#### Block health
+
+`avgMatchRate` (`/pools/:interval`) and `avgBlockHealth` (`/pool/:slug`) are the mean of the match rates ([Block audits](#block-audits)) of the pool's audited blocks: in the period asked for, or for `avgBlockHealth` in everything the table holds. Only best-chain blocks count: an audited block that a reorg replaced counts for nobody, as in the audit pages. Two decimals, as the reference writes them.
+
+**What it covers.** A block is audited only when this server watched it arrive with the mempool engine on and a projection ready ([Block audits](#block-audits)); audits cannot be made afterwards. So the average covers the blocks since the server first ran with the engine, less any it missed, which for most pools and most periods is a small part of their blocks: a pool with two blocks audited out of hundreds gets the mean of those two. The reference's shape has no place for the count, so the answer cannot say it. A pool with no audited block in the period answers `null`, as the reference answers for one (`avgBlockHealth` of a pool whose blocks all predate its audits), never `0` or `100`. To weigh the figure, count the pool's audited blocks: `/api/v1/mining/blocks/audit/scores` and `/predictions/:interval` list every audited block by height and time, and `/pool/:slug/blocks` lists the pool's heights.
+
+**Cost.** One grouped read over the audits table joined to the block table by height and hash, done with each answer's other reads and cached with it: the audits table holds one row per block watched (about 52,000 a year), so it adds well under a millisecond to a computation and nothing to a request.
 
 #### Freshness and cost
 
