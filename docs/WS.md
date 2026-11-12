@@ -1,6 +1,6 @@
 # WebSocket protocol
 
-The live channel between the server and the frontend: one socket per browser tab at `/app/ws`, or under a network's prefix (`/signet/app/ws`, `/testnet4/app/ws`, `/regtest/app/ws`). A socket belongs to one network. This page is the contract the frontend and every topic are written against. The code is `crates/server/src/ws.rs` and `crates/server/src/ws/`.
+The live channel between the server and the frontend: one socket per browser tab at `/app/ws`, or under a network's prefix (`/signet/app/ws`, `/testnet4/app/ws`, `/regtest/app/ws`). A socket belongs to one network. This page is the contract the frontend and every topic are written against. The code is `crates/server/src/ws.rs` and `crates/server/src/ws/`. Wallets and bots written for mempool.space have [their own socket](#the-mempoolspace-shaped-socket-apiv1ws) at `/api/v1/ws`, on the same hub.
 
 The socket is part of the private `/app` API: it may change in any release, since the frontend and server ship together. Breaking changes bump the protocol version.
 
@@ -323,6 +323,114 @@ Browsers answer pings on their own, so a live tab is never closed for silence. A
 | 4004 | `idle timeout` | Nothing received for `WS_IDLE_TIMEOUT_SECS`, ping unanswered |
 
 A client closed for 1002 to 4002 has a bug; reconnecting will not help. After 4003 or 4004, reconnect with backoff. The close frame is written after any frame in progress and the queued messages are dropped. When a client has stopped reading, the close frame may never reach it: the write gives up after `REQUEST_TIMEOUT_SECS` without progress and the connection is dropped.
+
+## The mempool.space-shaped socket (`/api/v1/ws`)
+
+For wallets and bots written against mempool.space's WebSocket: `/api/v1/ws` on each network (`/signet/api/v1/ws`, `/testnet4/api/v1/ws`, `/regtest/api/v1/ws`). It runs on the same hub, framing, limits and tracking as `/app/ws` and speaks the reference's JSON, observed from mempool.space ([`compat/websocket.md`](compat/websocket.md)) and held to recorded messages by a test (`every_message_has_the_reference_shape`, against [`fixtures/websocket/reference.json`](../fixtures/websocket/reference.json)). It is a public API: unlike `/app/ws` it may change only to add, and other sites' pages may open it ([below](#why-other-sites-may-open-it)). It is not a drop-in replacement: what it leaves out is [listed](#differences-from-the-reference). The code is `crates/server/src/ws/v1.rs`.
+
+### What a client sends
+
+Text frames with one JSON object. An object may hold several of these keys; each is handled.
+
+| Message | Does |
+|---|---|
+| `{"action":"ping"}` | Answered `{"pong":true}` |
+| `{"action":"want","data":["blocks","stats","mempool-blocks"]}` | Replaces the set of parts wanted; other names are ignored. Each newly wanted part first sends its current state, then every change. `"data":[]` stops them all |
+| `{"track-tx":"<txid>"}` | Follows one transaction, 64 hex digits in lower case. A new one replaces the last; `{"track-tx":"stop"}` ends it |
+| `{"track-address":"<address>"}` | Follows one address of this network (bech32 in either case). A new one replaces the last; `"stop"` ends it |
+| `{"track-addresses":["<address>", …]}` | Follows a set of addresses, replacing the last set; `[]` stops it. Duplicates count once |
+
+What else happens, as on the reference unless it says otherwise:
+
+| A client sends | It gets |
+|---|---|
+| Text that is not JSON | Close `4000` (the reference closes too, without a status) |
+| JSON it does not understand: another type, an unknown key or `action`, a value of the wrong type, a txid or address that does not parse for this network | Nothing; the socket stays |
+| `track-mempool`, `track-mempool-txids`, `track-mempool-block`, `track-rbf`, `track-rbf-summary`, `track-txs`, `track-scripthashes`, `track-accelerations` | `{"<key>-error":"not served by this server"}`, and the socket stays. Ours: the reference serves them |
+| `{"action":"init"}`, `refresh-blocks` and the reference's other keys | Nothing |
+
+### What the server sends
+
+Every message is one JSON object in its own frame, with the key named here.
+
+| Message | When | What |
+|---|---|---|
+| `{"blocks":[…]}` | On `want` | The last 8 blocks, oldest first, each the node's Esplora JSON exactly as `GET /api/block/:hash` serves it |
+| `{"block":{…}}` | Each new block | The same JSON, at the same moment as `/app/ws`'s `block` |
+| `{"mempoolInfo":{…},"fees":{…},"da":{…},"transactions":[…]}` | On `want`, then every `WS_MEMPOOL_INTERVAL_MS` (2 s) | Whatever of these the server has: `mempoolInfo` is the node's `getmempoolinfo` as the mempool tracker last read it, amounts in BTC; `fees` is `GET /api/v1/fees/precise`'s answer and `da` `GET /api/v1/difficulty-adjustment`'s ([`API.md`](API.md#mempoolspace-shaped-routes-apiv1)); `transactions` is the newest `WS_LATEST_TXS` transactions seen, `{txid, fee, vsize, value, rate, time}` with `rate` in sat/vB |
+| `{"mempool-blocks":[…]}` | On `want`, then when the projected blocks change | `GET /api/v1/fees/mempool-blocks`' answer. After a `block`, the next one is on that block (held for at most 3 s, as on `/app/ws`) |
+| `{"txPosition":{"txid":"…","position":{"block":0,"vsize":1078}}}` | The followed transaction waits | `block` is the projected block, 0 for the next; `vsize` is what is mined before it inside that block. Sent when it changes, a mere shuffle at most once per `WS_POSITION_INTERVAL_MS`, from the same pass as `tx:<txid>` ([above](#following-a-transaction-or-an-address)) |
+| `{"txReplaced":{"txid":"<replacement>"}}` | It was replaced | The transaction that replaced it |
+| `{"txConfirmed":"<txid>"}` | It was mined | |
+| `{"address-transactions":[…]}` | `track-address`: transactions paying or spending it entered the mempool | The node's Esplora JSON for each, as `GET /api/tx/:txid` serves it |
+| `{"block-transactions":[…]}` | `track-address`: transactions of it confirmed | As above |
+| `{"multi-address-transactions":{"<address>":{"mempool":[…],"confirmed":[…],"removed":[]}}}` | `track-addresses`: the same events | One address per message, written as the server writes it (bech32 in lower case); `removed` is always empty |
+| `{"<key>-error":"…"}` | `track-tx`, `track-address` or `track-addresses` over a limit below | The socket stays. What the message asked to stop is stopped: a refused `track-tx` or `track-address` has still ended the previous one, and a `track-addresses` set keeps the addresses the server could take |
+
+A part wanted, or a transaction followed, gets its current message at once (a transaction gets none while no message applies: not seen yet, evicted). An address gets nothing until it changes, as on the reference. After a reconnect, send everything again.
+
+**Addresses.** When an address is first followed, the server reads its newest history page once from the node (up to 50 mempool and the 25 newest confirmed transactions, `/scripthash/:hash/txs`) and says nothing: that is what the client could already see. On each change of the node's Electrum status for it, the server reads the page again and sends what is new in it. One read per address and change, whatever the number of sockets; changes during a read make one more read; at most two reads per network at once, each counted until the node answers or 60 s pass, as the address routes' calls are ([`SECURITY.md`](SECURITY.md) rule 11), and capped at 8 MB. A read still waiting its turn is dropped when no socket follows the address any more. So more than 50 mempool or 25 confirmed transactions between two changes are not all sent, and a transaction that leaves the mempool unconfirmed is not said. An address the node will not watch (more history than its `--max-sh-creates`) gets no messages; `/app/ws` says why, this socket does not.
+
+### Limits
+
+Every rule in [Connection rules](#connection-rules) applies, with the same settings and close codes, except the socket counts:
+
+| Rule | Default | Setting |
+|---|---|---|
+| `/api/v1/ws` sockets open at once, every network together | 256 | `WS_V1_MAX_SOCKETS` |
+| `/api/v1/ws` sockets per client address | 4 | `WS_V1_CLIENT_MAX_SOCKETS` |
+
+They are pools of their own: a compatible socket never takes one of `WS_MAX_SOCKETS` or a client's `WS_CLIENT_MAX_SOCKETS`, and the reverse. Over a cap at upgrade, `503` or `429` as for `/app/ws`, logged with `refused` `v1_server_sockets` or `v1_client_sockets`.
+
+Per socket, the parts wanted count inside `WS_MAX_SUBSCRIPTIONS`; the `track-tx` transaction inside `WS_MAX_TRACKED_TXS`; the `track-address` address and the `track-addresses` set together inside `WS_MAX_TRACKED_ADDRESSES` (2; the reference allows 10). Over it, `track-addresses` is answered `track-addresses-error` and changes nothing; `track-tx` and `track-address` answer `track-tx-error` and `track-address-error`. Past the network's `WS_TRACKED_TXS_TOTAL` or `WS_TRACKED_ADDRESSES_TOTAL`, shared with `/app/ws`, the same keys say the server is full, for the transaction or each address it could not take. A message is at most `WS_MAX_MESSAGE_BYTES` (1,024 bytes, about twenty addresses).
+
+### Why other sites may open it
+
+`/app/ws` refuses another site's page ([`SECURITY.md`](SECURITY.md) rule 21), because that page could otherwise open sockets from each of its visitors until their allowance was used up and lock them out of our pages. A public API socket is meant to be opened from other sites, so the same attack is closed another way: its sockets come from the pools above. Another site can use up a visitor's 4 compatible sockets, and with enough visitors all 256, but never one `/app/ws` socket, so our pages keep working. Each pool bounds its own memory and file descriptors.
+
+### Differences from the reference
+
+| What | Here | Why |
+|---|---|---|
+| Frames | One part per message | The reference puts several in one frame (a block with `mempool-blocks`, `fees`, `da`, `txConfirmed`, …). Each of ours is encoded once and shared by every subscriber; bundling would mean a frame per combination. A client reads every key of every message |
+| `blocks`, `block` | The node's Esplora JSON: no `extras`, no `stale` | The extras come from our block table after the block arrives; waiting for them would break the block budget ([`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets)). Who mined a block and its fees are in [`API.md`](API.md#mining), its audit in [Block audits](API.md#block-audits). Only best-chain blocks are sent |
+| `vBytesPerSecond` | Absent | Not computed yet |
+| `mempoolInfo` | rbitcoin's `getmempoolinfo`: has `fullrbf`, `limitclustercount`, `limitclustersize`; no `permitbaremultisig`, `maxdatacarriersize` or `optimal` | The node's own answer |
+| `stats` cadence | Every 2 s | The reference sends about once a second; `WS_MEMPOOL_INTERVAL_MS` bounds every mempool topic |
+| `transactions` | `vsize` is the sigop-adjusted integer | The tracker's unit |
+| `txPosition` | No `cpfp`; sent when it changes | The CPFP details are `GET /app/tx/:txid/relatives`; the reference repeats the position in every stats frame |
+| `txConfirmed` | Its own message | As above |
+| Transactions in address messages | The node's Esplora JSON, without the reference's own fields (`order`, `vsize`, `adjustedVsize`, `feePerVsize`, `adjustedFeePerVsize`, `effectiveFeePerVsize`, `firstSeen`, `cpfpDirty`, `clusterId`, `chunkIndex`, `cpfpChecked`, …) | Passed through from the node, never rebuilt |
+| `track-addresses` | 2 addresses per socket by default | Each address is a node subscription; raise `WS_MAX_TRACKED_ADDRESSES` to allow more |
+| `multi-address-transactions` | One address per message; `removed` always empty | Each address's message is encoded once for every socket following it |
+| Not served | `init`, `refresh-blocks`, `live-2h-chart`, `conversions`, `loadingIndicators`, `backend`, the replacement feeds (`rbfLatest`, `rbfSummary`, …), `track-txs`, `track-mempool*`, `track-mempool-block`, `utxoSpent`, `address-removed-transactions`, `rbfTransaction`, `rbfInfo` | Status and reason per message in [`compat/websocket.md`](compat/websocket.md) |
+
+### Cost of a compatible socket
+
+A compatible socket costs what an `/app/ws` socket costs: every message is encoded once per network and each socket's queue holds references to the same bytes. Nothing it sends reaches the node except following an address, which reads one history page per change of the address, shared by every socket following it.
+
+Measured locally on the release build against the regtest node (Apple M4 shared with other work, clients in Bun on the same machine), every socket wanting `blocks`, `stats` and `mempool-blocks` and following the same transaction and address, under the same activity in each step (a payment to the address every 15 s, a block a minute), 60 s a step:
+
+| Sockets | Server CPU | Server RSS | Sent to clients | RPC calls a minute | Address reads a minute |
+|---|---|---|---|---|---|
+| 1 | 0.05% of one core | 8 MB | 1.2 KB/s | 29–37 | 5 |
+| 100 | 0.15% | 9 MB | 131 KB/s | 29–37 | 5 |
+| 1,000 | 1.0% | 15 MB | 1.3 MB/s | 29–37 | 5 |
+
+The node's work does not change with the sockets: the RPC calls are the mempool tracker's, and the address is read once per payment or block whatever the number of sockets following it. Memory grows by about 6 KB a socket. No socket was dropped.
+
+**Against the reference, on mainnet,** 2026-11-12, 15 minutes and three blocks (975,542 to 975,544): our server read-only against a synced node with the mempool engine on, one client to it and one to mempool.space's socket, each wanting every part and following the same transaction and its address.
+
+| | Here | Reference |
+|---|---|---|
+| `block`, after the reference's | +0.43 s, +2.5 s, −0.63 s | |
+| Of which our own wait | 0.9 s each: the node's Esplora had not caught up with its announcement, as for `/app/ws` | |
+| The tracked transaction's `block-transactions` and `txConfirmed`, after the reference's | +0.46 s and +1.3 s | In the `block` frame |
+| First `mempool-blocks` on the new block, after its `block` | 3.7 to 4.2 s | In the same frame |
+| `stats` | one per 2.0 s | one per 1.1 s |
+| Traffic for these parts | 1.7 KB/s | 3.5 KB/s |
+
+Shapes matched as the conformance test says, and only where the table of differences says. The `mempool-blocks` on a new block waits for the fee task's next projection read and then this socket's own, each once per `WS_MEMPOOL_INTERVAL_MS`; `/app/ws` sends its projection about 2 s after the block. The whole server, engines included, used 3.3% of one core and 83 MB.
 
 ## How it works
 

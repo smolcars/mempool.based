@@ -436,8 +436,8 @@ enum Answer {
 }
 
 #[derive(Clone)]
-struct Electrum {
-    addr: String,
+pub(crate) struct Electrum {
+    pub(crate) addr: String,
     answers: Arc<Mutex<HashMap<String, Answer>>>,
     /// `blockchain.scripthash.subscribe` requests received: the node's cost.
     subscribes: Arc<AtomicUsize>,
@@ -463,7 +463,7 @@ fn header_hex() -> String {
 }
 
 impl Electrum {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let e = Self {
             addr: listener.local_addr().unwrap().to_string(),
@@ -489,7 +489,7 @@ impl Electrum {
     }
 
     /// Pushes a new status for a script, as the node does when its history changes.
-    fn notify(&self, sh: ScriptHash, status: &str) {
+    pub(crate) fn notify(&self, sh: ScriptHash, status: &str) {
         self.answer(sh, Answer::Status(Some(status.into())));
         let msg = json!({"jsonrpc": "2.0", "method": "blockchain.scripthash.subscribe",
             "params": [sh.to_string(), status]});
@@ -553,9 +553,9 @@ impl Electrum {
 
 // The server side.
 
-struct Server {
-    ctx: Arc<NetworkContext>,
-    projector: Projector,
+pub(crate) struct Server {
+    pub(crate) ctx: Arc<NetworkContext>,
+    pub(crate) projector: Projector,
     mock: Mock,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -569,8 +569,18 @@ impl Drop for Server {
 }
 
 /// Fast settings for tests; `tweak` changes the bounds under test.
-fn context(
+pub(crate) fn context(
     electrum: &str,
+    mempool: bool,
+    tweak: impl FnOnce(&mut WsLimits),
+) -> Arc<NetworkContext> {
+    context_at(electrum, "http://127.0.0.1:1", mempool, tweak)
+}
+
+/// [`context`] with an Esplora at `esplora`.
+pub(crate) fn context_at(
+    electrum: &str,
+    esplora: &str,
     mempool: bool,
     tweak: impl FnOnce(&mut WsLimits),
 ) -> Arc<NetworkContext> {
@@ -579,7 +589,7 @@ fn context(
         ("REGTEST_RPC_PORT", "1"),
         ("REGTEST_RPC_USER", "u"),
         ("REGTEST_RPC_PASSWORD", "p"),
-        ("REGTEST_ESPLORA_URL", "http://127.0.0.1:1"),
+        ("REGTEST_ESPLORA_URL", esplora),
         ("REGTEST_ELECTRUM_ADDR", electrum),
         (
             "REGTEST_MEMPOOL_ENABLED",
@@ -597,11 +607,11 @@ fn context(
 }
 
 impl Server {
-    fn start(mock: &Mock, tweak: impl FnOnce(&mut WsLimits)) -> Self {
+    pub(crate) fn start(mock: &Mock, tweak: impl FnOnce(&mut WsLimits)) -> Self {
         Self::on(context("127.0.0.1:1", true, tweak), mock)
     }
 
-    fn on(ctx: Arc<NetworkContext>, mock: &Mock) -> Self {
+    pub(crate) fn on(ctx: Arc<NetworkContext>, mock: &Mock) -> Self {
         let tracker_config = mempool::Config {
             gap: Duration::from_millis(10),
             heartbeat: Duration::from_millis(100),
@@ -625,7 +635,7 @@ impl Server {
     }
 
     /// Waits until the engines hold exactly the mock's mempool on its tip and stopped moving.
-    async fn settle(&self) {
+    pub(crate) async fn settle(&self) {
         let deadline = Instant::now() + WAIT;
         loop {
             let want: HashSet<Txid> = self.mock.node().txs.iter().map(MockTx::id).collect();

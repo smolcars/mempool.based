@@ -120,6 +120,13 @@ impl Hub {
         self.topics().entry(topic).or_default().snapshot = vec![frame];
     }
 
+    /// Forgets the topic's stored state, keeping its subscribers: new ones are sent nothing.
+    pub(super) fn clear(&self, topic: Topic) {
+        if let Some(state) = self.topics().get_mut(&topic) {
+            state.snapshot.clear();
+        }
+    }
+
     /// Subscribers of `topic` now.
     pub fn subscribers(&self, topic: Topic) -> usize {
         self.topics().get(&topic).map_or(0, |s| s.subscribers.len())
@@ -229,6 +236,7 @@ pub async fn feed(
                 let msg = json!({ "topic": "blocks", "type": "reorg", "fork_height": fork_height });
                 hub.announce_tip(None, || {
                     hub.announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
+                    super::v1::reorg(&ctx);
                 });
             }
             Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
@@ -262,6 +270,7 @@ async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last)
             ctx.hub.announce_tip(Some(tip.hash), || {
                 ctx.hub
                     .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+                super::v1::block(ctx, &block);
             });
             ctx.summaries.new_tip(tip.hash, since);
         }

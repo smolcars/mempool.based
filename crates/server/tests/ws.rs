@@ -53,8 +53,16 @@ async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
             }
         }
     }
+    // The ten newest by height, newest first, as the node's `/blocks` answers.
+    async fn recent(State((blocks, _)): State<(Blocks, Misses)>) -> impl IntoResponse {
+        let mut all: Vec<Value> = blocks.lock().unwrap().values().cloned().collect();
+        all.sort_by_key(|b| std::cmp::Reverse(b["height"].as_u64()));
+        all.truncate(10);
+        Value::Array(all).to_string()
+    }
     let app = axum::Router::new()
         .route("/block/{hash}", get(block))
+        .route("/blocks", get(recent))
         .with_state((blocks, misses));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -988,4 +996,213 @@ async fn hostile_frames_and_upgrades_close_with_their_codes() {
         let _ = stream.read_to_string(&mut reply).await;
         assert!(reply.starts_with("HTTP/1.1 400"), "{head}: {reply}");
     }
+}
+
+// The mempool.space-shaped socket at `/api/v1/ws`.
+
+impl Harness {
+    async fn v1(&self) -> Ws {
+        Ws::connect(&self.addr, "/regtest/api/v1/ws").await
+    }
+
+    async fn v1_from(&self, origin: &str) -> Result<Ws, String> {
+        let stream = TcpStream::connect(&self.addr).await.unwrap();
+        let headers = format!("Host: test\r\nOrigin: {origin}\r\n");
+        Ws::upgrade(stream, "/regtest/api/v1/ws", &headers).await
+    }
+}
+
+impl Ws {
+    /// The next message that has `key`, skipping the others (`stats`, `mempool-blocks`).
+    async fn with_key(&mut self, key: &str) -> Value {
+        loop {
+            let v = self.json().await;
+            if v.get(key).is_some() {
+                return v;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn v1_want_then_blocks_in_the_reference_shape() {
+    let mut s = Harness::start(limits()).await;
+    let mut ws = s.v1().await;
+    // No greeting: the first frame is the answer to the first message.
+    ws.send(json!({"action": "ping"})).await;
+    assert_eq!(ws.json().await, json!({"pong": true}));
+    // The node's recent blocks are read once, after the first block: a socket that wanted
+    // them before has the tip alone, then the whole list when it is read.
+    let mut probe = s.v1().await;
+    probe
+        .send(json!({"action": "want", "data": ["blocks"]}))
+        .await;
+    let list = loop {
+        let list = probe.with_key("blocks").await["blocks"].clone();
+        if list.as_array().unwrap().len() == 3 {
+            break list;
+        }
+    };
+    // Oldest first, ending at the tip, each the node's own JSON.
+    let heights: Vec<u64> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["height"].as_u64().unwrap())
+        .collect();
+    assert_eq!(heights, [0, 1, 2]);
+    assert_eq!(
+        list[2],
+        s.blocks.lock().unwrap()[&s.h[2].block_hash().to_string()]
+    );
+
+    ws.send(json!({"action": "want", "data": ["blocks", "stats", "mempool-blocks", "nonsense"]}))
+        .await;
+    assert_eq!(ws.with_key("blocks").await["blocks"], list);
+    let next = chain(s.h[2].block_hash(), 1, 7)[0];
+    s.mine(3, &next).await;
+    let block = ws.with_key("block").await;
+    let id = next.block_hash().to_string();
+    assert_eq!(block, json!({"block": s.blocks.lock().unwrap()[&id]}));
+    // A later subscriber's list ends at the new block.
+    let mut late = s.v1().await;
+    late.send(json!({"action": "want", "data": ["blocks"]}))
+        .await;
+    let list = late.with_key("blocks").await;
+    let list = list["blocks"].as_array().unwrap().clone();
+    assert_eq!(list.last().unwrap()["id"], id.as_str());
+    assert!(list.len() <= 8);
+    // Wanting nothing stops the blocks.
+    ws.send(json!({"action": "want", "data": []})).await;
+    let after = chain(next.block_hash(), 1, 8)[0];
+    s.mine(4, &after).await;
+    late.with_key("block").await;
+    ws.send(json!({"action": "ping"})).await;
+    assert_eq!(ws.with_key("pong").await, json!({"pong": true}));
+}
+
+#[tokio::test]
+async fn v1_sockets_have_their_own_allowance_and_any_origin() {
+    let s = Harness::start(WsLimits {
+        max_sockets: 3,
+        client_max_sockets: 2,
+        v1_max_sockets: 3,
+        v1_client_max_sockets: 2,
+        ..limits()
+    })
+    .await;
+    // Another site's page may open the public socket, up to its own allowance.
+    let _a = s.v1_from("https://evil.example").await.unwrap();
+    let _b = s.v1_from("https://evil.example").await.unwrap();
+    assert_eq!(
+        s.v1_from("https://evil.example").await.err().unwrap(),
+        "HTTP/1.1 429 Too Many Requests"
+    );
+    let refused =
+        logged(|v| v["event"] == "http_request" && v["refused"] == "v1_client_sockets").await;
+    assert_eq!(refused["route"], "/regtest/api/v1/ws");
+    // Our own pages still have every one of theirs, and other sites still cannot use them.
+    let _c = s.connect().await;
+    let _d = s.connect().await;
+    let stream = TcpStream::connect(&s.addr).await.unwrap();
+    assert_eq!(
+        Ws::connect_stream(stream, "/regtest/app/ws")
+            .await
+            .err()
+            .unwrap(),
+        "HTTP/1.1 429 Too Many Requests"
+    );
+    let stream = TcpStream::connect(&s.addr).await.unwrap();
+    let evil = "Host: test\r\nOrigin: https://evil.example\r\n";
+    assert_eq!(
+        Ws::upgrade(stream, "/regtest/app/ws", evil)
+            .await
+            .err()
+            .unwrap(),
+        "HTTP/1.1 403 Forbidden"
+    );
+    assert_eq!(s.sockets.open(), 4);
+}
+
+#[tokio::test]
+async fn v1_messages_are_answered_like_the_reference_within_our_limits() {
+    let s = Harness::start(WsLimits {
+        max_message_bytes: 256,
+        messages_per_sec: 5,
+        ..limits()
+    })
+    .await;
+    // Not JSON closes, as on the reference.
+    let mut ws = s.v1().await;
+    ws.send_frame(0x81, b"hello").await;
+    assert_eq!(ws.close_code().await, (4000, "bad message".to_owned()));
+    // JSON it does not understand is left unanswered and the socket stays; the heavy topics
+    // say they are not served.
+    let mut ws = s.v1().await;
+    for m in [
+        json!([1, 2]),
+        json!({"bogus": 1}),
+        json!({"action": "want", "data": "blocks"}),
+        json!({"track-tx": "zz"}),
+    ] {
+        ws.send(m).await;
+    }
+    ws.send(json!({"track-mempool": true})).await;
+    assert_eq!(
+        ws.json().await,
+        json!({"track-mempool-error": "not served by this server"})
+    );
+    // Too big, from the frame header.
+    let mut ws = s.v1().await;
+    ws.send_frame(0x81, &[b' '; 257]).await;
+    assert_eq!(ws.close_code().await.0, 1009);
+    // A flood.
+    let mut ws = s.v1().await;
+    for _ in 0..6 {
+        ws.send(json!({"action": "ping"})).await;
+    }
+    assert_eq!(
+        ws.close_code().await,
+        (4002, "too many messages".to_owned())
+    );
+    let closed =
+        logged(|v| v["event"] == "ws_closed" && v["api"] == "v1" && v["code"] == 4002).await;
+    assert_eq!(closed["network"], "regtest");
+}
+
+#[tokio::test]
+async fn v1_a_slow_reader_is_dropped_while_others_keep_receiving() {
+    let mut s = Harness::start(WsLimits {
+        send_queue: 2,
+        ..limits()
+    })
+    .await;
+    let pad = "x".repeat(256 * 1024);
+    let slow_socket = TcpSocket::new_v4().unwrap();
+    slow_socket.set_recv_buffer_size(4096).unwrap();
+    let stream = slow_socket.connect(s.addr.parse().unwrap()).await.unwrap();
+    let mut slow = Ws::connect_stream(stream, "/regtest/api/v1/ws")
+        .await
+        .unwrap();
+    slow.send(json!({"action": "want", "data": ["blocks"]}))
+        .await;
+    let mut fast = s.v1().await;
+    fast.send(json!({"action": "want", "data": ["blocks"]}))
+        .await;
+    fast.with_key("blocks").await;
+
+    let blocks = chain(s.h[2].block_hash(), 40, 9);
+    for (i, header) in blocks.iter().enumerate() {
+        let height = 3 + i as u32;
+        let id = header.block_hash().to_string();
+        let prev = header.prev_blockhash.to_string();
+        s.blocks.lock().unwrap().insert(
+            id.clone(),
+            json!({"id": id, "height": height, "previousblockhash": prev, "pad": pad}),
+        );
+        s.peer.push_tip(height, header).await;
+        assert_eq!(fast.with_key("block").await["block"]["height"], height);
+    }
+    logged(|v| v["event"] == "ws_closed" && v["api"] == "v1" && v["code"] == 4003).await;
+    drop(slow);
 }

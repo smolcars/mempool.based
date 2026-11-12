@@ -58,6 +58,19 @@ pub fn parse(name: &str, network: Network) -> Option<(Topic, String)> {
     Some((Topic::Address(sh), format!("address:{address}")))
 }
 
+/// Whether `topic` follows a transaction or an address, in either protocol: those go through
+/// [`Tracking`], the rest straight to the hub.
+pub(crate) fn tracked(topic: Topic) -> bool {
+    matches!(
+        topic,
+        Topic::Tx(_)
+            | Topic::Address(_)
+            | Topic::V1Tx(_)
+            | Topic::V1Address(_)
+            | Topic::V1Addresses(_)
+    )
+}
+
 /// Settings that bound tracking, from [`WsLimits`].
 #[derive(Debug, Clone, Copy)]
 struct Bounds {
@@ -149,7 +162,7 @@ enum AddrState {
 
 /// A transaction's state as the topic says it.
 #[derive(Debug, Clone, PartialEq)]
-enum TxState {
+pub(crate) enum TxState {
     /// `position` is `None` for the moment between the tracker seeing it and the projected
     /// blocks placing it.
     Mempool {
@@ -280,7 +293,9 @@ impl Tracking {
     }
 
     /// Adds `conn` to a tracked topic and queues its state to it. Beyond the server's total for
-    /// that kind, `conn` is sent a `refused` message instead and nothing is subscribed.
+    /// that kind, `conn` is sent a `refused` message instead (on `/app/ws`; the caller answers on
+    /// `/api/v1/ws`) and nothing is subscribed. An address's `name` is always `address:<address>`,
+    /// whichever protocol asks first: it names the `/app` messages.
     pub(super) fn subscribe(
         self: &Arc<Self>,
         topic: Topic,
@@ -289,11 +304,11 @@ impl Tracking {
     ) -> Result<(), Full> {
         let mut st = lock(&self.state);
         match topic {
-            Topic::Tx(txid) => {
+            Topic::Tx(txid) | Topic::V1Tx(txid) => {
                 if !st.txs.contains_key(&txid) && st.txs.len() >= self.bounds.txs_total {
                     st.stats.refused += 1;
                     st.stats.refused_txs += 1;
-                    self.refuse(conn, name, "tx", st.stats.refused_txs);
+                    self.refuse(conn, topic, name, "tx", st.stats.refused_txs);
                     return Err(Full);
                 }
                 let entry = st.txs.entry(txid).or_insert(TxEntry {
@@ -314,13 +329,13 @@ impl Tracking {
                     }
                 }
             }
-            Topic::Address(sh) => {
+            Topic::Address(sh) | Topic::V1Address(sh) | Topic::V1Addresses(sh) => {
                 if !st.addresses.contains_key(&sh)
                     && st.addresses.len() >= self.bounds.addresses_total
                 {
                     st.stats.refused += 1;
                     st.stats.refused_addresses += 1;
-                    self.refuse(conn, name, "address", st.stats.refused_addresses);
+                    self.refuse(conn, topic, name, "address", st.stats.refused_addresses);
                     return Err(Full);
                 }
                 if let Some(e) = st.addresses.get_mut(&sh) {
@@ -358,35 +373,51 @@ impl Tracking {
         let mut st = lock(&self.state);
         self.hub.unsubscribe(topic, id);
         let last = match topic {
-            Topic::Tx(t) => st.txs.get_mut(&t).is_some_and(|e| {
+            Topic::Tx(t) | Topic::V1Tx(t) => st.txs.get_mut(&t).is_some_and(|e| {
                 e.refs = e.refs.saturating_sub(1);
                 e.refs == 0
             }),
-            Topic::Address(sh) => st.addresses.get_mut(&sh).is_some_and(|e| {
-                e.refs = e.refs.saturating_sub(1);
-                e.refs == 0
-            }),
+            Topic::Address(sh) | Topic::V1Address(sh) | Topic::V1Addresses(sh) => {
+                st.addresses.get_mut(&sh).is_some_and(|e| {
+                    e.refs = e.refs.saturating_sub(1);
+                    e.refs == 0
+                })
+            }
             _ => false,
         };
         if last {
-            match topic {
-                Topic::Tx(t) => {
+            // Every hub topic sharing the entry is forgotten with it.
+            let topics = match topic {
+                Topic::Tx(t) | Topic::V1Tx(t) => {
                     st.txs.remove(&t);
+                    vec![Topic::Tx(t), Topic::V1Tx(t)]
                 }
-                // Dropping the entry drops its Electrum handle: the node stops watching. One with a
-                // request in flight stays until it ends, still counted against the total.
-                Topic::Address(sh) if st.addresses.get(&sh).is_some_and(|e| !e.pending) => {
-                    st.addresses.remove(&sh);
+                Topic::Address(sh) | Topic::V1Address(sh) | Topic::V1Addresses(sh) => {
+                    // Dropping the entry drops its Electrum handle: the node stops watching. One
+                    // with a request in flight stays until it ends, still counted against the total.
+                    if st.addresses.get(&sh).is_some_and(|e| !e.pending) {
+                        st.addresses.remove(&sh);
+                    }
+                    vec![
+                        Topic::Address(sh),
+                        Topic::V1Address(sh),
+                        Topic::V1Addresses(sh),
+                    ]
                 }
-                _ => {}
+                _ => return,
+            };
+            for t in topics {
+                self.hub.remove(t);
             }
-            self.hub.remove(topic);
         }
     }
 
-    fn refuse(&self, conn: &Conn, name: &str, kind: &'static str, total: u64) {
-        let msg = json!({ "topic": name, "type": "refused", "reason": "server_full" });
-        conn.send(Frame::text(msg.to_string().as_bytes()));
+    fn refuse(&self, conn: &Conn, topic: Topic, name: &str, kind: &'static str, total: u64) {
+        // `/api/v1/ws` names no topics: its session answers in its own shape.
+        if matches!(topic, Topic::Tx(_) | Topic::Address(_)) {
+            let msg = json!({ "topic": name, "type": "refused", "reason": "server_full" });
+            conn.send(Frame::text(msg.to_string().as_bytes()));
+        }
         if total.is_power_of_two() {
             logging::emit(&TrackingRefused {
                 network: self.network.name(),
@@ -430,6 +461,15 @@ impl Tracking {
             asked: txids.iter().copied().collect(),
             stale: p.stale,
             blocks: p.blocks.len(),
+            starts: p
+                .blocks
+                .iter()
+                .scan(0u64, |at, b| {
+                    let start = *at;
+                    *at += b.summary.vsize;
+                    Some(start)
+                })
+                .collect(),
             txs: infos
                 .into_iter()
                 .map(|(t, i)| (t, (i, projector.position(&t))))
@@ -559,12 +599,18 @@ impl Tracking {
                 Some(_) => true,
             };
             if send {
-                out.push((Topic::Tx(*txid), tx_message(txid, &shown)));
+                let v1 = super::v1::tx_message(txid, &shown.state, &view.starts);
+                out.push((*txid, tx_message(txid, &shown), v1));
                 e.sent = Some((shown, now));
             }
         }
-        for (topic, msg) in out {
-            self.publish(&mut st, topic, &msg);
+        for (txid, msg, v1) in out {
+            self.publish(&mut st, Topic::Tx(txid), &msg);
+            match v1 {
+                Some(v1) => self.publish(&mut st, Topic::V1Tx(txid), &v1),
+                // A state the reference has no message for: a later subscriber is told nothing.
+                None => self.hub.clear(Topic::V1Tx(txid)),
+            }
         }
         if waiting {
             Left::Shuffle
@@ -705,6 +751,8 @@ struct View {
     asked: HashSet<Txid>,
     stale: bool,
     blocks: usize,
+    /// The vsize ahead of each projected block, for `/api/v1/ws`'s position inside its block.
+    starts: Vec<u64>,
     /// Those in the mempool: time, fee, vsize, and the position if placed yet.
     txs: HashMap<Txid, (Record, Option<Position>)>,
 }

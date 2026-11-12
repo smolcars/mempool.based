@@ -503,7 +503,7 @@ async fn the_parser_survives_random_and_mutated_streams() {
         let opened = Instant::now();
         read_loop(
             &mut probe,
-            &track,
+            Reader::App(Subscriptions::new(&track, &conn)),
             &conn,
             &limits,
             opened,

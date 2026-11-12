@@ -1,0 +1,327 @@
+{
+ "observed": "mempool.space /api/v1/ws, 2026-11-12, mainnet; lists cut to their first element",
+ "pong": {
+  "pong": true
+ },
+ "stats": {
+  "mempoolInfo": {
+   "loaded": true,
+   "size": 82656,
+   "bytes": 35992849,
+   "usage": 198751920,
+   "total_fee": 0.06112459,
+   "maxmempool": 300000000,
+   "mempoolminfee": 1e-06,
+   "minrelaytxfee": 1e-06,
+   "incrementalrelayfee": 1e-06,
+   "unbroadcastcount": 0,
+   "permitbaremultisig": true,
+   "maxdatacarriersize": 100000,
+   "limitclustercount": 64,
+   "limitclustersize": 101000,
+   "optimal": true
+  },
+  "vBytesPerSecond": 1854,
+  "fees": {
+   "fastestFee": 1.622,
+   "halfHourFee": 1.312,
+   "hourFee": 0.594,
+   "economyFee": 0.2,
+   "minimumFee": 0.1
+  },
+  "da": {
+   "progressPercent": 89.88095238095238,
+   "difficultyChange": -7.812309319448396,
+   "estimatedRetargetDate": 1794614127820,
+   "remainingBlocks": 204,
+   "remainingTime": 132845820,
+   "previousRetarget": 5.5392014927774085,
+   "previousTime": 1793301298,
+   "nextRetargetHeight": 975744,
+   "timeAvg": 651205,
+   "adjustedTimeAvg": 651205,
+   "timeOffset": 0,
+   "expectedBlocks": 1966.64
+  },
+  "transactions": [
+   {
+    "txid": "e3b42dc1587ccf170cb960a9a0423fd7d66b76db48f4fbe281cade6b86078211",
+    "fee": 550,
+    "vsize": 163.25,
+    "value": 123908,
+    "rate": 3.3690658499234303,
+    "time": 1794481282
+   }
+  ]
+ },
+ "mempool-blocks": {
+  "mempool-blocks": [
+   {
+    "blockSize": 1772975,
+    "blockVSize": 997977.5,
+    "nTx": 1379,
+    "totalFees": 1322464,
+    "medianFee": 1.1218274111675126,
+    "feeRange": [
+     1.004566210045662,
+     1.0053475935828877,
+     1.0104166666666667,
+     1.1174377224199288,
+     1.206143896523848,
+     3.4306049822064058,
+     60.15915119363395
+    ]
+   }
+  ]
+ },
+ "blocks": {
+  "blocks": [
+   {
+    "id": "0000000000000000000040645635b8a06e97b6dd5f8659f74e8cfe0273061f28",
+    "height": 975533,
+    "version": 537010176,
+    "timestamp": 1794472166,
+    "bits": 386000300,
+    "nonce": 1087154273,
+    "difficulty": 148364561003867.4,
+    "merkle_root": "e9fe5def3acebd6c0f30609e7f95e744d7547d833358549279e71b9747443a40",
+    "tx_count": 2191,
+    "size": 1811536,
+    "weight": 3980362,
+    "previousblockhash": "00000000000000000000711295d305a336164cbcebd0eebea335ca6e517e8e73",
+    "mediantime": 1794468260,
+    "stale": false,
+    "extras": {
+     "reward": 313818674,
+     "coinbaseRaw": "03ade20e153c204f4345414e2e58595a203e0f506f772e72650007159310454e9151",
+     "orphans": [],
+     "medianFee": 1.006681358779475,
+     "feeRange": [
+      0.998109640831758,
+      1.0021917176144883,
+      1.00355871886121,
+      1.0068649885583525,
+      1.0923482849604222,
+      3,
+      251.33689839572193
+     ],
+     "totalFees": 1318674,
+     "avgFee": 602,
+     "avgFeeRate": 1,
+     "utxoSetChange": -4603,
+     "avgTxSize": 826.41,
+     "totalInputs": 10069,
+     "totalOutputs": 5466,
+     "totalOutputAmt": 482970192210,
+     "segwitTotalTxs": 2057,
+     "segwitTotalSize": 1739007,
+     "segwitTotalWeight": 3690354,
+     "feePercentiles": null,
+     "virtualSize": 995090.5,
+     "coinbaseAddress": "bc1qzk8vs4p3skr75nskpqyh4f9l0z3hmqd2u4tvpu",
+     "coinbaseAddresses": [
+      "bc1qzk8vs4p3skr75nskpqyh4f9l0z3hmqd2u4tvpu",
+      "bc1q2824ekxc6ewypfpzv64h69frnx9dx6rsgek6ec",
+      "375oBHuaSbTbv9QEbCZPFC2wynZeFpQMGB",
+      "bc1qztuue9qkmj48zhwxww6rzqm3caz7xtg7kudnv2",
+      "bc1qpqjh2zlwplafa6x5s0fgjr2vcqclhmeslpfcax",
+      "bc1q7ur9nh720up3syvhnmgtl7s885lnvffn8nkjry",
+      "bc1qp7rr6lwc0lesf7gku7e6tlj987stesavjlpemlrl3zj720zgm9gsxvyerj",
+      "bc1q7fkekg66yly2ynaew7t9gdvt8cut0p0drzf2q4",
+      "bc1qzfrtdupxf29vqxpxmxqctpg8wlcma2n780sp4jcr7457ypv25mtq34f9cm",
+      "bc1qdxpl0l5c86tdck6rvalmzjpz5p64jcmyeg2ggv",
+      "bc1q3efjjcxpz0yxztasw0m7gcvtdca5hzll8k2vtd",
+      "1KYRyWnFokPiAoTLRWEMLNRQ2sd3PxS5dd",
+      "bc1qkvnltjlxxemxe562xmd2g9aqh5ln7tpsyynpg0",
+      "bc1q2vp7faz6rftal2y03fuq9hkm4st6tseenahy90",
+      "bc1qfnlf63932nhxquz8d0swajdh8lmlnhdag5vldx",
+      "bc1q8c4uxmh4att7lfc9y8z4wmcp6g2mcs5cp27r9qrzrvln898zf25qgpuwc2",
+      "37dvwZZoT3D7RXpTCpN2yKzMmNs2i2Fd1n"
+     ],
+     "coinbaseSignature": "OP_0 OP_PUSHBYTES_20 158ec854318587ea4e1608097aa4bf78a37d81aa",
+     "coinbaseSignatureAscii": "\u0003\u00ad\u00e2\u000e\u0015< OCEAN.XYZ >\u000fPow.re\u0000\u0007\u0015\u0093\u0010EN\u0091Q",
+     "header": "00200220738e7e516eca35a3beeed0ebbc4c1636a305d395127100000000000000000000403a4447971be77992545833837d54d744e7957f9e60300f6cbdce3aef5dfee9e678f56aace5011761a8cc40",
+     "utxoSetSize": null,
+     "totalInputAmt": null,
+     "pool": {
+      "id": 142,
+      "name": "OCEAN",
+      "slug": "ocean",
+      "minerNames": [
+       " OCEANXYZ ",
+       "Powre"
+      ]
+     },
+     "matchRate": 100,
+     "expectedFees": 1522051,
+     "expectedWeight": 3991817,
+     "firstSeen": null,
+     "coinbaseBip54": false,
+     "similarity": 0.9253463873856441
+    }
+   }
+  ]
+ },
+ "block": {
+  "block": {
+   "id": "00000000000000000000f615cc4e624b19050b5a9f7662aa6ec83d659e716e04",
+   "height": 975540,
+   "version": 537493504,
+   "timestamp": 1794481219,
+   "bits": 386000300,
+   "nonce": 2511644934,
+   "difficulty": 148364561003867.4,
+   "merkle_root": "939610b66a1ecce2d00cc0b15bbde5aa97704c27751fcec5dac84fc7c0251543",
+   "tx_count": 1979,
+   "size": 1712285,
+   "weight": 3997529,
+   "previousblockhash": "000000000000000000009658141dfe654b2b6c3908eb7f1b05872e3a5f90f864",
+   "mediantime": 1794474924,
+   "stale": false,
+   "extras": {
+    "reward": 314629694,
+    "coinbaseRaw": "03b4e20e2cfabe6d6d479e6db9866546448fd3f839510f8a6443f5f8a3f38eaddbdbaf22089b0880f410000000f09f909f092f4632506f6f6c2f650000000000000000000000000000000000000000000000000000000000000000000000050004b14378",
+    "orphans": [],
+    "medianFee": 2.0071485440346923,
+    "feeRange": [
+     1.208237986270023,
+     1.3881278538812785,
+     1.7224199288256228,
+     2.0047281323877066,
+     2.013729977116705,
+     2.373795761078998,
+     100.53097345132744
+    ],
+    "totalFees": 2129694,
+    "avgFee": 1076,
+    "avgFeeRate": 2,
+    "utxoSetChange": -5103,
+    "avgTxSize": 864.9300000000001,
+    "totalInputs": 10159,
+    "totalOutputs": 5056,
+    "totalOutputAmt": 132729019859,
+    "segwitTotalTxs": 1821,
+    "segwitTotalSize": 1501015,
+    "segwitTotalWeight": 3152557,
+    "feePercentiles": null,
+    "virtualSize": 999382.25,
+    "coinbaseAddress": "1K6KoYC69NnafWJ7YgtrpwJxBLiijWqwa6",
+    "coinbaseAddresses": [
+     "1K6KoYC69NnafWJ7YgtrpwJxBLiijWqwa6",
+     "1AfCc4F9c4VTYSE31PUe2kUEKs6ZxiDjxm"
+    ],
+    "coinbaseSignature": "OP_DUP OP_HASH160 OP_PUSHBYTES_20 c6740a12d0a7d556f89782bf5faf0e12cf25a639 OP_EQUALVERIFY OP_CHECKSIG",
+    "coinbaseSignatureAscii": "\u0003\u00b4\u00e2\u000e,\u00fa\u00bemmG\u009em\u00b9\u0086eFD\u008f\u00d3\u00f89Q\u000f\u008adC\u00f5\u00f8\u00a3\u00f3\u008e\u00ad\u00db\u00db\u00af\"\b\u009b\b\u0080\u00f4\u0010\u0000\u0000\u0000\u00f0\u009f\u0090\u009f\t/F2Pool/e\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0005\u0000\u0004\u00b1Cx",
+    "header": "0080092064f8905f3a2e87051b7feb08396c2b4b65fe1d14589600000000000000000000431525c0c74fc8dac5ce1f75274c7097aae5bd5bb1c00cd0e2cc1e6ab6109693439cf56aace5011706a9b495",
+    "utxoSetSize": null,
+    "totalInputAmt": null,
+    "pool": {
+     "id": 36,
+     "name": "F2Pool",
+     "slug": "f2pool",
+     "minerNames": null
+    },
+    "matchRate": 100,
+    "expectedFees": 2235011,
+    "expectedWeight": 3991895,
+    "firstSeen": null,
+    "coinbaseBip54": false,
+    "similarity": 0.9524567838452368
+   }
+  }
+ },
+ "txPosition": {
+  "txPosition": {
+   "txid": "0b2e195c9dfb1c17a649d15c73605fae3b05b4c81bf0c59bf3100605b1a490ae",
+   "position": {
+    "block": 0,
+    "vsize": 1078
+   },
+   "cpfp": {
+    "ancestors": [],
+    "bestDescendant": null,
+    "descendants": [],
+    "effectiveFeePerVsize": 50.28968713789108,
+    "sigops": 7,
+    "adjustedVsize": 215.75
+   }
+  }
+ },
+ "txConfirmed": {
+  "txConfirmed": "0b2e195c9dfb1c17a649d15c73605fae3b05b4c81bf0c59bf3100605b1a490ae"
+ },
+ "block-transactions": {
+  "block-transactions": [
+   {
+    "txid": "0b2e195c9dfb1c17a649d15c73605fae3b05b4c81bf0c59bf3100605b1a490ae",
+    "version": 1,
+    "locktime": 0,
+    "vin": [
+     {
+      "txid": "c5e1db325449c686eac85407fbcba3328aab4ce339db7ecb2b545d27632d63d9",
+      "vout": 1,
+      "prevout": {
+       "scriptpubkey": "a914040572f196381a9a41e27a709760148f3b88fcd787",
+       "scriptpubkey_asm": "OP_HASH160 OP_PUSHBYTES_20 040572f196381a9a41e27a709760148f3b88fcd7 OP_EQUAL",
+       "scriptpubkey_type": "p2sh",
+       "scriptpubkey_address": "324H9uyTV9bPgAVgmdJNxPKKKZmowk5CYq",
+       "value": 12003593183
+      },
+      "scriptsig": "2200204da47981ba68ab7ea07c93f891a071402735297face889108558935830b82625",
+      "scriptsig_asm": "OP_PUSHBYTES_34 00204da47981ba68ab7ea07c93f891a071402735297face889108558935830b82625",
+      "witness": [
+       "",
+       "304402204323402780448ea7fc1ab75713ef270c0c3f9003805adc9836bb1ce5c3d88d92022039506ca7f9c491394b469df324a313c993853463c964d2ed8fa895b61a3871f401",
+       "3045022100ef2fc71a4e8227a31272bf054128d64396ac001d4698bcecc9dea7ffc8c537cc02207ba4a6630893fa4fb1d27e73e1a3ce7c76a4efa52d5473dd8c134a2d1d17b69001",
+       "52210359acdc9d4b78cce6625bb523e16f993bf51e9f374f1acca7d9ef9012d9310e7f21025664c202b4507fd626b41ae1c4a638f4e1fb0e53c697937d30af0148f2f1ddd02103e6dbb3f4f1c2d2cff15ea09c3f07517e12b8f9c0015ea8377f149bc8f16e732353ae"
+      ],
+      "is_coinbase": false,
+      "sequence": 4294967293,
+      "inner_redeemscript_asm": "OP_0 OP_PUSHBYTES_32 4da47981ba68ab7ea07c93f891a071402735297face889108558935830b82625",
+      "inner_witnessscript_asm": "OP_PUSHNUM_2 OP_PUSHBYTES_33 0359acdc9d4b78cce6625bb523e16f993bf51e9f374f1acca7d9ef9012d9310e7f OP_PUSHBYTES_33 025664c202b4507fd626b41ae1c4a638f4e1fb0e53c697937d30af0148f2f1ddd0 OP_PUSHBYTES_33 03e6dbb3f4f1c2d2cff15ea09c3f07517e12b8f9c0015ea8377f149bc8f16e7323 OP_PUSHNUM_3 OP_CHECKMULTISIG"
+     }
+    ],
+    "vout": [
+     {
+      "scriptpubkey": "a914040572f196381a9a41e27a709760148f3b88fcd787",
+      "scriptpubkey_asm": "OP_HASH160 OP_PUSHBYTES_20 040572f196381a9a41e27a709760148f3b88fcd7 OP_EQUAL",
+      "scriptpubkey_type": "p2sh",
+      "scriptpubkey_address": "324H9uyTV9bPgAVgmdJNxPKKKZmowk5CYq",
+      "value": 910898797
+     },
+     {
+      "scriptpubkey": "76a914349dc66e84210a5ae1f069d775068e8e3c620b0f88ac",
+      "scriptpubkey_asm": "OP_DUP OP_HASH160 OP_PUSHBYTES_20 349dc66e84210a5ae1f069d775068e8e3c620b0f OP_EQUALVERIFY OP_CHECKSIG",
+      "scriptpubkey_type": "p2pkh",
+      "scriptpubkey_address": "15oD9PDK6u1C2cZ7dx7AfcAPNCT8mFmR51",
+      "value": 11092683536
+     }
+    ],
+    "size": 407,
+    "weight": 863,
+    "sigops": 7,
+    "fee": 10850,
+    "status": {
+     "confirmed": true,
+     "block_height": 975539,
+     "block_hash": "000000000000000000009658141dfe654b2b6c3908eb7f1b05872e3a5f90f864",
+     "block_time": 1794481160
+    },
+    "order": 2928714929,
+    "vsize": 216,
+    "adjustedVsize": 215.75,
+    "feePerVsize": 50.28968713789108,
+    "adjustedFeePerVsize": 50.28968713789108,
+    "effectiveFeePerVsize": 50.23148148148148,
+    "firstSeen": 1794480496,
+    "cpfpDirty": false,
+    "clusterId": 118733,
+    "chunkIndex": 0,
+    "cpfpChecked": true
+   }
+  ]
+ },
+ "track-addresses-error": {
+  "track-addresses-error": "(the reference's own wording, not kept)"
+ }
+}

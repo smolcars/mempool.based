@@ -17,6 +17,7 @@ mod frame;
 mod hub;
 pub mod mempool;
 pub mod track;
+pub mod v1;
 
 use std::collections::HashSet;
 use std::pin::pin;
@@ -112,6 +113,19 @@ pub enum Topic {
     Address(node::electrum::ScriptHash),
     /// Fee recommendations.
     Fees,
+    /// The mempool.space-shaped `/api/v1/ws` (`v1.rs`): its `blocks` and `block` messages.
+    V1Blocks,
+    /// `/api/v1/ws`: the `stats` messages (mempool info, fees, difficulty adjustment).
+    V1Stats,
+    /// `/api/v1/ws`: the `mempool-blocks` messages.
+    V1MempoolBlocks,
+    /// `/api/v1/ws`: one transaction followed with `track-tx`. Shares [`Topic::Tx`]'s entry.
+    V1Tx(bitcoin::Txid),
+    /// `/api/v1/ws`: one address followed with `track-address`. Shares [`Topic::Address`]'s
+    /// Electrum subscription.
+    V1Address(node::electrum::ScriptHash),
+    /// `/api/v1/ws`: one address of a `track-addresses` set, sent in that message's shape.
+    V1Addresses(node::electrum::ScriptHash),
 }
 
 /// Names of the [`Topic::ProjectedTxs`] topics, by block.
@@ -152,6 +166,11 @@ impl Topic {
             Self::Projected => "projected",
             Self::Transactions => "transactions",
             Self::Fees => "fees",
+            Self::V1Blocks => "v1:blocks",
+            Self::V1Stats => "v1:stats",
+            Self::V1MempoolBlocks => "v1:mempool-blocks",
+            Self::V1Tx(_) => "v1:tx",
+            Self::V1Address(_) | Self::V1Addresses(_) => "v1:address",
             Self::ProjectedTxs(i) => PROJECTED_TXS.get(usize::from(i)).copied().unwrap_or(""),
         }
     }
@@ -162,6 +181,8 @@ impl Topic {
 pub struct Sockets {
     limits: WsLimits,
     permits: Arc<Semaphore>,
+    /// `/api/v1/ws` sockets: a pool apart, so they can never take `/app/ws` slots.
+    v1_permits: Arc<Semaphore>,
     shutdown: watch::Sender<bool>,
     closed_at: OnceLock<Instant>,
     /// How long sockets get to close after [`Sockets::close_all`].
@@ -177,6 +198,7 @@ impl Sockets {
         Arc::new(Self {
             limits: limits.clone(),
             permits: Arc::new(Semaphore::new(limits.max_sockets)),
+            v1_permits: Arc::new(Semaphore::new(limits.v1_max_sockets)),
             shutdown: watch::Sender::new(false),
             closed_at: OnceLock::new(),
             grace,
@@ -185,17 +207,18 @@ impl Sockets {
         })
     }
 
-    /// Sockets open now, on every network.
+    /// Sockets open now, on every network and both APIs.
     pub fn open(&self) -> usize {
-        self.limits
-            .max_sockets
-            .saturating_sub(self.permits.available_permits())
+        let used = |all: usize, s: &Semaphore| all.saturating_sub(s.available_permits());
+        used(self.limits.max_sockets, &self.permits)
+            + used(self.limits.v1_max_sockets, &self.v1_permits)
     }
 
     /// Refuses new sockets and tells every open one to close with 1001.
     pub fn close_all(&self) {
         self.closed_at.get_or_init(Instant::now);
         self.permits.close();
+        self.v1_permits.close();
         self.shutdown.send_replace(true);
     }
 
@@ -203,10 +226,9 @@ impl Sockets {
     /// margin after it lets those tasks run their cleanup. Bounded, so an upgrade still pending in
     /// an HTTP connection cannot hold shutdown.
     pub async fn drain(&self) {
-        let all = self.limits.max_sockets;
         let _ = tokio::time::timeout_at((self.deadline() + CLOSE_GRACE).into(), async {
-            // `close_all` closed the semaphore, so wait on the count instead of acquiring.
-            while self.permits.available_permits() < all {
+            // `close_all` closed the semaphores, so wait on the count instead of acquiring.
+            while self.open() > 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -259,18 +281,50 @@ impl Conn {
     }
 }
 
+/// Which protocol a socket speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Api {
+    /// Ours, at `/app/ws`.
+    App,
+    /// mempool.space's, at `/api/v1/ws` (`v1.rs`).
+    V1,
+}
+
+impl Api {
+    fn name(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::V1 => "v1",
+        }
+    }
+}
+
 /// `GET /app/ws`: checks the handshake and the caps, answers `101`, and runs the socket.
 pub async fn handle(
     State(ctx): State<Arc<NetworkContext>>,
     Extension(client): Extension<limits::Client>,
+    req: Request,
+) -> Response {
+    upgrade(ctx, &client, req, Api::App)
+}
+
+/// Checks the handshake, the origin (`/app/ws` only) and `api`'s caps, answers `101`, and runs
+/// the socket.
+pub(crate) fn upgrade(
+    ctx: Arc<NetworkContext>,
+    client: &limits::Client,
     mut req: Request,
+    api: Api,
 ) -> Response {
     let accept = match handshake(req.headers()) {
         Ok(accept) => accept,
         Err(e) => return e.into_response(),
     };
     let sockets = Arc::clone(&ctx.sockets);
-    if let Err((origin, host)) = same_origin(req.headers()) {
+    // A public API is meant for other sites' pages: its own pools below stand in for this rule.
+    if api == Api::App
+        && let Err((origin, host)) = same_origin(req.headers())
+    {
         let total = sockets.origin_refused.fetch_add(1, Ordering::Relaxed) + 1;
         if total.is_power_of_two() {
             logging::emit(&logging::events::WsOriginRefused {
@@ -282,19 +336,36 @@ pub async fn handle(
         }
         return refused(ORIGIN_REFUSED, "origin");
     }
-    // Each cap names itself in the request log, as every other limit does.
-    let Ok(permit) = Arc::clone(&sockets.permits).try_acquire_owned() else {
-        return refused(ApiError::OVERLOADED, "server_sockets");
+    let limits = &sockets.limits;
+    let (permits, held, max, server_cap, client_cap) = match api {
+        Api::App => (
+            &sockets.permits,
+            Held::Socket,
+            limits.client_max_sockets,
+            "server_sockets",
+            "client_sockets",
+        ),
+        Api::V1 => (
+            &sockets.v1_permits,
+            Held::V1Socket,
+            limits.v1_client_max_sockets,
+            "v1_server_sockets",
+            "v1_client_sockets",
+        ),
     };
-    let hold = match client.hold(Held::Socket, sockets.limits.client_max_sockets) {
+    // Each cap names itself in the request log, as every other limit does.
+    let Ok(permit) = Arc::clone(permits).try_acquire_owned() else {
+        return refused(ApiError::OVERLOADED, server_cap);
+    };
+    let hold = match client.hold(held, max) {
         Ok(hold) => hold,
-        Err(r) if r.reason == "client_concurrency" => return refused(r.error, "client_sockets"),
+        Err(r) if r.reason == "client_concurrency" => return refused(r.error, client_cap),
         Err(r) => return r.into_response(),
     };
     let upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(async move {
         if let Ok(io) = upgrade.await {
-            run(ctx, TokioIo::new(io), (permit, hold)).await;
+            run(ctx, TokioIo::new(io), (permit, hold), api).await;
         }
     });
     let mut res = StatusCode::SWITCHING_PROTOCOLS.into_response();
@@ -377,7 +448,7 @@ fn handshake(h: &HeaderMap) -> Result<HeaderValue, ApiError> {
 
 /// Runs one upgraded connection to its end. `slots` (the total and per-client caps) are held
 /// until then.
-async fn run<S>(ctx: Arc<NetworkContext>, io: S, slots: (OwnedSemaphorePermit, Hold))
+async fn run<S>(ctx: Arc<NetworkContext>, io: S, slots: (OwnedSemaphorePermit, Hold), api: Api)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -392,15 +463,20 @@ where
         queue,
         closing,
     });
-    // The conformance suite expects a socket to stay silent until it is sent something.
-    if !cfg!(feature = "autobahn") {
+    // The conformance suite expects a socket to stay silent until it is sent something; the
+    // mempool.space protocol has no greeting.
+    if !cfg!(feature = "autobahn") && api == Api::App {
         conn.send(hello(&ctx));
     }
+    let reader = match api {
+        Api::App => Reader::App(Subscriptions::new(&ctx.track, &conn)),
+        Api::V1 => Reader::V1(v1::Session::new(&ctx, &conn)),
+    };
 
     let (rd, mut wr) = tokio::io::split(io);
     // Milliseconds since `opened` of the last complete frame from the client.
     let last_seen = AtomicU64::new(0);
-    let mut reading = pin!(read_loop(rd, &ctx.track, &conn, limits, opened, &last_seen));
+    let mut reading = pin!(read_loop(rd, reader, &conn, limits, opened, &last_seen));
     let mut watchdog = pin!(watchdog(
         &conn,
         limits.idle_timeout,
@@ -457,6 +533,7 @@ where
     let network = ctx.config.network.name();
     logging::emit(&logging::events::WsClosed {
         network,
+        api: api.name(),
         code: reason.code,
         reason: reason.label,
         duration_ms: opened.elapsed().as_secs_f64() * 1000.0,
@@ -490,21 +567,31 @@ enum ClientMessage {
     Ping,
 }
 
+/// What handles a socket's client messages: its protocol and its subscriptions.
+enum Reader<'a> {
+    App(Subscriptions<'a>),
+    V1(v1::Session<'a>),
+}
+
+impl Reader<'_> {
+    fn handle(&mut self, text: &str, limits: &WsLimits) -> Result<(), Close> {
+        match self {
+            Self::App(s) => s.handle(text, limits),
+            Self::V1(s) => s.handle(text, limits),
+        }
+    }
+}
+
 /// Reads and handles client messages until the connection must close, then sets why.
 async fn read_loop<R: AsyncRead>(
     rd: R,
-    track: &Arc<Tracking>,
+    mut subs: Reader<'_>,
     conn: &Arc<Conn>,
     limits: &WsLimits,
     opened: Instant,
     last_seen: &AtomicU64,
 ) {
     let mut rd = pin!(rd);
-    let mut subs = Subscriptions {
-        track,
-        conn,
-        topics: HashSet::new(),
-    };
     let rate = f64::from(limits.messages_per_sec);
     let (mut tokens, mut refilled) = (rate, Instant::now());
     let mut partial: Option<Vec<u8>> = None;
@@ -591,13 +678,21 @@ fn peer_close(payload: &[u8]) -> Close {
 }
 
 /// A connection's subscriptions, removed from the hub when the connection ends.
-struct Subscriptions<'a> {
+pub(crate) struct Subscriptions<'a> {
     track: &'a Arc<Tracking>,
     conn: &'a Arc<Conn>,
     topics: HashSet<Topic>,
 }
 
-impl Subscriptions<'_> {
+impl<'a> Subscriptions<'a> {
+    pub(crate) fn new(track: &'a Arc<Tracking>, conn: &'a Arc<Conn>) -> Self {
+        Self {
+            track,
+            conn,
+            topics: HashSet::new(),
+        }
+    }
+
     /// A topic name, strictly: a fixed topic, or a tracked transaction or address of this
     /// network. Returns the topic and its name as the server writes it.
     fn parse(&self, name: &str) -> Result<(Topic, String), Close> {
@@ -608,10 +703,66 @@ impl Subscriptions<'_> {
     }
 
     fn leave(&self, topic: Topic) {
-        match topic {
-            Topic::Tx(_) | Topic::Address(_) => self.track.unsubscribe(topic, self.conn.id),
-            _ => self.track.hub().unsubscribe(topic, self.conn.id),
+        if track::tracked(topic) {
+            self.track.unsubscribe(topic, self.conn.id);
+        } else {
+            self.track.hub().unsubscribe(topic, self.conn.id);
         }
+    }
+
+    /// Subscribes to `topic` unless it already is, within the per-connection caps; over one,
+    /// `Err` with the close code `/app/ws` uses. `Ok(false)` when the server's total for a tracked
+    /// topic refused it: the client has been told, and stays.
+    pub(crate) fn join(
+        &mut self,
+        topic: Topic,
+        name: &str,
+        limits: &WsLimits,
+    ) -> Result<bool, Close> {
+        if self.topics.contains(&topic) {
+            return Ok(true);
+        }
+        let count = |f: fn(&Topic) -> bool| self.topics.iter().filter(|t| f(t)).count();
+        let blocks = |t: &Topic| matches!(t, Topic::ProjectedTxs(_));
+        let txs = |t: &Topic| matches!(t, Topic::Tx(_) | Topic::V1Tx(_));
+        let addresses = |t: &Topic| {
+            matches!(
+                t,
+                Topic::Address(_) | Topic::V1Address(_) | Topic::V1Addresses(_)
+            )
+        };
+        if self.topics.len() >= limits.max_subscriptions
+            || blocks(&topic) && count(blocks) >= limits.max_block_subscriptions
+            || txs(&topic) && count(txs) >= limits.max_tracked_txs
+            || addresses(&topic) && count(addresses) >= limits.max_tracked_addresses
+        {
+            return Err(Close::TOO_MANY_SUBSCRIPTIONS);
+        }
+        if track::tracked(topic) {
+            // Beyond the server's total the client is told so, and stays connected.
+            if self.track.subscribe(topic, name, self.conn).is_err() {
+                return Ok(false);
+            }
+        } else {
+            self.track.hub().subscribe(topic, self.conn);
+        }
+        self.topics.insert(topic);
+        Ok(true)
+    }
+
+    /// Unsubscribes from `topic`, if subscribed.
+    pub(crate) fn part(&mut self, topic: Topic) {
+        if self.topics.remove(&topic) {
+            self.leave(topic);
+        }
+    }
+
+    pub(crate) fn conn(&self) -> &'a Arc<Conn> {
+        self.conn
+    }
+
+    pub(crate) fn track(&self) -> &'a Arc<Tracking> {
+        self.track
     }
 
     fn handle(&mut self, text: &str, limits: &WsLimits) -> Result<(), Close> {
@@ -625,37 +776,13 @@ impl Subscriptions<'_> {
             ClientMessage::Subscribe { topics } => {
                 for name in topics {
                     let (topic, name) = self.parse(&name)?;
-                    if self.topics.contains(&topic) {
-                        continue;
-                    }
-                    let count = |f: fn(&Topic) -> bool| self.topics.iter().filter(|t| f(t)).count();
-                    let blocks = |t: &Topic| matches!(t, Topic::ProjectedTxs(_));
-                    let txs = |t: &Topic| matches!(t, Topic::Tx(_));
-                    let addresses = |t: &Topic| matches!(t, Topic::Address(_));
-                    if self.topics.len() >= limits.max_subscriptions
-                        || blocks(&topic) && count(blocks) >= limits.max_block_subscriptions
-                        || txs(&topic) && count(txs) >= limits.max_tracked_txs
-                        || addresses(&topic) && count(addresses) >= limits.max_tracked_addresses
-                    {
-                        return Err(Close::TOO_MANY_SUBSCRIPTIONS);
-                    }
-                    if txs(&topic) || addresses(&topic) {
-                        // Beyond the server's total the client is told so, and stays connected.
-                        if self.track.subscribe(topic, &name, self.conn).is_err() {
-                            continue;
-                        }
-                    } else {
-                        self.track.hub().subscribe(topic, self.conn);
-                    }
-                    self.topics.insert(topic);
+                    self.join(topic, &name, limits)?;
                 }
             }
             ClientMessage::Unsubscribe { topics } => {
                 for name in topics {
                     let (topic, _) = self.parse(&name)?;
-                    if self.topics.remove(&topic) {
-                        self.leave(topic);
-                    }
+                    self.part(topic);
                 }
             }
             ClientMessage::Ping => {

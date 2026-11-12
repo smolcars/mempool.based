@@ -37,9 +37,9 @@ One table per group, each on its own page:
 |---|---|---|---|---|---|---|---|
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 0 | 50 | 0 | 6 | 48 |
 | mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 26 | 30 | 4 | 13 | 72 |
-| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 47 | 0 | 40 | 2 | 5 | 43 |
+| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 19 | 3 | 4 | 22 | 43 |
 | Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 0 | 38 | 2 | 6 | 29 |
-| **Total** | | **222** | **26** | **158** | **8** | **30** | **192** |
+| **Total** | | **223** | **45** | **121** | **10** | **47** | **192** |
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -96,6 +96,6 @@ Proposals for [`PLAN.md`](PLAN.md) and [`TODO.md`](TODO.md); this task does not 
 
 ### Third-party dependence
 
-13. **A compatible WebSocket is worth a task.** [`ARCHITECTURE.md`](ARCHITECTURE.md) defines only `/app/ws`. Wallets and bots that follow transactions or addresses speak `/api/v1/ws` (`want`, `track-tx`, `track-address`, `track-addresses`, `ping`). Proposal: a task in M2, after S3 and MP5, that serves this JSON subset from the same hub, with the heavy `track-mempool` topic rate-limited.
+13. **A compatible WebSocket is worth a task.** [`ARCHITECTURE.md`](ARCHITECTURE.md) defines only `/app/ws`. Wallets and bots that follow transactions or addresses speak `/api/v1/ws` (`want`, `track-tx`, `track-address`, `track-addresses`, `ping`). Proposal: a task in M2, after S3 and MP5, that serves this JSON subset from the same hub, with the heavy `track-mempool` topic rate-limited. Done in WS1 without the heavy topics, which are answered as not served ([`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws)).
 14. **Endpoints most likely relied on by others** (from what wallets and tools are publicly known to call, not measured here): Esplora `/api/tx`, `/api/tx/:txid/status`, `/api/address/*`, `/api/blocks/tip/height`; `/api/v1/fees/recommended`, `/api/v1/fees/mempool-blocks`, `/api/v1/prices`, `/api/v1/historical-price`, `/api/v1/difficulty-adjustment`, `/api/v1/cpfp/:txid`. Deliver these first within their milestones.
 15. **Serve both fee shapes.** `fees/recommended` keeps its whole-number contract for old clients; on a 0.1 sat/vB mempool it overstates the minimum tenfold, so `fees/precise` and our frontend use sub-sat values.

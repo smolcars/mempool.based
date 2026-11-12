@@ -53,6 +53,7 @@ A network is enabled by setting its variables (`.env.example`). Mainnet is serve
 | `/api/v1/*` | mempool.space-shaped subset | Only the endpoints listed as served in [`COMPAT.md`](COMPAT.md) |
 | `/app/*` | Private API for our frontend | May change in any release; the frontend and server ship together |
 | `/app/ws` | WebSocket for live updates | See below |
+| `/api/v1/ws` | mempool.space-shaped WebSocket | For wallets and bots; the same hub ([`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws)) |
 | `/healthz` | Liveness | No upstream calls |
 | everything else | The frontend | Static files from a configured directory, with the app shell as fallback |
 

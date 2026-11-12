@@ -48,6 +48,8 @@ pub struct ServerStarting<'a> {
     pub trusted_proxies: Option<Vec<String>>,
     pub ws_max_sockets: usize,
     pub ws_client_max_sockets: u32,
+    pub ws_v1_max_sockets: usize,
+    pub ws_v1_client_max_sockets: u32,
     pub ws_max_message_bytes: usize,
     pub ws_messages_per_sec: u32,
     pub ws_max_subscriptions: usize,
@@ -289,6 +291,8 @@ event!(RpcReachable, "rpc_reachable", Info);
 #[derive(Debug, Serialize)]
 pub struct WsClosed {
     pub network: &'static str,
+    /// `app` for `/app/ws`, `v1` for the mempool.space-shaped `/api/v1/ws`.
+    pub api: &'static str,
     /// The close code sent, or 1006 when the connection dropped without a close frame.
     pub code: u16,
     /// Why, as a fixed label: `client_closed`, `shutdown`, `too_slow`, `idle`, …
@@ -927,6 +931,8 @@ mod tests {
                 trusted_proxies: Some(vec!["127.0.0.1/32".into()]),
                 ws_max_sockets: 1,
                 ws_client_max_sockets: 1,
+                ws_v1_max_sockets: 1,
+                ws_v1_client_max_sockets: 1,
                 ws_max_message_bytes: 1,
                 ws_messages_per_sec: 1,
                 ws_max_subscriptions: 1,
@@ -1010,6 +1016,7 @@ mod tests {
             }),
             both(&WsClosed {
                 network: n,
+                api: "v1",
                 code: 4003,
                 reason: "too_slow",
                 duration_ms: 1500.0,

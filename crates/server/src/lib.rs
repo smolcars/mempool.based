@@ -102,6 +102,8 @@ pub struct NetworkContext {
     /// Fee recommendations and projected-block totals, kept current by `ws::fees`.
     pub fees: ws::fees::Fees,
     pub history: statistics::History,
+    /// The mempool.space-shaped socket's own state (`ws::v1`).
+    pub v1: Arc<ws::v1::Compat>,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -152,6 +154,7 @@ impl NetworkContext {
             node: health::NodeCheck::default(),
             fees: ws::fees::Fees::default(),
             history: statistics::History::default(),
+            v1: Arc::new(ws::v1::Compat::new(Some(&url))),
         })
     }
 }
@@ -161,6 +164,7 @@ impl NetworkContext {
 pub fn network_routes() -> Router<Arc<NetworkContext>> {
     Router::new()
         .route("/app/ws", get(ws::handle))
+        .route("/api/v1/ws", get(ws::v1::handle))
         .route("/app/block/{hash}/summary", get(summary::facts))
         .route("/app/block/{hash}/txs", get(summary::txs))
         .route("/app/blocks/summary", get(summary::batch))
@@ -212,6 +216,7 @@ impl App {
                     blocks::spawn(&ctx, config.backfill);
                     ws::mempool::start(&ctx);
                     tokio::spawn(mining::run(Arc::clone(&ctx)));
+                    tokio::spawn(ws::v1::run(Arc::clone(&ctx)));
                     tokio::spawn(ws::track::follow_addresses(
                         Arc::clone(&ctx.track),
                         ctx.electrum.events(),

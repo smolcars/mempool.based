@@ -254,10 +254,12 @@ def hostile():
     return {"tx": txid, "block": block, "coinbase": coinbase}
 
 
-def rbf():
+def rbf(gap=0.0):
     [coin] = take_coins()
     outs = [(P2TR, 25_000_000)]
     original = broadcast([coin], outs, 1)
+    # A pause lets a watcher see the original in the mempool before it is replaced.
+    time.sleep(gap)
     replacement = broadcast([coin], outs, 5)
     return {"rbf_original": original, "rbf_replacement": replacement}
 
@@ -356,8 +358,9 @@ def main():
     s.add_argument("sats", type=int)
     s.add_argument("--feerate", type=float, default=2.0, help="sat/vB (default 2)")
     s.set_defaults(f=cmd_send)
-    sub.add_parser("rbf", help="broadcast a tx and its replacement, print both txids").set_defaults(
-        f=lambda _: print(json.dumps(rbf(), indent=2)))
+    r = sub.add_parser("rbf", help="broadcast a tx and its replacement, print both txids")
+    r.add_argument("--gap", type=float, default=0.0, help="seconds between the two (default 0)")
+    r.set_defaults(f=lambda a: print(json.dumps(rbf(a.gap), indent=2)))
     sub.add_parser("cpfp", help="broadcast a low-fee parent and a high-fee child").set_defaults(
         f=lambda _: print(json.dumps(cpfp(), indent=2)))
     sub.add_parser("scenario", help="reset, build the known chain, print its manifest").set_defaults(f=cmd_scenario)

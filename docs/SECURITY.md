@@ -49,7 +49,7 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 
 ### Browsers
 
-21. **The private `/app` API serves only this site's pages.** A WebSocket upgrade on `/app/ws` whose `Origin` is not this site (its host and port equal to the request's `Host`) is refused with `403`, before it takes any slot. Otherwise any website could open sockets from each of its visitors until their per-client cap is reached and lock them out of ours. An upgrade without `Origin` comes from a program, not a browser, and cannot be forced on a third party's visitor, so it is allowed and bounded like any client.
+21. **The private `/app` API serves only this site's pages.** A WebSocket upgrade on `/app/ws` whose `Origin` is not this site (its host and port equal to the request's `Host`) is refused with `403`, before it takes any slot. Otherwise any website could open sockets from each of its visitors until their per-client cap is reached and lock them out of ours. An upgrade without `Origin` comes from a program, not a browser, and cannot be forced on a third party's visitor, so it is allowed and bounded like any client. The public `/api/v1/ws` accepts any `Origin`; its sockets come from pools of their own, so another site can use up only those, never a slot of `/app/ws` ([`WS.md`](WS.md#why-other-sites-may-open-it)).
 
 ## Reviewing a change
 
