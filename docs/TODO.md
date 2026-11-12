@@ -113,10 +113,11 @@ Refined when M4 lands.
 |---|---|---|---|
 | C1a | The `/api/v1` block routes still planned: `blocks`, `block/:hash`, the block summary routes and the tip-height alias, with their extras from the store | MI1, MI4 | done ([#59](https://github.com/smolcars/mempool.based/pull/59)) |
 | C1b | The `/api/v1` transaction routes still planned: replacements, CPFP, first-seen times, address validation and prevouts. Also correct the comment in `crates/server/src/limits.rs` that says the heaviest page loads 22 files (it is 25 since FE8) | MP1, MP5 | doing |
+| C1c | Replacement trees: keep the figures of a root that a miner confirmed after we saw it replaced, and unmark a replacement whose block is reorged away | C1b | todo |
 | WS2 | Follow-ups on the compatible WebSocket: send the first `mempool-blocks` with the block instead of about 4 s later, and decide on the bounded `track-mempool-txids` its PR proposes | WS1 | todo |
 | C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | doing |
-| Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | todo |
+| Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | doing |
 | Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | doing |
