@@ -20,7 +20,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use engine::lightning::{self, Block, Change, Close, EVERY, Kind, Level, Open, Point, Stats};
 use engine::store::{Options, Store};
-use mempool_based::{App, Config};
+use rbitcoin_space::{App, Config};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -35,7 +35,7 @@ impl Drop for Dir {
 
 fn dir(name: &str) -> Dir {
     let d = std::env::temp_dir().join(format!(
-        "mempool-based-lightning-{name}-{}",
+        "rbitcoin-space-lightning-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&d);
