@@ -588,7 +588,7 @@ const columns = [
   {
     header: "Transaction",
     cell: (tx: ProjectedTx) => (
-      <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" />
+      <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" fit />
     ),
   },
   {

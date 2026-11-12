@@ -241,14 +241,15 @@
   }
 
   /* ---- Layout: flow and fee side by side, details under the flow ---- */
+  /* The flow takes the page's width, so an address fits its box on one line; the fee and the
+     details share the row under it. */
   .tx-layout {
     display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
-      "flow fee"
-      "details fee";
-    grid-template-rows: auto 1fr;
-    gap: var(--space-6) var(--space-7);
+      "flow flow"
+      "fee details";
+    gap: var(--space-5);
     align-items: start;
   }
   .tx-layout__flow {

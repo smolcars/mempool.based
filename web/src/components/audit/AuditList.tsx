@@ -61,7 +61,7 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
     {
       header: "Transaction",
       cell: (t: AuditTx) => (
-        <Hash value={t.txid} href={paths.tx(t.txid)} copyLabel="Copy transaction ID" />
+        <Hash value={t.txid} href={paths.tx(t.txid)} copyLabel="Copy transaction ID" fit />
       ),
     },
     {

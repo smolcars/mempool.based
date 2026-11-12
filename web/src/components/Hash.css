@@ -15,6 +15,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Cut in the middle only when the column is narrower than the value: the head gives way, the
+     last eight characters stay. */
+  .hash--fit {
+    display: flex;
+  }
+  .hash--fit .hash__text {
+    display: flex;
+    min-width: 0;
+  }
+  .hash__head {
+    min-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hash__tail {
+    flex: none;
+  }
   .hash--whole .hash__text {
     white-space: normal;
     overflow-wrap: anywhere;

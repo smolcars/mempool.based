@@ -20,7 +20,11 @@ const COLUMNS: Column<RecentTx | null>[] = [
   {
     header: "Transaction",
     cell: (t) =>
-      t ? <Hash value={t.txid} href={paths.tx(t.txid)} copy={false} /> : <span class="home-bone" />,
+      t ? (
+        <Hash value={t.txid} href={paths.tx(t.txid)} copy={false} fit />
+      ) : (
+        <span class="home-bone" />
+      ),
   },
   {
     header: "Fee rate, sat/vB",

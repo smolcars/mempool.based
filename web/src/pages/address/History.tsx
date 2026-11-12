@@ -345,7 +345,7 @@ function Transactions(props: {
       cell: (tx) =>
         tx ? (
           <span class="address-txcell">
-            <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+            <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" fit />
             {/* Phones drop the time column, so the time moves under the txid. */}
             <span class="address-txcell__when">
               <When tx={tx} />

@@ -833,7 +833,7 @@ const columns = [
     cell: (tx: Transaction | null) =>
       tx ? (
         <span class="block-txcell">
-          <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+          <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" fit />
           {/* Phones drop the fee rate column, so the rate moves under the txid. */}
           <span class="block-txcell__rate">
             <RateCell tx={tx} unit />
