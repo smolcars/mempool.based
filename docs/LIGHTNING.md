@@ -345,7 +345,6 @@ The peer never learns a channel's funding txid ([Why the script and not the outp
 
 ### Still missing
 
-- The Lightning pages (W11), which read the [routes](#routes).
 - `/api/v1/lightning/penalties`: its rows are the reference's database records of a closed channel (each end's last policy, balances, outputs, resolution state), which we do not keep ([`compat/api-v1.md`](compat/api-v1.md#lightning)). Breaches show in our closed-channel lists.
 - A channel's close is lost when the history store falls past the peer's memory ([`STORE.md`](STORE.md#ln_channels)), and channels the peer stops watching (pruned) keep their row as open.
 
