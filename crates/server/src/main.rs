@@ -2,16 +2,36 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use logging::events::{
+    ConfigInvalid, ListenFailed, Listening, NetworkEnabled, NoNetworks, ServerStarting,
+    ServerStopped, ShutdownRequested, WebDirMissing,
+};
+use mempool_based::config::EsploraEndpoint;
 use mempool_based::{App, Config};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+/// How long exit waits for queued log lines; a blocked stdout must not hang shutdown.
+const LOG_FLUSH: Duration = Duration::from_secs(2);
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    let config = match Config::from_env() {
+    let code = run().await;
+    logging::flush(LOG_FLUSH);
+    code
+}
+
+async fn run() -> ExitCode {
+    let (settings, bad_settings) = match logging::Settings::from_env() {
+        Ok(s) => (s, None),
+        Err(e) => (logging::Settings::default_for_stdout(), Some(e)),
+    };
+    logging::init(settings, std::io::stdout());
+    logging::install_panic_hook();
+    let config = match bad_settings.map_or_else(Config::from_env, Err) {
         Ok(config) => config,
-        Err(e) => {
-            eprintln!("error: {e}");
+        Err(error) => {
+            logging::emit(&ConfigInvalid { error: &error });
             return ExitCode::FAILURE;
         }
     };
@@ -22,27 +42,70 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    if !config.web_dir.join("index.html").is_file() {
-        eprintln!(
-            "warning: {} has no index.html; build the frontend or set WEB_DIR",
-            config.web_dir.display()
-        );
-    }
+
+    started(&config, settings);
     let listener = match TcpListener::bind(config.listen).await {
         Ok(listener) => listener,
         Err(e) => {
-            eprintln!("error: cannot listen on {}: {e}", config.listen);
+            logging::emit(&ListenFailed {
+                addr: config.listen.to_string(),
+                error: e.to_string(),
+            });
             return ExitCode::FAILURE;
         }
     };
-    let names: Vec<&str> = config.networks.iter().map(|n| n.network.name()).collect();
-    if names.is_empty() {
-        eprintln!("warning: no network is configured; only the frontend and /healthz are served");
-    }
     let bound = listener.local_addr().unwrap_or(config.listen);
-    eprintln!("listening on http://{bound} for {}", names.join(", "));
+    logging::emit(&Listening {
+        addr: bound.to_string(),
+    });
     App::new(&config).serve(listener, shutdown_signal()).await;
+    logging::emit(&ServerStopped {});
     ExitCode::SUCCESS
+}
+
+/// The effective configuration, without secrets: the RPC password and user are left out.
+fn started(config: &Config, log: logging::Settings) {
+    let l = &config.limits;
+    logging::emit(&ServerStarting {
+        version: env!("CARGO_PKG_VERSION"),
+        listen_addr: config.listen.to_string(),
+        web_dir: config.web_dir.display().to_string(),
+        networks: config.networks.iter().map(|n| n.network.name()).collect(),
+        log_format: log.format.as_str(),
+        log_level: log.level.as_str(),
+        log_requests: config.log_requests.as_str(),
+        log_client_addr: config.log_client_addr,
+        broadcast_enabled: config.broadcast,
+        max_body_bytes: l.max_body_bytes,
+        request_timeout_secs: l.request_timeout.as_secs(),
+        max_connections: l.max_connections,
+        max_concurrent_requests: l.max_requests,
+        client_max_connections: l.client_connections,
+        client_max_concurrent_requests: l.client_requests,
+        client_rate_per_sec: l.client_rate_per_sec,
+        client_burst: l.client_burst,
+        max_tracked_clients: l.max_tracked_clients,
+        trusted_proxy_header: l.trusted_proxy_header.as_ref().map(|h| h.as_str()),
+    });
+    for n in &config.networks {
+        logging::emit(&NetworkEnabled {
+            network: n.network.name(),
+            rpc_addr: format!("{}:{}", n.rpc.host, n.rpc.port),
+            esplora: match &n.esplora {
+                EsploraEndpoint::Http(url) => url.clone(),
+                EsploraEndpoint::Unix(path) => path.display().to_string(),
+            },
+            electrum_addr: &n.electrum,
+        });
+    }
+    if config.networks.is_empty() {
+        logging::emit(&NoNetworks {});
+    }
+    if !config.web_dir.join("index.html").is_file() {
+        logging::emit(&WebDirMissing {
+            web_dir: config.web_dir.display().to_string(),
+        });
+    }
 }
 
 /// `mempool-based healthcheck`: whether the server at `LISTEN_ADDR` answers `/healthz` with 200.
@@ -87,11 +150,11 @@ async fn shutdown_signal() {
     };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
-    eprintln!("shutting down");
+    let signal = tokio::select! {
+        () = ctrl_c => "ctrl_c",
+        () = terminate => "sigterm",
+    };
+    logging::emit(&ShutdownRequested { signal });
 }
 
 #[cfg(test)]
@@ -100,6 +163,7 @@ mod tests {
 
     use super::*;
     use mempool_based::Limits;
+    use mempool_based::config::RequestLog;
 
     #[tokio::test]
     async fn healthcheck_needs_a_server() {
@@ -111,6 +175,8 @@ mod tests {
             networks: Vec::new(),
             limits: Limits::default(),
             broadcast: false,
+            log_requests: RequestLog::All,
+            log_client_addr: false,
         };
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(App::new(&config).serve(listener, async {

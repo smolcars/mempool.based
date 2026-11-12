@@ -3,6 +3,8 @@
 //!
 //! `ESPLORA_URL=… NETWORK=bitcoin|signet|testnet4 cargo run -p node --example esplora_probe`
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+// A manual probe: printing is its output.
+#![allow(clippy::print_stdout)]
 
 use std::fmt::Debug;
 use std::time::{Duration, Instant};

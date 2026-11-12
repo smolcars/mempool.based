@@ -1,0 +1,97 @@
+# Logging
+
+The server writes structured logs to stdout. Every line is one **event**: a declared Rust type with named, typed fields, a stable name and a level. There is no free-text logging call anywhere. The event types in [`crates/logging/src/events.rs`](../crates/logging/src/events.rs) are everything the server can say, and the catalogue below lists them all.
+
+## Rules
+
+1. **Typed events only.** No `println!`, `eprintln!`, `dbg!` or message strings. The workspace denies the print macros through clippy; tests and manual probes allow them locally, with a comment.
+2. **Add an event when an operator would act on it or needs it to explain an incident:** a request, a lifecycle step, a lost or restored upstream, a limit that refused work. Do not add one to trace control flow, to say a function ran, or for something a request event already shows.
+3. **Summarise repeats.** Something that can fail in a loop (a reconnect, a poll) logs on the 1st, 2nd, 4th, 8th… occurrence in a row, carrying the count, and logs again when it recovers. Never one line per attempt.
+4. **Privacy by default.** A request event carries the matched route template, never the raw path or query string: the path of an explorer request says which address or transaction someone looked up. Client addresses are off unless the operator turns them on (`LOG_CLIENT_ADDR`).
+5. **No secrets.** No event field holds a password, a token, a credentialed URL or a request body. Configuration types that hold secrets (`Secret`) cannot be formatted, and the config refuses URLs with credentials, so nothing can carry them into an event by accident.
+6. **Library crates do not log.** `node` and `engine` report through values: errors they return, and state they expose (the Electrum client's `health()` watch). The server turns those into events (`crates/server/src/report.rs`). This keeps the libraries free of global state and testable without a logger.
+7. **Keep fields bounded.** A field holds a fixed label, a number, or text whose size the code controls. Attacker-chosen text is allowed only when it is needed (the node's software string, a panic message) and is always escaped, never trusted to be short or clean.
+
+## Field conventions
+
+- snake_case names; units in the name: `duration_ms`, `upstream_ms`, `bytes`, `request_timeout_secs`.
+- The same name for the same thing everywhere: `network` (`mainnet`, `signet`, `testnet4`, `regtest`), `request_id`, `route`, `status`, `method`.
+- Labels are fixed snake_case strings from our code (`refused: "client_rate"`), not formatted messages.
+- An optional field that does not apply is left out of the line, not written as `null`.
+- `ts`, `level` and `event` are reserved for the line header and are never field names.
+
+## Output
+
+| Format | Line |
+|---|---|
+| `json` | `{"ts":"2026-11-11T09:30:12.345Z","level":"info","event":"http_request","request_id":"…","route":"/api/{*rest}",…}` |
+| `text` | `2026-11-11T09:30:12.345Z INFO  http_request duration_ms=0.41 method=GET route=/api/{*rest} status=200 …` |
+
+`ts` is RFC 3339 in UTC with milliseconds. In `json`, fields follow the header in declaration order; in `text` they are sorted by name, plain values are written bare and anything else as a JSON string.
+
+**One event is always exactly one line, and a value cannot leave its field.** Quotes, backslashes and control characters are escaped by the JSON encoder; DEL, C1 controls (NEL and the 8-bit CSI among them), Unicode line and paragraph separators and bidirectional overrides are escaped as `\uXXXX` in both formats. Invalid UTF-8 cannot reach a field: fields are Rust strings, so bytes from the network are converted lossily first.
+
+**Logging never blocks or crashes the server.** `emit` formats the line on the caller's thread and puts it on a bounded queue (4,096 lines) drained by one writer thread. When the queue is full the event is dropped and counted, and a `log_events_dropped` event with the count is written once the queue drains. A write error is ignored. At exit the server waits at most two seconds for the queue to empty.
+
+## Settings
+
+`LOG_FORMAT`, `LOG_LEVEL`, `LOG_REQUESTS` and `LOG_CLIENT_ADDR` are in [`CONFIG.md`](CONFIG.md#logging). A passing `/healthz` is never logged, whatever `LOG_REQUESTS` says, so health checks do not flood the log.
+
+### Why client addresses are off by default
+
+A request event already says when someone used which kind of page or API route. With the client address it becomes a per-person activity record, and together with the timing it can often be matched back to what was looked up. The operator did not ask for that record, and anyone who later reads the log (a backup, a log service, a subpoena) gets it too. The limits that stop abuse work on live counters and do not need the log. An operator investigating abuse can turn `LOG_CLIENT_ADDR` on for the duration, or use the access log of the reverse proxy in front of the server, which most deployments already keep under their own retention policy.
+
+## Request ids
+
+Every response carries `X-Request-Id`, a 16-digit hex id that also appears in its `http_request` event, so a user's report can be matched to one line. It is exposed to cross-origin callers of `/api`. Ids are unique within a process and unguessable; a client cannot set its own.
+
+## Adding an event
+
+1. Declare a struct in `crates/logging/src/events.rs` with `#[derive(Debug, Serialize)]` and the fields it needs, following the conventions above. Borrow strings (`&'a str`) rather than allocating.
+2. Give it a name and level on the line after: `event!(UpstreamSlow, "upstream_slow", Warn);`
+3. Add a sample to `samples()` in the same file's tests, and a row to the catalogue below. Tests fail until both exist.
+4. Emit it where the thing happens: `logging::emit(&UpstreamSlow { network, endpoint, duration_ms });`
+
+## Catalogue
+
+### Lifecycle
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, …), `trusted_proxy_header` if set | Configuration parsed, before listening. Never the RPC user or password |
+| `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr` | Once per enabled network at startup |
+| `no_networks` | warn | none | No network is configured |
+| `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
+| `listening` | info | `addr` | The listener is bound; shows the real port when asked for port 0 |
+| `shutdown_requested` | info | `signal` (`sigterm` or `ctrl_c`) | A shutdown signal arrived |
+| `server_stopped` | info | none | In-flight requests are done and the process exits normally |
+| `config_invalid` | error | `error` | Invalid configuration; the process exits. The message names the variable, never its value |
+| `listen_failed` | error | `addr`, `error` | The listen address could not be bound; the process exits |
+| `panic` | error | `message`, `location`, `thread` | Any panic. In a request handler the client gets a 500 and the server keeps running |
+| `log_events_dropped` | warn | `count` | The log queue was full; written once it drains |
+
+### HTTP
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `http_request` | info | `request_id`, `network`, `method`, `route`, `status`, `duration_ms`, `bytes`, `refused`, `endpoint`, `source`, `upstream_ms`, `upstream_error`, `client` | Each request, when its response head is ready, subject to `LOG_REQUESTS` |
+
+- `route` is the matched route template (`/signet/api/{*rest}`, `/healthz`), or `frontend` for pages and static files.
+- `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
+- `duration_ms` runs until the response head is ready; streaming the body is not included. `bytes` is the body size when known up front.
+- `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, or `route_rate` (a route's own stricter limit, such as broadcast). A `413` is an oversized body.
+- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)): the named Esplora route (`tx_status`), where the answer came from (`upstream`, `coalesced` onto another request's call, or `hot` from the short cache), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`).
+- `client` only with `LOG_CLIENT_ADDR=true`.
+
+### Node clients
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `electrum_connected` | info | `network`, `server`, `protocol` | The Electrum connection is up, subscriptions restored. `server` is the node's own software string |
+| `electrum_disconnected` | warn | `network` | A ready connection was lost; the client reconnects with backoff |
+| `electrum_unreachable` | warn | `network`, `attempts` | Connection attempts keep failing: at the 1st, 2nd, 4th, 8th… in a row |
+| `electrum_resynced` | info | `network` | Updates may have been missed (reconnect, or a tip jump too far to follow) |
+| `electrum_lines_skipped` | warn | `network`, `total` | The node sent lines that are not valid JSON-RPC; at a total of 1, 2, 4, 8… |
+| `chain_reorg` | warn | `network`, `fork_height` | Blocks above `fork_height` left the best chain |
+
+`crates/server/src/report.rs` produces these from the client's `health()` watch and event stream; call `report_electrum` once where each network's Electrum client is created. The Esplora and RPC clients return their failures as error values (`rpc::Error::Busy` is the node's back-pressure); the code that calls them owns the event, summarised by rule 3.

@@ -11,9 +11,10 @@ publish = false
 
 [workspace.dependencies]
 engine = { path = "crates/engine" }
+logging = { path = "crates/logging" }
 node = { path = "crates/node" }
 
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "tokio"] }
 bitcoin = { version = "0.32.102", default-features = false, features = ["std", "serde"] }
 bytes = "1.12.1"
 http-body-util = "0.1.5"
@@ -35,3 +36,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 indexing_slicing = "deny"
+# Output goes through the `logging` crate as typed events (docs/LOGGING.md). Tests and examples opt out locally.
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"

@@ -100,6 +100,19 @@ struct Shared {
     events: broadcast::Sender<Event>,
     /// The newest header the node pushed, before reconciling with our chain.
     pushed_tip: watch::Sender<Option<(u32, Header)>>,
+    health: watch::Sender<Health>,
+}
+
+/// The connection's state, for whoever reports on it. The client never logs; the server turns
+/// changes into log events.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Health {
+    /// Connected, handshake done and subscriptions restored.
+    pub ready: bool,
+    /// Connection attempts in a row that did not get ready. Reset when one does.
+    pub failures: u32,
+    /// Lines from the server that were not valid JSON-RPC and were skipped, since start.
+    pub skipped_lines: u64,
 }
 
 #[derive(Default)]
@@ -153,6 +166,7 @@ impl Client {
             state: Mutex::default(),
             events,
             pushed_tip,
+            health: watch::Sender::default(),
         });
         tokio::spawn(supervise(shared.clone()));
         tokio::spawn(track_tip(shared.clone(), tip_rx));
@@ -164,6 +178,12 @@ impl Client {
     /// [`Event::Resynced`].
     pub fn events(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
+    }
+
+    /// Changes to the connection's [`Health`]. Updates may be coalesced: compare with the last
+    /// value seen rather than counting notifications.
+    pub fn health(&self) -> watch::Receiver<Health> {
+        self.shared.health.subscribe()
     }
 
     /// The best block as last reported by the node.
@@ -525,13 +545,20 @@ async fn supervise(shared: Arc<Shared>) {
     let mut delay = FIRST_RETRY;
     let mut resync = false;
     loop {
-        if let Some(ready) = session(&shared, resync).await {
+        let outcome = session(&shared, resync).await;
+        if let Some(ready) = outcome {
             // Requests and pushes may have been served on it, so the next one resyncs.
             resync = true;
             if ready {
                 delay = FIRST_RETRY;
             }
         }
+        shared.health.send_modify(|h| {
+            h.ready = false;
+            if outcome != Some(true) {
+                h.failures = h.failures.saturating_add(1);
+            }
+        });
         sleep(delay).await;
         delay = (delay * 2).min(shared.config.max_reconnect_delay);
     }
@@ -616,6 +643,10 @@ async fn drive(shared: &Arc<Shared>, resync: bool, ready: &mut bool) {
     }
 
     *ready = true;
+    shared.health.send_modify(|h| {
+        h.ready = true;
+        h.failures = 0;
+    });
     if resync {
         let _ = shared.events.send(Event::Resynced);
     }
@@ -653,8 +684,9 @@ async fn read_loop<R: AsyncBufRead + Unpin>(shared: &Shared, mut rd: R) {
         {
             return;
         }
-        // shortcut: a malformed line is skipped silently; log it once the server has logging.
-        let _ = shared.dispatch(&line);
+        if shared.dispatch(&line).is_err() {
+            shared.health.send_modify(|h| h.skipped_lines += 1);
+        }
     }
 }
 
