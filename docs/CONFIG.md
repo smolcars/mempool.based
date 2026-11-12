@@ -105,13 +105,13 @@ The defaults above are derived from what the frontend really asks for, so an ord
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
-| Home | 11 (23) | 3 | 1 | 1 |
-| Blocks | 11 (20) | 13 | 0 | 2 |
-| Block | 13 (26) | 6 | 1 | 5 |
-| Transaction | 10 (19) | 5 | 1 | 3 |
-| Address | 13 (23) | 5 | 1 | 4 |
-| Mining | 16 (26) | 6 | 0 | 4 |
-| Lightning | 11 (18) | 2 | 0 | 1 |
+| Home | 10 (23) | 3 | 1 | 1 |
+| Blocks | 10 (20) | 13 | 0 | 2 |
+| Block | 12 (26) | 6 | 1 | 5 |
+| Transaction | 9 (19) | 5 | 1 | 3 |
+| Address | 12 (23) | 5 | 1 | 4 |
+| Mining | 15 (26) | 6 | 0 | 4 |
+| Lightning | 10 (18) | 2 | 0 | 1 |
 
 At most 7 static files were in flight at once on any page (18 before).
 
@@ -124,7 +124,7 @@ Opening a block's audit list adds two files and one API request. An open home pa
 | `CLIENT_BURST` | `120` | A restored session of eight tabs loading one after another: 8 × 13 = 104 |
 | `CLIENT_RATE_PER_SEC` | `20` | Unchanged: sixty open home pages polling, or a full burst refilled in 6 seconds |
 | `WS_CLIENT_MAX_SOCKETS` | `16` | One socket per open tab; sixteen tabs |
-| Static files, fixed | 400 at once, 100 a second, 96 in flight | Set when the heaviest page needed 25 files: sixteen cold loads of it at once, and three of them with every file in flight together (75). The heaviest now needs 16 (mining), which the same derivation would put at 256 and 48; the limits are unchanged, which leaves that much more room for a NAT or a page that grows |
+| Static files, fixed | 400 at once, 100 a second, 96 in flight | Set when the heaviest page needed 25 files: sixteen cold loads of it at once, and three of them with every file in flight together (75). The heaviest now needs 15 (mining), which the same derivation would put at 240 and 45; the limits are unchanged, which leaves that much more room for a NAT or a page that grows |
 
 `crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
 
