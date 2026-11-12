@@ -3,7 +3,7 @@
 mempool.based is a sidecar: one Rust server beside a stock rbitcoin node, a static frontend, and a SQLite file per network. It does not embed or patch the node.
 
 ```text
- browser ──HTTP/WS──► mempool-based ──Esplora REST──► rbitcoin v0.9.1
+ browser ──HTTP/WS──► mempool-based ──Esplora REST──► rbitcoin v0.9.2
                         │   │   │  ──Electrum TCP──►   (unmodified)
                         │   │   └──JSON-RPC────────►
                         │   └── SQLite (derived data only)
@@ -14,7 +14,7 @@ mempool.based is a sidecar: one Rust server beside a stock rbitcoin node, a stat
 
 1. **The node is the source of truth.** Anything rbitcoin can answer is asked of rbitcoin, never copied into our own store. Blocks, transactions, addresses and spends stay in the node.
 2. **We store only derived or observed data:** per-block mining summaries, mempool history, Lightning graph history, prices.
-3. **Push where the node pushes, poll where it does not.** Blocks and tracked scripts arrive by Electrum subscription. The mempool is polled, because v0.9.1 has no mempool event stream ([`RBITCOIN.md`](RBITCOIN.md)).
+3. **Push where the node pushes, poll where it does not.** Blocks and tracked scripts arrive by Electrum subscription. The mempool is polled, because rbitcoin has no mempool event stream ([`RBITCOIN.md`](RBITCOIN.md)).
 4. **Clients are untrusted.** The browser never reaches the node directly. Every request goes through typed, bounded handlers ([`SECURITY.md`](SECURITY.md)).
 5. **Compatibility is a bonus, not a constraint.** We serve rbitcoin's Esplora API as it is, and mempool.space-shaped endpoints where they are cheap. Where rbitcoin lets us do better, we do it our own way ([`COMPAT.md`](COMPAT.md)).
 

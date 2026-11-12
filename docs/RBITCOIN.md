@@ -1,6 +1,19 @@
 # What we rely on from rbitcoin
 
-Pinned to **rbitcoin v0.9.1**. Everything here was read from that tag's source and docs, or measured against a synced v0.9.1 mainnet node. When the pin moves, re-check this page.
+Pinned to **rbitcoin v0.9.2**. This page was written against v0.9.1: its facts were read from that tag's source and docs, or measured against a synced v0.9.1 mainnet node. When the pin moves, re-check this page.
+
+## What v0.9.2 changed for us
+
+Nothing we depend on. It is a bug-fix release (32 commits) and the Esplora crate is untouched. The changes that reach our interfaces at all:
+
+| Area | Change | Effect on us |
+|---|---|---|
+| RPC authentication | The auth scheme name is matched in any case | None; we send `Basic` |
+| `getindexinfo` | Lists the block filter index | None; we do not call it |
+| `submitpackage`, `submitblock` | Fixes for same-txid members and a mid-check sibling block | None for the explorer; regtest mining goes through the same code, so the harness is re-checked on the new image |
+| Electrum silent payments | The subscribe address carries its version | None; we do not use it |
+
+Schema stays 27, so a v0.9.1 data directory opens in place. One operator note from the release: a data directory that already connected a block with a re-spent output keeps the wrong spent slot and needs a re-sync.
 
 Upstream references: `COMPAT.md`, `docs/rpc.md`, `docs/lightning.md` and `docs/esplora-openapi.yaml` in the rbitcoin repo.
 

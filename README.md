@@ -8,7 +8,7 @@ A fast block explorer for [rbitcoin](https://github.com/rbitcoin-org/rbitcoin): 
 
 ## What it is
 
-- **One Rust server** that runs beside a stock rbitcoin node (pinned to v0.9.1) and talks to it over Esplora, Electrum and JSON-RPC.
+- **One Rust server** that runs beside a stock rbitcoin node (pinned to v0.9.2) and talks to it over Esplora, Electrum and JSON-RPC.
 - **A static Solid frontend** served by that same server.
 - **SQLite** for the little data the node does not already store.
 - **A gossip-only LDK peer** for the Lightning explorer. It holds no funds and opens no channels.
