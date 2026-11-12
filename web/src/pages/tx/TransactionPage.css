@@ -1,0 +1,607 @@
+@layer pages {
+  .tx-page {
+    display: grid;
+    align-content: start;
+    gap: var(--space-6);
+    /* Keeps the footer below the fold, so it never jumps when the transaction arrives. */
+    min-height: 100dvh;
+    padding-top: var(--space-6);
+  }
+
+  /* ---- Head: title, status and the txid ---- */
+  .tx-head {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .tx-head__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+  }
+  .tx-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+    padding: 2px var(--space-3) 2px var(--space-2);
+    border: 1.5px solid currentColor;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .tx-status--pending {
+    width: 8rem;
+    color: var(--color-line);
+    border-style: dashed;
+  }
+  .tx-status--positive {
+    color: var(--color-positive);
+  }
+  .tx-status--caution {
+    color: var(--color-caution);
+  }
+  .tx-status--negative {
+    color: var(--color-negative);
+  }
+  .tx-icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* ---- Status timeline: a real sequence, so its steps are numbered ---- */
+  .tx-timeline {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+  .tx-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--space-3);
+    row-gap: var(--space-2);
+    padding-right: var(--space-5);
+    align-content: start;
+  }
+  .tx-step::before {
+    content: "";
+    position: absolute;
+    left: 36px;
+    right: 8px;
+    top: 13px;
+    height: 2px;
+    background: var(--color-line);
+  }
+  .tx-step:last-child::before {
+    display: none;
+  }
+  .tx-step--done::before {
+    background: var(--color-text);
+  }
+  .tx-step__marker {
+    grid-column: 1;
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--color-line-strong);
+    border-radius: 50%;
+    background: var(--color-bg);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .tx-step__title {
+    grid-column: 1 / -1;
+    font-weight: var(--weight-bold);
+  }
+  .tx-step--done .tx-step__marker {
+    background: var(--color-text);
+    border-color: var(--color-text);
+    color: var(--color-bg);
+  }
+  .tx-step--current .tx-step__marker {
+    border-color: currentColor;
+    color: inherit;
+    box-shadow:
+      0 0 0 4px var(--color-bg),
+      0 0 0 5.5px currentColor;
+  }
+  .tx-step--positive {
+    color: var(--color-positive);
+  }
+  .tx-step--positive .tx-step__marker {
+    background: var(--color-positive);
+    border-color: var(--color-positive);
+    color: var(--color-bg);
+  }
+  .tx-step--caution {
+    color: var(--color-caution);
+  }
+  .tx-step--negative {
+    color: var(--color-negative);
+  }
+  .tx-step--dead .tx-step__marker {
+    border-style: dashed;
+  }
+  .tx-step--dead:not(.tx-step--negative) .tx-step__title {
+    color: var(--color-text-muted);
+    text-decoration: line-through;
+  }
+  .tx-step__detail {
+    grid-column: 1 / -1;
+    display: grid;
+    align-content: start;
+    /* Room for the longest detail (block, time, age), so a live change never moves the page. */
+    min-height: calc(3 * var(--leading-body) * 1em);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-step--current.tx-step--caution .tx-step__marker {
+    animation: tx-waiting 2.4s var(--ease-in-out) infinite;
+  }
+  @keyframes tx-waiting {
+    50% {
+      box-shadow:
+        0 0 0 4px var(--color-bg),
+        0 0 0 5.5px transparent;
+    }
+  }
+  /* The one moment on this page: the step lands when the transaction confirms while you watch. */
+  .tx-step.tx-step--landed .tx-step__marker {
+    animation: tx-land var(--dur-slow) var(--ease-settle) both;
+  }
+  .tx-step--landed .tx-step__detail {
+    animation: tx-fade var(--dur-base) var(--ease-out) both;
+  }
+  @keyframes tx-land {
+    from {
+      transform: scale(0.4);
+      opacity: 0;
+    }
+  }
+  @keyframes tx-fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /* ---- Layout: flow and fee side by side, details under the flow ---- */
+  .tx-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas:
+      "flow fee"
+      "details fee";
+    grid-template-rows: auto 1fr;
+    gap: var(--space-6) var(--space-7);
+    align-items: start;
+  }
+  .tx-layout__flow {
+    grid-area: flow;
+    min-width: 0;
+  }
+  .tx-layout__fee {
+    grid-area: fee;
+    min-width: 0;
+  }
+  .tx-layout__details {
+    grid-area: details;
+    min-width: 0;
+  }
+  .tx-note {
+    margin-bottom: var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  /* ---- Flow ---- */
+  .tx-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(3.5rem, 0.6fr) minmax(0, 1fr);
+    align-items: center;
+    min-height: 8rem;
+  }
+  .tx-flow__col {
+    display: grid;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .tx-flow__item {
+    display: grid;
+    min-width: 0;
+    min-height: 4.75rem;
+    align-content: center;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-m);
+    background: var(--color-surface);
+    font-size: var(--text-sm);
+    transition:
+      border-color var(--dur-quick) var(--ease-out),
+      box-shadow var(--dur-quick) var(--ease-out);
+  }
+  .tx-flow__col--in .tx-flow__item {
+    justify-items: start;
+    border-right: 3px solid var(--color-line-strong);
+  }
+  .tx-flow__col--out .tx-flow__item {
+    border-left: 3px solid var(--color-line-strong);
+    justify-items: end;
+    text-align: right;
+  }
+  .tx-flow__item.is-selected {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+  }
+  .tx-flow__item--fee {
+    border-style: dashed;
+    background: transparent;
+  }
+  .tx-flow__col--out .tx-flow__item--fee {
+    border-left: 3px solid var(--swatch);
+  }
+  .tx-flow__item--more {
+    border-style: dashed;
+    background: transparent;
+  }
+  .tx-flow__item--ghost {
+    border-color: transparent;
+    background: var(--color-surface-sunken);
+  }
+  .tx-flow__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0 var(--space-2);
+    width: 100%;
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+  }
+  .tx-flow__col--out .tx-flow__top {
+    flex-direction: row-reverse;
+  }
+  .tx-flow__who {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .tx-flow__label {
+    color: var(--color-text-muted);
+  }
+  .tx-flow__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--space-2);
+    min-height: 24px;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+  .tx-flow__col--out .tx-flow__meta {
+    justify-content: flex-end;
+  }
+  /* A 24 px target (WCAG 2.2) without making the line taller than the meta line itself. */
+  .tx-flow__spent {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    min-width: 24px;
+  }
+  .tx-flow__open {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-m);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background-color var(--dur-quick) var(--ease-out);
+  }
+  .tx-flow__open:hover {
+    background: var(--color-surface-sunken);
+    color: var(--color-text);
+  }
+  .tx-flow__open[aria-expanded="true"] {
+    background: var(--color-accent-soft);
+    color: var(--color-text);
+  }
+  .tx-flow__open svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--dur-quick) var(--ease-out);
+  }
+  .tx-flow__open[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+  }
+  .tx-flow__more {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-weight: var(--weight-bold);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 0.2em;
+    cursor: pointer;
+  }
+  .tx-flow__more:hover {
+    color: var(--color-accent);
+  }
+  .tx-flow__ribbons {
+    align-self: stretch;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .tx-ribbon {
+    fill: var(--color-line-strong);
+    fill-opacity: 0.45;
+    transition:
+      fill var(--dur-quick) var(--ease-out),
+      fill-opacity var(--dur-quick) var(--ease-out);
+  }
+  .tx-ribbon--more {
+    fill-opacity: 0.25;
+  }
+  .tx-ribbon--fee {
+    fill: var(--swatch);
+    fill-opacity: 0.9;
+  }
+  .tx-ribbon.is-selected {
+    fill: var(--color-accent);
+    fill-opacity: 0.8;
+  }
+  .tx-flow__trunk {
+    fill: var(--color-text);
+  }
+
+  /* ---- Inspector: one input or output in full ---- */
+  .tx-inspector {
+    display: grid;
+    gap: var(--space-4);
+    margin-top: var(--space-5);
+    padding: var(--space-4);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-l);
+    background: var(--color-surface);
+    min-width: 0;
+  }
+  .tx-inspector__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .tx-inspector__head h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+  }
+  .tx-codes {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .tx-witness {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+  .tx-witness > * {
+    width: 100%;
+  }
+  .tx-witness > .btn {
+    width: auto;
+  }
+  .tx-witness__title {
+    font-weight: var(--weight-bold);
+    font-size: var(--text-sm);
+  }
+  .tx-code {
+    display: grid;
+    gap: var(--space-1);
+    justify-items: start;
+    min-width: 0;
+  }
+  .tx-code__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-code__size {
+    font-size: var(--text-xs);
+  }
+  .tx-code__text {
+    width: 100%;
+    max-height: 16rem;
+    overflow: auto;
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    font-size: var(--text-xs);
+    line-height: var(--leading-body);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .tx-code__empty,
+  .tx-code__note {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-outpoint {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 var(--space-1);
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* ---- Fact lists ---- */
+  .tx-facts {
+    display: grid;
+    gap: 0 var(--space-5);
+    align-content: start;
+  }
+  .tx-fact {
+    min-width: 0;
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-line);
+  }
+  .tx-fact dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-fact dd {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    min-width: 0;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
+  }
+  .tx-fact__sub {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+  }
+  .tx-facts--single .tx-fact,
+  .tx-inspector .tx-fact {
+    display: grid;
+    grid-template-columns: 9rem minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: baseline;
+  }
+  .tx-facts--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tx-facts--two .tx-fact--wide {
+    grid-column: 1 / -1;
+  }
+  .tx-fact .state {
+    padding: 0;
+  }
+  /* Reserved for the projected position in the mempool (see the page component). */
+  .tx-position-slot {
+    min-height: 5.5rem;
+  }
+
+  /* ---- Loading ---- */
+  .tx-skeleton {
+    display: grid;
+    gap: var(--space-6);
+    animation: tx-fade var(--dur-fade) linear 150ms both;
+  }
+  .tx-bar {
+    display: block;
+    width: 60%;
+    height: 0.9em;
+    margin-block: 0.3em;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+  }
+  .tx-bar--title {
+    width: 40%;
+  }
+  .tx-bar--head {
+    width: 10rem;
+    height: 1.1em;
+  }
+  .tx-skeleton .tx-flow__item--ghost {
+    min-height: 4.75rem;
+  }
+
+  @media (max-width: 1040px) {
+    .tx-layout {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "flow" "fee" "details";
+      grid-template-rows: none;
+    }
+  }
+  @media (max-width: 640px) {
+    .tx-timeline {
+      grid-auto-flow: row;
+      gap: var(--space-4);
+    }
+    .tx-step {
+      row-gap: 0;
+      padding-right: 0;
+    }
+    .tx-step__marker {
+      grid-row: 1 / 3;
+    }
+    .tx-step__title,
+    .tx-step__detail {
+      grid-column: 2;
+    }
+    .tx-step__detail {
+      min-height: 0;
+    }
+    .tx-step:nth-child(2) .tx-step__detail {
+      min-height: calc(3 * var(--leading-body) * 1em);
+    }
+    .tx-step::before {
+      left: 13px;
+      top: 30px;
+      bottom: calc(-1 * var(--space-4));
+      right: auto;
+      width: 2px;
+      height: auto;
+    }
+    .tx-flow {
+      grid-template-columns: minmax(0, 1fr) 2.25rem minmax(0, 1fr);
+    }
+    .tx-flow__item {
+      padding: var(--space-1) var(--space-2);
+    }
+    .tx-flow__top {
+      font-size: var(--text-sm);
+    }
+    .tx-flow__open {
+      width: 24px;
+      height: 24px;
+    }
+    .tx-facts--two {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .tx-facts--single .tx-fact,
+    .tx-inspector .tx-fact {
+      grid-template-columns: 7rem minmax(0, 1fr);
+    }
+    .tx-inspector {
+      padding: var(--space-3);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tx-step--current.tx-step--caution .tx-step__marker,
+    .tx-step.tx-step--landed .tx-step__marker {
+      animation: none;
+    }
+  }
+}
