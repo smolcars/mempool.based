@@ -81,21 +81,25 @@
     font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
+  /* The padding is spare room for slivers held at their minimum width; shares are of the rest. */
   .audit-bars__track {
     display: block;
+    padding-right: var(--space-4);
     overflow: hidden;
   }
   .audit-bars__lane {
     display: flex;
-    gap: 2px;
     /* As wide as the track whatever its offset, so a share means the same width in both lanes. */
     width: 100%;
     height: 1.25rem;
     margin-left: calc(var(--off) * 100%);
   }
+  /* A seam of the page inside each piece, so seams take no width and matched lines up in both. */
   .audit-bars__seg {
     flex: 0 0 calc(var(--w) * 100%);
-    min-width: 3px;
+    box-sizing: border-box;
+    min-width: 5px;
+    border-right: 2px solid var(--color-bg);
     border-radius: var(--radius-s);
   }
 
