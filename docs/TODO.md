@@ -52,7 +52,7 @@ Refined when M1 lands.
 | MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | done ([#20](https://github.com/smolcars/mempool.based/pull/20)) |
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | done ([#28](https://github.com/smolcars/mempool.based/pull/28)) |
 | MP3 | Run the mempool tracker and projected blocks inside the server, and serve them over the WebSocket: mempool totals, projected-block totals, binary per-transaction deltas, the latest transactions | MP2, S3 | done ([#35](https://github.com/smolcars/mempool.based/pull/35)) |
-| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | built and reviewed in [#45](https://github.com/smolcars/mempool.based/pull/45); not merged: the same browser test fails in its CI (MP7, FX6) |
+| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | done ([#45](https://github.com/smolcars/mempool.based/pull/45)); its evidence is one hour and four blocks (MP8) |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | done ([#42](https://github.com/smolcars/mempool.based/pull/42)) |
 | MP6 | RBF history and CPFP or cluster view | MP1 | done ([#42](https://github.com/smolcars/mempool.based/pull/42)) |
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | done ([#27](https://github.com/smolcars/mempool.based/pull/27)) |
