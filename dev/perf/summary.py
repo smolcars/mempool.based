@@ -88,9 +88,10 @@ def limits(dirs):
 
 
 def ws(dirs):
-    print("| Sockets | Open | Server CPU mean / busiest s (cores) | Server RSS MB | Block: published → last reader p50 / max ms | Block: node → last reader max ms | mempool: first → last reader p50 / max ms | projected-txs:0 delta first → last p50 / max ms | Load tool CPU (cores) |")
-    print("|---|---|---|---|---|---|---|---|---|")
-    for n in ["100", "1000", "10000", "slow"]:
+    # Last-reader times cover only messages every subscribed reader got; "incomplete" counts the rest.
+    print("| Sockets | Open | Server CPU mean / busiest s (cores) | Server RSS MB | Messages incomplete | Block: published → last reader p50 / max ms | Block: node → last reader max ms | mempool: first → last reader p50 / max ms | projected-txs:0 delta first → last p50 / max ms | Load tool CPU (cores) |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for n in ["100", "1000", "2000", "5000", "8000", "10000", "slow"]:
         runs = load(dirs, f"ws-{n}.json")
         if not runs:
             continue
@@ -100,6 +101,7 @@ def ws(dirs):
         print(f"| {n} | {rng([r['open'] for r in runs], '{:,}')} "
               f"| {rng([r['server']['cpu_pct_mean'] / 100 for r in runs], '{:.2f}')} / {rng([r['server']['cpu_pct_busiest_second'] / 100 for r in runs], '{:.2f}')} "
               f"| {rng([r['server']['rss_mb_max'] for r in runs])} "
+              f"| {rng([sum(v.get('incomplete', 0) for v in r['messages'].values()) for r in runs], '{:,}')} "
               f"| {rng([m(r, 'blocks:block', 'published_to_last_ms', 'p50') for r in runs])} / {rng([m(r, 'blocks:block', 'published_to_last_ms', 'max') for r in runs])} "
               f"| {rng([m(r, 'blocks:block', 'node_to_last_ms', 'max') for r in runs])} "
               f"| {rng([m(r, 'mempool:mempool', 'first_to_last_ms', 'p50') for r in runs])} / {rng([m(r, 'mempool:mempool', 'first_to_last_ms', 'max') for r in runs])} "
