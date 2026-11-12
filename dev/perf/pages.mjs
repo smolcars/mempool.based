@@ -122,13 +122,32 @@ async function load(browser, profile, path, ready) {
   let jsBytes = 0;
   let requests = 0;
   const scripts = new Set();
+  // Each request's start and end (CDP seconds) and URL, for the chain and the config's arrival.
+  const spans = new Map();
   cdp.on("Network.requestWillBeSent", (e) => {
     requests++;
     if (e.type === "Script") scripts.add(e.requestId);
+    const t = e.timestamp;
+    spans.set(e.requestId, { url: e.request.url, issued: t, start: t, end: null });
+  });
+  // When it went out on the wire: later than its start when it waited for a free connection.
+  cdp.on("Network.responseReceived", (e) => {
+    const s = spans.get(e.requestId);
+    const t = e.response.timing;
+    if (s && t && t.sendStart >= 0) s.start = t.requestTime + t.sendStart / 1000;
   });
   cdp.on("Network.loadingFinished", (e) => {
     bytes += e.encodedDataLength;
     if (scripts.has(e.requestId)) jsBytes += e.encodedDataLength;
+    const s = spans.get(e.requestId);
+    if (s) s.end = e.timestamp;
+  });
+  cdp.on("Network.webSocketWillSendHandshakeRequest", (e) => {
+    spans.set(e.requestId, { url: "ws", issued: e.timestamp, start: e.timestamp, end: null });
+  });
+  cdp.on("Network.webSocketHandshakeResponseReceived", (e) => {
+    const s = spans.get(e.requestId);
+    if (s) s.end = e.timestamp;
   });
   await page.addInitScript(() => {
     window.__lcp = null;
@@ -158,6 +177,21 @@ async function load(browser, profile, path, ready) {
       load: nav ? nav.loadEventEnd : null,
     };
   });
+  // The longest run of requests, each sent only after the one before it had finished, among those
+  // done before the data showed: the round trips the page waited through in a row, a wait for a
+  // free connection included.
+  // Elapsed times count from when the document was asked for, as `performance.now()` does.
+  const t0 = Math.min(...[...spans.values()].map((s) => s.issued));
+  const done = [...spans.values()]
+    .filter((s) => s.end !== null && (dataMs === null || (s.end - t0) * 1000 <= dataMs))
+    .sort((a, b) => a.start - b.start);
+  const depth = done.map(() => 1);
+  for (let i = 0; i < done.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (done[j].end <= done[i].start) depth[i] = Math.max(depth[i], depth[j] + 1);
+    }
+  }
+  const config = [...spans.values()].find((s) => s.url.endsWith("/app/config") && s.end !== null);
   const metrics = Object.fromEntries(
     (await cdp.send("Performance.getMetrics")).metrics.map((m) => [m.name, m.value]),
   );
@@ -168,6 +202,8 @@ async function load(browser, profile, path, ready) {
     bytes,
     js_bytes: jsBytes,
     requests,
+    chain: depth.length ? Math.max(...depth) : null,
+    config_ms: config ? (config.end - t0) * 1000 : null,
     script_ms: metrics.ScriptDuration * 1000,
     task_ms: metrics.TaskDuration * 1000,
   };
@@ -260,6 +296,8 @@ for (const [name, [path, ready]] of Object.entries(pagesFor())) {
       "bytes",
       "js_bytes",
       "requests",
+      "chain",
+      "config_ms",
       "script_ms",
       "task_ms",
     ];

@@ -42,11 +42,19 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rolldownOptions: {
       output: {
-        // The live channel, the topics the home page reads and what they import (Solid's runtime
-        // among it) travel as one file: the transaction and address pages share only part of it,
-        // which would otherwise split it into several small files on the first load.
+        // The shell (the entry module and everything it imports, Solid's runtime among it), the
+        // live channel, the topics the home page reads and the small components most pages use
+        // travel as one file, loaded with the shell. Split by which pages share them, they were 14
+        // more files on a cold page, and on a slow network each waits its turn for one of the
+        // browser's six connections. With the entry module in it, all the shell's styles are one
+        // stylesheet as well: the only one index.html links, and the one that sets the layer order.
         codeSplitting: {
-          groups: [{ name: "app", test: /\/src\/lib\/(live|blocks-topic|projected-topic)\.ts$/ }],
+          groups: [
+            {
+              name: "app",
+              test: /\/src\/(index\.tsx|lib\/(live|blocks-topic|projected-topic|clock)\.ts|components\/(Amount|DataTable|FeeRate|Hash|SectionHeader|Strata|Time)\.tsx)$/,
+            },
+          ],
         },
       },
     },
