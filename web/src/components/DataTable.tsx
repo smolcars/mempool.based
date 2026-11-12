@@ -19,6 +19,8 @@ export interface DataTableProps<T> {
   rows: readonly T[];
   /** Shown instead of the table when there are no rows. */
   empty?: JSX.Element;
+  /** A class for one row, such as a highlight for a row that just arrived. */
+  rowClass?: (row: T) => string | undefined;
 }
 
 /** A table with units in headers, right-aligned numbers and row rules. */
@@ -47,7 +49,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
           <tbody>
             <For each={props.rows}>
               {(row, i) => (
-                <tr>
+                <tr class={props.rowClass?.(row)}>
                   <For each={props.columns}>
                     {(c) => <td class={cellClass(c)}>{c.cell(row, i())}</td>}
                   </For>

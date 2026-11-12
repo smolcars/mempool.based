@@ -1,0 +1,334 @@
+@layer pages {
+  .address {
+    padding-block: var(--space-6) var(--space-8);
+  }
+
+  /* Header: title and type, then the address in groups of eight. */
+  .address-head {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .address-head .hash--full {
+    max-width: 46rem;
+  }
+  .address-head__row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+  .address-type {
+    padding: 2px var(--space-3);
+    border: 1.5px solid var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+    cursor: help;
+  }
+  .address-head__raw {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    overflow-wrap: anywhere;
+    color: var(--color-text-muted);
+  }
+
+  /* Totals: the balance leads, four figures follow. Every line exists while loading. */
+  .address-totals {
+    margin-top: var(--space-6);
+  }
+  .address-stats {
+    display: grid;
+    /* Wide enough for most balances at once, so the figures beside it rarely move when it lands. */
+    grid-template-columns: minmax(22rem, auto) repeat(4, minmax(0, 1fr));
+    align-items: end;
+    gap: var(--space-5) var(--space-5);
+  }
+  .address-stat {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .address-stat__label,
+  .address-stat__sub {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    line-height: var(--leading-snug);
+  }
+  .address-stat__value {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-tight);
+  }
+  .address-stat--balance .address-stat__value {
+    font-size: var(--text-3xl);
+    letter-spacing: var(--tracking-tight);
+  }
+  /* An amount may wrap only before its unit; the number itself never breaks. */
+  .address-stat__value .amount {
+    white-space: normal;
+  }
+  @media (min-width: 641px) {
+    .address-stat--balance .amount {
+      white-space: nowrap;
+    }
+  }
+
+  /* History: two views under one section rule; the chosen one is underlined in the accent. */
+  .address-history {
+    margin-top: var(--space-7);
+  }
+  .address-history__head {
+    align-items: flex-end;
+  }
+  .address-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+  }
+  .address-tab {
+    position: relative;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    line-height: var(--leading-snug);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color var(--dur-quick) var(--ease-out);
+  }
+  .address-tab:hover,
+  .address-tab[aria-selected="true"] {
+    color: var(--color-text);
+  }
+  .address-tab::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: calc(-1 * var(--space-3) - 3px);
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-accent);
+    transform: scaleX(0);
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+  .address-tab[aria-selected="true"]::after {
+    transform: none;
+  }
+
+  /* Fixed column widths, so columns stay put when rows replace their placeholders. */
+  .address-txs .table,
+  .address-utxos .table {
+    table-layout: fixed;
+  }
+  .address-txs th:nth-child(1) {
+    width: 20%;
+  }
+  .address-txs th:nth-child(2) {
+    width: 34%;
+  }
+  .address-txs th:nth-child(3),
+  .address-txs th:nth-child(4) {
+    width: 23%;
+  }
+  .address-utxos th:nth-child(1) {
+    width: 50%;
+  }
+  /* Placeholder rows as tall as real ones, whose copy button sets their height. */
+  .address-txs td {
+    height: calc(28px + 2 * var(--space-2));
+  }
+  .address-utxos th:nth-child(2),
+  .address-utxos th:nth-child(3) {
+    width: 25%;
+  }
+
+  .address-more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    margin-top: var(--space-4);
+  }
+  .address-more .state {
+    flex-basis: 100%;
+    padding: 0;
+  }
+  .address-more__count {
+    display: none;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .address-txcell {
+    display: grid;
+    justify-items: start;
+  }
+  .address-txcell__when {
+    display: none;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+
+  /* A transaction that arrived with a refresh: one background flash, color only. */
+  .address-row--new {
+    animation: address-flash 1.6s var(--ease-out);
+  }
+  @keyframes address-flash {
+    from {
+      background: var(--color-accent-soft);
+    }
+  }
+
+  .address-pending {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--color-caution);
+    font-weight: var(--weight-medium);
+  }
+  .address-pending svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-dasharray: 2.6 2;
+  }
+
+  .address-outpoint {
+    display: inline-flex;
+    align-items: baseline;
+  }
+  .address-outpoint__vout {
+    color: var(--color-text-muted);
+  }
+
+  /* Waiting for a value: a bar as tall as the text, shown only if the wait is noticeable. */
+  .skeleton {
+    display: inline-block;
+    width: var(--w);
+    max-width: 100%;
+    height: 0.75em;
+    vertical-align: -0.05em;
+    border-radius: var(--radius-s);
+    background: var(--color-line);
+    opacity: 0;
+    animation: address-appear var(--dur-fade) linear 300ms forwards;
+  }
+  @keyframes address-appear {
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* State that is not an error: too large, no index, wrong network, malformed. */
+  .address-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    max-width: 48rem;
+    margin-top: var(--space-6);
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--color-line-strong);
+    border-radius: 0 var(--radius-m) var(--radius-m) 0;
+    background: var(--color-surface);
+  }
+  .address-notice--caution {
+    border-left-color: var(--color-caution);
+  }
+  .address-notice__icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    margin-top: 4px;
+    fill: none;
+    stroke: var(--color-text-muted);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .address-notice--caution .address-notice__icon {
+    stroke: var(--color-caution);
+  }
+  .address-notice__body {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .address-notice__title {
+    font-weight: var(--weight-bold);
+  }
+  .address-notice__text {
+    display: grid;
+    gap: var(--space-2);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .address-elsewhere {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+  }
+  .address-elsewhere a {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+  }
+
+  /* Below this the four figures beside the balance get too narrow, so the balance takes a row. */
+  @media (max-width: 1280px) {
+    .address-stats {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .address-stat--balance {
+      grid-column: 1 / -1;
+    }
+  }
+  @media (max-width: 640px) {
+    .address {
+      padding-top: var(--space-5);
+    }
+    .address-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-4);
+    }
+    .address-stat__value {
+      font-size: var(--text-md);
+    }
+    .address-tab {
+      font-size: var(--text-md);
+    }
+    .address-tabs {
+      gap: var(--space-2) var(--space-4);
+    }
+    .address-history__head .section__meta {
+      display: none;
+    }
+    .address-more__count,
+    .address-txcell__when {
+      display: inline;
+    }
+    .address-txs th:nth-child(2) {
+      width: 58%;
+    }
+    .address-txs th:nth-child(3) {
+      width: 42%;
+    }
+    .address-utxos th:nth-child(1) {
+      width: 58%;
+    }
+    .address-utxos th:nth-child(2) {
+      width: 42%;
+    }
+    .address-txs td {
+      height: auto;
+    }
+    .address-history .table th {
+      white-space: normal;
+      vertical-align: bottom;
+    }
+    /* Room for the whole shortened txid beside the amount; the transaction page has a copy. */
+    .address-txcell .copy {
+      display: none;
+    }
+  }
+}
