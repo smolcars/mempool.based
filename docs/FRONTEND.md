@@ -40,6 +40,7 @@ The network comes from the path. `useNetwork()` returns it; never keep it anywhe
 |---|---|---|---|
 | Home | `/` | `pages/home` | W2 |
 | Block | `/block/:id` (hash or height) | `pages/block` | W3 |
+| Blocks | `/blocks`, `/blocks/:from` (paging back from a height) | `pages/blocks` | W3 |
 | Transaction | `/tx/:txid` | `pages/tx` | W4 |
 | Address | `/address/:address` | `pages/address` | W5 |
 | Mining | `/mining` | `pages/mining` | W9 |

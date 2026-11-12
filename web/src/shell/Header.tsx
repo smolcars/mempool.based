@@ -11,7 +11,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import "./Header.css";
 
 const NAV = [
-  { href: "/", label: "Blocks", match: (p: string) => p === "/" || p.startsWith("/block/") },
+  { href: "/blocks", label: "Blocks", match: (p: string) => /^\/blocks?(\/|$)/.test(p) },
   { href: "/mining", label: "Mining", match: (p: string) => /^\/mining(\/|$)/.test(p) },
   { href: "/lightning", label: "Lightning", match: (p: string) => /^\/lightning(\/|$)/.test(p) },
 ];

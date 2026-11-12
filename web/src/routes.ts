@@ -2,6 +2,7 @@
 import type { RouteDefinition } from "@solidjs/router";
 import { routes as address } from "./pages/address/routes";
 import { routes as block } from "./pages/block/routes";
+import { routes as blocks } from "./pages/blocks/routes";
 import { routes as home } from "./pages/home/routes";
 import { routes as lightning } from "./pages/lightning/routes";
 import { routes as mining } from "./pages/mining/routes";
@@ -12,6 +13,15 @@ import { routes as tx } from "./pages/tx/routes";
 export const routes: RouteDefinition[] = [
   {
     path: ["/", "/signet", "/testnet4", "/regtest"],
-    children: [...home, ...block, ...tx, ...address, ...mining, ...lightning, ...notFound],
+    children: [
+      ...home,
+      ...block,
+      ...blocks,
+      ...tx,
+      ...address,
+      ...mining,
+      ...lightning,
+      ...notFound,
+    ],
   },
 ];

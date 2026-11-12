@@ -47,6 +47,8 @@ const segment = (value: string | number) => encodeURIComponent(String(value));
 export const paths = {
   home: () => "/",
   block: (hashOrHeight: string | number) => `/block/${segment(hashOrHeight)}`,
+  /** Recent blocks, newest first; from a height when paging back. */
+  blocks: (from?: number) => (from === undefined ? "/blocks" : `/blocks/${segment(from)}`),
   tx: (txid: string) => `/tx/${segment(txid)}`,
   address: (address: string) => `/address/${segment(address)}`,
   mining: () => "/mining",

@@ -1,0 +1,29 @@
+@layer pages {
+  /* As tall as a line of the text it stands for, so nothing moves when the text arrives. */
+  .block-skel {
+    display: inline-block;
+    vertical-align: middle;
+    width: 9em;
+    max-width: 100%;
+    height: 0.9em;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+    animation: block-skel-pulse 1.6s var(--ease-in-out) infinite alternate;
+  }
+  .block-skel--s {
+    width: 5em;
+  }
+  .block-skel--l {
+    width: min(16em, 100%);
+  }
+  @keyframes block-skel-pulse {
+    to {
+      opacity: 0.45;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .block-skel {
+      animation: none;
+    }
+  }
+}
