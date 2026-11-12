@@ -180,11 +180,13 @@ export function createPoll<T>(
   path: string,
   everyMs: number,
   valid: (v: unknown) => v is T,
+  /** Polls only while this is true, and at once when it becomes true. */
+  enabled: Accessor<boolean> = () => true,
 ): Feed<T> {
   const [data, setData] = createSignal<T>();
   const [error, setError] = createSignal<unknown>();
   let controller: AbortController | undefined;
-  let lastAt = 0;
+  let lastAt = Number.NEGATIVE_INFINITY;
 
   const refresh = () => {
     controller?.abort();
@@ -207,18 +209,22 @@ export function createPoll<T>(
     );
   };
 
-  const timer = setInterval(() => {
-    if (!document.hidden) refresh();
-  }, everyMs);
-  const visible = () => {
-    if (!document.hidden && Date.now() - lastAt >= everyMs) refresh();
+  const due = () => {
+    const never = lastAt === Number.NEGATIVE_INFINITY;
+    if (never || (!document.hidden && Date.now() - lastAt >= everyMs)) refresh();
   };
-  document.addEventListener("visibilitychange", visible);
-  refresh();
-  onCleanup(() => {
-    clearInterval(timer);
-    document.removeEventListener("visibilitychange", visible);
-    controller?.abort();
+  createEffect(() => {
+    if (!enabled()) return;
+    due();
+    const timer = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, everyMs);
+    document.addEventListener("visibilitychange", due);
+    onCleanup(() => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", due);
+    });
   });
+  onCleanup(() => controller?.abort());
   return { data, error, refresh };
 }

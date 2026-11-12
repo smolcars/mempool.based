@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
@@ -9,9 +9,12 @@ import type { RecentTx } from "../../lib/esplora";
 import { feeRate, groupDigits } from "../../lib/format";
 import { paths } from "../../lib/network";
 import type { Feed } from "./feeds";
+import { enqueueTxs } from "./mempool";
 
-/** Rows shown while the first answer is on its way, so the section keeps its height. */
-const PLACEHOLDER_ROWS = 10;
+/** Rows shown, and while the first answer is on its way, so the section keeps its height. */
+const ROWS = 10;
+/** New rows enter one at a time, at most this often, so each can be read on a busy day. */
+export const PACE_MS = 700;
 
 const COLUMNS: Column<RecentTx | null>[] = [
   {
@@ -46,14 +49,41 @@ const COLUMNS: Column<RecentTx | null>[] = [
  * the ones that are new flash.
  */
 export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
+  const [list, setList] = createSignal<RecentTx[]>();
+  let queue: RecentTx[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const step = () => {
+    const [next, ...rest] = queue;
+    queue = rest;
+    timer = next ? setTimeout(step, PACE_MS) : undefined;
+    if (next)
+      setList((l) => [next, ...(l ?? []).filter((t) => t.txid !== next.txid)].slice(0, ROWS));
+  };
+  createEffect(
+    on(props.feed.data, (incoming) => {
+      if (!incoming) return;
+      const shown = untrack(list);
+      // The first list, or one nobody is watching arrive, is shown as it is.
+      if (!shown || document.hidden) {
+        clearTimeout(timer);
+        timer = undefined;
+        queue = [];
+        setList(incoming.slice(0, ROWS));
+        return;
+      }
+      queue = enqueueTxs(shown, queue, incoming, ROWS);
+      if (timer === undefined) step();
+    }),
+  );
+  onCleanup(() => clearTimeout(timer));
   let known = new Map<string, RecentTx>();
   const fresh = new WeakSet<RecentTx>();
   let first = true;
   const rows = createMemo(() => {
-    const list = props.feed.data();
-    if (!list) return undefined;
+    const l = list();
+    if (!l) return undefined;
     const next = new Map<string, RecentTx>();
-    const out = list.map((t) => {
+    const out = l.map((t) => {
       const kept = known.get(t.txid);
       if (kept) return kept;
       if (!first) fresh.add(t);
@@ -81,7 +111,7 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
         <DataTable<RecentTx | null>
           caption="The newest transactions waiting in the mempool"
           columns={COLUMNS}
-          rows={rows() ?? Array.from({ length: PLACEHOLDER_ROWS }, () => null)}
+          rows={rows() ?? Array.from({ length: ROWS }, () => null)}
           rowClass={(t) => (t && fresh.has(t) ? "home-recent__new" : undefined)}
           empty={
             <Empty title="No transactions are waiting">

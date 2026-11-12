@@ -1,6 +1,7 @@
 // What the home page computes from the mempool summary and the fee estimates.
 import type { FeeEstimates, MempoolSummary, RecentTx } from "../../lib/esplora";
 import { FEE_BOUNDS, feeBand } from "../../lib/format";
+import type { MempoolState } from "../../lib/mempool-topics";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
@@ -66,9 +67,15 @@ export function bandShares(histogram: readonly (readonly [number, number])[]): F
     const i = feeBand(rate) - 1;
     vsize[i] = (vsize[i] ?? 0) + size;
   }
+  return sharesOf(vsize);
+}
+
+/** The bar from the virtual size in each of the ten bands, cheapest first. */
+export function sharesOf(vsize: readonly number[]): FeeBandShare[] {
   const total = vsize.reduce((a, b) => a + b, 0);
   let x = 0;
-  return vsize.map((v, i) => {
+  return Array.from({ length: 10 }, (_, i) => {
+    const v = vsize[i] ?? 0;
     const share = total > 0 ? v / total : 0;
     const band = {
       band: i + 1,
@@ -123,11 +130,13 @@ export function ladderPos(rate: number): number {
 }
 
 /**
- * Stacks pin labels into rows so nothing collides. A pin's stem rises from the scale to its label's
- * row, so a label may not cover another label in its row, nor a stem that reaches its row, and a
- * stem may not pass through a label below its top. Pins are placed right to left, each in the
- * lowest row that works; a label flips to the left of its pin when it would run past the end.
- * Positions and widths in px; rows count up from the scale.
+ * Stacks pin labels into rows so no two collide. A pin's stem rises from the scale to its label's
+ * row; where it can, a label also keeps clear of every stem, and a stem of every label. Pins are
+ * placed right to left, each in the lowest row that works; a label flips to the left of its pin
+ * when it would run past the end. When no row keeps clear of the stems (close pins near the end),
+ * the label only keeps clear of the other labels, so `n` pins never need more than `n` rows, and
+ * the stem passes behind it (the panel draws lower rows on top). Positions and widths in px; rows
+ * count up from the scale.
  */
 export function stackLabels(
   pins: readonly { x: number; width: number }[],
@@ -142,16 +151,17 @@ export function stackLabels(
     const { x, width } = pins[i] ?? { x: 0, width: 0 };
     const flip = x + width + gap > trackWidth;
     const [from, to] = flip ? [x - width - gap, x] : [x, x + width + gap];
-    const fits = (row: number, strict: boolean) =>
+    const fits = (row: number, clear: boolean) =>
       placed.every(
         (p) =>
           !(p.row === row && p.from < to && from < p.to) &&
-          !(p.row >= row && p.x > from && p.x < to) &&
-          (!strict || !(p.row <= row && x > p.from && x < p.to)),
+          (!clear || !(p.row >= row && p.x > from && p.x < to)) &&
+          (!clear || !(p.row <= row && x > p.from && x < p.to)),
       );
     let row = 0;
     while (row < pins.length && !fits(row, true)) row++;
     if (row === pins.length) {
+      // Each placed label rules out one row at most, so one of the first `n` is free.
       row = 0;
       while (!fits(row, false)) row++;
     }
@@ -159,4 +169,54 @@ export function stackLabels(
     out[i] = { row, flip };
   }
   return out;
+}
+
+/** What the mempool panel shows, from the `mempool` topic or the polled `/mempool`. */
+export interface MempoolFigures {
+  count: number;
+  vsize: number;
+  fees: number;
+  /** The lowest rate shown, sat/vB, and what it is. */
+  lowest: number | undefined;
+  lowestNote: string;
+  bands: FeeBandShare[];
+}
+
+export function figuresFromSummary(s: MempoolSummary): MempoolFigures {
+  return {
+    count: s.count,
+    vsize: s.vsize,
+    fees: s.total_fee,
+    lowest: lowestRate(s.fee_histogram),
+    lowestNote: "cheapest waiting",
+    bands: bandShares(s.fee_histogram),
+  };
+}
+
+export function figuresFromTopic(m: MempoolState): MempoolFigures {
+  return {
+    count: m.count,
+    vsize: m.vsize,
+    fees: m.fees,
+    lowest: m.minFeeRate ?? undefined,
+    lowestNote: "the node's minimum",
+    bands: sharesOf(m.bands),
+  };
+}
+
+/**
+ * Paces new rows into a list of the newest transactions, newest first, so each can be read on a
+ * busy day: the queue holds the ones not shown yet, oldest first, at most `max` of them (older
+ * ones would be pushed out of the list at once anyway). Returns the new queue.
+ */
+export function enqueueTxs<T extends { txid: string }>(
+  shown: readonly T[],
+  queue: readonly T[],
+  incoming: readonly T[],
+  max: number,
+): T[] {
+  const known = new Set([...shown, ...queue].map((t) => t.txid));
+  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
+  const fresh = incoming.filter((t) => !known.has(t.txid)).reverse();
+  return [...queue, ...fresh].slice(-max);
 }

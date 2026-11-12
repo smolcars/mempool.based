@@ -1,23 +1,22 @@
 import { createEffect, on, Show } from "solid-js";
 import { ApiError } from "../../lib/api";
-import type { FeeEstimates, MempoolSummary, RecentTx } from "../../lib/esplora";
+import type { FeeEstimates } from "../../lib/esplora";
 import { useLiveStatus } from "../../lib/live";
 import type { Network } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { BlockStrip } from "./BlockStrip";
 import { FeePanel } from "./FeePanel";
 import { createBlockFeed, createPoll } from "./feeds";
+import { createLiveMempool } from "./live-mempool";
 import { MempoolPanel } from "./MempoolPanel";
-import { isFeeEstimates, isMempoolSummary, isRecentList } from "./mempool";
+import { isFeeEstimates } from "./mempool";
 import { RecentTxs } from "./RecentTxs";
 import { createSummaries } from "./summaries";
 import { DifficultyPanel } from "./DifficultyPanel";
 import "./HomePage.css";
 
-/** How often each panel asks again. Tip and mempool answers are cached for a second on the server. */
-const MEMPOOL_MS = 10_000;
+/** How often the estimates are asked for. */
 const FEES_MS = 30_000;
-const RECENT_MS = 5_000;
 
 /** A failure that means the node, not the request, is the problem. */
 const nodeSilent = (e: unknown) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
@@ -37,25 +36,22 @@ function Home(props: { network: Network }) {
   const status = useLiveStatus();
   const blocks = createBlockFeed(props.network, status);
   const facts = createSummaries(props.network, blocks.data);
-  const mempool = createPoll<MempoolSummary>(
-    props.network,
-    "/mempool",
-    MEMPOOL_MS,
-    isMempoolSummary,
-  );
+  const live = createLiveMempool(props.network, status);
   const fees = createPoll<FeeEstimates>(props.network, "/fee-estimates", FEES_MS, isFeeEstimates);
-  const recent = createPoll<RecentTx[]>(props.network, "/mempool/recent", RECENT_MS, isRecentList);
 
-  // A new tip changes the mempool and the estimates: ask at once rather than at the next tick.
+  // A new tip changes the estimates, and the mempool when it is polled: ask at once rather than at
+  // the next tick. Only on a change of tip, not when the first list arrives.
   createEffect(
     on(
       () => blocks.data()?.[0]?.id,
-      () => {
-        mempool.refresh();
+      (tip, before) => {
+        if (before === undefined || tip === undefined) return;
         fees.refresh();
-        recent.refresh();
+        if (live.polling()) {
+          live.mempool.refresh();
+          live.recent.refresh();
+        }
       },
-      { defer: true },
     ),
   );
 
@@ -66,13 +62,17 @@ function Home(props: { network: Network }) {
         error={blocks.error}
         retry={blocks.refresh}
         status={status}
-        stale={() => [blocks, mempool, recent].some((f) => nodeSilent(f.error()))}
+        stale={() =>
+          live.stale() || [blocks, live.mempool, live.recent].some((f) => nodeSilent(f.error()))
+        }
         facts={facts}
+        projection={live.projection}
+        network={props.network}
       />
       <div class="home-grid wrap">
-        <MempoolPanel feed={mempool} />
+        <MempoolPanel feed={live.mempool} />
         <FeePanel feed={fees} />
-        <RecentTxs feed={recent} />
+        <RecentTxs feed={live.recent} />
         <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
       </div>
     </div>
