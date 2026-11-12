@@ -330,8 +330,9 @@ async fn precompressed_variants_and_cache_headers() {
             b"",
         )
         .await;
-        assert_eq!(r.body, "shell-br", "{path}");
-        assert_eq!(r.header("content-encoding"), Some("br"), "{path}");
+        // A page's head is filled in per path, so the shell goes out as built, not precompressed.
+        assert_eq!(r.body, "<!doctype html>app-shell", "{path}");
+        assert_eq!(r.header("content-encoding"), None, "{path}");
         assert_eq!(r.header("cache-control"), Some("no-cache"), "{path}");
     }
 

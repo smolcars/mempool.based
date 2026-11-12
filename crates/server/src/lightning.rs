@@ -1387,6 +1387,6 @@ async fn v1_series(
 }
 
 mod index;
-mod nodes;
+pub(crate) mod nodes;
 #[cfg(test)]
 mod tests;
