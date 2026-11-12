@@ -69,6 +69,9 @@ pub fn start(ctx: &Arc<NetworkContext>) {
                 Snapshot::Replace,
             );
         }
+        // Fee recommendations fall back to the node's own estimates.
+        let fees = tokio::spawn(super::fees::run(Arc::clone(ctx), None, Default::default()));
+        abort_on_shutdown(ctx, vec![fees]);
         return;
     }
     // Their own clients, so the byte counts in the events are the engines' traffic alone.
@@ -85,6 +88,11 @@ pub fn start(ctx: &Arc<NetworkContext>) {
     let mut tasks = run(ctx, &tracker, &projector);
     tasks.push(tracker_task);
     tasks.push(projector_task);
+    abort_on_shutdown(ctx, tasks);
+}
+
+/// Stops `tasks` when shutdown starts.
+fn abort_on_shutdown(ctx: &NetworkContext, tasks: Vec<JoinHandle<()>>) {
     let mut shutdown = ctx.sockets.shutdown.subscribe();
     tokio::spawn(async move {
         super::until(&mut shutdown, |s| *s).await;
@@ -139,6 +147,14 @@ pub(crate) fn run(
             tracker.clone(),
             projector.clone(),
             stats,
+        )),
+        tokio::spawn(super::fees::run(
+            Arc::clone(ctx),
+            Some(super::fees::Engines {
+                tracker: tracker.clone(),
+                projector: projector.clone(),
+            }),
+            Default::default(),
         )),
     ]
 }
@@ -740,4 +756,4 @@ fn summary_line(network: &'static str) -> MempoolSummary {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

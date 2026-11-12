@@ -660,6 +660,44 @@ pub struct ProjectionResynced {
 }
 event!(ProjectionResynced, "projection_resynced", Warn);
 
+/// Once a minute per network: the fee recommendations now, in sat per 1,000 vB, and where they
+/// came from (`projected`, `node`, or `none` when nothing could be served).
+#[derive(Debug, Serialize)]
+pub struct FeesSummary {
+    pub network: &'static str,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medium: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_rush: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<u32>,
+    pub inflow_minutes: usize,
+    pub ws_messages: u64,
+}
+event!(FeesSummary, "fees_summary", Info);
+
+/// Our own recommendations stopped and the node's estimates (or nothing) are served instead.
+/// `reason` is `warming_up`, `stale` or `engine_off`.
+#[derive(Debug, Serialize)]
+pub struct FeesFallbackStarted {
+    pub network: &'static str,
+    pub reason: &'static str,
+}
+event!(FeesFallbackStarted, "fees_fallback_started", Warn);
+
+/// Our own recommendations are served again, after `duration_ms` of fallback.
+#[derive(Debug, Serialize)]
+pub struct FeesFallbackEnded {
+    pub network: &'static str,
+    pub duration_ms: u64,
+}
+event!(FeesFallbackEnded, "fees_fallback_ended", Info);
+
 /// A reader of the tracker's or the projector's change stream fell behind and started over
 /// from a snapshot. At a total of 1, 2, 4, 8… per network and source.
 #[derive(Debug, Serialize)]
@@ -1077,6 +1115,25 @@ mod tests {
             both(&ProjectionResynced {
                 network: n,
                 txs: 55_000,
+            }),
+            both(&FeesSummary {
+                network: n,
+                source: "projected",
+                high: Some(2_001),
+                medium: Some(1_031),
+                low: Some(126),
+                no_rush: Some(121),
+                minimum: Some(100),
+                inflow_minutes: 30,
+                ws_messages: 28,
+            }),
+            both(&FeesFallbackStarted {
+                network: n,
+                reason: "stale",
+            }),
+            both(&FeesFallbackEnded {
+                network: n,
+                duration_ms: 12_000,
             }),
             both(&MempoolSubscriberLagged {
                 network: n,

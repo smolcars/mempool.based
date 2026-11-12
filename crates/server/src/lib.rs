@@ -97,6 +97,8 @@ pub struct NetworkContext {
     pub mining: mining::Mining,
     /// What the last node check found, for `/readyz`; kept by [`health::watch`].
     pub node: health::NodeCheck,
+    /// Fee recommendations and projected-block totals, kept current by `ws::fees`.
+    pub fees: ws::fees::Fees,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -145,6 +147,7 @@ impl NetworkContext {
             difficulty: difficulty::Difficulty::default(),
             mining: mining::Mining::default(),
             node: health::NodeCheck::default(),
+            fees: ws::fees::Fees::default(),
         })
     }
 }
@@ -363,7 +366,7 @@ async fn cors(req: Request, next: Next) -> Response {
             ACCESS_CONTROL_EXPOSE_HEADERS,
             HeaderValue::from_static(
                 "X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height, X-Request-Id, X-Data-From-Height, \
-                 X-Data-From-Time, X-Data-Complete",
+                 X-Data-From-Time, X-Data-Complete, X-Fee-Source",
             ),
         );
     }

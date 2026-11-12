@@ -19,8 +19,13 @@ use serde::Serialize;
 use crate::NetworkContext;
 use crate::difficulty::{Answer, unix_ms};
 use crate::error::ApiError;
+use crate::ws::fees::Source;
 
 const NOT_READY: ApiError = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "not ready yet; retry");
+const MEMPOOL_OFF: ApiError = ApiError::new(
+    StatusCode::SERVICE_UNAVAILABLE,
+    "the mempool engine is off on this server",
+);
 
 /// The answers change at most once a block, but time-based fields move every second.
 const CACHE: &str = "public, max-age=1";
@@ -47,7 +52,130 @@ struct DifficultyAdjustment {
 pub fn routes() -> Router<Arc<NetworkContext>> {
     Router::new()
         .route("/api/v1/difficulty-adjustment", get(difficulty_adjustment))
+        .route("/api/v1/fees/recommended", get(fees_recommended))
+        .route("/api/v1/fees/precise", get(fees_precise))
+        .route("/api/v1/fees/mempool-blocks", get(fees_mempool_blocks))
         .merge(crate::mining::routes())
+}
+
+/// The reference's five levels, in its order. `T` is whole sat/vB (`u64`) or precise (`f64`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeeLevels<T> {
+    fastest_fee: T,
+    half_hour_fee: T,
+    hour_fee: T,
+    economy_fee: T,
+    minimum_fee: T,
+}
+
+impl<T> FeeLevels<T> {
+    fn of(r: &engine::fees::Rates, f: impl Fn(u32) -> T) -> Self {
+        let [fastest, half_hour, hour, economy] = r.levels;
+        Self {
+            fastest_fee: f(fastest),
+            half_hour_fee: f(half_hour),
+            hour_fee: f(hour),
+            economy_fee: f(economy),
+            minimum_fee: f(r.minimum),
+        }
+    }
+}
+
+/// Sat/vB from sat per 1,000 vB: exact to the node's resolution, three decimals.
+fn sat_vb(rate: u32) -> f64 {
+    f64::from(rate) / 1000.0
+}
+
+async fn fees_recommended(State(ctx): State<Arc<NetworkContext>>) -> Response {
+    fee_levels(&ctx, |r| FeeLevels::of(r, engine::fees::whole))
+}
+
+async fn fees_precise(State(ctx): State<Arc<NetworkContext>>) -> Response {
+    fee_levels(&ctx, |r| FeeLevels::of(r, sat_vb))
+}
+
+fn fee_levels<T: Serialize>(
+    ctx: &NetworkContext,
+    body: impl Fn(&engine::fees::Rates) -> FeeLevels<T>,
+) -> Response {
+    ctx.fees.want();
+    let Some(answer) = ctx.fees.current() else {
+        return NOT_READY.into_response();
+    };
+    let mut res = Json(body(&answer.rates)).into_response();
+    let h = res.headers_mut();
+    h.insert(CACHE_CONTROL, HeaderValue::from_static(CACHE));
+    h.insert(
+        "x-fee-source",
+        HeaderValue::from_static(answer.source.name()),
+    );
+    tip_headers(&mut res, answer.tip);
+    if answer.source == Source::Node {
+        age(&mut res, answer.at);
+    }
+    res
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MempoolBlockJson {
+    block_size: u64,
+    #[serde(rename = "blockVSize")]
+    block_vsize: u64,
+    n_tx: u32,
+    total_fees: u64,
+    median_fee: f64,
+    fee_range: Vec<f64>,
+}
+
+async fn fees_mempool_blocks(State(ctx): State<Arc<NetworkContext>>) -> Response {
+    if !ctx.config.mempool {
+        return MEMPOOL_OFF.into_response();
+    }
+    let Some(b) = ctx.fees.blocks() else {
+        return NOT_READY.into_response();
+    };
+    let body: Vec<MempoolBlockJson> = b
+        .blocks
+        .iter()
+        // An empty projected block has nothing to report: only a mempool smaller than the blocks.
+        .filter(|m| m.txs > 0)
+        .map(|m| MempoolBlockJson {
+            block_size: m.size,
+            block_vsize: m.vsize,
+            n_tx: m.txs,
+            total_fees: m.fees,
+            median_fee: sat_vb(m.median),
+            fee_range: m.range.iter().copied().map(sat_vb).collect(),
+        })
+        .collect();
+    let mut res = Json(body).into_response();
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(CACHE));
+    tip_headers(&mut res, b.tip);
+    if b.stale {
+        age(&mut res, b.at);
+    }
+    res
+}
+
+fn tip_headers(res: &mut Response, tip: Option<node::esplora::ChainTip>) {
+    let Some(tip) = tip else { return };
+    let h = res.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&tip.hash.to_string()) {
+        h.insert("x-bitcoin-chain-tip", v);
+    }
+    h.insert("x-bitcoin-chain-tip-height", HeaderValue::from(tip.height));
+}
+
+/// Seconds since `at`: the answer is not known to be current.
+fn age(res: &mut Response, at: SystemTime) {
+    let secs = SystemTime::now()
+        .duration_since(at)
+        .unwrap_or_default()
+        .as_secs();
+    res.headers_mut().insert(AGE, HeaderValue::from(secs));
 }
 
 async fn difficulty_adjustment(State(ctx): State<Arc<NetworkContext>>) -> Response {

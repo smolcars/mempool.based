@@ -36,6 +36,7 @@ One per mempool transaction, keyed by txid:
 | total output value | 8 | the raw transaction | the live feed |
 | vsize, sigop-adjusted | 4 | `getmempoolentry` | fee rates, projected blocks |
 | weight | 4 | `getmempoolentry` | block fill |
+| size | 4 | the raw transaction | the projected blocks' byte size (`/api/v1/fees/mempool-blocks`) |
 | accept time | 4 | `getmempoolentry` `time` | "first seen"; it is the node's, so it survives our restarts |
 | output count | 4 | the raw transaction | finding children of a removed transaction |
 | input fingerprints | 16 + 8 per input | the raw transaction | finding what replaced it |
@@ -46,7 +47,7 @@ Input fingerprints are 64-bit SipHash values of each spent outpoint under a rand
 
 Everything else is fetched on demand from the node: ancestors, descendants and cluster chunks (`getmempoolcluster`), scripts and addresses (Esplora).
 
-**Cost.** The hash-map slot is 80 bytes. At 300,000 transactions the table has 524,288 slots (one control byte each), about 42 MB, plus the inputs on the heap: about 50 MB in all, or roughly 165 bytes a transaction. On mainnet at 55,000 transactions the whole process, runtime and HTTP clients included, measured 32–48 MB RSS over a 15-minute run.
+**Cost.** The hash-map slot is 88 bytes. At 300,000 transactions the table has 524,288 slots (one control byte each), about 47 MB, plus the inputs on the heap: about 55 MB in all, or roughly 180 bytes a transaction. On mainnet at 55,000 transactions the whole process, runtime and HTTP clients included, measured 32–48 MB RSS over a 15-minute run.
 
 ## Initial sync
 
@@ -331,3 +332,97 @@ The projector logs nothing itself. `Projector::events()` yields:
 
 The mempool totals' `min_fee_rate` is the node's `mempoolminfee` from the tracker's own `getmempoolinfo` probe, which `Tracker::node_info` exposes; no extra call is made for it.
 
+
+## Fee recommendations
+
+`engine::fees` answers the question most people bring to an explorer: what should I pay to be mined within a given time? It reads the answer off the projected blocks and the recent arrival of competing transactions. The routes are in [`API.md`](API.md#fees), the topic in [`WS.md`](WS.md#mempool-topics).
+
+| Part | File | Does |
+|---|---|---|
+| Method | `crates/engine/src/fees.rs` | Depth, arrivals, the search, smoothing, the node's fallback. Pure: no I/O, no clock |
+| In the server | `crates/server/src/ws/fees.rs` | Feeds it from the tracker and projector, falls back, publishes, holds the answers |
+| Proof | `crates/engine/examples/fee_watch.rs` | Records our answers, the node's and the reference's against a live node, and scores each against the blocks that follow |
+
+### Levels
+
+| Level | Mined within | The reference's field |
+|---|---|---|
+| `high` | the next block | `fastestFee` |
+| `medium` | 3 blocks, about half an hour | `halfHourFee` |
+| `low` | 6 blocks, about an hour | `hourFee` |
+| `no_rush` | 144 blocks, about a day | `economyFee` |
+| minimum | accepted by the node now | `minimumFee` |
+
+Rates are in sat per 1,000 vB, the node's unit and resolution, so every answer has three decimals in sat/vB.
+
+### The method
+
+For a level of `N` blocks, the answer is the lowest rate `r` for which
+
+> (virtual size in the mempool paying `r` or more) + (virtual size expected to arrive paying `r` or more before the `N`-th block) < `N` × 998,000 vB
+
+where 998,000 vB is a block's room for transactions (4,000,000 weight units less the 8,000 a template keeps for the coinbase), and every rate is a transaction's **effective** rate: the rate of the chunk the node will mine it in, so a parent lifted by its child counts where the node would put it. Both terms only shrink as `r` grows, so the lowest such `r` is found by bisection over whole sat per 1,000 vB, between the node's minimum and one step above the highest rate anyone pays.
+
+Why each part is as it is:
+
+- **The bottom of a block sets the price, not its middle.** A new transaction gets into block `N` when everything that outbids it fits in `N` blocks: that is the depth term. Reading the median of a block instead would overpay by half a block's spread on every level.
+- **Ties count against us.** Transactions at exactly `r` are counted as ahead, because the node orders equal rates in an order nobody outside it can know ([Limits](#limits)). With thousands of chunks at one rate at a block boundary, as mainnet holds today, the answer is one step (0.001 sat/vB) above that rate, never the rate itself. A block exactly full of transactions at `r` likewise has no room at `r`.
+- **A block that is not full means the minimum is enough,** because the depth term is already under `N` blocks at the node's minimum; so is an empty or nearly empty mempool, where every level is the minimum. Only arrivals can lift it then.
+- **Arrivals.** Blocks come every ten minutes on average, and every transaction that arrives before then paying more than ours goes ahead of it. The method counts, per minute, the virtual size of transactions that entered the mempool at each rate over the last 30 minutes (from the tracker's change stream, at their own rate), and expects that rate to continue. It counts them up to the time by which the `N`-th block has come with 80% probability, block intervals being exponential: 16.1 minutes for `high`, 42.8 for `medium`, 79.1 for `low` and 25.7 hours for `no_rush`. 80% rather than the mean because the cost is lopsided: too low leaves a payment stuck, while too high costs, on today's mempool, a fraction of a sat/vB.
+- **One burst is not a trend.** The busiest of the 30 minutes is left out of the arrivals once there are five, so a single burst (a consolidation, an exchange's batch) is not extrapolated over the horizon. It is in the mempool already, where the depth term counts it.
+- **Never an absurd rate.** One transaction paying 10,000 sat/vB adds its own size, at most 100 kvB, to the depth of every rate below it: it cannot fill a block. The answer is the minimum or one step above a rate some transaction pays, and only where more than the level's room pays that rate or more; it is never above one step over the highest rate seen. A test puts one in the mempool and one in the arrivals and shows nothing moves.
+- **Never below the node's minimum.** Every level is at least `mempoolminfee` and at least 0.1 sat/vB, rbitcoin's relay floor, and a faster level is never below a slower one. The construction already guarantees both; the result is still put in order, as a guard.
+- **Stable.** Recomputed every 2 s, each level is the highest of the last 60 seconds since the tip last moved: it rises at once and falls only after a minute, so it does not flicker with every arrival at a block's edge. The cost is freshness on the way down: after the mempool thins, a level can stay up to 60 seconds too high. A new block clears the history, because it changes the picture for real.
+- **Five minutes of warm-up.** Until five whole minutes of arrivals were watched, the arrival term cannot be trusted, and the node's estimates are served instead. Only time with a current projection counts: after the projection was stale or missing for a minute or more (the node was down), the arrivals are thrown away and the warm-up starts over, so an outage is never taken for quiet minutes.
+
+### When ours cannot be served
+
+| Condition | Served | Why |
+|---|---|---|
+| The first five minutes after start | The node's estimates | Arrivals not yet known |
+| The projection is stale (the node is failing) | The node's estimates, when it still answers them | An old projection is not the mempool now |
+| `{NET}_MEMPOOL_ENABLED=false` | The node's estimates | No projection at all |
+| The node's estimates older than 90 s, or never received | Nothing: `503`, and the topic says `unavailable` | An old recommendation presented as current costs money; a wallet that gets nothing uses its own |
+
+The node's estimates are rbitcoin's `/fee-estimates` (a ten-minute inclusion product, not Bitcoin Core's historical estimator, [`RBITCOIN.md`](RBITCOIN.md)): targets 1, 3, 6 and 144 blocks (or the next longer target the node gives), lifted to its minimum (`getmempoolinfo`, asked with them, since the tracker's copy is as old as its last good cycle) and put in order, and marked as the node's everywhere they appear. While they are served they are also lifted to any higher minimum the tracker sees in the meantime. The task waits at most 5 s for them, and withdraws whatever it served before it starts waiting, so a hanging node cannot keep an old answer up; the routes themselves refuse estimates past 90 s, and the topic withdraws them at the next tick after they expire, or at the moment they expire while a refresh is pending. They are asked every 30 s, and only while they are what is served and someone wants them: a fee route was requested in the last ten minutes, or the `fees` topic has a subscriber. So nobody asking means no node call, and the first request after a quiet spell is a `503` that the next one, a moment later, does not get.
+
+### Against the blocks that followed
+
+A recommendation is a claim about the future, so it is scored against what happened. `fee_watch` records, every 30 s, our answer, the node's `/fee-estimates` mapped as in the fallback, and (every ten minutes) the reference backend's `/v1/fees/precise`. For every block mined it takes the **clearing rate**: the 1st percentile by vsize of the effective rates our last projection before the block gave its transactions, so one prioritised or out-of-band transaction does not set it. A level met its horizon when it paid at least one step above the clearing rate of one of the next `N` blocks after the moment it was given; its overpay is how far above the cheapest such rate it was.
+
+```bash
+NET=MAINNET SECS=3900 OUT=fees.jsonl REFERENCE_URL=<reference>/v1 cargo run --release -p engine --example fee_watch
+RESCORE=fees.jsonl cargo run --release -p engine --example fee_watch   # score a recorded run again
+```
+
+**Run of 2026-11-12,** mainnet, read-only, 65 minutes, 58,000–62,000 transactions, 131 samples (108 with our own answer after the warm-up), blocks 975,530 to 975,533:
+
+| Level | Source | Samples | Met the horizon | Mean overpay when met | Mean shortfall when missed |
+|---|---|---|---|---|---|
+| next block | ours | 108 | 64.8% | 0.436 sat/vB | 0.462 sat/vB |
+| | the node's estimate | 108 | 100% | 2.004 sat/vB | |
+| | the reference | 5 | 60% | 1.194 sat/vB | 0.290 sat/vB |
+| 3 blocks | ours | 97 | 74.2% | 0.072 sat/vB | 0.035 sat/vB |
+| | the node's estimate | 97 | 100% | 0.639 sat/vB | |
+| | the reference | 5 | 80% | 0.857 sat/vB | 0.030 sat/vB |
+
+At the five moments the reference was asked, ours met the next block 4 times in 5 (mean overpay 0.331 sat/vB) and 3 blocks 4 times in 5 (0.098 sat/vB).
+
+**How thin this is.** Four blocks came in 65 minutes, so the 108 samples are four outcomes, not 108: every sample waiting for the same block shares its fate. All of our misses are one block: 975,531 came 34 minutes after the one before (a gap that long happens about 3% of the time), and while it was awaited the market rose from about 1.1 to 2.0 sat/vB; the samples taken early in that wait were too low, those taken late were right. For the other three blocks every sample of ours met both horizons. Six blocks never followed a sample inside the run, so the hour and day levels are not scored at all, and the reference was asked only five times. The node's estimate met every horizon by paying two to four times what sufficed. A run of a day or more is the follow-up; `fee_watch` is built for it.
+
+### Against the node and the reference
+
+The same moments, the three sources side by side (sat/vB; next block / 3 blocks / 6 blocks / no rush / minimum):
+
+| Moment (tip) | Ours | The node's estimates | The reference |
+|---|---|---|---|
+| 975,529 | 2.001 / 1.056 / 0.126 / 0.1 / 0.1 | 3.738 / 1.574 / 1.486 / 0.128 / 0.1 | 2.5 / 1.754 / 0.815 / 0.2 / 0.1 |
+| 975,530 | 2.034 / 1.099 / 0.126 / 0.1 / 0.1 | 3.263 / 1.556 / 1.47 / 0.128 / 0.1 | 1.641 / 0.971 / 0.423 / 0.2 / 0.1 |
+| 975,530 | 1.303 / 1.004 / 0.125 / 0.1 / 0.1 | 3.296 / 1.376 / 1.332 / 0.128 / 0.1 | 1.803 / 1.404 / 0.64 / 0.2 / 0.1 |
+| 975,530 | 2.032 / 1.099 / 0.141 / 0.1 / 0.1 | 3.929 / 1.793 / 1.389 / 0.128 / 0.1 | 2.911 / 2.005 / 1.378 / 0.2 / 0.1 |
+| 975,530 | 2.626 / 1.193 / 0.141 / 0.1 / 0.1 | 4.425 / 2.001 / 1.644 / 0.128 / 0.1 | 3.527 / 2.367 / 1.56 / 0.2 / 0.1 |
+| 975,533 | 1.001 / 0.125 / 0.121 / 0.1 / 0.1 | 2.152 / 0.472 / 0.472 / 0.128 / 0.1 | 1.016 / 0.571 / 0.223 / 0.2 / 0.1 |
+
+Ours and the reference's next-block numbers are close; below that they part. The mempool at the time held about three blocks above 0.125 sat/vB and then some 25 MvB of transactions at 0.12 sat/vB and below, so a transaction at 0.126 sat/vB is ahead of all of those and, unless more than three blocks' worth arrives above it, mined within six blocks: that is our `low`, where the reference said 0.4 to 1.6. `no_rush` is the minimum because the whole mempool plus a day of arrivals at the observed pace fits in 144 blocks; the reference's economy level read 0.2 (twice its minimum) at every moment. Neither longer level could be scored in this run.
+
+A recorded moment of this run (the projection's rates and sizes, 30 minutes of arrivals and the answer) is `fixtures/fees/mainnet.json`, replayed by a test.

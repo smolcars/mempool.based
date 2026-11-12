@@ -140,6 +140,9 @@ How the tracker and projected blocks run in the server is in [`MEMPOOL.md`](MEMP
 | `projection_recovered` | info | `network`, `failures` | The projected blocks are current again after failed requests |
 | `projection_resynced` | warn | `network`, `txs` | The projector fell behind the tracker and rebuilt from a snapshot |
 | `mempool_subscriber_lagged` | warn | `network`, `source`, `missed`, `total` | A reader of the `tracker`'s or the `projector`'s change stream fell behind and started over. At a total of 1, 2, 4, 8… per source and network |
+| `fees_summary` | info | `network`, `source`, `high`, `medium`, `low`, `no_rush`, `minimum`, `inflow_minutes`, `ws_messages` | Once a minute per network: the fee recommendations being served, in sat per 1,000 vB ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations)), whether they are ours (`projected`), the node's (`node`) or nothing (`none`, and the rates left out), the minutes of arrivals watched, and the `fees` messages published that minute |
+| `fees_fallback_started` | warn | `network`, `reason` | Our own recommendations stopped and the node's estimates, or nothing, are served instead. `reason` is `warming_up` (from start until five minutes of arrivals were watched), `stale` (the projection is, because the node is failing) or `engine_off` (once at start) |
+| `fees_fallback_ended` | info | `network`, `duration_ms` | Our own recommendations are served again |
 
 ### Following transactions and addresses
 
