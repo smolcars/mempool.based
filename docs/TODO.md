@@ -27,7 +27,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | doing |
 | W3 | Block page: header details, paged transaction list | W1, S2 | done ([#23](https://github.com/smolcars/mempool.based/pull/23)) |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | done ([#24](https://github.com/smolcars/mempool.based/pull/24)) |
-| W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | doing |
+| W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | done ([#25](https://github.com/smolcars/mempool.based/pull/25)) |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2, LX1 | todo |
 | FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
@@ -35,7 +35,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 | U1 | Move the regtest harness and compose files to the rbitcoin v0.9.2 image; confirm the scenario's hashes and the node clients are unchanged | R2, P1 | done ([#14](https://github.com/smolcars/mempool.based/pull/14)) |
 | LX1 | Switch the frontend to OXC: `oxlint` with strict rules and `oxfmt` as the only formatter, Biome removed, TypeScript options tightened, all enforced in CI. Runs when the page tasks in flight (W2–W5) have merged, before any other frontend task, because it reformats every file | W2, W3, W4, W5 | todo |
-| FX2 | Harden the WebSocket hub: retry the new-block fetch quickly so a slow Esplora cannot turn a block into a resync; run a WebSocket conformance suite and a no-panic test against our hand-written framing; tag the socket-cap refusal in the request log | S3 | todo |
+| FX2 | Harden the WebSocket hub: retry the new-block fetch quickly so a slow Esplora cannot turn a block into a resync; run a WebSocket conformance suite and a no-panic test against our hand-written framing; tag the socket-cap refusal in the request log | S3 | doing |
 | L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | done ([#12](https://github.com/smolcars/mempool.based/pull/12)) |
 
 ## M2 — Live mempool
