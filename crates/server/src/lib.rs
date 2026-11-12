@@ -11,6 +11,7 @@ pub mod difficulty;
 pub mod error;
 pub mod esplora;
 pub mod limits;
+pub mod mining;
 pub mod report;
 pub mod request_log;
 mod serve;
@@ -86,6 +87,8 @@ pub struct NetworkContext {
     pub difficulty: difficulty::Difficulty,
     /// The block table, when `DATA_DIR` is set and the file opened.
     pub blocks: Option<blocks::BlockTable>,
+    /// The mining routes' answers, kept current by [`mining::run`].
+    pub mining: mining::Mining,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -122,6 +125,7 @@ impl NetworkContext {
             hub: ws::Hub::new(config.network, Arc::clone(sockets)),
             sockets: Arc::clone(sockets),
             difficulty: difficulty::Difficulty::default(),
+            mining: mining::Mining::default(),
         })
     }
 }
@@ -174,6 +178,7 @@ impl App {
                     tokio::spawn(difficulty::run(Arc::clone(&ctx), ctx.electrum.events()));
                     blocks::spawn(&ctx, config.backfill);
                     ws::mempool::start(&ctx);
+                    tokio::spawn(mining::run(Arc::clone(&ctx)));
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()
@@ -320,7 +325,8 @@ async fn cors(req: Request, next: Next) -> Response {
         h.insert(
             ACCESS_CONTROL_EXPOSE_HEADERS,
             HeaderValue::from_static(
-                "X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height, X-Request-Id",
+                "X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height, X-Request-Id, X-Data-From-Height, \
+                 X-Data-From-Time, X-Data-Complete",
             ),
         );
     }

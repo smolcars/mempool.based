@@ -930,3 +930,408 @@ async fn read_benchmark() {
         time(&format!("row counts {c:?}"), s.elapsed());
     }
 }
+
+// The mining reads (`mining.rs`).
+
+const FOUNDRY: u16 = 88;
+const ANTPOOL: u16 = 61;
+
+/// A block at `height` stamped `time`, mined with `tag`, at `difficulty`.
+fn mined(height: u32, time: u64, tag: &[u8], difficulty: f64) -> Row {
+    let mut hd = header(0, height, 0);
+    hd.timestamp = time;
+    hd.difficulty = difficulty;
+    let totals = BlockTotals {
+        totalfee: Amount::from_sat(1000 + u64::from(height)),
+        subsidy: Amount::from_sat(312_500_000),
+        total_weight: 3000,
+    };
+    Row::new(&hd, &totals, &coinbase(tag, &[(312_501_000, vec![0x51])]))
+}
+
+fn count(counts: &[PoolCount], pool: u16) -> u32 {
+    counts
+        .iter()
+        .find(|c| c.pool == pool)
+        .map_or(0, |c| c.blocks)
+}
+
+#[tokio::test]
+async fn span_reaches_down_to_the_first_missing_height() {
+    let t = temp();
+    assert_eq!(span(&t.store).await.unwrap(), None);
+    // More rows than one read of the walk takes, with holes at 3 and 12,000.
+    let rows: Vec<Row> = (0..25_000)
+        .filter(|h| *h != 3 && *h != 12_000)
+        .map(|h| mined(h, 1_000 + u64::from(h) * 600, b"", 1.0))
+        .collect();
+    insert(&t.store, rows).await;
+    let s = span(&t.store).await.unwrap().unwrap();
+    assert_eq!((s.tip, s.from), (24_999, 12_001));
+    assert_eq!(s.tip_hash, hash(0, 24_999));
+    assert_eq!(
+        (s.tip_time, s.from_time),
+        (1_000 + 24_999 * 600, 1_000 + 12_001 * 600)
+    );
+    insert(&t.store, vec![mined(12_000, 1, b"", 1.0)]).await;
+    assert_eq!(span(&t.store).await.unwrap().unwrap().from, 4);
+    insert(&t.store, vec![mined(3, 1, b"", 1.0)]).await;
+    assert_eq!(span(&t.store).await.unwrap().unwrap().from, 0);
+    assert_eq!(row_counts(&t.store).await.unwrap(), (25_000, 0));
+}
+
+#[tokio::test]
+async fn pools_are_attributed_on_write_and_redone_when_the_list_changes() {
+    let t = temp();
+    let tags: [&[u8]; 4] = [
+        b"\x03\x01\x02Foundry USA Pool #x/",
+        b"/AntPool/",
+        b"\xff\xfejunk",
+        b"",
+    ];
+    let rows = (0..8)
+        .map(|h| mined(h, 1_000 + u64::from(h), tags[h as usize % 4], 1.0))
+        .collect();
+    insert(&t.store, rows).await;
+    let counts = pool_counts(&t.store, 0, 7).await.unwrap();
+    assert_eq!(
+        counts
+            .iter()
+            .map(|c| (c.pool, c.blocks))
+            .collect::<Vec<_>>(),
+        [
+            (crate::mining::pools::UNKNOWN, 4),
+            (ANTPOOL, 2),
+            (FOUNDRY, 2)
+        ],
+        "most blocks first, then by id"
+    );
+    // A fresh table is stamped with the list on its first pass; nothing else to do after.
+    let pools = crate::mining::pools::list();
+    assert_eq!(
+        reattribute(&t.store, pools)
+            .await
+            .unwrap()
+            .map(|r| r.changed),
+        Some(0)
+    );
+    assert_eq!(reattribute(&t.store, pools).await.unwrap(), None);
+    // Rows from before the pool column, or from another list, are redone.
+    t.store
+        .write(|sql| {
+            sql.prepare("UPDATE blocks SET pool = 0")?.execute([])?;
+            sql.prepare("UPDATE pool_list SET version = 'old'")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&pool_counts(&t.store, 0, 7).await.unwrap(), FOUNDRY),
+        0
+    );
+    let r = reattribute(&t.store, pools).await.unwrap().unwrap();
+    assert_eq!((r.rows, r.changed), (8, 4));
+    assert_eq!(pool_counts(&t.store, 0, 7).await.unwrap(), counts);
+    assert_eq!(reattribute(&t.store, pools).await.unwrap(), None);
+    // Empty blocks and rewards are counted per pool.
+    let c = pool_counts(&t.store, 0, 0).await.unwrap();
+    assert_eq!(
+        (c[0].empty, c[0].reward),
+        (u32::from(header(0, 0, 0).tx_count == 1), 312_501_000)
+    );
+}
+
+#[tokio::test]
+async fn a_reorg_rewrites_pools_and_sums() {
+    let t = temp();
+    let rows = (0..10)
+        .map(|h| mined(h, 1_000 + u64::from(h), b"Foundry USA Pool", 1.0))
+        .collect();
+    insert(&t.store, rows).await;
+    assert_eq!(
+        count(&pool_counts(&t.store, 0, 9).await.unwrap(), FOUNDRY),
+        10
+    );
+    let before = periods(&t.store, 0, 9, Period::Blocks(5)).await.unwrap();
+    // Heights 5 to 9 replaced by another branch, mined by AntPool with other fees.
+    let branch: Vec<Row> = (5..10)
+        .map(|h| {
+            let mut r = mined(h, 1_000 + u64::from(h), b"/AntPool/", 1.0);
+            r.hash = hash(1, h);
+            r.fees += 1_000_000;
+            r
+        })
+        .collect();
+    insert(&t.store, branch).await;
+    let counts = pool_counts(&t.store, 0, 9).await.unwrap();
+    assert_eq!((count(&counts, FOUNDRY), count(&counts, ANTPOOL)), (5, 5));
+    let after = periods(&t.store, 0, 9, Period::Blocks(5)).await.unwrap();
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[1].fees, before[1].fees + 5_000_000);
+    let page = pool_page(&t.store, ANTPOOL, 0, 9, 10).await.unwrap();
+    assert_eq!(
+        page.iter().map(|r| r.height).collect::<Vec<_>>(),
+        [8, 7, 6, 5]
+    );
+    assert_eq!(page[0].hash, hash(1, 8));
+    assert!(pool_page(&t.store, ANTPOOL, 7, 9, 10).await.unwrap().len() == 2);
+}
+
+#[tokio::test]
+async fn retargets_work_and_times() {
+    let t = temp();
+    // Three periods at difficulty 1, 2 and 3, a block every 600 s.
+    let rows = (0..=4032)
+        .map(|h| mined(h, 10_000 + u64::from(h) * 600, b"", f64::from(h / 2016 + 1)))
+        .collect();
+    insert(&t.store, rows).await;
+    let r = retargets(&t.store, 0, 0, 4032).await.unwrap();
+    assert_eq!(
+        r.iter()
+            .map(|r| (r.height, r.difficulty, r.previous))
+            .collect::<Vec<_>>(),
+        [(2016, 2.0, 1.0), (4032, 3.0, 2.0)]
+    );
+    assert_eq!(r[0].time, 10_000 + 2016 * 600);
+    assert_eq!(retargets(&t.store, 0, 2017, 4031).await.unwrap(), []);
+    // A retarget whose previous period is not stored is left out.
+    t.store
+        .write(|sql| {
+            sql.prepare("DELETE FROM blocks WHERE height = 2016")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(retargets(&t.store, 0, 0, 4032).await.unwrap().len(), 0);
+    // Nor one whose previous period lies below the caller's floor.
+    let r = retargets(&t.store, 2017, 2017, 4032).await.unwrap();
+    assert!(
+        r.is_empty(),
+        "4032 is measured against 2016, below the floor"
+    );
+
+    // The work of heights 11..=20 over the time from 10 to 20.
+    let w = work(&t.store, 10, 20).await.unwrap().unwrap();
+    assert_eq!((w.blocks, w.difficulty_sum), (10, 10.0));
+    assert_eq!(w.max_time - w.min_time, 6000);
+    assert_eq!(work(&t.store, 10, 10).await.unwrap(), None);
+
+    assert_eq!(at_or_before(&t.store, 0, 9_999).await.unwrap(), None);
+    let b = at_or_before(&t.store, 0, 10_000 + 7 * 600 + 599)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((b.0, b.1, b.2), (7, hash(0, 7), 10_000 + 7 * 600));
+    assert_eq!(
+        at_or_before(&t.store, 0, u64::MAX)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        4032
+    );
+
+    // Rows below the floor never answer, whatever their timestamps.
+    insert(
+        &t.store,
+        vec![mined(5000, 10_000 + 7 * 600 + 300, b"", 1.0)],
+    )
+    .await;
+    assert_eq!(
+        at_or_before(&t.store, 0, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        5000
+    );
+    assert_eq!(
+        at_or_before(&t.store, 10, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        5000
+    );
+    assert_eq!(
+        at_or_before(&t.store, 5001, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        first_since(&t.store, 0, 10_000 + 7 * 600 + 1)
+            .await
+            .unwrap(),
+        Some(8)
+    );
+    assert_eq!(
+        first_since(&t.store, 4000, 10_000 + 7 * 600 + 1)
+            .await
+            .unwrap(),
+        Some(4000)
+    );
+    assert_eq!(first_since(&t.store, 0, u64::MAX).await.unwrap(), None);
+    t.store
+        .write(|sql| {
+            sql.prepare("DELETE FROM blocks WHERE height = 5000")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    // Weeks start on Monday: 1970-01-05 00:00 UTC is 345,600.
+    let w = pool_weeks(&t.store, 0, 4032).await.unwrap();
+    assert!(
+        w.iter()
+            .all(|(start, pool, _)| (start - WEEK_OFFSET).is_multiple_of(WEEK) && *pool == 0)
+    );
+    assert_eq!(w.iter().map(|x| x.2).sum::<u32>(), 4032);
+}
+
+/// Fills `$MINING_BENCH_DIR/regtest.sqlite` (a temporary directory otherwise) with 975,000
+/// mainnet-like rows ending now, the last year rated, mined by the list's pools in a skewed
+/// share, and times the mining reads and a full re-attribution. Run with
+/// `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "fills a 300 MB table; a benchmark, not a test"]
+#[allow(clippy::print_stdout)] // A benchmark's report.
+async fn mining_benchmark() {
+    use std::time::{Instant, SystemTime};
+    const ROWS: u32 = 975_000;
+    const YEAR: u32 = 52_560;
+    let (dir, store) = match std::env::var_os("MINING_BENCH_DIR") {
+        Some(d) => {
+            let d = PathBuf::from(d);
+            let s = Arc::new(Store::open(&d, "regtest", StoreOptions::default()).unwrap());
+            (None, s)
+        }
+        None => {
+            let t = temp();
+            let s = Arc::clone(&t.store);
+            (Some(t), s)
+        }
+    };
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let list = crate::mining::pools::list();
+    // Twenty pools by their first tag, the first taking the most blocks; every 50th unknown.
+    let tags: Vec<Vec<u8>> = list.all()[1..]
+        .iter()
+        .filter_map(|p| p.tags.first())
+        .take(20)
+        .map(|t| t.as_bytes().to_vec())
+        .collect();
+    let started = Instant::now();
+    for chunk in (0..ROWS).collect::<Vec<_>>().chunks(10_000) {
+        let tags = tags.clone();
+        let rows: Vec<Row> = chunk
+            .iter()
+            .map(|&h| {
+                let mut tag = vec![3, h as u8, (h >> 8) as u8, (h >> 16) as u8];
+                if h % 50 != 0 {
+                    let pick = (h.wrapping_mul(2_654_435_761) >> 16) % 210;
+                    // 20 + 19 + … : pool i gets a share falling with i.
+                    let mut i = 0usize;
+                    let mut acc = 0u32;
+                    while i < 19 && acc + 20 - i as u32 <= pick {
+                        acc += 20 - i as u32;
+                        i += 1;
+                    }
+                    tag.extend_from_slice(&tags[i]);
+                }
+                tag.extend((0..30).map(|i| (h ^ i) as u8));
+                let pay = vec![(
+                    312_500_000,
+                    vec![0x00, 0x14].into_iter().chain([h as u8; 20]).collect(),
+                )];
+                let mut hd = header(0, h, 0);
+                hd.timestamp = now - 300 - u64::from(ROWS - 1 - h) * 600 + u64::from(h % 7) * 60;
+                hd.tx_count = 1 + h % 5000;
+                hd.size = 1_500_000 + u64::from(h % 100_000);
+                hd.weight = 3_990_000 + u64::from(h % 9000);
+                hd.difficulty =
+                    1.5e14 * (f64::from(h / 2016 + 1) / f64::from(ROWS / 2016 + 1)).powi(3);
+                let totals = BlockTotals {
+                    totalfee: Amount::from_sat(u64::from(h) * 37 % 9_000_000),
+                    subsidy: Amount::from_sat(312_500_000),
+                    total_weight: 3_989_000,
+                };
+                let mut row = Row::new(&hd, &totals, &coinbase(&tag, &pay));
+                if h >= ROWS - YEAR {
+                    row.rates = Some(Rated::from(&mock_facts(h, row.hash)));
+                }
+                row
+            })
+            .collect();
+        store
+            .write(move |sql| {
+                let mut s = sql.prepare(db::INSERT_NEW)?;
+                for r in &rows {
+                    db::write_row(&mut s, r)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+    println!(
+        "filled {ROWS} rows, attributing each, in {:?}",
+        started.elapsed()
+    );
+    let ms = |s: Instant| s.elapsed().as_secs_f64() * 1000.0;
+    for _ in 0..3 {
+        let s = Instant::now();
+        let sp = span(&store).await.unwrap().unwrap();
+        let t_span = ms(s);
+        let s = Instant::now();
+        let c = pool_counts(&store, 0, ROWS - 1).await.unwrap();
+        let t_all = ms(s);
+        let s = Instant::now();
+        pool_counts(&store, ROWS - 1008, ROWS - 1).await.unwrap();
+        let t_week = ms(s);
+        let s = Instant::now();
+        let w = pool_weeks(&store, 0, ROWS - 1).await.unwrap();
+        let t_weeks = ms(s);
+        let s = Instant::now();
+        let d = periods(&store, 0, ROWS - 1, Period::Day).await.unwrap();
+        let t_days = ms(s);
+        let s = Instant::now();
+        retargets(&store, 0, 0, ROWS - 1).await.unwrap();
+        let t_ret = ms(s);
+        let s = Instant::now();
+        pool_page(&store, c[0].pool, 0, ROWS, 100).await.unwrap();
+        let t_page = ms(s);
+        println!(
+            "span {t_span:.1} ms (from {}); pool counts: all {t_all:.1} ms ({} pools), a week \
+             {t_week:.2} ms; pools by week, all {t_weeks:.1} ms ({} rows); days, all {t_days:.1} \
+             ms ({}); retargets {t_ret:.2} ms; a pool's page {t_page:.2} ms",
+            sp.from,
+            c.len(),
+            w.len(),
+            d.len()
+        );
+    }
+    store
+        .write(|sql| {
+            sql.prepare("UPDATE pool_list SET version = 'old'")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let s = Instant::now();
+    let r = reattribute(&store, list).await.unwrap().unwrap();
+    println!(
+        "re-attributed {} rows ({} changed) in {:.0} ms",
+        r.rows,
+        r.changed,
+        ms(s)
+    );
+    drop(dir);
+}

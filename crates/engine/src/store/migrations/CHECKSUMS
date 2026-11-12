@@ -1,3 +1,4 @@
 # One line per migration: file name and FNV-1a 64 of its contents. A shipped migration never
 # changes; `cargo test -p engine store` fails with the line to append when you add one.
 0001_blocks.sql 9d1160d7ae33ce36
+0002_pools.sql 18bc8596caa1e50c

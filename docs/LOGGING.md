@@ -80,7 +80,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 - `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
 - `duration_ms` runs until the response head is ready; streaming the body is not included. `bytes` is the body size when known up front.
 - `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), or for a WebSocket upgrade `client_sockets` (`WS_CLIENT_MAX_SOCKETS`) and `server_sockets` (`WS_MAX_SOCKETS`). A `413` is an oversized body.
-- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)) and for the block summary routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
+- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)), for the block summary routes and for the mining routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`, `mining_pools`, `mining_hashrate`, …), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache or a mining answer already computed, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
 - `client` only with `LOG_CLIENT_ADDR=true`.
 
 ### Node clients
@@ -158,3 +158,13 @@ The store is in [`STORE.md`](STORE.md); the block table's settings in [`CONFIG.m
 | `block_rows_failed` | warn | `network`, `task`, `error`, `failures` | Following the tip (`follow`) or a backfill step (`tip`, `totals`, `rates`) failed with `busy`, `too_big`, `node` or `store`, and will be retried after a pause. At the 1st, 2nd, 4th, 8th… failure in a row |
 | `block_rows_recovered` | info | `network`, `task`, `failures` | `follow` or `backfill` worked again after failures |
 | `block_backfill_progress` | info | `network`, `tip`, `rows`, `rated`, `totals_done`, `rates_done`, `totals_written`, `rates_written`, `busy_ms`, `bytes` | Every minute while the backfill works, and when it has caught up: rows in the table and how many are rated, whether each tier has reached its end, and since start the rows it added and rated, the time it spent working and the bytes it read. The rate is the difference between two lines |
+
+### Mining
+
+The routes and what they cache are in [`API.md`](API.md#mining).
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `pools_reattributed` | info | `network`, `rows`, `changed`, `duration_ms` | Every row's pool was recomputed because the build's pool list or rules differ from the ones the table was attributed with (also on the first start after the column was added). The mining routes answer once it is done |
+| `mining_refreshed` | debug | `network`, `tip`, `from`, `answers`, `duration_ms` | The answers clients have asked for were recomputed for a changed table: once a block, and at most once a minute while the backfill adds rows. `from` is the lowest height of the stored history they cover. Debug, since it is once per block |
+| `mining_failed` | warn | `network`, `task`, `error`, `failures` | Mining answers could not be computed from the table (`task`: `reattribute`, `refresh` or `request`; `error`: `timed_out` past the store's read limit, or `store`). The last answers are still served. At the 1st, 2nd, 4th, 8th… failure in a row |

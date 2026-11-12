@@ -45,7 +45,9 @@ struct DifficultyAdjustment {
 }
 
 pub fn routes() -> Router<Arc<NetworkContext>> {
-    Router::new().route("/api/v1/difficulty-adjustment", get(difficulty_adjustment))
+    Router::new()
+        .route("/api/v1/difficulty-adjustment", get(difficulty_adjustment))
+        .merge(crate::mining::routes())
 }
 
 async fn difficulty_adjustment(State(ctx): State<Arc<NetworkContext>>) -> Response {
