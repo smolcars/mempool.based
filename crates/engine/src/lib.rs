@@ -8,4 +8,5 @@ pub mod history;
 pub mod mempool;
 pub mod mining;
 pub mod projected;
+pub mod replacements;
 pub mod store;

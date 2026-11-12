@@ -27,7 +27,7 @@ use tokio::time::Instant;
 
 use super::{Conn, Frame, Hub, Snapshot, Topic};
 use crate::config::{Network, WsLimits};
-use crate::replacements::{Link, MAX_LINKS, Replacements};
+use crate::replacements::{Batch, Facts, Kept, Link, MAX_LINKS, Replacements};
 use crate::{ApiError, esplora};
 
 /// The `/app` answer while the network's mempool engine is switched off.
@@ -286,6 +286,14 @@ impl Tracking {
         f(&lock(&self.state).replacements)
     }
 
+    /// Puts back links recorded before (from the store), oldest first.
+    pub(crate) fn restore_replacements(&self, links: Vec<Link>) {
+        let mut st = lock(&self.state);
+        for l in links {
+            st.replacements.restore(l);
+        }
+    }
+
     /// Transactions and addresses tracked now.
     pub fn tracked(&self) -> (usize, usize) {
         let st = lock(&self.state);
@@ -478,11 +486,13 @@ impl Tracking {
     }
 
     /// Folds one tracker delta in: every replacement goes into the record, and each tracked
-    /// transaction that left or came back has its reason set or cleared. Returns whether one did.
-    fn apply(&self, d: &Delta, tracker: &Tracker) -> bool {
+    /// transaction that left or came back has its reason set or cleared. Returns whether one did,
+    /// and what changed in the record, for the store.
+    fn apply(&self, d: &Delta, tracker: &Tracker) -> (bool, Batch) {
         let mut st = lock(&self.state);
         st.applied = d.seq;
         let seen = unix_now();
+        let mut batch = Batch::default();
         for (txid, info) in &d.replaced {
             let Ok(i) = d.removed.binary_search_by_key(txid, |(t, _)| *t) else {
                 continue;
@@ -495,32 +505,45 @@ impl Tracking {
                 .binary_search_by_key(by, |(t, _)| *t)
                 .ok()
                 .and_then(|i| d.added.get(i))
-                .map(|(_, i)| (i.fee.to_sat(), i.vsize))
-                .or_else(|| tracker.read(|m| m.get(by).map(|i| (i.fee.to_sat(), i.vsize))));
-            st.replacements.insert(Link {
+                .map(|(_, i)| Facts::of(i))
+                .or_else(|| tracker.read(|m| m.get(by).map(Facts::of)));
+            // Confirmed in this delta, or never held at all: the tracker names as a replacement
+            // only what entered the mempool in this cycle or sits in a recent block.
+            let mined = match d.removed.binary_search_by_key(by, |(t, _)| *t) {
+                Ok(i) => matches!(d.removed.get(i), Some((_, Removal::Confirmed { .. }))),
+                Err(_) => by_info.is_none(),
+            };
+            let link = Link {
                 txid: *txid,
                 by: *by,
                 seen,
-                fee: info.fee.to_sat(),
-                vsize: info.vsize,
-                by_fee: by_info.map(|b| b.0),
-                by_vsize: by_info.map(|b| b.1),
-            });
+                tx: Facts::of(info),
+                by_tx: by_info,
+                mined,
+            };
+            st.replacements.insert(link);
+            batch.links.push(link);
         }
         let mut moved = false;
         for (txid, reason) in &d.removed {
+            if matches!(reason, Removal::Confirmed { .. }) && st.replacements.confirmed(txid) {
+                batch.mined.push(*txid);
+            }
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = Some(*reason);
                 moved = true;
             }
         }
         for (txid, _) in &d.added {
+            if st.replacements.returned(txid) {
+                batch.returned.push(*txid);
+            }
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = None;
                 moved = true;
             }
         }
-        moved
+        (moved, batch)
     }
 
     /// Starting over from the tracker's state at `seq`, after losing our place in its stream:
@@ -793,10 +816,9 @@ fn state(
                     txid: *txid,
                     by,
                     seen: 0,
-                    fee: 0,
-                    vsize: 0,
-                    by_fee: None,
-                    by_vsize: None,
+                    tx: Facts::default(),
+                    by_tx: None,
+                    mined: false,
                 }];
                 chain.extend(rest.into_iter().filter(|l| l.txid != *txid));
                 let cut = cut || chain.len() > MAX_LINKS;
@@ -857,7 +879,7 @@ fn tx_message(txid: &Txid, s: &Shown) -> Value {
             "chain": chain
                 .iter()
                 // A link known only from the tracker's reason has no figures.
-                .map(|l| if l.vsize == 0 { json!({ "txid": l.txid, "by": l.by }) } else { l.json() })
+                .map(|l| if l.tx.vsize == 0 { json!({ "txid": l.txid, "by": l.by }) } else { l.json() })
                 .collect::<Vec<_>>(),
             "truncated": cut,
         }),
@@ -941,12 +963,18 @@ fn refusal(e: &electrum::Error) -> AddrState {
 /// and replacements, the projected blocks for positions. Reconsiders every followed
 /// transaction at most once per `WS_MEMPOOL_INTERVAL_MS`, and a newly followed one at once. One
 /// task per network, whatever the number of subscribers.
-pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration) {
+pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration, kept: Option<Kept>) {
     let Some((tracker, projector)) = track.engines.get().cloned() else {
         return;
     };
+    let mut restore = kept.as_ref();
     loop {
         let (seq, mut deltas) = tracker.subscribe(|m| m.seq());
+        // After subscribing, so a replacement seen meanwhile waits in the stream; before the
+        // first delta is folded in, so restored links stay older than new ones.
+        if let Some(k) = restore.take() {
+            k.restore(&track).await;
+        }
         // Its lock is held through a pack: take it on a blocking thread.
         let p = projector.clone();
         let Ok((_, mut projections)) = tokio::task::spawn_blocking(move || p.subscribe()).await
@@ -963,8 +991,12 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration) {
                     Ok(d) => {
                         // A confirmation, replacement or return is said at once, not at the
                         // next interval: a block's confirmations go out with its projection.
-                        if track.apply(&d, &tracker) {
+                        let (moved, batch) = track.apply(&d, &tracker);
+                        if moved {
                             next = Instant::now();
+                        }
+                        if let Some(k) = &kept {
+                            k.send(batch);
                         }
                         dirty = true;
                     }

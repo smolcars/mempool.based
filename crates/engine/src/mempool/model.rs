@@ -21,6 +21,9 @@ pub struct TxInfo {
     pub size: u32,
     /// Unix time the node accepted it, from `getmempoolentry`. Survives our own restarts.
     pub time: u32,
+    /// Signals replaceability itself (BIP 125: an input's sequence below `0xfffffffe`). rbitcoin
+    /// replaces regardless; kept for the `/api/v1` replacement trees' `rbf`. Fits in padding.
+    pub rbf: bool,
     /// Output count, to find children of a removed transaction.
     pub(crate) outputs: u32,
     /// Keyed 64-bit fingerprints of the outpoints it spends, to find what replaced it.
@@ -38,6 +41,7 @@ impl TxInfo {
             weight,
             size: weight.div_ceil(4),
             time,
+            rbf: false,
             outputs: 0,
             spends: Box::new([]),
         }
@@ -125,6 +129,7 @@ impl Keys {
             weight: sat(entry.weight),
             size: sat(tx.total_size() as u64),
             time: sat(entry.time),
+            rbf: tx.is_explicitly_rbf(),
             outputs: sat(tx.output.len() as u64),
             spends: tx
                 .input

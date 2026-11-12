@@ -67,6 +67,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
 | [`mempool_history`](#mempool_history) | `0004_mempool_history.sql` | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
+| [`replacements`](#replacements) | `0005_replacements.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
 
 ### Adding a table
 
@@ -270,6 +271,28 @@ So a gap in the table is the truth: the engine was off, the node was failing, or
 | `all` (ten years) | 914 | 15 ms |
 
 **Rebuildable:** no. It was observed live; deleting the file loses it.
+
+### replacements
+
+The replacement record ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)), so that what replaced what survives a restart: the transaction page's "replaced by", the `tx:` topic and the `/api/v1` replacement and first-seen routes ([`API.md`](API.md#transactions)). The code is `crates/engine/src/replacements/db.rs`; the server writes it from `crates/server/src/replacements.rs`.
+
+| Column | Type | Why |
+|---|---|---|
+| `n` | integer key | The order recorded, newest highest: what the bound keeps and what the trees list newest first |
+| `txid` | 32-byte blob, unique | The replaced transaction. A transaction replaced again (it came back) replaces its row |
+| `by` | 32-byte blob, indexed | Its replacement. Indexed to mark a replacement mined, and to walk a history backwards |
+| `seen` | integer | Unix seconds we saw it replaced |
+| `fee`, `vsize`, `weight`, `value`, `time`, `rbf` | integer | The replaced transaction's base fee and total output value (sats), sigop-adjusted vsize, weight, the node's accept time and whether it signalled BIP 125 |
+| `by_fee` … `by_rbf` | integer or `NULL` | The same for the replacement; all `NULL` when the tracker never held it (it was confirmed in the block that removed the original) |
+| `mined` | integer | 1 once the replacement was seen confirmed |
+
+**Writes.** One writer task per network takes each tracker delta's changes from a queue of 64, with whatever else is queued, and writes them in one transaction, delta by delta in order: `INSERT OR REPLACE` per new link (after deleting the replacement's own row, which no longer stands now that it is back), an indexed `UPDATE` per replacement seen confirmed, and for a transaction back in the mempool a `DELETE` of its own row and an `UPDATE` clearing `mined` on what it replaced; then `DELETE` of every row more than `REPLACEMENTS_KEPT` places behind the newest (a deleted row's place still counts, so the table may hold fewer, never more). All or nothing: a crash or an error leaves the rows as they were, and memory still has the links. The tracker and the task that follows it never wait for the store: a full queue drops the write and logs `replacements_store_failed`.
+
+**Reading.** `load(store, keep)` once, when the mempool engine starts: the newest `keep` rows, put back into the record oldest first. 10,000 rows took 3.6 ms (below). Requests never read the table; they read the record in memory.
+
+**Size.** At most `REPLACEMENTS_KEPT` rows (10,000 by default). Measured with `cargo test --release -p engine -- --ignored --nocapture replacements_benchmark` (20,000 links written 20 at a time, so the bound had pruned half): 10,000 rows, 2.06 MB for the table and its two indexes, 205 bytes a row; reading them back took 3.6 ms.
+
+**Rebuildable:** no. The node does not keep replaced transactions; deleting the file forgets every replacement seen before.
 
 ## Pragmas
 

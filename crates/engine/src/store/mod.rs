@@ -24,7 +24,8 @@ pub use migrate::MigrationError;
 pub use rusqlite::{Error as SqlError, OptionalExtension, Row, Statement, params};
 
 /// The migrations in `migrations/`, compiled in by `build.rs`.
-const MIGRATIONS: &[migrate::Migration] = include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
+pub(crate) const MIGRATIONS: &[migrate::Migration] =
+    include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
 
 /// A write that holds the writer this long is reported as [`Event::SlowWrite`].
 const SLOW_WRITE: Duration = Duration::from_secs(1);

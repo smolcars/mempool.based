@@ -298,7 +298,7 @@ pub fn is_static(path: &str) -> bool {
 
 /// Per-client limits on static files, fixed: generous, since they cost no node work and finish in
 /// milliseconds, but there so one client cannot take every global request slot with them. A cold
-/// load of the heaviest page is 22 files (docs/CONFIG.md, "Per-client defaults").
+/// load of the heaviest page is 25 files (docs/CONFIG.md, "Per-client defaults").
 pub const STATIC_BURST: u32 = 400;
 pub const STATIC_RATE_PER_SEC: u32 = 100;
 pub const STATIC_CONCURRENCY: u32 = 96;

@@ -314,10 +314,9 @@ fn transaction_messages_have_the_reference_shapes() {
         txid,
         by,
         seen: 0,
-        fee: 0,
-        vsize: 0,
-        by_fee: None,
-        by_vsize: None,
+        tx: crate::replacements::Facts::default(),
+        by_tx: None,
+        mined: false,
     };
     assert_eq!(
         tx_message(&txid, &TxState::Replaced(vec![link], false), &starts),

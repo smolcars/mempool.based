@@ -249,7 +249,7 @@ For the transaction page: who it will be mined with, and what replaced what. Per
 - `parents` and `children` are this transaction's own unconfirmed ones. Their parents and children are in `txs`: draw the graph from there. A cluster holds at most 64 transactions.
 - `404` `{"error":"not in the mempool"}`; `503` with `Retry-After: 1` for `mempool is syncing` (the server just started), `not placed yet` (it arrived a moment ago) or `mempool is switched off` (no retry will help); `400` for a malformed txid.
 
-**Replacements.** A bounded record kept in memory per network: the most recent `REPLACEMENTS_KEPT` (10,000) replacements, oldest out first, lost when the server restarts ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)). Someone who opens a replaced transaction's page later still learns what replaced it.
+**Replacements.** A bounded record per network: the most recent `REPLACEMENTS_KEPT` (10,000) replacements, oldest out first, kept in memory and, with a `DATA_DIR`, in the store, so it survives a restart ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)). Someone who opens a replaced transaction's page later still learns what replaced it.
 
 ```json
 {"txid":"<B>","truncated":false,

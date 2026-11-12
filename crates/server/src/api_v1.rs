@@ -21,8 +21,9 @@ use crate::difficulty::{Answer, unix_ms};
 use crate::error::ApiError;
 use crate::ws::fees::Source;
 
-const NOT_READY: ApiError = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "not ready yet; retry");
-const MEMPOOL_OFF: ApiError = ApiError::new(
+pub(crate) const NOT_READY: ApiError =
+    ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "not ready yet; retry");
+pub(crate) const MEMPOOL_OFF: ApiError = ApiError::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "the mempool engine is off on this server",
 );

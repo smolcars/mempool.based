@@ -1,0 +1,208 @@
+{
+ "_about": "Answers of the reference backend (a stock mempool backend in front of rbitcoin, mainnet) recorded 2026-11-12, for the shape tests of crates/server/tests/transactions.rs. Lists are trimmed to one or two items; values are public chain data.",
+ "rbf": {
+  "replacements": {
+   "tx": {
+    "txid": "62900b31a7755a59d43cf496fd14d63f3e9a77718b08724ad4ab8a342c1f808e",
+    "fee": 82,
+    "vsize": 152.25,
+    "value": 40201,
+    "rate": 0.5385878489326765,
+    "time": 1794486134,
+    "rbf": false,
+    "fullRbf": true,
+    "mined": true
+   },
+   "time": 1794486134,
+   "fullRbf": true,
+   "replaces": [
+    {
+     "tx": {
+      "txid": "14c11583c4b6c67cc0e34eefc4f2b689606b89ef9543908efe50e5d98bb5a7ca",
+      "fee": 49,
+      "vsize": 152.25,
+      "value": 40234,
+      "rate": 0.3218390804597701,
+      "time": 1794485633,
+      "rbf": false,
+      "fullRbf": true
+     },
+     "time": 1794485633,
+     "fullRbf": true,
+     "replaces": [
+      {
+       "tx": {
+        "txid": "f0b0d42fbb669db354278d6b8fc3735d622afdb1028f23ba1974c96406b592fa",
+        "fee": 16,
+        "vsize": 152.25,
+        "value": 40267,
+        "rate": 0.10509031198686371,
+        "time": 1794485516,
+        "rbf": false
+       },
+       "time": 1794485516,
+       "interval": 117,
+       "fullRbf": true,
+       "replaces": []
+      }
+     ],
+     "interval": 501
+    }
+   ],
+   "mined": true
+  },
+  "replaces": [
+   "f0b0d42fbb669db354278d6b8fc3735d622afdb1028f23ba1974c96406b592fa"
+  ]
+ },
+ "rbf_none": {
+  "replacements": null,
+  "replaces": null
+ },
+ "replacements": [
+  {
+   "tx": {
+    "txid": "14c11583c4b6c67cc0e34eefc4f2b689606b89ef9543908efe50e5d98bb5a7ca",
+    "fee": 49,
+    "vsize": 152.25,
+    "value": 40234,
+    "rate": 0.3218390804597701,
+    "time": 1794485633,
+    "rbf": false,
+    "fullRbf": true
+   },
+   "time": 1794485633,
+   "fullRbf": true,
+   "replaces": [
+    {
+     "tx": {
+      "txid": "f0b0d42fbb669db354278d6b8fc3735d622afdb1028f23ba1974c96406b592fa",
+      "fee": 16,
+      "vsize": 152.25,
+      "value": 40267,
+      "rate": 0.10509031198686371,
+      "time": 1794485516,
+      "rbf": false
+     },
+     "time": 1794485516,
+     "interval": 117,
+     "fullRbf": true,
+     "replaces": []
+    }
+   ]
+  }
+ ],
+ "cpfp": {
+  "ancestors": [
+   {
+    "txid": "ef46573e4680683a2688767e4de7aab0a078dac9b9bc436b939ffc5804b109c0",
+    "fee": 13,
+    "weight": 501
+   }
+  ],
+  "bestDescendant": null,
+  "descendants": [
+   {
+    "txid": "c2f641b4d9ff447b1987da583eb76c8e19ab9e5ed1e0118eb3d6fa89011ca93f",
+    "fee": 13,
+    "weight": 502
+   }
+  ],
+  "effectiveFeePerVsize": 0.10370961308336657,
+  "sigops": 1,
+  "fee": 13,
+  "adjustedVsize": 125.5
+ },
+ "cpfp_none": {
+  "ancestors": []
+ },
+ "transaction_times": [
+  1793832388,
+  0,
+  0
+ ],
+ "validate_address": {
+  "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": {
+   "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+   "isscript": false,
+   "isvalid": true,
+   "iswitness": false,
+   "scriptPubKey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac"
+  },
+  "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy": {
+   "address": "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy",
+   "isscript": true,
+   "isvalid": true,
+   "iswitness": false,
+   "scriptPubKey": "a914b472a266d0bd89c13706a4132ccfb16f7c3b9fcb87"
+  },
+  "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq": {
+   "address": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+   "isscript": false,
+   "isvalid": true,
+   "iswitness": true,
+   "scriptPubKey": "0014e8df018c7e326cc253faac7e46cdc51e68542c42",
+   "witness_program": "e8df018c7e326cc253faac7e46cdc51e68542c42",
+   "witness_version": 0
+  },
+  "bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297": {
+   "address": "bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297",
+   "isscript": true,
+   "isvalid": true,
+   "iswitness": true,
+   "scriptPubKey": "5120a37c3903c8d0db6512e2b40b0dffa05e5a3ab73603ce8c9c4b7771e5412328f9",
+   "witness_program": "a37c3903c8d0db6512e2b40b0dffa05e5a3ab73603ce8c9c4b7771e5412328f9",
+   "witness_version": 1
+  },
+  "BC1QAR0SRRR7XFKVY5L643LYDNW9RE59GTZZWF5MDQ": {
+   "address": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+   "isscript": false,
+   "isvalid": true,
+   "iswitness": true,
+   "scriptPubKey": "0014e8df018c7e326cc253faac7e46cdc51e68542c42",
+   "witness_program": "e8df018c7e326cc253faac7e46cdc51e68542c42",
+   "witness_version": 0
+  },
+  "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx": {
+   "isvalid": false
+  },
+  "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdx": {
+   "isvalid": false
+  },
+  "notanaddress": {
+   "isvalid": false
+  },
+  "bc1zw508d6qejxtdg4y5r3zarvaryvaxxpcs": {
+   "address": "bc1zw508d6qejxtdg4y5r3zarvaryvaxxpcs",
+   "isscript": false,
+   "isvalid": true,
+   "iswitness": true,
+   "scriptPubKey": "5210751e76e8199196d454941c45d1b3a323",
+   "witness_program": "751e76e8199196d454941c45d1b3a323",
+   "witness_version": 2
+  }
+ },
+ "prevouts": [
+  {
+   "prevout": {
+    "value": 5000000000,
+    "scriptpubkey": "410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac",
+    "scriptpubkey_asm": "OP_PUSHBYTES_65 0496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858ee OP_CHECKSIG",
+    "scriptpubkey_type": "p2pk",
+    "scriptpubkey_address": ""
+   },
+   "unconfirmed": false
+  },
+  {
+   "prevout": {
+    "scriptpubkey": "00144128c79f7aceed3fc8f452edf46d4cc0d119166b",
+    "scriptpubkey_address": "bc1qgy5v08m6emknlj852tklgm2vcrg3j9nt5xtaef",
+    "scriptpubkey_asm": "OP_0 OP_PUSHBYTES_20 4128c79f7aceed3fc8f452edf46d4cc0d119166b",
+    "scriptpubkey_type": "v0_p2wpkh",
+    "value": 48384
+   },
+   "unconfirmed": true
+  },
+  null
+ ]
+}

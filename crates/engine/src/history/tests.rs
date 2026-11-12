@@ -419,7 +419,9 @@ async fn a_minute_whose_hour_or_day_was_rolled_already_is_not_counted_again() {
 }
 
 #[tokio::test]
-async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_at_four() {
+async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_at_the_newest() {
+    // Later migrations only add to this one's.
+    let newest = i64::try_from(crate::store::MIGRATIONS.len()).unwrap();
     let version = async |store: &Store| -> (i64, i64) {
         store
             .read(|sql| {
@@ -438,7 +440,7 @@ async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_a
             .unwrap()
     };
     let fresh = temp();
-    assert_eq!(version(&fresh.store).await, (4, 4));
+    assert_eq!(version(&fresh.store).await, (newest, 4));
 
     // A file as the build before this one left it: the first three migrations, version 3.
     let dir = std::env::temp_dir().join(format!("mempool-based-history-v3-{}", std::process::id()));
@@ -457,7 +459,7 @@ async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_a
         c.pragma_update(None, "user_version", 3).unwrap();
     }
     let store = Store::open(&dir, "regtest", Options::default()).unwrap();
-    assert_eq!(version(&store).await, (4, 4));
+    assert_eq!(version(&store).await, (newest, 4));
     record(&store, minute(NOW, 1), NOW).await.unwrap();
     assert_eq!(rows(&store).await.len(), 1);
     store.close().await;

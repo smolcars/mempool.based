@@ -359,6 +359,30 @@ fn finish(calls: &HeavyCalls, key: &str, call: &HeavyCall, abandon: bool) -> boo
 /// if every request for it has gone meanwhile, then asks the node and keeps its places until the
 /// node answers or [`HEAVY_CEILING`] passes, even after every request waiting for it is gone.
 async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String) -> Response {
+    let call = route.clone();
+    match heavy_call(ctx, client, key, move |esplora| async move {
+        esplora.raw(&call).await
+    })
+    .await
+    {
+        Ok((result, source)) => respond(&route, result, source),
+        Err(refused) => *refused,
+    }
+}
+
+/// [`heavy`] for any work on the node that one request causes: `fetch` is run with the heavy
+/// calls' own client, under the same places and slot, by the same rules. Requests with the same
+/// `key` share one run. A refusal is the response to send.
+pub(crate) async fn heavy_call<F, Fut>(
+    ctx: &NetworkContext,
+    client: &Client,
+    key: String,
+    fetch: F,
+) -> Result<(Answer, Source), Box<Response>>
+where
+    F: FnOnce(Esplora) -> Fut + Send + 'static,
+    Fut: Future<Output = Answer> + Send + 'static,
+{
     let h = &ctx.api.heavy;
     let (mut answer, led) = {
         let mut calls = h.calls.lock().unwrap_or_else(PoisonError::into_inner);
@@ -366,11 +390,13 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
             (call.subscribe(), false)
         } else {
             let Ok(pending) = Arc::clone(&h.pending).try_acquire_owned() else {
-                return Refused {
-                    error: HEAVY_BUSY,
-                    reason: "heavy_busy",
-                }
-                .into_response();
+                return Err(Box::new(
+                    Refused {
+                        error: HEAVY_BUSY,
+                        reason: "heavy_busy",
+                    }
+                    .into_response(),
+                ));
             };
             let hold = match h
                 .clients
@@ -383,14 +409,14 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
                         "client_concurrency" => "route_concurrency",
                         other => other,
                     };
-                    return Refused { reason, ..r }.into_response();
+                    return Err(Box::new(Refused { reason, ..r }.into_response()));
                 }
             };
             let (tx, rx) = watch::channel(None);
             let tx = Arc::new(tx);
             calls.insert(key.clone(), Arc::clone(&tx));
             let running = Arc::clone(&h.running);
-            let (esplora, all, call) = (h.esplora.clone(), Arc::clone(&h.calls), route.clone());
+            let (esplora, all) = (h.esplora.clone(), Arc::clone(&h.calls));
             tokio::spawn(async move {
                 let slot = loop {
                     tokio::select! {
@@ -409,7 +435,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
                     return;
                 };
                 let called = Instant::now();
-                let answer = esplora.raw(&call).await;
+                let answer = fetch(esplora).await;
                 let node_time = called.elapsed();
                 drop((slot, pending, hold));
                 finish(&all, &key, &tx, false);
@@ -430,7 +456,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
     } else {
         Source::Coalesced
     };
-    respond(&route, result, source)
+    Ok((result, source))
 }
 
 /// The network's heavy calls are all running: retry in a moment.
@@ -902,7 +928,7 @@ impl<'a> Query<'a> {
     }
 }
 
-type Answer = Result<RawResponse, Error>;
+pub(crate) type Answer = Result<RawResponse, Error>;
 
 #[derive(Debug)]
 struct Done {
