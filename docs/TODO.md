@@ -11,7 +11,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | F0 | Rust workspace, skeleton server (`/healthz`, static files), skeleton frontend, CI within budget | — | done ([#1](https://github.com/smolcars/mempool.based/pull/1)) |
 | R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | doing |
 | R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | done ([#2](https://github.com/smolcars/mempool.based/pull/2)) |
-| D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | doing |
+| D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | done ([#5](https://github.com/smolcars/mempool.based/pull/5)) |
 
 ## M1 — Explorer skeleton
 
@@ -23,8 +23,8 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | doing |
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | todo |
-| W1 | App shell: router with network prefixes, layout, theme and tokens, HTTP and WebSocket data layer | F0, D1 | todo |
-| W2 | Home page: latest blocks, live block push, mempool summary | W1, S2, S3 | todo |
+| W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | doing |
+| W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | todo |
 | W3 | Block page: header details, paged transaction list | W1, S2 | todo |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | todo |
 | W5 | Address page: totals, unspent outputs, paged history | W1, S2 | todo |
