@@ -331,11 +331,14 @@ export function createRequest<S, T>(
   const [error, setError] = createSignal<unknown>(undefined);
   const [state, setState] = createSignal<RequestState>("unresolved");
   const [asks, setAsks] = createSignal(0);
+  // A memo, so a source that is worked out again to the same value asks nothing: effects run on
+  // every change to what they read, equal or not.
+  const key = createMemo(source);
   let answered = false;
   createEffect(
     () => {
       asks();
-      return source();
+      return key();
     },
     (s) => {
       // oxlint-disable-next-line typescript/strict-boolean-expressions -- every falsy source means "no request"

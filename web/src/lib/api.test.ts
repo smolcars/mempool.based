@@ -1,8 +1,10 @@
+import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   chainTip,
   clearApiCache,
+  createRequest,
   errorMessage,
   fetchApi,
   fetchStamped,
@@ -258,5 +260,41 @@ describe("chain tip stamps", () => {
       value: { progressPercent: 5 },
       tip: { hash: tip, height: 12 },
     });
+  });
+});
+
+describe("createRequest", () => {
+  it("asks again for a new source or a refetch, not for the same source worked out again", async () => {
+    const asked: string[] = [];
+    const [n, setN] = createSignal(0);
+    const [[value, { refetch }], dispose] = createRoot((d) => {
+      const r = createRequest(
+        () => (n() < 10 ? "low" : "high"),
+        (key) => {
+          asked.push(key);
+          return key;
+        },
+      );
+      return [r, d] as const;
+    });
+    const settle = async () => {
+      flush();
+      await Promise.resolve();
+      flush();
+    };
+    await settle();
+    expect(asked).toStrictEqual(["low"]);
+    expect(value()).toBe("low");
+    setN(1);
+    await settle();
+    expect(asked).toStrictEqual(["low"]);
+    refetch();
+    await settle();
+    expect(asked).toStrictEqual(["low", "low"]);
+    setN(10);
+    await settle();
+    expect(asked).toStrictEqual(["low", "low", "high"]);
+    expect(value()).toBe("high");
+    dispose();
   });
 });
