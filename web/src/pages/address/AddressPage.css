@@ -82,6 +82,15 @@
   .address-balance__slot {
     min-height: calc(200px + 5.75rem);
   }
+  /* On a phone the readout takes three lines: the time, the balance and block, the change. */
+  @media (max-width: 640px) {
+    .address-balance .chart__readout {
+      min-height: 4.25rem;
+    }
+    .address-balance__slot {
+      min-height: calc(200px + 7.25rem);
+    }
+  }
   .address-balance-none {
     max-width: 48rem;
     margin-top: var(--space-4);

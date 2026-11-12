@@ -152,6 +152,16 @@ describe("loadHistory", () => {
     expect(points(h)[0]?.balance).toBe(123_456 - (MAX_ROWS - 1) * 100);
   });
 
+  it("keeps the pages it has when a later one fails, anchored all the same", async () => {
+    const rows = Array.from({ length: 300 }, (_, i) => row(300 - i, 100));
+    const n = node(rows, 77_777, 300);
+    const flaky = (p: string) =>
+      p.includes(`/txs/summary/${txid(251)}`) ? Promise.reject(new Error("504")) : n.fetch(p);
+    const h = await loadHistory(BASE, flaky);
+    expect(h).toMatchObject({ complete: false, balance: 77_777, total: 300 });
+    expect(h.rows).toHaveLength(50);
+  });
+
   it("knows a history of exactly the cap is whole when the totals agree", async () => {
     const rows = Array.from({ length: MAX_ROWS }, (_, i) => row(MAX_ROWS - i, 100));
     const h = await loadHistory(BASE, node(rows, MAX_ROWS * 100, MAX_ROWS).fetch);

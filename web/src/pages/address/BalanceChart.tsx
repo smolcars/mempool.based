@@ -151,7 +151,8 @@ export function BalanceChart(props: {
                       domain={[v().from, v().end]}
                       gap={Number.POSITIVE_INFINITY}
                       height={HEIGHT}
-                      left={{ format: btcTick, zero: true }}
+                      // A whole history rose from nothing; a partial one starts where it stood.
+                      left={{ format: btcTick, zero: v().h.complete }}
                       series={[
                         {
                           name: "Balance",

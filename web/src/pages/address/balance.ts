@@ -62,7 +62,8 @@ const confirmed = (rows: readonly TxSummary[]) => rows.filter((r) => r.height > 
 
 /**
  * The newest history, at most {@link MAX_PAGES} pages, every page as of the first's block. When
- * it stops short of the first transaction, the address's totals as of that block anchor it.
+ * it stops short of the first transaction (the cap, or a later page that failed), the address's
+ * totals as of that block anchor it.
  */
 export async function loadHistory(
   base: string,
@@ -75,8 +76,13 @@ export async function loadHistory(
   const rows = [...page];
   for (let asked = 1; page.length >= SUMMARY_PAGE && asked < MAX_PAGES; asked++) {
     const last = page.at(-1)?.txid ?? "";
-    // oxlint-disable-next-line no-await-in-loop -- each page continues after the last one's final row
-    page = readRows((await fetch(`${base}/txs/summary/${last}${pin}`)).value);
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- each page continues after the last one's final row
+      page = readRows((await fetch(`${base}/txs/summary/${last}${pin}`)).value);
+    } catch {
+      // A later page that fails (a node too slow to answer) leaves the newer ones, anchored below.
+      break;
+    }
     rows.push(...page);
   }
   const kept = confirmed(rows);
