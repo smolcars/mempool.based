@@ -45,7 +45,9 @@ export default defineConfig({
         // The live channel, the topics the home page reads, the small components every main page
         // uses and what they import (Solid's runtime among it) travel as one file, loaded with the
         // shell. Split by which pages share them, they were 14 more files on a cold page, and on a
-        // slow network each waits its turn for one of the browser's six connections.
+        // slow network each waits its turn for one of the browser's six connections. The tokens and
+        // global styles go in it too: its stylesheet is linked first, so it must set the cascade
+        // layer order before any component's layer appears (`bun run size` checks).
         codeSplitting: {
           groups: [
             {
