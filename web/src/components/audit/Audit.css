@@ -1,0 +1,201 @@
+@layer components {
+  .audit {
+    margin-top: var(--space-5);
+  }
+  .audit__none {
+    max-width: 60ch;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  /* One line's height while the block's facts load: the same as the "not audited" line. */
+  .audit__wait {
+    display: inline-block;
+    vertical-align: middle;
+    width: min(24em, 100%);
+    height: 0.9em;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+  }
+  .audit__retry {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .audit__body {
+    display: grid;
+    gap: var(--space-5);
+  }
+  .audit__intro {
+    max-width: 66ch;
+    color: var(--color-text-muted);
+  }
+  .audit__top {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    gap: var(--space-5) var(--space-7);
+    align-items: start;
+  }
+  .audit__score {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .audit__rate {
+    font-size: var(--text-3xl);
+    font-weight: var(--weight-heavy);
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-tight);
+  }
+  .audit__pct {
+    margin-left: 0.05em;
+    font-size: 0.6em;
+    font-weight: var(--weight-bold);
+  }
+  .audit__rate-label {
+    font-weight: var(--weight-bold);
+  }
+  .audit__rate-says,
+  .audit__note {
+    max-width: 44ch;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .audit__note {
+    margin-top: var(--space-2);
+  }
+
+  /* ---- Expected over mined, their matched parts lined up ---- */
+  .audit-bars {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .audit-bars__row {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  /* The padding is spare room for slivers held at their minimum width; shares are of the rest. */
+  .audit-bars__track {
+    display: block;
+    padding-right: var(--space-4);
+    overflow: hidden;
+  }
+  .audit-bars__lane {
+    position: relative;
+    display: block;
+    height: 1.25rem;
+  }
+  /* A seam of the page inside each piece, so seams take no width. */
+  .audit-bars__seg {
+    position: absolute;
+    inset: 0 auto 0 calc(var(--x) * 100%);
+    box-sizing: border-box;
+    width: calc(var(--w) * 100%);
+    min-width: 5px;
+    border-right: 2px solid var(--color-bg);
+    border-radius: var(--radius-s);
+  }
+
+  /* Category marks: neutral, never fee colors. Only "missing" counts against the miner. */
+  .audit-kind--matched {
+    background: var(--color-line-strong);
+  }
+  .audit-kind--displaced,
+  .audit-kind--fresh,
+  .audit-kind--conflicted {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--color-line-strong) 0 2px,
+      transparent 2px 5px
+    );
+    box-shadow: inset 0 0 0 1px var(--color-line-strong);
+  }
+  .audit-kind--missing {
+    background: var(--color-negative);
+  }
+  .audit-kind--added {
+    box-shadow: inset 0 0 0 1.5px var(--color-line-strong);
+  }
+  .audit-kind--unseen {
+    outline: 1.5px dashed var(--color-line-strong);
+    outline-offset: -1.5px;
+  }
+
+  /* ---- The categories ---- */
+  .audit__kinds {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 var(--space-7);
+  }
+  .audit__kinds > .audit-kinds {
+    grid-column: 1 / -1;
+  }
+  .audit__side-title {
+    margin-top: var(--space-4);
+    padding-bottom: var(--space-2);
+    font-size: var(--text-md);
+  }
+  .audit-kinds__item {
+    display: grid;
+    grid-template-columns: 0.875rem auto minmax(0, 1fr);
+    gap: 0 var(--space-3);
+    align-items: baseline;
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--color-line);
+  }
+  .audit-kinds__swatch {
+    width: 0.875rem;
+    height: 0.875rem;
+    border-radius: var(--radius-s);
+    align-self: center;
+  }
+  .audit-kinds__name {
+    font-weight: var(--weight-bold);
+  }
+  .audit-kinds__figures {
+    justify-self: end;
+    font-weight: var(--weight-medium);
+  }
+  .audit-kinds__says {
+    grid-column: 2 / -1;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .audit-kinds__item--none .audit-kinds__swatch {
+    opacity: 0.35;
+  }
+  .audit-kinds__item--none .audit-kinds__figures {
+    color: var(--color-text-muted);
+    font-weight: var(--weight-regular);
+  }
+
+  .audit__details {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-4);
+  }
+  #audit-list {
+    width: 100%;
+  }
+
+  @media (max-width: 1040px) {
+    .audit__top {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 640px) {
+    .audit__kinds {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .audit-bars__row {
+      grid-template-columns: 4rem minmax(0, 1fr);
+    }
+  }
+}

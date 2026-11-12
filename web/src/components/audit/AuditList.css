@@ -1,0 +1,32 @@
+@layer components {
+  .audit-list {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .audit-list__kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .audit-list__kind {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .audit-list__swatch {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: var(--radius-s);
+  }
+  .audit-list__cut,
+  .audit-list__shown {
+    max-width: 66ch;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  @media (max-width: 640px) {
+    .audit-list .copy {
+      display: none;
+    }
+  }
+}

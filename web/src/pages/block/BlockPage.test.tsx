@@ -1,6 +1,8 @@
 import { createRouter, memoryHistory } from "@solidjs/router";
 import { render } from "@solidjs/web";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUDIT } from "../../components/audit/fakes";
+import { FakeSocket } from "../../lib/fakes";
 import { clearApiCache } from "../../lib/api";
 import { type BlockSummary, clearSummaries } from "../../lib/summary";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
@@ -137,7 +139,14 @@ const normal = () => ({
   [txsPath]: { body: records() },
 });
 
+beforeEach(() => {
+  // The page hears the blocks topic while a block's facts are on their way.
+  FakeSocket.all = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
+});
+
 afterEach(() => {
+  for (const dispose of mounted.splice(0)) dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -159,9 +168,11 @@ function open(url: string) {
   });
   const el = document.createElement("div");
   document.body.append(el);
-  render(() => <Router>{(page) => page.children}</Router>, el);
+  // Disposed after each test, so a page's WebSocket subscription ends with it.
+  mounted.push(render(() => <Router>{(page) => page.children}</Router>, el));
   return el;
 }
+const mounted: (() => void)[] = [];
 
 const text = (el: Element) => (el.textContent ?? "").replaceAll(" ", " ");
 const fact = (el: Element, label: string) =>
@@ -216,6 +227,48 @@ describe("BlockPage", () => {
     expect(caption).toContain("Layers, cheapest first: under 0.20 sat/vB: 367.01 kvB, 37%");
     expect(caption).toContain("10.0 sat/vB and up: 5 453 vB, under 1%");
     expect(el.querySelector(".block-core .feekey")).not.toBeNull();
+  });
+
+  it("shows the block's audit from its facts", async () => {
+    serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, audit: AUDIT }] } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(text(el.querySelector(".audit__rate") as Element)).toBe("99.87%"));
+    expect(text(el.querySelector(".audit") as Element)).toContain("3 transactions, 1 200 vB");
+  });
+
+  it("says plainly that a block has no audit", async () => {
+    serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, audit: null }] } });
+    const el = open(`/block/${HASH}`);
+    await until(() =>
+      expect(text(el.querySelector(".audit") as Element)).toContain(
+        "Not audited: we were not watching when this block arrived",
+      ),
+    );
+    expect(el.querySelector(".audit [role=alert]")).toBeNull();
+  });
+
+  it("shows a new block's audit when its facts arrive over the WebSocket", async () => {
+    // The facts request is still being computed by the server when the push comes.
+    serve({ ...normal(), [summaryPath(HASH)]: () => ({ body: new Promise(() => {}) }) });
+    const served = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: string) =>
+      input.includes("/app/blocks/summary") ? new Promise(() => {}) : served(input),
+    );
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Reward")).toContain("3.13000000 BTC"));
+    expect(el.querySelector(".audit__rate")).toBeNull();
+    const socket = await until(() => FakeSocket.last());
+    socket.hello({ network: "mainnet" });
+    // Another block's facts change nothing here.
+    socket.receive({
+      topic: "blocks",
+      type: "summary",
+      summary: { ...SUMMARY, id: NEXT, audit: null },
+    });
+    expect(el.querySelector(".audit__rate")).toBeNull();
+    socket.receive({ topic: "blocks", type: "summary", summary: { ...SUMMARY, audit: AUDIT } });
+    expect(text(el.querySelector(".audit__rate") as Element)).toBe("99.87%");
+    expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB");
   });
 
   it("names the miner, linking to its pool's page", async () => {
@@ -577,6 +630,31 @@ describe("BlocksPage", () => {
     expect(el.querySelectorAll("tbody tr")[2]?.querySelector(".block-skel")).not.toBeNull();
     await vi.advanceTimersByTimeAsync(1300);
     await until(() => expect(row(2)).toContain("0.00000007"));
+  });
+
+  it("gives each audited block its match rate, and nothing to a block without one", async () => {
+    const rows = list(975_420);
+    const table: typeof replies = {
+      "/blocks": { body: rows },
+      "/blocks/tip/height": { body: "975420" },
+    };
+    for (const [i, b] of rows.entries()) {
+      table[summaryPath(b.id)] = {
+        body: [{ ...SUMMARY, id: b.id, audit: i === 0 ? AUDIT : null }],
+      };
+    }
+    serve(table);
+    const el = open("/blocks");
+    const header = [...el.querySelectorAll("thead th")].map((th) => text(th));
+    const col = header.indexOf("Match rate, %");
+    expect(col).toBeGreaterThan(-1);
+    const cell = (i: number) =>
+      text(el.querySelectorAll("tbody tr")[i]?.querySelectorAll("td")[col] as Element);
+    await until(() => expect(cell(0)).toBe("99.87%"));
+    await until(() =>
+      expect(text(el.querySelectorAll("tbody tr")[1] as Element)).toContain("1.09"),
+    );
+    expect(cell(1)).toBe("");
   });
 
   it("refuses a bad height", () => {

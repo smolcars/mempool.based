@@ -1,6 +1,7 @@
 import { useParams } from "@solidjs/router";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
+import { formatMatchRate, readAudit } from "../../components/audit/model";
 import { DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
@@ -67,6 +68,24 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       if (f === undefined) return <Skel size="s" />;
       if (f === "failed") return MISSING;
       return f.fee_rate ? <FeeRate rate={f.fee_rate.median} unit={false} /> : "None";
+    },
+  },
+  // Blank for a block without an audit: most old blocks, and never an error.
+  {
+    header: "Match rate, %",
+    numeric: true,
+    cell: (b: Block | null) => {
+      const f = b ? factsOf(b.id) : undefined;
+      if (f === undefined) return <Skel size="s" />;
+      const a = f === "failed" ? null : readAudit(f.audit);
+      return a ? (
+        <>
+          {formatMatchRate(a.match_rate)}
+          <span class="visually-hidden">%</span>
+        </>
+      ) : (
+        ""
+      );
     },
   },
   {

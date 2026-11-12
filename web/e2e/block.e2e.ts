@@ -30,6 +30,16 @@ test("a block by height shows its facts and transactions, and steps to its neigh
   await expect(page).toHaveURL(`/regtest/block/${chain.blocks[106]}`);
 });
 
+test("a block from before the server started says it has no audit", async ({ page }) => {
+  await page.goto(`/regtest/block/${chain.blocks[106]}`);
+  await expect(
+    page
+      .getByRole("region", { name: "Audit" })
+      .getByText("Not audited: we were not watching when this block arrived", { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByText("Match rate", { exact: true })).toHaveCount(0);
+});
+
 test("the genesis and newest blocks say so", async ({ page }) => {
   await page.goto("/regtest/block/0");
   await expect(page.getByText("Genesis block")).toBeVisible();
