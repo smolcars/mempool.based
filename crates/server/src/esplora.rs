@@ -114,6 +114,12 @@ impl std::fmt::Debug for Heavy {
 }
 
 impl Api {
+    /// How long a page of address history may take before it is answered `504` and remembered as
+    /// slow ([`Verdict::Slow`]).
+    pub fn history_timeout(&self) -> Duration {
+        self.heavy.history_timeout
+    }
+
     /// `url` is the network's Esplora endpoint, checked by `Config`.
     pub fn new(broadcast: bool, limits: &Limits, url: &str) -> Result<Self, Error> {
         let max_tracked_clients = limits.max_tracked_clients;

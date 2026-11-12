@@ -297,6 +297,48 @@ async fn pages_fall_back_to_the_app_shell() {
 }
 
 #[tokio::test]
+async fn paths_too_long_for_the_file_system_are_pages_or_not_found_never_errors() {
+    let addr = start(limits()).await;
+    let long_segment = "a".repeat(300);
+    // Over Linux's 4,096-byte `PATH_MAX` on its own, in short segments.
+    let many_segments = "a/".repeat(2100);
+    for path in [
+        format!("/{long_segment}"),
+        format!("/{many_segments}"),
+        format!("/signet/{many_segments}"),
+    ] {
+        let r = get_path(&addr, &path).await;
+        assert_eq!(r.status, 200, "{}", &path[..20]);
+        assert_eq!(r.body, "<!doctype html>app-shell");
+    }
+    // 253 bytes is a name the file system takes, until `ServeDir` adds `.br` or `.gz` to it.
+    let near_limit = "a".repeat(253);
+    for (path, encoding) in [
+        (format!("/assets/{long_segment}"), "identity"),
+        (format!("/assets/{many_segments}"), "identity"),
+        (format!("/assets/{near_limit}"), "br"),
+        (format!("/assets/{near_limit}"), "gzip"),
+    ] {
+        let r = send(
+            &addr,
+            &format!("GET {path} HTTP/1.1\r\nAccept-Encoding: {encoding}"),
+            b"",
+        )
+        .await;
+        assert_json_error(&r, 404, "not found");
+        assert_eq!(r.header("cache-control"), Some("no-store"));
+    }
+    let r = send(
+        &addr,
+        &format!("GET /{near_limit} HTTP/1.1\r\nAccept-Encoding: br"),
+        b"",
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body, "<!doctype html>app-shell");
+}
+
+#[tokio::test]
 async fn precompressed_variants_and_cache_headers() {
     let addr = start(limits()).await;
     let asset = |enc: &'static str| {
