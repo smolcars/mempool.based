@@ -35,6 +35,8 @@ macro_rules! event {
 #[derive(Debug, Serialize)]
 pub struct ServerStarting<'a> {
     pub version: &'a str,
+    /// The commit the binary was built from, or `unknown` (docs/DEPLOY.md, "Health").
+    pub revision: &'a str,
     pub listen_addr: String,
     pub web_dir: String,
     pub networks: Vec<&'a str>,
@@ -337,6 +339,23 @@ pub struct RpcReachable {
 }
 event!(RpcReachable, "rpc_reachable", Info, keep);
 
+/// The node answers address and scripthash lookups (`--sh-index`). Written at the first answer
+/// and when it changes; asked at startup and on every Electrum reconnect.
+#[derive(Debug, Serialize)]
+pub struct AddressIndexOn {
+    pub network: &'static str,
+}
+event!(AddressIndexOn, "address_index_on", Info, keep);
+
+/// The node runs without its address index (`--sh-index`): address pages and the address and
+/// scripthash routes answer 503 until it is turned on. Written at the first answer and when it
+/// changes.
+#[derive(Debug, Serialize)]
+pub struct AddressIndexOff {
+    pub network: &'static str,
+}
+event!(AddressIndexOff, "address_index_off", Warn);
+
 // WebSocket hub.
 
 /// A socket closed. Debug level: one per socket. Clients dropped for a limit are also summarised
@@ -600,6 +619,26 @@ pub struct StoreSlowWrite {
     pub queue_depth: usize,
 }
 event!(StoreSlowWrite, "store_slow_write", Warn);
+
+/// SQLite refused a write: at the 1st, 2nd, 4th, 8th… in a row.
+#[derive(Debug, Serialize)]
+pub struct StoreWriteFailed<'a> {
+    pub network: &'static str,
+    /// `disk_full`, `read_only`, `corrupt`, `busy`, `io` or `other`.
+    pub error: &'static str,
+    /// SQLite's own message. Operator-only: never in an answer.
+    pub sqlite: &'a str,
+    pub failures: u32,
+}
+event!(StoreWriteFailed<'a>, "store_write_failed", Warn);
+
+/// A write committed after `failures` in a row had failed.
+#[derive(Debug, Serialize)]
+pub struct StoreWriteRecovered {
+    pub network: &'static str,
+    pub failures: u32,
+}
+event!(StoreWriteRecovered, "store_write_recovered", Info, keep);
 
 /// A read ran past its time limit and was stopped.
 #[derive(Debug, Serialize)]
@@ -1363,6 +1402,7 @@ mod tests {
         vec![
             both(&ServerStarting {
                 version: "0.1.0",
+                revision: "2912d6f0c3a1e4b5d6c7e8f9a0b1c2d3e4f5a6b7",
                 listen_addr: "127.0.0.1:0".into(),
                 web_dir: "web/dist".into(),
                 networks: vec![n],
@@ -1517,6 +1557,8 @@ mod tests {
                 height: 975_523,
                 failures: 4,
             }),
+            both(&AddressIndexOn { network: n }),
+            both(&AddressIndexOff { network: n }),
             both(&DifficultyRetried {
                 network: n,
                 height: 975_523,
@@ -1619,6 +1661,16 @@ mod tests {
                 network: n,
                 duration_ms: 1200.0,
                 queue_depth: 3,
+            }),
+            both(&StoreWriteFailed {
+                network: n,
+                error: "disk_full",
+                sqlite: "database or disk is full",
+                failures: 4,
+            }),
+            both(&StoreWriteRecovered {
+                network: n,
+                failures: 9,
             }),
             both(&StoreReadTimedOut {
                 network: n,

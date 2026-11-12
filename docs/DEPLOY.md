@@ -15,7 +15,7 @@ rbitcoin at **v0.9.2**, the version this release was built and tested against. T
 | `--esplora-listen` | Blocks, transactions, addresses, spends, broadcast, fee estimates: most of what a page shows | Nothing works |
 | `--electrum-listen` | Being told about new blocks and about changes to followed addresses and transactions | Nothing is live, and `/readyz` stays `503` |
 | `--rpc-listen` with `--rpc-cookie-file` | The live mempool, projected blocks, block statistics and the backfill. The cookie file holds `user:password`; rbitcoin has no `--rpcuser` | No mempool, no block table, no mining pages |
-| `--sh-index` | Address pages and the address and scripthash API routes | Those answer `503` `address index is disabled on this server`; everything else works. It is off by default in rbitcoin |
+| `--sh-index` | Address pages and the address and scripthash API routes | Those answer `503` `address index is disabled on this server`; everything else works. The server says so at startup (`address_index_off`, and `address_index` in [`/readyz`](#health)). It is off by default in rbitcoin |
 
 Esplora and Electrum have no authentication. Never let anything but the server reach them. The [interfaces and what the explorer relies on](RBITCOIN.md) are documented separately.
 
@@ -27,7 +27,7 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 |---|---|
 | Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` (32 MB) per network as the block summary cache fills, and more with open WebSockets: 64 MB at the peak with 5,000 |
 | CPU | Under 3% of one core on mainnet with one client; 8% with 5,000 WebSockets open |
-| Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)) |
+| Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)). The log is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)); the compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
 | Network | Nothing published but the node's P2P port and, through the proxy, 443 |
 
 ## Run it beside the node
@@ -114,16 +114,25 @@ docker run --rm --network rbitcoin-space_default curlimages/curl:8.11.1 -su "rbi
 
 | Route | Answers | Use it for |
 |---|---|---|
-| `/healthz` | `200` `{"status":"ok","version":…}` while the process serves HTTP. Never asks the node | Liveness. It is the image's own health check, so `docker compose ps` shows `healthy` |
-| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp; and `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`), which does not count towards `ready` | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+| `/healthz` | `200` `{"status":"ok","version":"0.1.0","revision":…}` while the process serves HTTP. `revision` is the commit the binary was built from, or `unknown` for a build without one (below). Never asks the node | Liveness. It is the image's own health check, so `docker compose ps` shows `healthy`. And which build is running: after an upgrade, `revision` must be the new release's commit |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp. Then four that do not count towards `ready`: `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`); `address_index` (`on`, `off`, or `unknown` until the node has answered); `store` (`ok`, `failing` while SQLite refuses writes, `open_failed`, or `off` without `DATA_DIR`); and `store_written_secs_ago`, since a write last committed (`null` before the first) | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs`. Alert on `address_index` `off` and `store` other than `ok` too |
 
 ```sh
 curl -s http://127.0.0.1:8080/readyz
 ```
 
-`/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds. Neither route is logged when it passes. `/readyz` says nothing about the store or the address index; [watch the log](#watching-it) for those.
+`/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds. The address index is asked once the Electrum connection is up and again after every reconnect, since the node may come back with other flags: one lookup of a scripthash no script has, about 20 ms of the node's time. Neither route is logged when it passes.
 
-Lightning is left out of readiness on purpose: the explorer serves blocks, transactions and the mempool whatever the Lightning peer does, and a first sync takes minutes. Watch `lightning` (or `/app/lightning/status`) to know when the Lightning pages have data.
+Lightning, the address index and the store are left out of readiness on purpose: the explorer serves blocks, transactions and the mempool without any of them, so a load balancer should keep sending users. Without the index, address pages answer `503`; with the store failing, the pages still answer from the node and from memory, but history (block rows, audits, the mempool chart, replacements) stops being recorded until writes commit again. Watch the three fields, or their log events, instead. `/app/lightning/status` says when the Lightning pages have data.
+
+**What the two routes tell a client,** since they answer anyone the proxy lets through: the version and commit, which name public source code an attacker could read anyway and save an operator guessing which build runs; and the labels above, each a state, never a reason. Why the RPC failed, SQLite's message, file paths and the node's addresses stay in the log ([`SECURITY.md`](SECURITY.md) rule 17). Hide both routes in the proxy if even that is too much.
+
+**The revision** comes from the build: the image's build argument `SOURCE_REVISION` (the release workflow passes the commit it builds, the same commit as the image's `org.opencontainers.image.revision` label), else `git` when building from a checkout, else `unknown`, as from a source archive. Uncommitted changes are not marked. Compare the two:
+
+```sh
+docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' ghcr.io/smolcars/rbitcoin-space:0.1.0
+curl -s http://127.0.0.1:8080/healthz
+```
 
 The compose file adds no health check of its own and restarts on exit, not on health. The usual reason for not being ready is the node, which can take hours to sync, and restarting the server would not help.
 
@@ -253,8 +262,8 @@ docker compose start server
 
 On its first start with an empty store the server runs the **backfill**: it fills the block table from the node, newest blocks first, with every block's totals and the last year's fee rates. The table is its progress, so it resumes where it stopped after any restart.
 
-- **How long.** On mainnet at the default pace, a full run measured about 430 blocks a minute at its start: about a day and a half for every block's totals, then fee rates for the year after that. The measured costs per era are in [`STORE.md`](STORE.md#backfill).
-- **What it reads.** Totals are small: about 1.2 GB from the node for the whole chain. Fee rates are not: each block's costs a 10 MB `getblock`, about 550 GB for the year. The node does that work, so a node on the same host matters here.
+- **How long.** On mainnet at the default pace, about a day and a half for every block's totals, measured; a year of fee rates adds little on a node with the block listing route, and about another day through `getblock` on rbitcoin v0.9.2, which lacks it. The numbers, and how they were measured, are in [`STORE.md`](STORE.md#backfill), which owns them.
+- **What it reads.** Totals are small: about 1.2 GB from the node for the whole chain. Fee rates read every transaction of each block: about 17 GB for the year through the listing route, 550 GB through `getblock`. The node does that work, so a node on the same host matters here.
 - **Gentler.** `BACKFILL_BUSY_PERCENT` (default 50) is the share of time its one call keeps the node busy; lower is gentler and slower. `BACKFILL_FEE_RATE_DEPTH` (default 52560, a year) is how far back fee rates go; `0` skips them, and the block facts route then computes older blocks' rates on demand.
 - **Pause it** with `BACKFILL_ENABLED=false` in `.env` and `docker compose up -d`; set it back to resume. All three are in [`CONFIG.md`](CONFIG.md#block-table).
 - **Progress** is a `block_backfill_progress` line every minute: `rows` and `rated` against `tip`.
@@ -271,18 +280,22 @@ The server writes one JSON object per line to stdout: `ts`, `level`, `event`, th
 docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 ```
 
-**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request (`LOG_REQUESTS=failures` keeps only the refused and failed ones). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` with `warming_up` lasts five minutes.
+**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` with `warming_up` lasts five minutes.
 
 **Alert on:**
 
 | Event or check | Means |
 |---|---|
 | Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `store_open_failed`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
+| `store_write_failed`, or `/readyz` `store` not `ok` | SQLite refuses writes; `error` says why (`disk_full`, `read_only`, `corrupt`, `busy`, `io`). History is not being recorded |
+| `address_index_off`, or `/readyz` `address_index` `off` | The node runs without `--sh-index`: address pages are down |
 | `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
 | `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
 | `rpc_unreachable`, `electrum_unreachable`, `mempool_poll_failed`, `block_rows_failed` repeating | The node is failing or overloaded. They are logged at the 1st, 2nd, 4th, 8th… in a row, so a rising count is a long outage |
 | `store_slow_write`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full |
-| `connections_refused`, `log_events_dropped` | One address is holding many connections; the log cannot keep up |
+| `connections_refused` | One address is holding many connections |
+| `requests_refused` every minute | Something is being refused: one address flooding, or a proxy set up wrong. Its fields tell which ([`LOGGING.md`](LOGGING.md#refusals)) |
+| `log_events_dropped` | Request lines were dropped: `queue_full`, the output (a disk, a pipe) cannot keep up; `over_budget`, the site served more than the log's ceiling ([`LOGGING.md`](LOGGING.md#for-operators)) |
 
 ### Memory and CPU
 
@@ -396,9 +409,11 @@ Read the log as [above](#the-log) and `/readyz`.
 | The server stops at once | `config_invalid` with the variable's name (never its value) | Fix that variable. A network needs all six of its variables or none ([`CONFIG.md`](CONFIG.md#networks)) |
 | Pages load but nothing from the chain; `/readyz` `503` with `rpc` `unreachable` | `rpc_unreachable`, `electrum_unreachable` and `mempool_poll_failed` with `unavailable`, repeating | The node is down or its address is wrong: `docker compose ps`, `docker compose logs node`, then the `*_HOST`, `*_PORT` and `*_ADDR` settings |
 | `/readyz` `503` with `rpc` `auth_failed` | `rpc_auth_failed` (an `error`), then `mempool_poll_failed` with `auth` | The password in `.env` and the one in `rpc.cookie` differ. Make them equal and `docker compose up -d --force-recreate` |
-| Address pages show an error; everything else works | `http_request` with `status` `503` and `endpoint` `script_stats` or `script_txs` | The node runs without `--sh-index`, which rbitcoin leaves off by default. Turn it on, as the compose file does |
-| Visitors get `429`, on pages they barely used | `http_request` with `refused` `client_rate` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up, or `TRUSTED_PROXIES` is not the address the proxy arrives from. Check with `LOG_CLIENT_ADDR=true` |
-| The store stopped: no mining history, audits or mempool chart | `store_open_failed` with `database or disk is full`, or `block_rows_failed` with `store` while running | The disk is full. Free space and `docker compose restart server`. Block rows are retried and filled in; the minutes of mempool history missed meanwhile are a gap |
+| Address pages show an error; everything else works; `/readyz` `address_index` `off` | `address_index_off` (a `warn`) once Electrum connects, and `http_request` with `status` `503` and `endpoint` `script_stats` or `script_txs` | The node runs without `--sh-index`, which rbitcoin leaves off by default. Turn it on, as the compose file does, and restart the node: the server asks again when it reconnects and logs `address_index_on` |
+| Visitors get `429`, on pages they barely used | `requests_refused` every minute with `untrusted_forwarded` or `proxy_keyed` close to `total` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up (`untrusted_forwarded`: `TRUSTED_PROXIES` is not the address the proxy arrives from; `proxy_keyed`: the proxy does not send the header named in `TRUSTED_PROXY_HEADER`). Check with `LOG_CLIENT_ADDR=true` |
+| The disk filled while the server ran: no new mining rows, audits or mempool chart; `/readyz` `store` `failing` | `store_write_failed` with `error` `disk_full` and SQLite's own message, at the 1st, 2nd, 4th… failed write; `block_rows_failed` with `store` beside it | Free space. Nothing needs a restart: the next write that commits logs `store_write_recovered` and `store` is `ok` again. Block rows are retried and filled in; the minutes of mempool history missed meanwhile are a gap |
+| The store will not take writes for another reason; `/readyz` `store` `failing` | `store_write_failed` with `read_only` (the volume is mounted read-only or not owned by uid 65532), `corrupt`, `busy` (another process holds the file's lock, such as a long backup) or `io` | `read_only`: fix the mount or ownership, then `docker compose restart server`. `corrupt`: [restore a backup](#the-data-directory) or delete the file. `busy`: let the other process finish |
+| The store did not open; `/readyz` `store` `open_failed` | `store_open_failed` with the reason, `database or disk is full` among them | Fix what it names, then `docker compose restart server` |
 | The store stopped after a rollback | `store_open_failed` with `database schema version 5 is newer than this build supports (2)` | An older release cannot open a store a newer one migrated. [Restore the backup](#upgrading) or delete the file |
 | Live updates never arrive; the home page does not move | `ws_origin_refused` with the `origin` and `host` it compared | The proxy changes `Host`. Pass it through as the browser sent it, port included |
 | Same, but nothing about the WebSocket in the server's log | No `http_request` with route `/app/ws` | The proxy does not forward the upgrade. See [any other proxy](#any-other-proxy) |
@@ -408,22 +423,24 @@ Read the log as [above](#the-log) and `/readyz`.
 ## Reference: the image
 
 ```sh
-docker build -t rbitcoin-space .
+docker build --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" -t rbitcoin-space .
 ```
+
+Without the argument the image reports `revision` `unknown`, since `.git` is not part of the build context.
 
 The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch and pinned by digest; all come from Docker Hub or `gcr.io`.
 
 | Stage | From | Does |
 |---|---|---|
 | `web` | `oven/bun` | `bun install --frozen-lockfile` and `bun run build`. Runs on the build platform only, since the output is the same on every architecture |
-| `server` | `rust` (Debian 13) | `cargo build --release --locked -p rbitcoin-space`. The cargo registry and `target/` are BuildKit cache mounts, so a one-file change recompiles one crate. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
+| `server` | `rust` (Debian 13) | `cargo build --release --locked -p rbitcoin-space`. The cargo registry and `target/` are BuildKit cache mounts, so a change recompiles the workspace's own crates and never the dependencies. Every source is touched first: cargo trusts cached output newer than its sources' modification times, and a context's times can be older than the cache (`git archive` gives every file its commit's time), which once left a new migration out of an image without an error. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
 | final | `gcr.io/distroless/cc-debian13:nonroot` | The binary at `/usr/local/bin/rbitcoin-space`, the frontend at `/srv/web`. No shell, no package manager |
 
 Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Everything else is configured as in [`CONFIG.md`](CONFIG.md). It does not set `DATA_DIR`; without it the server keeps no store.
 
 It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns, so it runs with a read-only root filesystem and a volume at `/data`. Its health check is the binary itself: `rbitcoin-space healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
 
-[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
+[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `dev/load/` (a workspace member, whose manifest cargo reads), `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
 
 Check those claims on any image:
 

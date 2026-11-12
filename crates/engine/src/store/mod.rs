@@ -44,6 +44,42 @@ pub enum Event<'a> {
     },
     /// A read ran past [`Options::read_time_limit`] and was stopped.
     ReadTimedOut { limit: Duration },
+    /// A write failed in SQLite, at the 1st, 2nd, 4th… failure in a row. `kind` is from
+    /// [`failure_kind`]; `detail` is SQLite's own message, for the log and never for a client.
+    WriteFailed {
+        kind: &'static str,
+        detail: &'a str,
+        failures: u32,
+    },
+    /// A write committed after `failures` in a row had failed.
+    WriteRecovered { failures: u32 },
+}
+
+/// What the writer last saw, for a status page: [`Store::write_health`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteHealth {
+    /// When a write last committed.
+    pub last_ok: Option<Instant>,
+    /// Writes that failed in SQLite since then; `0` while writes work.
+    pub failures: u32,
+    /// The latest failure's [`failure_kind`].
+    pub kind: Option<&'static str>,
+}
+
+/// Classifies a failed write by SQLite's code, so an operator reads "disk_full", not a code:
+/// `disk_full`, `read_only`, `corrupt`, `busy` (another process holds the lock past the busy
+/// timeout), `io` or `other`. `None` for a constraint failure, which is the caller's logic and
+/// says nothing about the store.
+pub fn failure_kind(e: &rusqlite::Error) -> Option<&'static str> {
+    Some(match e.sqlite_error_code() {
+        Some(ErrorCode::ConstraintViolation) => return None,
+        Some(ErrorCode::DiskFull) => "disk_full",
+        Some(ErrorCode::ReadOnly) => "read_only",
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => "corrupt",
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "busy",
+        Some(ErrorCode::SystemIoFailure | ErrorCode::CannotOpen) => "io",
+        _ => "other",
+    })
 }
 
 type Observer = Arc<dyn Fn(&Event) + Send + Sync>;
@@ -193,12 +229,23 @@ fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|d| Instant::now() >= d)
 }
 
-/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit.
-type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool) + Send>;
+/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit. The
+/// job reports how it ended before it wakes its caller, so health is current when `write` returns.
+type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool, &dyn Fn(Wrote)) + Send>;
+
+/// How a job ended, for [`WriteHealth`].
+enum Wrote {
+    Committed,
+    /// SQLite refused it: the [`failure_kind`] and SQLite's message.
+    Failed(&'static str, String),
+    /// The caller's own error, a constraint or a panic: nothing about the store.
+    Other,
+}
 
 /// One network's SQLite file. Share it behind an `Arc`.
 pub struct Store {
     queue: mpsc::Sender<Job>,
+    health: Arc<Mutex<WriteHealth>>,
     writer: JoinHandle<()>,
     readers: Arc<Readers>,
     options: Options,
@@ -321,12 +368,14 @@ impl Store {
 
         let (queue, mut jobs) = mpsc::channel::<Job>(options.queue.max(1));
         let observer = options.observer.clone();
+        let health = Arc::new(Mutex::new(WriteHealth::default()));
+        let seen = health.clone();
         let writer = std::thread::Builder::new()
             .name(format!("store-{network}"))
             .spawn(move || {
                 while let Some(job) = jobs.blocking_recv() {
                     let start = Instant::now();
-                    job(&mut conn, &sealed);
+                    job(&mut conn, &sealed, &|wrote| record(&seen, wrote, &observer));
                     let elapsed = start.elapsed();
                     if elapsed >= SLOW_WRITE {
                         observer(&Event::SlowWrite {
@@ -339,6 +388,7 @@ impl Store {
             .map_err(OpenError::Thread)?;
         Ok(Self {
             queue,
+            health,
             writer,
             readers,
             options,
@@ -371,6 +421,11 @@ impl Store {
             mpsc::error::TrySendError::Closed(_) => Error::Closed,
         })?;
         done.await.map_err(|_| Error::Closed)?
+    }
+
+    /// Whether writes are committing, and when one last did.
+    pub fn write_health(&self) -> WriteHealth {
+        *self.health.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Writes waiting for the writer.
@@ -444,7 +499,7 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let job: Job = Box::new(move |conn, sealed| {
+    let job: Job = Box::new(move |conn, sealed, report| {
         let result: Result<T, Error> = (|| {
             let t = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             sealed.store(true, Ordering::Relaxed);
@@ -460,8 +515,48 @@ where
             t.commit()?;
             Ok(value)
         })();
+        report(match &result {
+            Ok(_) => Wrote::Committed,
+            Err(Error::Sql(e)) => {
+                failure_kind(e).map_or(Wrote::Other, |kind| Wrote::Failed(kind, e.to_string()))
+            }
+            Err(_) => Wrote::Other,
+        });
         // The caller may have stopped waiting; the write stands either way.
         let _ = tx.send(result);
     });
     (job, rx)
+}
+
+/// Keeps [`WriteHealth`] and reports failures at the 1st, 2nd, 4th… in a row, then the recovery.
+fn record(health: &Mutex<WriteHealth>, wrote: Wrote, observer: &Observer) {
+    let mut h = health.lock().unwrap_or_else(PoisonError::into_inner);
+    match wrote {
+        Wrote::Committed => {
+            let failures = std::mem::take(&mut h.failures);
+            *h = WriteHealth {
+                last_ok: Some(Instant::now()),
+                failures: 0,
+                kind: None,
+            };
+            drop(h);
+            if failures > 0 {
+                observer(&Event::WriteRecovered { failures });
+            }
+        }
+        Wrote::Failed(kind, detail) => {
+            h.failures = h.failures.saturating_add(1);
+            h.kind = Some(kind);
+            let failures = h.failures;
+            drop(h);
+            if failures.is_power_of_two() {
+                observer(&Event::WriteFailed {
+                    kind,
+                    detail: &detail,
+                    failures,
+                });
+            }
+        }
+        Wrote::Other => {}
+    }
 }

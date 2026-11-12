@@ -74,6 +74,7 @@ jobs:
           docker build \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --build-arg "SOURCE_REVISION=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label org.opencontainers.image.licenses=MIT \
             -t rbitcoin-space .

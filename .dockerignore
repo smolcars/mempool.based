@@ -3,6 +3,7 @@
 !Cargo.toml
 !Cargo.lock
 !crates/
+!dev/load/
 !web/
 !design/tokens.css
 !design/logo.svg

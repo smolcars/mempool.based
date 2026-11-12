@@ -115,7 +115,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `log_max_bytes_per_sec`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
+| `server_starting` | info | `version`, `revision` (the commit built, or `unknown`), `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `log_max_bytes_per_sec`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
 | `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool`, `lightning` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`), `lightning` whether its Lightning peer does (`{NET}_LIGHTNING_ENABLED`) |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
@@ -156,6 +156,8 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `rpc_auth_failed` | error | `network` | The node refused `{NET}_RPC_USER` and `{NET}_RPC_PASSWORD`. Checked at startup and every 30 s ([`DEPLOY.md`](DEPLOY.md#health)); written when the refusals start. The server keeps running: fix the credentials. Clients see only `upstream unavailable` |
 | `rpc_unreachable` | warn | `network`, `error`, `failures` | The RPC check got no answer (`timeout`, `unavailable`, `busy`, `decode`): at the 1st, 2nd, 4th, 8th… check in a row. Look at the network, or whether the node is up |
 | `rpc_reachable` | info | `network`, `height`, `failures` | The RPC check got an answer with our credentials: the first at startup, and the first after failures or a refused password |
+| `address_index_off` | warn | `network` | The node runs without `--sh-index`: address pages and the address and scripthash routes answer `503`. Asked once the Electrum connection is up and after every reconnect (one lookup of an unused scripthash); written at the first answer and when it changes. Also `address_index` in `/readyz` ([`DEPLOY.md`](DEPLOY.md#health)) |
+| `address_index_on` | info | `network` | The node has its address index: the first answer, and after it was off |
 
 `crates/server/src/report.rs` produces these from the client's `health()` watch and event stream; call `report_electrum` once where each network's Electrum client is created. The Esplora and RPC clients return their failures as error values (`rpc::Error::Busy` is the node's back-pressure); the code that calls them owns the event, summarised by rule 3.
 
@@ -236,6 +238,8 @@ The store is in [`STORE.md`](STORE.md); the block table's settings in [`CONFIG.m
 | `store_open_failed` | error | `network`, `error` | The network's SQLite file would not open (unwritable `DATA_DIR`, a corrupt file, a file from a newer build). That network runs without a store |
 | `store_migration_applied` | info | `network`, `migration`, `duration_ms` | A schema migration ran while opening |
 | `store_slow_write` | warn | `network`, `duration_ms`, `queue_depth` | One write held the writer for a second or more, with `queue_depth` writes waiting |
+| `store_write_failed` | warn | `network`, `error`, `sqlite`, `failures` | SQLite refused a write: `error` is `disk_full`, `read_only` (a read-only mount, or a file the server may not write), `corrupt`, `busy` (another process held the lock past 5 s), `io` or `other`; `sqlite` is SQLite's own message. At the 1st, 2nd, 4th, 8th… in a row, whichever task wrote. `/readyz` shows `store` `failing` meanwhile |
+| `store_write_recovered` | info | `network`, `failures` | A write committed after `failures` in a row had failed |
 | `store_read_timed_out` | warn | `network`, `limit_ms` | A read ran past its limit and was stopped |
 | `block_rows_followed` | debug | `network`, `tip`, `written`, `rated`, `duration_ms` | The newest rows were checked against a new tip: rows added or replaced, rows given fee rates. Debug, since it is once per block |
 | `block_rows_reorged` | warn | `network`, `fork_height`, `stale` | Rows described blocks a reorg removed from the best chain; they were replaced or deleted |

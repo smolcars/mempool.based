@@ -22,17 +22,27 @@ RUN bun run build
 
 FROM ${RUST_IMAGE} AS server
 ARG TARGETPLATFORM
+# The commit being built, reported at /healthz; the context has no .git to read it from.
+# `unknown` when not given. release.yml passes the same commit as the image's revision label.
+ARG SOURCE_REVISION=unknown
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-# Cached target/ and registry: a one-file change recompiles one crate, not the dependency tree.
+# A workspace member: cargo reads every member's manifest even to build one package.
+COPY dev/load/ dev/load/
+# Cached target/ and registry: a change recompiles our own crates, never the dependency tree.
+# Cargo trusts a cached output newer than its sources' mtimes, and a context's mtimes need not
+# be newer (`git archive` stamps every file with its commit's time), so they are made new here.
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-$TARGETPLATFORM,target=/src/target \
-    cargo build --release --locked -p rbitcoin-space \
+    find Cargo.toml Cargo.lock crates dev -exec touch {} + \
+    && cargo build --release --locked -p rbitcoin-space \
     && cp target/release/rbitcoin-space /rbitcoin-space \
     && mkdir /data
 
 FROM ${RUNTIME_IMAGE}
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION}
 COPY --from=server /rbitcoin-space /usr/local/bin/rbitcoin-space
 COPY --from=web /src/web/dist /srv/web
 # The one writable place, for the SQLite store. A volume mounted here starts with this owner.

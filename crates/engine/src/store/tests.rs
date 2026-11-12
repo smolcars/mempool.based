@@ -149,6 +149,28 @@ fn shipped_migrations_are_numbered_and_unchanged() {
     }
 }
 
+/// `build.rs` reruns when a migration is added or changed: the compiled-in list is the directory
+/// as it is now, names and text. A stale build-script output fails here.
+#[test]
+fn compiled_migrations_match_the_files() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+    let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.ends_with(".sql"))
+        .map(|n| {
+            let text = std::fs::read_to_string(dir.join(&n)).unwrap();
+            (n, text)
+        })
+        .collect();
+    files.sort();
+    let compiled: Vec<(String, String)> = MIGRATIONS
+        .iter()
+        .map(|(n, t)| ((*n).to_owned(), (*t).to_owned()))
+        .collect();
+    assert_eq!(compiled, files);
+}
+
 #[tokio::test]
 async fn fresh_database_gets_every_migration_and_wal() {
     let dir = TempDir::new();
@@ -354,6 +376,130 @@ async fn a_failed_or_panicking_write_rolls_back_and_the_writer_survives() {
     insert(&store, 3).await;
     assert_eq!(count(&store).await, 1);
     store.close().await;
+}
+
+/// What the observer heard about failing writes: `(kind, detail, failures)`, and recoveries.
+type Heard = Arc<Mutex<(Vec<(&'static str, String, u32)>, Vec<u32>)>>;
+
+fn listening(dir: &Path) -> (Store, Heard) {
+    let heard = Heard::default();
+    let h = heard.clone();
+    let observer = move |e: &Event| {
+        let mut h = h.lock().unwrap();
+        match e {
+            Event::WriteFailed {
+                kind,
+                detail,
+                failures,
+            } => h.0.push((kind, (*detail).to_owned(), *failures)),
+            Event::WriteRecovered { failures } => h.1.push(*failures),
+            _ => {}
+        }
+    };
+    let options = Options {
+        observer: Arc::new(observer),
+        ..Options::default()
+    };
+    (
+        Store::open_with(dir, "regtest", options, &[M1]).unwrap(),
+        heard,
+    )
+}
+
+/// Sets a writer pragma that outlives the write, as a full disk or a read-only mount would.
+async fn writer_pragma(store: &Store, sql: &'static str) {
+    store
+        .write(move |s| {
+            let _: Option<i64> = s.prepare(sql)?.query_row([], |r| r.get(0)).optional()?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+async fn insert_big(store: &Store, id: i64) -> Result<(), Error> {
+    store
+        .write(move |sql| {
+            sql.prepare("INSERT INTO items (id, label) VALUES (?1, ?2)")?
+                .execute(params![id, "x".repeat(100_000)])?;
+            Ok(())
+        })
+        .await
+}
+
+/// A full disk, simulated by capping the file at its current size: SQLite answers exactly as it
+/// does when the disk is full (`SQLITE_FULL`). Every failed write counts; the 1st, 2nd, 4th and
+/// 8th are reported with SQLite's message; the health says so until a write commits again.
+#[tokio::test]
+async fn a_full_disk_is_classified_reported_in_powers_of_two_and_recovers() {
+    let dir = TempDir::new();
+    let (store, heard) = listening(&dir.0);
+    assert_eq!(store.write_health(), WriteHealth::default());
+    insert(&store, 1).await;
+    writer_pragma(&store, "PRAGMA max_page_count = 1").await;
+    let ok = store.write_health();
+    assert!(ok.last_ok.is_some() && ok.failures == 0 && ok.kind.is_none());
+
+    for i in 0..9 {
+        let e = insert_big(&store, 10 + i).await.unwrap_err();
+        assert!(matches!(e, Error::Sql(_)), "{e}");
+    }
+    let h = store.write_health();
+    assert_eq!(
+        (h.failures, h.kind, h.last_ok),
+        (9, Some("disk_full"), ok.last_ok)
+    );
+    let failed = heard.lock().unwrap().0.clone();
+    assert_eq!(
+        failed.iter().map(|f| f.2).collect::<Vec<_>>(),
+        [1, 2, 4, 8],
+        "{failed:?}"
+    );
+    assert!(failed.iter().all(|f| f.0 == "disk_full"));
+    assert_eq!(failed[0].1, "database or disk is full");
+
+    writer_pragma(&store, "PRAGMA max_page_count = 1000000").await;
+    assert_eq!(heard.lock().unwrap().1, [9]);
+    let h = store.write_health();
+    assert!(h.failures == 0 && h.kind.is_none() && h.last_ok > ok.last_ok);
+    insert_big(&store, 99).await.unwrap();
+    store.close().await;
+}
+
+/// Writes refused as on a read-only mount (`query_only` gives SQLite's `SQLITE_READONLY`), and a
+/// read-only file classified the same way. A constraint failure is the caller's, not the store's.
+#[tokio::test]
+async fn read_only_is_classified_and_constraints_are_not_failures() {
+    let dir = TempDir::new();
+    let (store, heard) = listening(&dir.0);
+    insert(&store, 1).await;
+    let dup = store
+        .write(|sql| {
+            sql.prepare("INSERT INTO items (id, label) VALUES (1, 'x')")?
+                .execute([])?;
+            Ok(())
+        })
+        .await;
+    assert!(matches!(dup, Err(Error::Sql(_))));
+    assert_eq!(store.write_health().failures, 0);
+
+    writer_pragma(&store, "PRAGMA query_only = ON").await;
+    assert!(insert_big(&store, 2).await.is_err());
+    assert_eq!(store.write_health().kind, Some("read_only"));
+    let failed = heard.lock().unwrap().0.clone();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].0, "read_only");
+    assert!(failed[0].1.contains("readonly"), "{failed:?}");
+    store.close().await;
+
+    // The same code from a file the process may not write.
+    let file = dir.0.join("regtest.sqlite");
+    let conn =
+        rusqlite::Connection::open_with_flags(&file, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let e = conn
+        .execute("INSERT INTO items (id, label) VALUES (5, 'x')", [])
+        .unwrap_err();
+    assert_eq!(failure_kind(&e), Some("read_only"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

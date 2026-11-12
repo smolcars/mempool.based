@@ -155,7 +155,7 @@ The block table ([`STORE.md`](STORE.md#blocks)) needs `DATA_DIR`. Its newest 100
 | Variable | Default | Protects against |
 |---|---|---|
 | `BACKFILL_ENABLED` | `true` | `false` pauses the backfill. The table is its progress, so the next start with `true` resumes where it stopped, redoing nothing |
-| `BACKFILL_BUSY_PERCENT` | `50` | Load on the node. The share of wall time, 1 to 100, the backfill keeps its one call busy: after a step that took `t` it waits `t × (100 − p) / p`. It also backs off from 5 s to 5 minutes, doubling, whenever the node is busy or failing. At 50, every mainnet block's totals are in after about 11 to 13 hours, and a year's fee rates with them on a node with the block listing route (about 38 hours through `getblock`); the costs are in [`STORE.md`](STORE.md#backfill) |
+| `BACKFILL_BUSY_PERCENT` | `50` | Load on the node. The share of wall time, 1 to 100, the backfill keeps its one call busy: after a step that took `t` it waits `t × (100 − p) / p`. It also backs off from 5 s to 5 minutes, doubling, whenever the node is busy or failing. How long that takes, measured on mainnet at 50 and on each kind of node, is in [`STORE.md`](STORE.md#backfill) (about a day and a half for every block's totals) |
 | `BACKFILL_FEE_RATE_DEPTH` | `52560` | How far back fee rates are filled, in blocks below the tip (52,560 is about a year). Each costs a block listing: about 60 ms and 0.3 MB of node time on a node with `/block/:hash/txs/summary`, a `getblock` of up to 10 MB and 2 s on one without; `0` fills none. Rows deeper than this keep their totals and coinbase, and the block facts route computes their fee rates on demand |
 
 ### WebSocket

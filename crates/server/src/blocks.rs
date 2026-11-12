@@ -13,6 +13,7 @@ use engine::store::{self, Store};
 use logging::events::{
     BlockBackfillProgress, BlockRowsFailed, BlockRowsFollowed, BlockRowsRecovered,
     BlockRowsReorged, StoreMigrationApplied, StoreOpenFailed, StoreReadTimedOut, StoreSlowWrite,
+    StoreWriteFailed, StoreWriteRecovered,
 };
 use node::esplora::Esplora;
 use node::rpc::{Limits, Rpc};
@@ -73,6 +74,20 @@ impl BlockTable {
             store::Event::ReadTimedOut { limit } => logging::emit(&StoreReadTimedOut {
                 network,
                 limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
+            }),
+            store::Event::WriteFailed {
+                kind,
+                detail,
+                failures,
+            } => logging::emit(&StoreWriteFailed {
+                network,
+                error: kind,
+                sqlite: detail,
+                failures: *failures,
+            }),
+            store::Event::WriteRecovered { failures } => logging::emit(&StoreWriteRecovered {
+                network,
+                failures: *failures,
             }),
         };
         let options = store::Options {

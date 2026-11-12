@@ -64,6 +64,9 @@ pub const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
     (X_FRAME_OPTIONS, "DENY"),
 ];
 
+/// The commit this binary was built from, or `unknown` (`build.rs`).
+pub const REVISION: &str = env!("SOURCE_REVISION");
+
 /// Vite puts content-hashed files under `/assets/`, so a URL there never changes content.
 pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
@@ -101,10 +104,14 @@ pub struct NetworkContext {
     pub difficulty: difficulty::Difficulty,
     /// The block table, when `DATA_DIR` is set and the file opened.
     pub blocks: Option<blocks::BlockTable>,
+    /// `DATA_DIR` is set, so a missing table means the file would not open.
+    pub data_dir: bool,
     /// The mining routes' answers, kept current by [`mining::run`].
     pub mining: mining::Mining,
     /// What the last node check found, for `/readyz`; kept by [`health::watch`].
     pub node: health::NodeCheck,
+    /// Whether the node has its address index; kept by [`health::watch_address_index`].
+    pub address_index: health::AddressIndex,
     /// Fee recommendations and projected-block totals, kept current by `ws::fees`.
     pub fees: ws::fees::Fees,
     pub history: statistics::History,
@@ -150,6 +157,7 @@ impl NetworkContext {
             .and_then(|dir| blocks::BlockTable::open(dir, config, &url, &lister));
         Some(Self {
             blocks: table,
+            data_dir: all.data_dir.is_some(),
             lister,
             rpc: node::rpc::Rpc::new(&rpc.host, rpc.port, &rpc.user, rpc.password.expose()).ok()?,
             summaries: summary::Summaries::new(
@@ -166,6 +174,7 @@ impl NetworkContext {
             difficulty: difficulty::Difficulty::default(),
             mining: mining::Mining::default(),
             node: health::NodeCheck::default(),
+            address_index: health::AddressIndex::default(),
             fees: ws::fees::Fees::default(),
             history: statistics::History::default(),
             v1: Arc::new(ws::v1::Compat::new(Some(&url))),
@@ -255,6 +264,7 @@ impl App {
                     lightning::spawn(&ctx);
                     peers.extend(ctx.lightning.clone());
                     tokio::spawn(summary::detect_listing(Arc::clone(&ctx)));
+                    tokio::spawn(health::watch_address_index(Arc::clone(&ctx)));
                     routes
                         .clone()
                         .route("/api/{*rest}", any(esplora::handle))
@@ -390,7 +400,11 @@ impl App {
 }
 
 async fn healthz() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+    Json(json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "revision": REVISION,
+    }))
 }
 
 async fn not_found() -> ApiError {
