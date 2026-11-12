@@ -16,8 +16,11 @@ use super::{Close, Conn, Frame, Sockets, Topic};
 use crate::NetworkContext;
 use crate::config::Network;
 
-/// Attempts to fetch a new block's JSON before telling clients to resync instead.
-const BLOCK_ATTEMPTS: u32 = 3;
+/// How often a new block is asked for while the node's Esplora has not caught up with its
+/// Electrum announcement (docs/RBITCOIN.md): at most one request per interval.
+const BLOCK_RETRY: Duration = Duration::from_millis(25);
+/// How long a new block is waited for before clients are told to resync instead.
+const BLOCK_WAIT: Duration = Duration::from_secs(3);
 
 /// What a new subscriber to a topic is sent first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,7 +154,7 @@ impl Hub {
 }
 
 /// Feeds the `blocks` topic from the network's Electrum events until they end. One task per
-/// network; the only upstream work is one Esplora fetch per new block, whatever the client count.
+/// network; the only upstream work is one Esplora fetch loop per new block, whatever the client count.
 pub async fn feed(
     ctx: Arc<NetworkContext>,
     mut events: tokio::sync::broadcast::Receiver<electrum::Event>,
@@ -230,25 +233,28 @@ fn resync(ctx: &NetworkContext, since: Instant, snapshot: Snapshot) {
         .announce(Topic::Blocks, "resync", &msg, snapshot, since);
 }
 
-/// The block's Esplora JSON, checked to be the block we asked for.
+/// The block's Esplora JSON, checked to be the block we asked for. Asked for every
+/// [`BLOCK_RETRY`] until [`BLOCK_WAIT`] has passed, so at most 120 requests per new block. The
+/// full fetch doubles as the existence check: a missing block is a short 404, and the answer is
+/// about 500 bytes, so a separate check would only add a round trip once the block is there.
 async fn fetch_block(esplora: &Esplora, hash: BlockHash) -> Option<Value> {
     let id = hash.to_string();
-    for attempt in 0..BLOCK_ATTEMPTS {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(100) * attempt).await;
-        }
-        let Ok(raw) = esplora.raw(&Route::Block(hash)).await else {
-            continue;
-        };
+    let once = async || {
+        let raw = esplora.raw(&Route::Block(hash)).await.ok()?;
         if !raw.status.is_success() {
-            continue;
+            return None;
         }
-        let Ok(block) = serde_json::from_slice::<Value>(&raw.body) else {
-            continue;
-        };
-        if block.get("id").and_then(Value::as_str) == Some(id.as_str()) {
-            return Some(block);
+        let block = serde_json::from_slice::<Value>(&raw.body).ok()?;
+        (block.get("id").and_then(Value::as_str) == Some(id.as_str())).then_some(block)
+    };
+    let retry = async {
+        loop {
+            let started = tokio::time::Instant::now();
+            if let Some(block) = once().await {
+                return block;
+            }
+            tokio::time::sleep_until(started + BLOCK_RETRY).await;
         }
-    }
-    None
+    };
+    tokio::time::timeout(BLOCK_WAIT, retry).await.ok()
 }

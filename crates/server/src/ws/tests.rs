@@ -1,4 +1,6 @@
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
+
+use std::collections::HashMap;
 
 use super::frame::{self, Incoming};
 use super::*;
@@ -219,4 +221,197 @@ fn client_close_frames_are_checked() {
         assert_eq!(close(reserved, b""), Close::PROTOCOL, "{reserved}");
     }
     assert_eq!(close(1000, &[0xff]), Close::INVALID_UTF8);
+}
+
+/// xorshift64*: a deterministic generator, so a failing stream can be replayed from its index.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+
+    fn chance(&mut self, one_in: usize) -> bool {
+        self.below(one_in) == 0
+    }
+
+    fn bytes(&mut self, n: usize) -> Vec<u8> {
+        (0..n).map(|_| self.next() as u8).collect()
+    }
+}
+
+/// One client frame, mostly well formed: a random opcode, sometimes reserved bits, no mask, a
+/// non-minimal or absurd length, or a payload that is not what its header says.
+fn fuzz_frame(rng: &mut Rng, out: &mut Vec<u8>) {
+    let opcode = match rng.below(10) {
+        0..=3 => frame::TEXT,
+        4 => frame::CONTINUATION,
+        5 => frame::PING,
+        6 => frame::PONG,
+        7 => frame::CLOSE,
+        8 => frame::BINARY,
+        _ => rng.below(16) as u8,
+    };
+    let fin = if rng.chance(3) { 0 } else { 0x80 };
+    let rsv = if rng.chance(20) {
+        0x10 << rng.below(3)
+    } else {
+        0
+    };
+    let payload = match rng.below(6) {
+        0 => br#"{"op":"ping"}"#.to_vec(),
+        1 => br#"{"op":"subscribe","topics":["blocks"]}"#.to_vec(),
+        2 => 1000u16.to_be_bytes().to_vec(),
+        3 => vec![b' '; rng.below(300)],
+        _ => {
+            let n = rng.below(140);
+            rng.bytes(n)
+        }
+    };
+    out.push(fin | rsv | opcode);
+    let mask_bit = if rng.chance(30) { 0 } else { 0x80 };
+    let len = payload.len() as u64;
+    match rng.below(12) {
+        0 => {
+            out.push(mask_bit | 127);
+            let absurd = [u64::MAX, 1 << 63, 1 << 32, 0x1_0000, len];
+            out.extend_from_slice(&absurd[rng.below(absurd.len())].to_be_bytes());
+        }
+        1 => {
+            out.push(mask_bit | 126);
+            out.extend_from_slice(&(len as u16).to_be_bytes());
+        }
+        _ if len < 126 => out.push(mask_bit | len as u8),
+        _ if len <= 0xFFFF => {
+            out.push(mask_bit | 126);
+            out.extend_from_slice(&(len as u16).to_be_bytes());
+        }
+        _ => {
+            out.push(mask_bit | 127);
+            out.extend_from_slice(&len.to_be_bytes());
+        }
+    }
+    let key = rng.bytes(4);
+    if mask_bit != 0 {
+        out.extend_from_slice(&key);
+    }
+    out.extend(payload.iter().zip(key.iter().cycle()).map(|(b, k)| b ^ k));
+}
+
+/// A byte stream: several frames, then sometimes bit flips, a cut, or plain noise.
+fn fuzz_stream(rng: &mut Rng) -> Vec<u8> {
+    if rng.chance(10) {
+        let n = rng.below(64);
+        return rng.bytes(n);
+    }
+    let mut out = Vec::new();
+    for _ in 0..1 + rng.below(12) {
+        fuzz_frame(rng, &mut out);
+    }
+    if !out.is_empty() && rng.chance(3) {
+        for _ in 0..1 + rng.below(4) {
+            let i = rng.below(out.len());
+            out[i] ^= 1 << rng.below(8);
+        }
+    }
+    if !out.is_empty() && rng.chance(4) {
+        out.truncate(rng.below(out.len()));
+    }
+    out
+}
+
+/// A reader over a byte slice that records the largest buffer it is asked to fill. The parser
+/// reads each payload straight into a buffer of the payload's size, so this is the largest
+/// payload it allocated.
+struct Probe<'a> {
+    data: &'a [u8],
+    largest: usize,
+}
+
+impl tokio::io::AsyncRead for Probe<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.largest = self.largest.max(buf.remaining());
+        let n = buf.remaining().min(self.data.len());
+        let (now, rest) = self.data.split_at(n);
+        buf.put_slice(now);
+        self.data = rest;
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn the_parser_survives_random_and_mutated_streams() {
+    const STREAMS: u64 = 50_000;
+    let defined = [
+        Close::NORMAL,
+        Close::PROTOCOL,
+        Close::UNSUPPORTED,
+        Close::INVALID_UTF8,
+        Close::TOO_BIG,
+        Close::BAD_MESSAGE,
+        Close::TOO_MANY_SUBSCRIPTIONS,
+        Close::GONE,
+    ];
+    let hub = hub();
+    let started = Instant::now();
+    let mut seen = HashMap::new();
+    let mut rng = Rng(0x5EED_CAFE_F00D_D00D);
+    for i in 0..STREAMS {
+        let max = [16, 125, 200, 1024][rng.below(4)];
+        let limits = WsLimits {
+            max_message_bytes: max,
+            messages_per_sec: 1_000_000,
+            ..WsLimits::default()
+        };
+        let stream = fuzz_stream(&mut rng);
+        let mut probe = Probe {
+            data: &stream,
+            largest: 0,
+        };
+        let (conn, _rx) = conn(1024);
+        let opened = Instant::now();
+        read_loop(&mut probe, &hub, &conn, &limits, opened, &AtomicU64::new(0)).await;
+        let reason = conn.reason();
+        assert!(
+            reason.is_some_and(|r| defined.contains(&r)),
+            "stream {i}: {reason:?}"
+        );
+        assert!(
+            probe.largest <= max.max(125),
+            "stream {i}: a {}-byte read with a {max}-byte limit",
+            probe.largest
+        );
+        *seen.entry(reason.map(|r| r.code)).or_insert(0u32) += 1;
+    }
+    // Every outcome the generator aims at was reached, so the streams are not all rejected early.
+    for code in [1000, 1002, 1003, 1006, 1007, 1009, 4000] {
+        assert!(
+            seen.contains_key(&Some(code)),
+            "{code} never reached: {seen:?}"
+        );
+    }
+    eprintln!("{STREAMS} streams in {:?}: {seen:?}", started.elapsed()); // test output only
+}
+
+#[test]
+fn reassembly_never_holds_more_than_the_limit() {
+    for (max, step) in [(1024, 1), (1024, 7), (1000, 333), (16, 16)] {
+        let mut buf = vec![b'a'; step];
+        while buf.len() + step <= max {
+            append(&mut buf, &vec![b'a'; step], max).unwrap();
+            assert!(buf.capacity() <= max, "{} > {max}", buf.capacity());
+        }
+        assert_eq!(append(&mut buf, &vec![b'a'; max], max), Err(Close::TOO_BIG));
+    }
 }
