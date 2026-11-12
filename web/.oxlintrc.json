@@ -17,6 +17,8 @@
     "reportUnusedDisableDirectives": "error"
   },
   "env": { "browser": true, "es2022": true },
+  // Solid writes a label's `for` as `for`, not React's `htmlFor`.
+  "settings": { "jsx-a11y": { "attributes": { "for": ["htmlFor", "for"] } } },
   "ignorePatterns": ["dist"],
   "rules": {
     // Tuned rather than off.
@@ -42,8 +44,6 @@
     "eslint/no-unassigned-vars": "off",
     // Fights Solid: `const x = props.x` is how props stay reactive; destructuring breaks that.
     "eslint/prefer-destructuring": "off",
-    // Reads React's `htmlFor`; Solid writes `for`, so every correct label fails.
-    "jsx-a11y/label-has-associated-control": "off",
     // Wants <output> for role="status"; swapping a <p> or <div> for a form element changes layout
     // and semantics, and role="status" is valid ARIA.
     "jsx-a11y/prefer-tag-over-role": "off",
