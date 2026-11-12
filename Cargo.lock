@@ -619,6 +619,7 @@ dependencies = [
  "engine",
  "hyper",
  "hyper-util",
+ "lightning",
  "ln",
  "logging",
  "node",

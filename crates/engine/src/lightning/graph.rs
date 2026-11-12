@@ -176,7 +176,7 @@ impl Index {
     /// Indexes a copy of the graph. Channels named twice count once; a node left without a
     /// channel (it lost its last one while the copy was taken) is left out, as the graph would,
     /// and a channel whose node was not copied gets a node without an announcement.
-    pub fn build(nodes: Vec<GraphNode>, mut channels: Vec<GraphChannel>, past: Past) -> Self {
+    pub fn build(nodes: Vec<GraphNode>, mut channels: Vec<GraphChannel>, past: &Past) -> Self {
         channels.sort_unstable_by_key(|c| c.scid);
         channels.dedup_by_key(|c| c.scid);
         let mut announced: HashMap<[u8; 33], Option<Announcement>> =

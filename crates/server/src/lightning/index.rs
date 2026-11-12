@@ -1,0 +1,398 @@
+//! What the node, channel, search and ranking routes read (`docs/LIGHTNING.md`, "Routes"): an
+//! [`Index`] of the verified graph, rebuilt every [`EVERY`] while the graph is synced, and the
+//! funding txids the peer never learns, asked of the node in the background.
+//!
+//! The graph is copied [`CHUNK`] entries per hold of its lock, so gossip never waits more than a
+//! fraction of a millisecond for it, and indexed off the lock on a blocking thread. Requests read
+//! the finished index through an `Arc` and never touch the graph, the peer or the node.
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use engine::lightning::{self as store_ln, Announcement, GraphChannel, GraphNode, Index, Past};
+use engine::store::Store;
+use logging::events::{LightningFundingFailed, LightningIndexBuilt};
+
+use super::{Lightning, short};
+
+/// How often the index is rebuilt: how far an answer can lag the graph, plus a build.
+pub(crate) const EVERY: Duration = Duration::from_secs(30);
+/// How soon a first index is tried again while the graph is not synced yet.
+const FIRST_TRY: Duration = Duration::from_secs(5);
+/// Graph entries copied per hold of its lock.
+pub(crate) const CHUNK: usize = 2_000;
+
+/// The live graph, read under its lock: the peer, or a graph built by a test.
+pub(crate) trait GraphRead {
+    fn read_graph<R>(&self, f: impl FnOnce(&ln::ReadOnlyNetworkGraph<'_>) -> R) -> R;
+}
+
+impl GraphRead for ln::Peer {
+    fn read_graph<R>(&self, f: impl FnOnce(&ln::ReadOnlyNetworkGraph<'_>) -> R) -> R {
+        self.read(f)
+    }
+}
+
+fn key(id: &ln::NodeId) -> Option<[u8; 33]> {
+    id.as_slice().try_into().ok()
+}
+
+fn policy(u: &ln::ChannelUpdateInfo) -> store_ln::Policy {
+    store_ln::Policy {
+        fee_rate: u.fees.proportional_millionths,
+        base_fee_msat: u.fees.base_msat,
+        cltv_delta: u.cltv_expiry_delta,
+        min_htlc_msat: u.htlc_minimum_msat,
+        max_htlc_msat: u.htlc_maximum_msat,
+        enabled: u.enabled,
+        last_update: u.last_update,
+    }
+}
+
+fn channel(scid: u64, c: &ln::ChannelInfo) -> Option<GraphChannel> {
+    Some(GraphChannel {
+        scid,
+        nodes: [key(&c.node_one)?, key(&c.node_two)?],
+        capacity: c.capacity_sats.unwrap_or(0),
+        policies: [
+            c.one_to_two.as_ref().map(policy),
+            c.two_to_one.as_ref().map(policy),
+        ],
+    })
+}
+
+fn node(id: &ln::NodeId, n: &ln::NodeInfo) -> Option<GraphNode> {
+    Some(GraphNode {
+        id: key(id)?,
+        announcement: n.announcement_info.as_ref().map(|a| Announcement {
+            // LDK's printing: up to the first NUL, control characters as U+FFFD. At most 32 bytes
+            // of gossip, so at most 96 bytes here.
+            alias: a.alias().to_string(),
+            color: a.rgb(),
+            addresses: a.addresses().iter().map(ToString::to_string).collect(),
+            features: a.features().le_flags().to_vec(),
+            last_update: a.last_update(),
+        }),
+    })
+}
+
+/// A copy of the graph, and the longest the graph's lock was held for it.
+pub(crate) struct Copy {
+    pub nodes: Vec<GraphNode>,
+    pub channels: Vec<GraphChannel>,
+    pub longest_hold: Duration,
+}
+
+/// Copies the graph [`CHUNK`] entries at a time, releasing its lock between chunks. Gossip that
+/// lands in between is copied or not; an entry gone by its chunk is skipped, and the index makes
+/// sense of the rest ([`Index::build`]).
+pub(crate) fn copy(g: &impl GraphRead) -> Copy {
+    let mut longest_hold = Duration::ZERO;
+    let mut timed = |f: &mut dyn FnMut(&ln::ReadOnlyNetworkGraph<'_>)| {
+        g.read_graph(|graph| {
+            let started = Instant::now();
+            f(graph);
+            longest_hold = longest_hold.max(started.elapsed());
+        });
+    };
+    let (mut scids, mut ids) = (Vec::new(), Vec::new());
+    timed(&mut |g| {
+        scids = g.channels().unordered_keys().copied().collect();
+        ids = g.nodes().unordered_keys().copied().collect();
+    });
+    let mut channels = Vec::with_capacity(scids.len());
+    for chunk in scids.chunks(CHUNK) {
+        timed(&mut |g| {
+            channels.extend(chunk.iter().filter_map(|s| channel(*s, g.channel(*s)?)));
+        });
+    }
+    let mut nodes = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(CHUNK) {
+        timed(&mut |g| nodes.extend(chunk.iter().filter_map(|id| node(id, g.node(id)?))));
+    }
+    Copy {
+        nodes,
+        channels,
+        longest_hold,
+    }
+}
+
+/// Keeps `l`'s index current while the peer runs: every [`EVERY`], if the graph is synced, a
+/// copy of it and the store's past (read again only after new history or statistics rows),
+/// indexed on a blocking thread. A graph that is not synced is never indexed, so a route never
+/// answers from a half-loaded graph.
+pub(crate) async fn keep(
+    peer: Arc<ln::Peer>,
+    store: Arc<Store>,
+    l: Arc<Lightning>,
+    network: &'static str,
+) {
+    let status = peer.status();
+    let mut past: Option<((u64, u64), Arc<Past>)> = None;
+    loop {
+        if status.borrow().synced {
+            let seen = (
+                l.records.load(Ordering::Relaxed),
+                l.written.load(Ordering::Acquire),
+            );
+            if past.as_ref().is_none_or(|(s, _)| *s != seen) {
+                // A failed read keeps the last past; the next round tries again.
+                if let Ok(p) = store_ln::past(&store).await {
+                    past = Some((seen, Arc::new(p)));
+                }
+            }
+            if let Some((_, p)) = &past {
+                let (peer, p) = (Arc::clone(&peer), Arc::clone(p));
+                let built = tokio::task::spawn_blocking(move || {
+                    let started = Instant::now();
+                    let c = copy(&*peer);
+                    let copied = started.elapsed();
+                    let index = Index::build(c.nodes, c.channels, &p);
+                    (index, copied, started.elapsed(), c.longest_hold)
+                })
+                .await;
+                if let Ok((index, copied, took, hold)) = built {
+                    let first = l.index().is_none();
+                    let (nodes, channels) = index.len();
+                    l.set_index(index);
+                    l.index_ms.store(
+                        took.as_micros().try_into().unwrap_or(u64::MAX),
+                        Ordering::Relaxed,
+                    );
+                    if first {
+                        logging::emit(&LightningIndexBuilt {
+                            network,
+                            nodes,
+                            channels,
+                            copy_ms: copied.as_secs_f64() * 1000.0,
+                            longest_hold_ms: hold.as_secs_f64() * 1000.0,
+                            duration_ms: took.as_secs_f64() * 1000.0,
+                        });
+                    }
+                }
+            }
+        }
+        let wait = if l.index().is_some() {
+            EVERY
+        } else {
+            FIRST_TRY
+        };
+        tokio::time::sleep(wait).await;
+    }
+}
+
+/// Least time between two funding-txid requests: at most 20 a second, one at a time.
+const FUNDING_EVERY: Duration = Duration::from_millis(50);
+/// Rows read, and txids stored, per round.
+const FUNDING_BATCH: usize = 300;
+/// How long a caught-up filler waits before looking for new channels.
+const FUNDING_IDLE: Duration = Duration::from_secs(60);
+
+/// Asks the node for each stored channel's funding txid (`/block/:hash/txid/:index`, one small
+/// request per channel, once), so a transaction's channels are found by index. Runs in the
+/// background at a bounded rate; requests never wait for it.
+pub(crate) async fn fill_funding(
+    chain: node::esplora::Esplora,
+    store: Arc<Store>,
+    l: Arc<Lightning>,
+    network: &'static str,
+) {
+    let mut after = 0;
+    let mut failures = 0u32;
+    loop {
+        let rows = store_ln::unfunded(&store, after, FUNDING_BATCH)
+            .await
+            .unwrap_or_default();
+        let Some(&(last, _)) = rows.last() else {
+            after = 0;
+            tokio::time::sleep(FUNDING_IDLE).await;
+            continue;
+        };
+        let mut found = Vec::with_capacity(rows.len());
+        for (scid, hash) in rows {
+            let started = tokio::time::Instant::now();
+            let index = u32::try_from(scid >> 16 & 0xff_ffff).unwrap_or(0);
+            match chain.block_txid(hash, index).await {
+                Ok(t) => {
+                    found.push((scid, hash, t.value));
+                    failures = 0;
+                }
+                // The block left the chain: the history will move the row; skip it this round.
+                Err(node::esplora::Error::NotFound) => {}
+                Err(e) => {
+                    failures = failures.saturating_add(1);
+                    if failures.is_power_of_two() {
+                        logging::emit(&LightningFundingFailed {
+                            network,
+                            error: short(&e.to_string()),
+                            failures,
+                        });
+                    }
+                    let backoff = 1u64 << failures.min(7).saturating_sub(1);
+                    tokio::time::sleep(Duration::from_secs(backoff)).await;
+                    break;
+                }
+            }
+            tokio::time::sleep_until(started + FUNDING_EVERY).await;
+        }
+        let stored = found.len() as u64;
+        // A full write queue or a failure loses only this round's answers: asked again later.
+        if !found.is_empty() && store_ln::set_funding(&store, found).await.is_ok() {
+            l.funded.fetch_add(stored, Ordering::Relaxed);
+        }
+        if failures == 0 {
+            after = last;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use std::cell::Cell;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use lightning::bitcoin::Network;
+    use lightning::bitcoin::constants::ChainHash;
+    use lightning::ln::msgs::{SocketAddress, UnsignedChannelUpdate, UnsignedNodeAnnouncement};
+    use lightning::routing::gossip::{NetworkGraph, NodeAlias, NodeId};
+    use lightning::types::features::{ChannelFeatures, NodeFeatures};
+    use lightning::util::logger::{Logger, Record};
+
+    use super::*;
+
+    struct Quiet;
+    impl Logger for Quiet {
+        fn log(&self, _: Record) {}
+    }
+
+    fn id(n: u32) -> NodeId {
+        let mut k = [2; 33];
+        k[1..5].copy_from_slice(&n.to_be_bytes());
+        NodeId::from_slice(&k).unwrap()
+    }
+
+    fn now() -> u32 {
+        let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        u32::try_from(t.as_secs()).unwrap()
+    }
+
+    /// A graph that, between two reads, lets gossip write: here, a channel is closed after every
+    /// read. Had a read kept the lock, the write would wait for it forever on this one thread.
+    struct Busy {
+        graph: NetworkGraph<&'static Quiet>,
+        reads: Cell<u64>,
+    }
+
+    impl GraphRead for Busy {
+        fn read_graph<R>(&self, f: impl FnOnce(&ln::ReadOnlyNetworkGraph<'_>) -> R) -> R {
+            let r = self.graph.read_only();
+            let out = f(&r);
+            drop(r);
+            let n = self.reads.get();
+            self.reads.set(n + 1);
+            self.graph.channel_failed_permanent(n << 40);
+            out
+        }
+    }
+
+    /// Mainnet's size, with one node announced and one channel's policy set.
+    fn graph() -> Busy {
+        static LOG: Quiet = Quiet;
+        let graph = NetworkGraph::new(Network::Bitcoin, &LOG);
+        for c in 0..36_000u32 {
+            let scid = u64::from(c) << 40;
+            let (a, b) = (id(c % 50), id(50 + c % 13_550));
+            graph
+                .add_channel_from_partial_announcement(
+                    scid,
+                    Some(100_000 + u64::from(c)),
+                    u64::from(now()),
+                    ChannelFeatures::empty(),
+                    a,
+                    b,
+                )
+                .unwrap();
+        }
+        let mut alias = [0; 32];
+        let name = b"<b>x</b>\x07\x1b[31m";
+        alias[..name.len()].copy_from_slice(name);
+        graph
+            .update_node_from_unsigned_announcement(&UnsignedNodeAnnouncement {
+                features: NodeFeatures::empty(),
+                timestamp: now(),
+                node_id: id(7),
+                rgb: [1, 2, 3],
+                alias: NodeAlias(alias),
+                addresses: vec![SocketAddress::TcpIpV4 {
+                    addr: [127, 0, 0, 1],
+                    port: 9735,
+                }],
+                excess_address_data: Vec::new(),
+                excess_data: Vec::new(),
+            })
+            .unwrap();
+        graph
+            .update_channel_unsigned(&UnsignedChannelUpdate {
+                chain_hash: ChainHash::using_genesis_block(Network::Bitcoin),
+                short_channel_id: 7 << 40,
+                timestamp: now(),
+                message_flags: 1,
+                channel_flags: 1,
+                cltv_expiry_delta: 144,
+                htlc_minimum_msat: 1_000,
+                htlc_maximum_msat: 100_000_000,
+                fee_base_msat: 1_000,
+                fee_proportional_millionths: 250,
+                excess_data: Vec::new(),
+            })
+            .unwrap();
+        Busy {
+            graph,
+            reads: Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn the_graph_is_copied_in_short_holds_that_let_gossip_write_between_them() {
+        let g = graph();
+        let c = copy(&g);
+        // Keys once, then 18 chunks of channels and 7 of nodes.
+        assert_eq!(g.reads.get(), 1 + 18 + 7);
+        // Channels closed between chunks are left out, or copied if their chunk came first.
+        assert!(
+            c.channels.len() < 36_000 && c.channels.len() > 35_970,
+            "{}",
+            c.channels.len()
+        );
+        assert!(
+            c.longest_hold < Duration::from_millis(100),
+            "{:?}",
+            c.longest_hold
+        );
+        let seven = c.channels.iter().find(|x| x.scid == 7 << 40).unwrap();
+        assert_eq!(seven.capacity, 100_007);
+        assert_eq!(seven.policies[0], None);
+        let p = seven.policies[1].unwrap();
+        assert_eq!(
+            (p.fee_rate, p.base_fee_msat, p.cltv_delta, p.enabled),
+            (250, 1_000, 144, true)
+        );
+        let n = c
+            .nodes
+            .iter()
+            .find(|n| n.id[1..5] == 7u32.to_be_bytes())
+            .unwrap();
+        let a = n.announcement.as_ref().unwrap();
+        // Markup stays text; control characters are LDK's replacement character.
+        assert_eq!(a.alias, "<b>x</b>\u{fffd}\u{fffd}[31m");
+        assert_eq!(a.addresses, ["127.0.0.1:9735"]);
+        assert_eq!(a.color, [1, 2, 3]);
+        // The copy builds into an index without the graph.
+        let index = Index::build(c.nodes, c.channels, &Past::default());
+        assert_eq!(index.search("<b>", 10).len(), 1);
+        assert_eq!(index.len().0, 13_600);
+    }
+}

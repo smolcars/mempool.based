@@ -146,7 +146,7 @@ fn validate(s: &str, network: crate::config::Network) -> Option<Valid> {
 // First-seen times.
 
 /// `txId[]=` values, each a txid. Other parameters are ignored, like every `/api/v1` query.
-fn times_query(query: Option<&str>) -> Result<Vec<Txid>, ApiError> {
+pub(crate) fn times_query(query: Option<&str>) -> Result<Vec<Txid>, ApiError> {
     let mut out = Vec::new();
     for part in query.unwrap_or("").split('&') {
         let (name, value) = part.split_once('=').unwrap_or((part, ""));

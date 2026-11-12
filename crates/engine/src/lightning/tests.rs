@@ -519,7 +519,7 @@ const D: u64 = 800_003 << 40;
 
 /// The index as the server builds it: the graph's copy and the store's past.
 async fn index(s: &Store, nodes: &[GraphNode], channels: &[GraphChannel]) -> Index {
-    Index::build(nodes.to_vec(), channels.to_vec(), past(s).await.unwrap())
+    Index::build(nodes.to_vec(), channels.to_vec(), &past(s).await.unwrap())
 }
 
 fn ids<'a>(nodes: impl Iterator<Item = &'a Node>) -> Vec<u8> {
@@ -653,7 +653,7 @@ fn search_matches_keys_and_aliases_as_plain_text_within_its_cap() {
         gchan(C, 3, 5, 1_000_000),
         gchan(D, 4, 5, 1_000_000),
     ];
-    let i = Index::build(nodes, graph, Past::default());
+    let i = Index::build(nodes, graph, &Past::default());
     // The impersonator matches too, after the larger node: an alias is a claim, not an identity.
     assert_eq!(ids(i.search("AcInQ", 10).into_iter()), [1, 2]);
     assert_eq!(ids(i.search("<script>", 10).into_iter()), [3]);
@@ -693,7 +693,7 @@ fn fee_buckets_follow_the_reference_s_steps() {
     }
     let mut c = gchan(A, 1, 2, 10);
     c.policies[1] = None;
-    let i = Index::build(vec![], vec![c], Past::default());
+    let i = Index::build(vec![], vec![c], &Past::default());
     let [incoming, outgoing] = i.fees(i.node(&key(1)).unwrap());
     assert_eq!(
         incoming,
@@ -816,7 +816,7 @@ async fn funding_txids_lookups_and_a_node_s_closed_channels() {
 }
 
 /// Mainnet's size: 36,000 channels between 13,600 nodes.
-pub(crate) fn mainnet_graph() -> (Vec<GraphNode>, Vec<GraphChannel>) {
+fn mainnet_graph() -> (Vec<GraphNode>, Vec<GraphChannel>) {
     let id = |n: u32| {
         let mut k = [0; 33];
         k[0] = 2;
@@ -851,7 +851,7 @@ pub(crate) fn mainnet_graph() -> (Vec<GraphNode>, Vec<GraphChannel>) {
 fn an_index_of_mainnet_s_size_builds_and_answers_quickly() {
     let (nodes, channels) = mainnet_graph();
     let started = std::time::Instant::now();
-    let i = Index::build(nodes, channels, Past::default());
+    let i = Index::build(nodes, channels, &Past::default());
     let build = started.elapsed();
     assert_eq!(i.len(), (13_600, 36_000));
     let hub = i.ranking(Rank::Channels).next().unwrap().id;

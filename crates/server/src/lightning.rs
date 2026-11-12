@@ -19,7 +19,9 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use engine::lightning::{self as store_ln, Change, Channel, EVERY, Interval, Point, Series, Stats};
+use engine::lightning::{
+    self as store_ln, Change, Channel, EVERY, Index, Interval, Point, Series, Stats,
+};
 use engine::store::{self, Store};
 use ln::{CloseKind, Event, History, Peer, Record};
 use logging::events::{
@@ -84,6 +86,12 @@ pub struct Lightning {
     written: AtomicU64,
     answers: Mutex<HashMap<(Shape, Interval), Answer>>,
     compute: tokio::sync::Mutex<()>,
+    /// What the node, channel, search and ranking routes read: `None` until the graph is synced.
+    /// Requests clone the `Arc` and let go; only the index task writes it.
+    index: RwLock<Option<Arc<Index>>>,
+    /// The last index build, microseconds, and funding txids learned since start.
+    index_ms: AtomicU64,
+    funded: AtomicU64,
 }
 
 impl std::fmt::Debug for Lightning {
@@ -109,6 +117,9 @@ impl Lightning {
             written: AtomicU64::new(0),
             answers: Mutex::new(HashMap::new()),
             compute: tokio::sync::Mutex::new(()),
+            index: RwLock::new(None),
+            index_ms: AtomicU64::new(0),
+            funded: AtomicU64::new(0),
         }
     }
 
@@ -136,9 +147,25 @@ impl Lightning {
     }
 
     /// Runs `f` on the live graph, if the peer runs. Gossip waits meanwhile: keep it short.
+    /// Routes read [`Lightning::index`] instead.
     pub fn read_graph<R>(&self, f: impl FnOnce(&ln::ReadOnlyNetworkGraph<'_>) -> R) -> Option<R> {
         let peer = self.peer.read().unwrap_or_else(PoisonError::into_inner);
         peer.as_ref().map(|p| p.read(f))
+    }
+
+    /// The newest index of the synced graph, `None` before the first.
+    pub fn index(&self) -> Option<Arc<Index>> {
+        self.index
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the index. The server's own task calls it; tests use it to serve a graph they
+    /// built, since their peer never syncs.
+    #[doc(hidden)]
+    pub fn set_index(&self, index: Index) {
+        *self.index.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(index));
     }
 
     /// Stops the peer and waits, at most [`STOP_WAIT`], for it to write its graph.
@@ -207,7 +234,7 @@ async fn run(
     config.peers.clone_from(&l.config.peers);
     config.max_peers = l.config.max_peers;
     config.max_channels = l.config.max_channels;
-    let (peer, load) = match Peer::start(config, chain) {
+    let (peer, load) = match Peer::start(config, chain.clone()) {
         Ok(p) => p,
         Err(e) => {
             logging::emit(&LightningFailed {
@@ -241,6 +268,8 @@ async fn run(
         () = consume(&*peer, &mut history, &mut pending, &store, &l, name) => false,
         stalled = report(&peer, events, &l, name) => stalled,
         () = store_ln::run(Arc::clone(&store), || statistics(&peer), sampler) => false,
+        () = index::keep(Arc::clone(&peer), Arc::clone(&store), Arc::clone(&l), name) => false,
+        () = index::fill_funding(chain, Arc::clone(&store), Arc::clone(&l), name) => false,
         () = l.stop.notified() => false,
     };
     if stalled {
@@ -790,6 +819,11 @@ fn summary(network: &'static str, s: &ln::Stats, status: &ln::Status, l: &Lightn
         gossip_bytes: s.totals.bytes,
         history_records: l.records.load(Ordering::Relaxed),
         history_seq: l.seq.load(Ordering::Relaxed),
+        index_ms: match l.index_ms.load(Ordering::Relaxed) {
+            0 => None,
+            us => Some(us as f64 / 1000.0),
+        },
+        funding_txids: l.funded.load(Ordering::Relaxed),
     });
 }
 
@@ -907,6 +941,7 @@ pub fn routes() -> Router<Arc<NetworkContext>> {
         .route("/app/lightning/channels/closed", get(closed))
         .route("/api/v1/lightning/statistics/latest", get(v1_latest))
         .route("/api/v1/lightning/statistics/{interval}", get(v1_series))
+        .merge(nodes::routes())
 }
 
 fn json_response(body: Bytes, route: &'static str, cache: &'static str) -> Response {
@@ -1048,23 +1083,16 @@ fn channel_json(c: &Channel, aliases: &HashMap<[u8; 33], String>) -> Value {
     })
 }
 
+/// The aliases of `channels`' nodes, from the index (none before the first).
 fn aliases(l: &Lightning, channels: &[Channel]) -> HashMap<[u8; 33], String> {
-    l.read_graph(|g| {
-        let mut out = HashMap::new();
-        for c in channels {
-            for id in [c.open.node_one, c.open.node_two] {
-                let alias = ln::NodeId::from_slice(&id).ok().and_then(|n| {
-                    let a = g.node(&n)?.announcement_info.as_ref()?;
-                    Some(a.alias().to_string())
-                });
-                if let Some(a) = alias {
-                    out.insert(id, a);
-                }
-            }
-        }
-        out
-    })
-    .unwrap_or_default()
+    let Some(index) = l.index() else {
+        return HashMap::new();
+    };
+    channels
+        .iter()
+        .flat_map(|c| [c.open.node_one, c.open.node_two])
+        .filter_map(|id| Some((id, index.node(&id)?.alias()?.to_owned())))
+        .collect()
 }
 
 async fn list(ctx: &NetworkContext, uri: &Uri, closes: bool) -> Result<Response, ApiError> {
@@ -1358,5 +1386,7 @@ async fn v1_series(
     series(&ctx, Shape::Reference, &i).await
 }
 
+mod index;
+mod nodes;
 #[cfg(test)]
 mod tests;
