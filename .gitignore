@@ -1,4 +1,6 @@
 /.env
+/deploy/.env
+/deploy/rpc.cookie
 /.env.backup-*
 /.env.local
 

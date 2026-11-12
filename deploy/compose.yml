@@ -1,0 +1,61 @@
+# mempool.based beside rbitcoin v0.9.1, for one network. docs/DEPLOY.md explains every choice.
+# From this directory, with .env filled in from .env.example: docker compose up -d --build
+name: mempool-based
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+
+services:
+  node:
+    <<: *hardened
+    # Multi-arch release image, pinned by digest. It runs as uid and gid 10001.
+    image: ${RBITCOIN_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.1@sha256:07ba41581f0c8f4c98a4b35c1106c61fe1b7c6c2c36cbd8321e7919efaae5207}
+    command:
+      - --network=${NETWORK:?set NETWORK in .env}
+      - --sh-index
+      - --listen=0.0.0.0:${P2P_PORT:?set P2P_PORT in .env}
+      # RPC and Electrum listen on the private compose network only; neither is published.
+      - --rpc-listen=0.0.0.0:8332
+      - --rpc-cookie-file=/run/secrets/rpc-cookie
+      - --electrum-listen=0.0.0.0:50001
+      # A path makes a unix socket, the only listener that also serves /internal/*.
+      - --esplora-listen=/run/esplora/esplora.sock
+    secrets: [rpc-cookie]
+    ports:
+      - ${P2P_PUBLISH:-${P2P_PORT}}:${P2P_PORT}
+    volumes:
+      - node-data:/data
+      - esplora-socket:/run/esplora
+    # The node flushes its store on SIGTERM; give it time.
+    stop_grace_period: 5m
+
+  server:
+    <<: *hardened
+    image: ${SERVER_IMAGE:-mempool-based}
+    build: ..
+    env_file: .env
+    # The socket is 0660, owned by the node's uid and gid 10001.
+    group_add: ["10001"]
+    volumes:
+      - esplora-socket:/run/esplora:ro
+    # Loopback by default: a reverse proxy on this host terminates TLS and forwards here.
+    ports:
+      - ${HTTP_PUBLISH:-127.0.0.1:8080}:8080
+    depends_on: [node]
+
+secrets:
+  rpc-cookie:
+    # user:password for HTTP Basic, no newline. Owner-only, owned by uid 10001 (docs/DEPLOY.md).
+    file: rpc.cookie
+
+volumes:
+  node-data:
+  # In memory, so a stale socket never outlives the stack. Only the node's uid and group may enter.
+  esplora-socket:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=10001,gid=10001,mode=0750

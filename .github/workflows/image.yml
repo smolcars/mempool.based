@@ -1,0 +1,54 @@
+name: Image
+
+# Builds the Docker image after every merge, on both architectures, so the Dockerfile cannot rot.
+# Never on pull requests, so it is outside the PR budget (docs/CI.md). It publishes nothing.
+on:
+  push:
+    branches: [master]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - web/**
+      - deploy/**
+      - .github/workflows/image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Native runners for each architecture: no emulation.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -t mempool-based .
+      # Started with the hardening deploy/compose.yml applies, it must pass its own health check.
+      - run: |
+          docker run -d --name smoke --read-only --cap-drop ALL --security-opt no-new-privileges mempool-based
+          for _ in $(seq 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' smoke)" = healthy ] && exit 0
+            sleep 1
+          done
+          docker logs smoke
+          exit 1
+      - name: Check the compose file
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          touch rpc.cookie
+          docker compose config --quiet
