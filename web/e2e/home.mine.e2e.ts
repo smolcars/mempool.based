@@ -132,10 +132,14 @@ test("mining takes the projected next block across the line and empties the proj
     description: `landed ${Math.round(at - (block?.at ?? 0))} ms after the block message; projection on it ${Math.round((onIt?.at ?? 0) - (block?.at ?? 0))} ms after`,
   });
   expect(at - (block?.at ?? 0)).toBeLessThan(500);
-  // The mempool panel says the same once its own topic catches up, so look in the strip.
-  await expect(
-    page.getByRole("region", { name: "Blocks" }).getByText("Nothing is waiting.", { exact: false }),
-  ).toBeVisible();
+  // The mempool panel says the same once its own topic catches up, so look in the strip. A phone
+  // hides the note to give the tiles room (HomePage.css).
+  const note = page
+    .getByRole("region", { name: "Blocks" })
+    .getByText("Nothing is waiting.", { exact: false });
+  await ((page.viewportSize()?.width ?? 0) > 640
+    ? expect(note).toBeVisible()
+    : expect(note).toBeAttached());
 });
 
 test("a new block lands in the strip without a reload, and a burst leaves it correct", async ({

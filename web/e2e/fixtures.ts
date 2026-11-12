@@ -22,6 +22,9 @@ const MINER = "raw(00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8
  */
 export const PROJECTION_LAG_MS = 6_000;
 
+// How the page names a CSP violation caused by Playwright itself rather than the site.
+const PLAYWRIGHT_STYLE = "Playwright's own style, refused by the CSP:";
+
 // Tests this worker has started, for their client addresses.
 let started = 0;
 
@@ -78,6 +81,21 @@ export const test = base.extend<{
     async ({ context, consoleErrorsAllowed }, use) => {
       const errors: string[] = [];
       const refused = new Set<string>();
+      // Each engine words a CSP violation differently, so the page reports every violation itself,
+      // in words the check below knows. In WebKit every
+      // Playwright screenshot adds a style of its own, which the CSP refuses: a style from no file
+      // at all, since the site's own come from its files. That one is named apart.
+      await context.addInitScript((playwrightStyle) => {
+        document.addEventListener("securitypolicyviolation", (e) => {
+          const what = `${e.violatedDirective} ${e.blockedURI}`;
+          // oxlint-disable-next-line no-console -- the console is how the test hears of it
+          console.error(
+            e.sourceFile === "" && e.violatedDirective === "style-src-elem"
+              ? `${playwrightStyle} ${what}`
+              : `Content Security Policy violation: ${what}`,
+          );
+        });
+      }, PLAYWRIGHT_STYLE);
       context.on("console", (m) => {
         // A failed load's text does not name the resource; its location does.
         if (m.type() === "error") errors.push(`${m.text()} ${m.location().url}`.trimEnd());
@@ -96,9 +114,16 @@ export const test = base.extend<{
       });
       await use(undefined);
       expect([...refused], "pages and static files refused by the server's limits").toEqual([]);
-      const unexpected = errors.filter(
-        (e) => /Content Security Policy/i.test(e) || !consoleErrorsAllowed.some((r) => r.test(e)),
-      );
+      // WebKit also logs each of Playwright's own refused styles in its usual words: drop as many.
+      let playwright = errors.filter((e) => e.startsWith(PLAYWRIGHT_STYLE)).length;
+      const unexpected = errors.filter((e) => {
+        if (e.startsWith(PLAYWRIGHT_STYLE)) return false;
+        if (playwright > 0 && e.startsWith("Refused to apply a stylesheet")) {
+          playwright -= 1;
+          return false;
+        }
+        return /Content.Security.Policy/i.test(e) || !consoleErrorsAllowed.some((r) => r.test(e));
+      });
       expect(unexpected, "console errors and CSP violations").toEqual([]);
     },
     { auto: true },

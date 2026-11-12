@@ -505,13 +505,40 @@ Lint, format and type checks are strict, and CI fails on any finding. OXC is the
 
 ## Browser tests
 
-`bun run e2e` runs the Playwright tests in `web/e2e/` in headless Chromium against the real server and a private rbitcoin node on regtest ([`REGTEST.md`](REGTEST.md)). It needs Docker, `python3`, Rust and bun, and does everything else itself: starts the node and builds the known chain, builds the frontend and the server from your checkout, starts the server on a free port with only regtest enabled and its block table in the run's directory (with some mempool history already in it, [below](#adding-a-test)), runs the tests and removes all of it. A second run takes about 10 seconds. Every run uses its own node, port and output directory, so any number can run at once. On a failure it keeps the server log and Playwright's traces and prints where.
+`bun run e2e` runs the Playwright tests in `web/e2e/` in headless Chromium ([or another engine](#other-engines)) against the real server and a private rbitcoin node on regtest ([`REGTEST.md`](REGTEST.md)). It needs Docker, `python3`, Rust and bun, and does everything else itself: starts the node and builds the known chain, builds the frontend and the server from your checkout, starts the server on a free port with only regtest enabled and its block table in the run's directory (with some mempool history already in it, [below](#adding-a-test)), runs the tests and removes all of it. A second run takes about 10 seconds. Every run uses its own node, port and output directory, so any number can run at once. On a failure it keeps the server log and Playwright's traces and prints where.
 
 Arguments go to Playwright: `bun run e2e tx.e2e.ts`, `bun run e2e -g "deep link"`, `bun run e2e --headed`.
 
 **The server runs with every limit at its production default** ([`CONFIG.md`](CONFIG.md#limits)), so each run also proves that real page loads stay inside them. The tests all come from one address, so each test poses as its own visitor, as its fresh browser context (empty cache, no cookies) is: the server trusts `X-Forwarded-For` from `127.0.0.1` only, and the fixture sends an address of the test's own (`198.18.<worker>.<test>`) on every page, file, API call, WebSocket handshake and `request` call. One address per worker would be one person making a dozen cold loads in seconds, which the block summary route's per-client limit rightly refuses. A test that sets `extraHTTPHeaders` itself must keep that header.
 
 **A limit that refuses anything fails the run, and says which.** A page or static file answered `429` or `503` ends its test at once with the request named, instead of a later assertion timing out. After the tests, `bun run e2e` fails if the server's log holds any refusal, even of an API call a page retried, and prints them: each line names the route, the limit (`refused`) and the worker's address (`client`).
+
+### Other engines
+
+```sh
+E2E_ENGINE=webkit bun run e2e              # or firefox; chromium is the default
+E2E_ENGINE=webkit E2E_PHONE=1 bun run e2e  # at a phone's width
+```
+
+`E2E_ENGINE` picks Playwright's Chromium, WebKit or Firefox, and `E2E_PHONE=1` a phone: Chromium as a Pixel 7, WebKit as an iPhone 15 (mobile viewport, touch, three device pixels per CSS pixel), and Firefox, which has no mobile emulation, as a 393 × 659 window with touch and three device pixels per CSS pixel. The script downloads the engine into Playwright's own cache on first use; on Linux, `node_modules/.bin/playwright install-deps <engine>` (as root) adds its system libraries once. Pull requests run Chromium at desktop width only; the weekly Browsers workflow runs WebKit and Firefox at both widths ([`CI.md`](CI.md#other-browsers)).
+
+What it proves: the pages work in the WebKit and Gecko engines. What it does not: Playwright builds its own WebKit, so a pass is not Safari on a Mac or an iPhone (other graphics, fonts, network stack and settings), least of all on CI's Linux. Check a change that depends on the engine by hand in Safari too.
+
+Differences found so far (2026-11, Playwright 1.64):
+
+- **Closing a socket that is still connecting** is logged as a failed connection by WebKit and Firefox, not by Chromium. Leaving a page often does that, so `lib/live.ts` closes such a socket once it opens instead.
+- **A page whose script failed to download** stays at "Loading this page" in WebKit: the retry never asks for the script again. Chromium and Firefox recover. `chunks.e2e.ts` is marked `fixme` in WebKit until it does.
+- **Digit groups run together in WebKit.** Numbers group digits with U+202F, which the Recursive subset lacks, so each engine draws another font's space: about 2 px in Chromium, under 1 px in WebKit, where `1 293` reads as `1293`.
+- **Safari's Tab** reaches only form fields unless the reader has turned on "Press Tab to highlight each item"; Option-Tab reaches the skip link and every link. Playwright's WebKit does the same.
+- **WebKit shows a JSON reply** (`/healthz`, an API route opened as a page) in a viewer the Content-Security-Policy refuses, which logs a violation that is not the site's.
+- Same in all three: `ws:` and `wss:` to the page's own host under `default-src 'self'`, the `Origin` check on `/app/ws`, WebGL2 and the page without it, the charts' pointer, touch and keyboard read-outs, reduced motion. Numbers and dates are formatted by our own code, not `Intl`, so they read the same everywhere.
+
+Write browser tests so they hold in every engine:
+
+- **Read a screenshot at the device's scale.** Desktop Safari has two device pixels per CSS pixel and the iPhone three: divide by the ratio, never assume 1 (`grid.e2e.ts`).
+- **CSP violations are reported by the page,** through `securitypolicyviolation`, since each engine words its console message differently. In WebKit, every Playwright screenshot adds a style the policy refuses; the fixture names that one and drops it.
+- **A test that depends on width checks it** (`page.viewportSize()`), as the home page's test does for the note a phone hides.
+- **Phone screenshots for a UI change come from WebKit** as an iPhone, besides Chromium: the owner's first device is a phone.
 
 ### Adding a test
 

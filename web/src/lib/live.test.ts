@@ -287,6 +287,17 @@ describe("LiveConnection", () => {
     expect(resync).not.toHaveBeenCalled();
   });
 
+  it("closes a socket that is still connecting once it opens, not before", () => {
+    const c = connect();
+    const off = c.add(echo, { message: () => {}, resync: () => {} });
+    const ws = FakeSocket.last();
+    ws.readyState = 0;
+    off();
+    expect(ws.closedWith).toBeNull();
+    ws.open();
+    expect(ws.closedWith).toBe(1000);
+  });
+
   it("waits for a hidden tab to come back before reconnecting, then reconnects at once", () => {
     const c = connect();
     c.add(echo, { message: () => {}, resync: () => {} });

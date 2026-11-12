@@ -10,7 +10,8 @@ const BLOCK = `/regtest/block/${chain.blocks[106]}`;
 /** The squares on screen, found in a screenshot of the canvas: each one's centre in page pixels. */
 async function squares(page: Page): Promise<{ x: number; y: number }[]> {
   const canvas = page.getByRole("img", { name: /^Map of the block's/ });
-  // The screenshot scrolls the canvas into view, so its box is read after.
+  // The screenshot scrolls the canvas into view, so its box is read after. At the device's own
+  // scale: scaled down to CSS pixels, the gaps between small squares blur away.
   const png = (await canvas.screenshot()).toString("base64");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("the map has no box");
@@ -19,7 +20,7 @@ async function squares(page: Page): Promise<{ x: number; y: number }[]> {
     const bytes = Uint8Array.from(atob(data), (c) => c.codePointAt(0) ?? 0);
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
     const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d");
-    if (!ctx) return [];
+    if (!ctx) return { out: [], width: 1 };
     ctx.drawImage(bitmap, 0, 0);
     const { data: px, width, height } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
     // The frame is empty at its top left in a nearly empty block: that is the background.
@@ -52,10 +53,12 @@ async function squares(page: Page): Promise<{ x: number; y: number }[]> {
       }
       out.push({ x: sx / n, y: sy / n, n });
     }
-    return out;
+    return { out, width };
   }, png);
-  // Screenshot pixels are page pixels at this test's device scale of 1.
-  return found.filter((s) => s.n > 4).map((s) => ({ x: box.x + s.x, y: box.y + s.y }));
+  const scale = found.width / box.width;
+  return found.out
+    .filter((s) => s.n > 4)
+    .map((s) => ({ x: box.x + s.x / scale, y: box.y + s.y / scale }));
 }
 
 test("a block's map draws one square per transaction", async ({ page }) => {

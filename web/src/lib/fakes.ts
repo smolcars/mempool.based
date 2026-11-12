@@ -16,6 +16,8 @@ export class FakeSocket implements SocketLike {
   onclose: SocketLike["onclose"] = null;
   onerror: SocketLike["onerror"] = null;
   binaryType: BinaryType = "blob";
+  /** Open (1) unless a test sets it to connecting (0) and later calls `open()`. */
+  readyState: SocketLike["readyState"] = 1;
   readonly sent: unknown[] = [];
   closedWith: number | undefined | null = null;
 
@@ -31,6 +33,13 @@ export class FakeSocket implements SocketLike {
   }
   close(code?: number): void {
     this.closedWith = code;
+  }
+
+  /** The handshake completes. */
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.call(this as unknown as WebSocket, new Event("open"));
+    flush();
   }
 
   /** The server sends a text frame (an object is sent as JSON) or a binary one. */

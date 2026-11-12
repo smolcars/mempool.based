@@ -29,7 +29,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
 | `ci-ok` | always | Fails if any job above failed |
 
-Outside the PR path, daily and when a lockfile changes on `master`: the [dependency audit](#dependency-audit) (`audit.yml`). After merge to `master`: the full Docker image build on both architectures (`image.yml`).
+Outside the PR path, daily and when a lockfile changes on `master`: the [dependency audit](#dependency-audit) (`audit.yml`). Weekly: the browser tests in [other browsers](#other-browsers) (`browsers.yml`). After merge to `master`: the full Docker image build on both architectures (`image.yml`).
 
 ## Dependency audit
 
@@ -54,6 +54,12 @@ python3 -I dev/audit/audit.py   # exit 0: clean; 1: the issue's Markdown on stdo
 
 `CARGO_LOCK=<file>` and `WEB_DIR=<directory with package.json and bun.lock>` point it at a temporary copy, for trying a change to the script.
 
+## Other browsers
+
+`browsers.yml` runs `bun run e2e` in Playwright's WebKit and Firefox, each at desktop and phone width: four jobs at once ([`FRONTEND.md`](FRONTEND.md#other-engines)). It runs every Monday and on manual dispatch (`gh workflow run browsers.yml`), never on a pull request, whose budget has no room for it. Its token reads only. Its jobs restore the cargo cache the `e2e` job saves on `master` and save none of their own; each engine's browser build is cached under the Playwright version, and its system libraries come from apt on every run. Each job times out at 20 minutes.
+
+A failure here means a page broke in an engine Chromium hides, or a test assumed Chromium. It is not Safari on a Mac or an iPhone: Playwright builds its own WebKit, here on Linux, so a green run does not replace a look in real Safari.
+
 ## Test layers
 
 | Layer | Tests | Speed |
@@ -61,7 +67,7 @@ python3 -I dev/audit/audit.py   # exit 0: clean; 1: the issue's Markdown on stdo
 | Unit | Pure logic: parsing, diffing, projected blocks, fee math, classification. No I/O | Milliseconds |
 | Fixture | Decoding and mapping against recorded public chain data in `fixtures/` | Milliseconds |
 | Integration | Node clients and the engine against rbitcoin on regtest in Docker ([`REGTEST.md`](REGTEST.md)) | Seconds |
-| End to end | The built server and frontend in headless Chromium | Seconds |
+| End to end | The built server and frontend in headless Chromium; WebKit and Firefox weekly | Seconds |
 
 Most coverage belongs in the first two layers. Integration and end-to-end tests cover the paths where the layers meet, not every case.
 
