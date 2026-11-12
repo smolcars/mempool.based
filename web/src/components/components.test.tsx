@@ -28,8 +28,8 @@ describe("Amount", () => {
   });
 
   it("signs incoming amounts and survives bad input", () => {
-    expect(mount(() => <Amount sats={150} signed unit={false} />).textContent).toBe("+0.00000150");
-    expect(mount(() => <Amount sats={-150} signed unit={false} />).textContent).toBe("−0.00000150");
+    expect(mount(() => <Amount sats={150} signed />).textContent).toBe("+0.00000150 BTC");
+    expect(mount(() => <Amount sats={-150} signed />).textContent).toBe("−0.00000150 BTC");
     expect(mount(() => <Amount sats={0.5} />).textContent).toBe("–");
     expect(mount(() => <Sats sats={1234} />).textContent).toBe(`1${NNBSP}234 sats`);
   });
@@ -40,7 +40,24 @@ describe("FeeRate", () => {
     const el = mount(() => <FeeRate rate={0.1996} />);
     expect(el.textContent).toBe("0.20 sat/vB");
     expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-2)");
-    expect(mount(() => <FeeRate rate={0.64} approx unit={false} />).textContent).toBe("~0.64");
+    expect(mount(() => <FeeRate rate={0.64} approx />).textContent).toBe("~0.64 sat/vB");
+  });
+
+  it("keeps a unit hidden from sight for screen readers, where a table names it in its header", () => {
+    for (const [el, unit] of [
+      [mount(() => <Amount sats={150} unit={false} />), " BTC"],
+      [mount(() => <Sats sats={150} unit={false} />), " sats"],
+      [mount(() => <FeeRate rate={0.64} unit={false} />), " sat/vB"],
+    ] as const) {
+      expect(q(el, ".unit").textContent).toBe(unit);
+      expect(q(el, ".unit").classList.contains("visually-hidden")).toBe(true);
+    }
+    expect(
+      q(
+        mount(() => <Amount sats={150} />),
+        ".unit",
+      ).classList,
+    ).not.toContain("visually-hidden");
   });
 
   it("has ten bands in the key", () => {

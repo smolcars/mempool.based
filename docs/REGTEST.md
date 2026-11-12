@@ -24,8 +24,9 @@ dev/regtest/regtest.py down       # remove the node and its chain
 | `rbf` | Broadcasts a transaction at 1 sat/vB and a replacement at 5 sat/vB, prints both txids |
 | `cpfp` | Broadcasts a parent at 1 sat/vB and a child at 25 sat/vB, prints both txids |
 | `scenario` | `reset`, then builds the known chain, checks it, prints its manifest. Stdout is only the JSON manifest; progress and the `.env` lines go to stderr |
+| `hostile` | Mines a transaction whose OP_RETURN outputs hold markup, a `javascript:` URL, bidi overrides, ANSI escapes and NUL, with a payment to the scenario's P2WPKH address; then submits an empty block, built by hand, whose coinbase tag is `<script>` markup with a right-to-left override and which claims 1,000 sats less than the subsidy. Prints the txid, the block hash and its coinbase txid. Mines on top of whatever chain is there, so the scenario's hashes are unchanged; the browser tests run it from a `*.mine.e2e.ts` file |
 
-`send`, `rbf` and `cpfp` need a mature coinbase, so mine at least 101 blocks first (or run `scenario`).
+`send`, `rbf`, `cpfp` and `hostile` need a mature coinbase, so mine at least 101 blocks first (or run `scenario`).
 
 ## Point the server at it
 

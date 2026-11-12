@@ -34,6 +34,7 @@ web/
       page.ts           `useNetwork`, `usePageTitle`
       clock.ts          Shared ticking clock for relative times
       config.ts         Reads `/app/config`
+      chunks.ts         A page's code and styles that failed to download, and asking for them again
       theme.ts          Theme toggle state
     components/         Shared components, one CSS file each
       txgrid/           The transaction grid: decoder, layout, animation, WebGL2 renderer (see "Transaction grid")
@@ -99,15 +100,21 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 </Show>
 ```
 
-- `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, and answers at once from the cache. Return a falsy path to wait for something else first.
+- `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, answers at once from the cache, and stays loading while a busy refusal waits to be retried. Return a falsy path to wait for something else first.
 - `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops. `fetchApp<T>` is the same for the app's own API under the network's `/app`.
 - **Chain-tip stamps.** `createApi<T>(path, { stamped: true })` and `fetchStamped<T>(network, path)` give `{ value, tip }`, where `tip` is the `X-Bitcoin-Chain-Tip` and its height that the reply is as of (undefined for an unstamped or cached reply). Take every figure that depends on the tip from one stamped reply, or compare the stamps of two: the block page counts confirmations from its status reply's stamp, and the home page's difficulty panel asks again while its answer's stamp trails the strip's tip.
-- **Busy servers.** `withRetry(call, signal)` retries a 503 or 429 no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. Show a loading state, not an error, while it waits. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
+- **Busy servers.** Every call above retries a 503 or 429 by itself, no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. They are all GETs, safe to repeat. Two 503s are not retried, because a retry cannot change them: an address too large to total and an address index that is off ([`API.md`](API.md#error-bodies-are-ours)). Show a loading state, not an error, while a call is pending. `withRetry(call, signal)` is the loop itself, for a call that does not go through `api.ts`; only wrap a call that is safe to repeat. A refusal it already gave up on is never retried by a loop around it. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
 - `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`), and `as: "bytes"` binary ones as an `ArrayBuffer` (`fetchApp(n, "/block/<hash>/txs", { as: "bytes" })`). The default is JSON.
-- Failures are `ApiError` with `status` (0 when the server cannot be reached) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
+- Failures are `ApiError` with `status` (0 when the server cannot be reached, with a message that says so when the browser is offline) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
 - Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
 - Reading a resource inside the shell's `<Suspense>` holds the whole page until it loads. To show the page frame first and fill sections as they arrive, give each section its own `<Suspense>` or test `resource.loading`.
 - An error thrown while rendering reaches the shell's error boundary, which shows "This page could not be shown". Catch expected failures (not found, node unavailable) in the page with `<ErrorState>` instead.
+
+### When a page's files fail to load
+
+Every page, and the transaction grid, is a chunk of code with its own stylesheet, downloaded on first use. A download can fail: a dropped connection, a busy proxy, or a deploy that replaced the files while a tab was open. Vite never asks for a failed stylesheet again by itself, so `lib/chunks.ts` notes every `<link rel="stylesheet">` that fails (`watchStyles`, started in `index.tsx`) and `retryStyles()` asks for each again through a fresh `<link>`. A failed script is fetched again when its `import()` runs again, which the router's `lazy()` does on the next render.
+
+The shell's error boundary handles both. On a chunk error it shows "Loading this page" and tries again after 1, 2 and 4 s: before each attempt it asks `/app/config` (never from a cache) whether the server's version changed since the tab loaded, then asks again for the failed stylesheets, and renders the page again only once they are in, so a page never appears unstyled. When the attempts run out it says that part of the page could not be downloaded, with "Try again", which asks for everything again. When the version changed, the files this tab needs were replaced by a deploy: it says the site has been updated and offers "Reload" rather than retrying files that are gone. A navigation starts the count afresh.
 
 `lib/esplora.ts` has hand-written types for the replies pages use, from rbitcoin v0.9.2's `docs/esplora-openapi.yaml`. Add a type when you use a new route; keep the field names exactly as the API sends them. Amounts are integer sats and times are unix seconds throughout.
 
@@ -202,9 +209,9 @@ Import from `components/`. All of them render chain data as text only.
 
 | Component | Use |
 |---|---|
-| `Amount sats unit? signed?` | BTC with eight decimals, trailing zeros dimmed, sats in the title. `signed` adds `+` and the positive color to incoming amounts |
-| `Sats sats unit?` | Grouped sats |
-| `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~` |
+| `Amount sats unit? signed?` | BTC with eight decimals, trailing zeros dimmed, sats in the title. `signed` adds `+` and the positive color to incoming amounts. `unit={false}` hides the unit from sight only, for a table that names it in its header: screen readers still read it |
+| `Sats sats unit?` | Grouped sats. `unit` as for `Amount` |
+| `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~`. `unit` as for `Amount` |
 | `FeeKey` | The ten bands with their lower bounds. Put it next to every fee visual |
 | `Strata layers settle? from?` | A block's fee bands as stacked layers, cheapest at the bottom, filling the box it is put in. Compute `layers` with `strataLayers(fee_bands, fill, min)`: `fill` is how full the block is, `min` the thinnest layer as a share of the box (about 2 px). `settle` drops the layers in, cheapest first; `from` grows each layer out of the same band's layer in another set (a projected block becoming the mined one), a band it lacks from nothing; reduced motion fades either. Decorative: give the figures, or `describeBands(fee_bands)`, as text beside it |
 | `TxGrid txs capacity label txid highlight? onState?` | Transactions as packed squares in WebGL2, in `components/txgrid/`. Load it with `lazy()`; see "Transaction grid" |
@@ -217,7 +224,7 @@ Import from `components/`. All of them render chain data as text only.
 | `SectionHeader title id? children?` | A section's `h2` over the 2 px rule; `children` sit at the right |
 | `Loading label?` | Waiting. Fades in only after 300 ms, so fast loads show nothing |
 | `Empty title children?` | Nothing to show, and what to do about it |
-| `ErrorState title error? retry?` | What failed, the API's message, and "Try again" |
+| `ErrorState title error? message? retry?` | What failed, the API's message (or `message`), and "Try again" |
 | `Pagination page pageCount? hasNext? onPage label` | Previous and next. Esplora's cursor-paged lists pass `hasNext` instead of `pageCount` |
 | `SearchField` | The search: reads the query as it is typed, opens its page on Enter or says why there is none. The header owns the one instance |
 | `Link href` | Internal link on the current network |
@@ -288,7 +295,7 @@ The font is preloaded, and `index.tsx` waits up to 1 s for it before the first r
 2. **Shared code changes in its own PR.** `components/`, `lib/`, `shell/` and `styles/` are shared. If a page needs a change there (a new prop, a fix, a new component), make it a small separate PR, or ask whoever is working on the shell. A component used by one page lives in that page's directory until a second page needs it.
 3. **Chain data is text.** No `innerHTML`, no markup built from data, no data in `href` or `src` except through `paths` ([`SECURITY.md`](SECURITY.md) rule 14).
 4. **No style attributes.** Custom properties through the `style` object with dynamic values only (see "CSS").
-5. **Numbers through `lib/format.ts`.** Never `toFixed` a BTC amount or a fee rate in a page.
+5. **Numbers through `lib/format.ts`.** Never `toFixed` a BTC amount or a fee rate in a page. Every amount, rate and size reaches a screen reader with its unit: in a table cell whose unit is in the header, use the components' `unit={false}`, or a `visually-hidden` unit after a number you format yourself.
 6. **No layout shift.** Reserve space for what loads later.
 7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy library (WebGL, uPlot) loads only on the page that uses it.
 8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router at a given URL.
@@ -345,4 +352,5 @@ test("a block page shows its height", async ({ page }) => {
   });
   ```
 
+- **Hostile chain data.** `hostile.mine.e2e.ts` puts markup, a `javascript:` URL, bidi overrides, ANSI escapes and NUL on the chain (`regtest.py hostile`: OP_RETURN outputs and a hand-built coinbase tag) and checks the transaction, block and address pages show them as visible, inert text: no injected element, no dialog, no unexpected link scheme. A new page that shows chain data belongs in it.
 - **Keep the suite fast.** Browser tests cover what only a browser can show: that the page renders real data, links work and nothing errors. Logic belongs in unit tests.

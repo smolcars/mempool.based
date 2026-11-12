@@ -1,5 +1,5 @@
 // What a transaction's fields mean, as plain sentences and numbers. Pure; the page renders the results.
-import type { Transaction, Vin } from "../../lib/esplora";
+import type { Transaction, Vin, Vout } from "../../lib/esplora";
 import { formatUtc, groupDigits, vsizeFromWeight } from "../../lib/format";
 
 /** Inputs and outputs shown at first, and how many more each press of "Show more" adds. */
@@ -76,6 +76,25 @@ export function features(tx: Transaction): string {
 }
 
 export const isCoinbase = (tx: Transaction): boolean => tx.vin?.[0]?.is_coinbase === true;
+
+/** Consensus limit on a script's size; a longer locking script can never be satisfied. */
+const MAX_SCRIPT_BYTES = 10_000;
+
+/**
+ * Why an output can never be spent, or null when it can. The node calls these "unspent", but none
+ * is in the set of coins that can be spent: an OP_RETURN or oversized script (as Bitcoin Core's
+ * `IsUnspendable`), and the genesis block's coinbase, which was never added to that set.
+ */
+export function whyUnspendable(tx: Transaction, out: Vout): string | null {
+  if (out.scriptpubkey.startsWith("6a")) return "an OP_RETURN output can never be spent";
+  if (out.scriptpubkey.length > MAX_SCRIPT_BYTES * 2) {
+    return "its script is longer than any script that can be run";
+  }
+  if (isCoinbase(tx) && tx.status.block_height === 0) {
+    return "the genesis block's reward was never added to the coins that can be spent";
+  }
+  return null;
+}
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 

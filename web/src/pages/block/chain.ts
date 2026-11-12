@@ -1,4 +1,4 @@
-// What the block page computes in the browser: subsidy, reward and fees, fullness, the coinbase tag.
+// What the block page computes in the browser: subsidy and reward, fullness, the coinbase tag.
 import type { Transaction } from "../../lib/esplora";
 import { groupDigits, MISSING } from "../../lib/format";
 import type { Network } from "../../lib/network";
@@ -26,11 +26,12 @@ export interface Reward {
   /** What the coinbase pays out, sats. */
   reward: number;
   subsidy: number;
-  /** reward − subsidy. Null when the miner claimed less than the subsidy, so the fees cannot be told. */
-  fees: number | null;
 }
 
-/** Reward and total fees from the block's coinbase transaction. Null when `tx` is not a coinbase. */
+/**
+ * What the block's coinbase claimed, and the subsidy. Null when `tx` is not a coinbase. The fees
+ * are not reward − subsidy: a miner may claim less than it could, so they come from the block summary.
+ */
 export function blockReward(
   tx: Transaction | undefined,
   height: number,
@@ -42,9 +43,7 @@ export function blockReward(
     if (!Number.isSafeInteger(out.value)) return null;
     reward += out.value;
   }
-  const s = subsidy(height, interval);
-  // shortcut: a miner may claim less than subsidy + fees; then the true fees need every transaction's fee, which the fee route will give.
-  return { reward, subsidy: s, fees: reward >= s ? reward - s : null };
+  return { reward, subsidy: subsidy(height, interval) };
 }
 
 /** Share of the weight limit used, 0–1 (an over-limit value from a broken node is clamped). */

@@ -116,8 +116,11 @@ export class LiveConnection {
     const wake = () => {
       if (!document.hidden && navigator.onLine) this.wakeUp();
     };
+    // A socket can stay open long after the network has gone, so the page would call itself live
+    // and blame the node for every failed request. Drop it: the reader is offline.
     const offline = () => {
-      if (!this.greeted) this.setStatus("offline");
+      if (this.ws) this.drop();
+      else if (!this.greeted) this.setStatus("offline");
     };
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("online", wake);

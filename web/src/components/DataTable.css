@@ -3,6 +3,8 @@
   .table-scroll {
     overflow-x: auto;
     overscroll-behavior-x: contain;
+    /* Holds the visually hidden units in cells, which would otherwise widen the page. */
+    position: relative;
   }
   .table {
     width: 100%;
@@ -40,6 +42,10 @@
   @media (max-width: 640px) {
     .table .table__optional {
       display: none;
+    }
+    /* A header such as "Fee rate, sat/vB" wraps rather than widen its column past a phone's width. */
+    .table th {
+      white-space: normal;
     }
   }
 }

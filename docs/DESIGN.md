@@ -150,9 +150,13 @@ Weights: `--weight-light` 340 (dimmed zeros), `--weight-regular` 420, `--weight-
 | BTC | Always eight decimals. Trailing zeros in muted color at light weight, so the significant part reads first. Hover shows sats | `0.03500000`, with `00000` dimmed |
 | sats | Grouped integer | `167 sats` |
 | Fee rate | Two decimals under 10, one under 100, none above. Always with a fee swatch | `0.80 sat/vB` |
-| Size | vB under 10 k, then kvB and MvB with two decimals | `209 vB`, `14.62 MvB` |
-| Units | Muted, after a space. In tables the unit moves into the column header ("Value, BTC") and cells hold bare numbers | |
+| Size | One quantity, one unit family, everywhere: serialized size in B, kB, MB; virtual size in vB, kvB, MvB; weight in WU, kWU, MWU. The base unit under 10 000, then k or M (powers of 1 000) with two decimals (`formatSize`). A block's **size** is its serialized size; its virtual size is always written in vB units or labelled "virtual". The same block reads the same string on every page | `209 vB`, `1.69 MB`, `998.52 kvB`, `3.99 MWU` |
+| Units | Muted, after a space. In tables the unit moves into the column header ("Value, BTC") and cells hold bare numbers, except sizes, which keep their unit in the cell because one column spans B to MB. A unit hidden from sight is still in the text for screen readers | |
 | Approximate | `~` for projected values, `≈` for derived counts | `~0.64 sat/vB`, `≈ 15 blocks` |
+
+### Spent state
+
+An output is **Spent** (or **Being spent**, while the spending transaction is unconfirmed), **Unspent**, or **Unspendable**. Unspendable is for outputs that can never be spent, which the node reports as not spent: an `OP_RETURN` output, a locking script over the 10,000-byte limit, and the genesis block's coinbase, which was never added to the set of spendable coins. Never call those Unspent, and never call the genesis coinbase Spendable; the inspector gives the reason.
 
 ### Hashes and copy
 
