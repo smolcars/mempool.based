@@ -24,7 +24,8 @@ export function watchFiles(): void {
  * Asks again for every file that failed: each stylesheet through a fresh `<link>` in place of the
  * old, each script with a request that skips the cache, which only proves it downloads now (the
  * page's `import()` loads it). Waits for every one to settle. Resolves when all have loaded, with
- * whether any of them was a script; rejects when any failed again (each such one is noted again).
+ * whether any of them was a script; rejects when any failed again. Then each failed stylesheet and
+ * every script is noted again, so the attempt that finally succeeds still says scripts were proven.
  */
 export async function retryFiles(): Promise<{ scripts: boolean }> {
   const links = [...failedStyles];
@@ -44,18 +45,18 @@ export async function retryFiles(): Promise<{ scripts: boolean }> {
         }),
     ),
     ...scripts.map(async (href) => {
-      const ok = await fetch(href, { cache: "reload" }).then(
-        (res) => res.ok,
-        () => false,
-      );
-      if (!ok) {
-        failedScripts.add(href);
-        throw new Error(`Could not load ${href}`);
-      }
+      // Headers alone do not prove it: the whole body has to arrive.
+      const ok = await fetch(href, { cache: "reload" })
+        .then(async (res) => res.ok && (await res.arrayBuffer(), true))
+        .catch(() => false);
+      if (!ok) throw new Error(`Could not load ${href}`);
     }),
   ]);
   const failed = settled.find((r) => r.status === "rejected");
-  if (failed) throw failed.reason;
+  if (failed) {
+    for (const href of scripts) failedScripts.add(href);
+    throw failed.reason;
+  }
   return { scripts: scripts.length > 0 };
 }
 

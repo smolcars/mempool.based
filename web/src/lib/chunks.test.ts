@@ -99,6 +99,37 @@ describe("retryFiles and scripts", () => {
     await expect(retryFiles()).resolves.toStrictEqual({ scripts: true });
     expect(fetch).toHaveBeenCalledTimes(3);
   });
+
+  it("still says a script was proven when only a stylesheet held up an attempt", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("x", { status: 200 }))),
+    );
+    failedPreload("/assets/Page-c.js");
+    failedLink("e");
+    const first = retryFiles();
+    current("e")?.dispatchEvent(new Event("error"));
+    await expect(first).rejects.toThrow("Could not load");
+    const second = retryFiles();
+    current("e")?.dispatchEvent(new Event("load"));
+    await expect(second).resolves.toStrictEqual({ scripts: true });
+  });
+
+  it("does not count a script whose body broke off as downloaded", async () => {
+    const broken = new ReadableStream({
+      start: (c) => c.error(new TypeError("network connection was lost")),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(new Response(broken, { status: 200 }))
+        .mockResolvedValueOnce(new Response("x", { status: 200 })),
+    );
+    failedPreload("/assets/Page-d.js");
+    await expect(retryFiles()).rejects.toThrow("Could not load");
+    await expect(retryFiles()).resolves.toStrictEqual({ scripts: true });
+  });
 });
 
 describe("reloadOnce", () => {

@@ -153,8 +153,10 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
       try {
         // oxlint-disable-next-line no-await-in-loop -- the page is shown only once its styles are in
         const { scripts } = await retryFiles();
+        // A page left meanwhile must not hand its evidence to the next one.
+        if (!alive) return;
         if (scripts) checkedAt = Date.now();
-        if (alive) props.reset();
+        props.reset();
         return;
       } catch {
         // A file failed again: wait longer and try once more.
@@ -173,6 +175,7 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
     }
     // A render error can follow a stylesheet that failed too; either way everything is asked again.
     const files = await retryFiles().catch(() => undefined);
+    if (!alive) return;
     if (files?.scripts) checkedAt = Date.now();
     if (files || !chunk) props.reset();
     else setState("failed");
