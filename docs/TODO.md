@@ -66,9 +66,9 @@ Refined when M2 lands.
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | done ([#13](https://github.com/smolcars/mempool.based/pull/13)) |
-| MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | doing |
-| MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | todo |
-| MI3 | Hashrate history | MI1 | todo |
+| MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | done ([#34](https://github.com/smolcars/mempool.based/pull/34)); the full mainnet backfill has not been run |
+| MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | doing |
+| MI3 | Hashrate history | MI1 | doing (with MI2) |
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
