@@ -85,7 +85,7 @@ export default function BlockPage() {
         {(e) => (
           <Show
             when={isNotFound(e())}
-            fallback={<PageError error={e()} retry={() => byHeightCtl.refetch()} />}
+            fallback={<PageError error={e()} retry={() => void byHeightCtl.refetch()} />}
           >
             <NoBlockAtHeight height={height() ?? 0} />
           </Show>
@@ -209,9 +209,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const stale = () => s()?.in_best_chain === false;
   usePageTitle(() => {
     const h = height();
-    return h !== undefined
-      ? `Block ${groupDigits(h)}`
-      : `Block ${truncateMiddle(props.hash ?? "")}`.trim();
+    return h === undefined
+      ? `Block ${truncateMiddle(props.hash ?? "")}`.trim()
+      : `Block ${groupDigits(h)}`;
   });
 
   // Further pages of transactions, appended below the first.
@@ -282,9 +282,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   };
   const pageError = () => failed(block) ?? failed(status);
   const retry = () => {
-    if (failed(block)) blockCtl.refetch();
-    if (failed(status)) statusCtl.refetch();
-    if (failed(first)) firstCtl.refetch();
+    if (failed(block) !== undefined) void blockCtl.refetch();
+    if (failed(status) !== undefined) void statusCtl.refetch();
+    if (failed(first) !== undefined) void firstCtl.refetch();
   };
 
   const rows = (): readonly (Transaction | null)[] => {
@@ -295,7 +295,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
 
   return (
     <Show
-      when={!pageError()}
+      when={pageError() === undefined}
       fallback={
         <Show
           when={isNotFound(pageError()) && props.hash}
@@ -333,7 +333,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                   {(next) => (
                     <Link href={paths.block(next())} rel="next">
                       Next: <span class="num">{groupDigits((height() ?? 0) + 1)}</span>
-                      {"\u202f→"}
+                      {"\u202F→"}
                     </Link>
                   )}
                 </Match>
@@ -445,9 +445,11 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 label="Reward"
                 wide="phone"
                 value={
-                  reward() === undefined
-                    ? undefined
-                    : (reward() && <Amount sats={reward()?.reward ?? 0} />) || MISSING
+                  reward() === undefined ? undefined : reward() ? (
+                    <Amount sats={reward()?.reward ?? 0} />
+                  ) : (
+                    MISSING
+                  )
                 }
                 sub={
                   reward() && (
@@ -541,12 +543,12 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
             </span>
           </SectionHeader>
           <Show
-            when={!failed(first)}
+            when={failed(first) === undefined}
             fallback={
               <ErrorState
                 title="Could not load the transactions"
                 error={failed(first)}
-                retry={() => firstCtl.refetch()}
+                retry={() => void firstCtl.refetch()}
               />
             }
           >
@@ -557,12 +559,17 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                   <ErrorState
                     title="Could not load more transactions"
                     error={e()}
-                    retry={loadMore}
+                    retry={() => void loadMore()}
                   />
                 )}
               </Show>
-              <Show when={hasMore() && !moreError()}>
-                <button class="btn" type="button" aria-disabled={moreLoading()} onClick={loadMore}>
+              <Show when={hasMore() && moreError() === undefined}>
+                <button
+                  class="btn"
+                  type="button"
+                  aria-disabled={moreLoading()}
+                  onClick={() => void loadMore()}
+                >
                   {moreLoading()
                     ? "Loading…"
                     : `Show ${Math.min(PAGE, (txCount() ?? 0) - (txs()?.length ?? 0))} more`}
@@ -619,7 +626,7 @@ const columns = [
     numeric: true,
     optional: true,
     cell: (tx: Transaction | null) =>
-      !tx ? <Skel size="s" /> : isCoinbase(tx) ? "" : formatSats(tx.fee ?? Number.NaN),
+      tx ? isCoinbase(tx) ? "" : formatSats(tx.fee ?? Number.NaN) : <Skel size="s" />,
   },
   {
     header: "Size, vB",

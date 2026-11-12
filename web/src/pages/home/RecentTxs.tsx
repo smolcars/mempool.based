@@ -69,7 +69,7 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
     <section class="home-recent" aria-labelledby="recent-title">
       <SectionHeader title="Latest transactions" id="recent-title" />
       <Show
-        when={rows() || !props.feed.error()}
+        when={rows() ?? props.feed.error() === undefined}
         fallback={
           <ErrorState
             title="Could not load the latest transactions"

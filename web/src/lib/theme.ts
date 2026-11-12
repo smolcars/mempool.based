@@ -9,7 +9,7 @@ const osQuery = () => matchMedia("(prefers-color-scheme: dark)");
 const osScheme = (): Scheme => (osQuery().matches ? "dark" : "light");
 
 function forced(): Scheme | null {
-  const t = root().dataset.theme;
+  const t = root().dataset["theme"];
   return t === "light" || t === "dark" ? t : null;
 }
 
@@ -34,8 +34,8 @@ export function watchTheme(): () => void {
 export function toggleTheme(): void {
   const next: Scheme = scheme() === "dark" ? "light" : "dark";
   const follow = next === osScheme();
-  if (follow) delete root().dataset.theme;
-  else root().dataset.theme = next;
+  if (follow) delete root().dataset["theme"];
+  else root().dataset["theme"] = next;
   try {
     if (follow) localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, next);

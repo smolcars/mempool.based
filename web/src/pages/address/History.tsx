@@ -145,7 +145,7 @@ export function History(props: {
 
   const loadMore = async () => {
     const list = shown();
-    const last = list?.[list.length - 1];
+    const last = list?.at(-1);
     if (!last || loadingMore()) return;
     const asked = generation;
     setLoadingMore(true);
@@ -189,8 +189,8 @@ export function History(props: {
     { as: "text" },
   );
   props.onRefresh(() => {
-    if (utxos.state === "ready") refetchUtxos();
-    if (tip.state === "ready") refetchTip();
+    if (utxos.state === "ready") void refetchUtxos();
+    if (tip.state === "ready") void refetchTip();
   });
 
   const meta = () => {
@@ -209,6 +209,7 @@ export function History(props: {
   return (
     <section class="address-history" aria-label="History">
       <div class="section__head address-history__head">
+        {/* oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take focus (roving tabindex); the list only handles their arrow keys */}
         <div class="address-tabs" role="tablist" aria-label="Show" onKeyDown={onKeyDown}>
           <For each={VIEWS}>
             {(v, i) => (
@@ -258,14 +259,14 @@ export function History(props: {
                       <button
                         class="btn"
                         type="button"
-                        onClick={loadMore}
+                        onClick={() => void loadMore()}
                         aria-disabled={loadingMore()}
                       >
                         {loadingMore()
                           ? "Loading…"
-                          : moreError()
-                            ? "Try again"
-                            : `Show ${PAGE} more`}
+                          : moreError() === undefined
+                            ? `Show ${PAGE} more`
+                            : "Try again"}
                       </button>
                     </Show>
                     {/* Phones have no room for the count in the section head. */}
@@ -288,8 +289,8 @@ export function History(props: {
                 utxos={utxos}
                 tip={tip}
                 retry={() => {
-                  if (utxos.state === "errored") refetchUtxos();
-                  if (tip.state === "errored") refetchTip();
+                  if (utxos.state === "errored") void refetchUtxos();
+                  if (tip.state === "errored") void refetchTip();
                 }}
               />
             </Match>
@@ -465,7 +466,7 @@ function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry:
   const pageCount = () => Math.max(1, Math.ceil((sorted()?.length ?? 0) / UTXO_STEP));
   // A refresh can shorten the list under the page on screen.
   const current = () => Math.min(page(), pageCount());
-  const failed = () =>
+  const failed = (): unknown =>
     props.utxos.state === "errored"
       ? props.utxos.error
       : props.tip.state === "errored"

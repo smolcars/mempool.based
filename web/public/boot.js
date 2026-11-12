@@ -4,10 +4,11 @@
   const root = document.documentElement;
   try {
     const theme = localStorage.getItem("theme");
-    if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+    if (theme === "light" || theme === "dark") root.dataset["theme"] = theme;
   } catch {
     // Storage blocked: the OS setting applies.
   }
   const first = location.pathname.split("/")[1];
-  root.dataset.network = ["signet", "testnet4", "regtest"].includes(first) ? first : "mainnet";
+  root.dataset["network"] =
+    first !== undefined && ["signet", "testnet4", "regtest"].includes(first) ? first : "mainnet";
 }

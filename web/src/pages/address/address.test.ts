@@ -40,7 +40,7 @@ describe("recognise", () => {
     ["bcrt1pz9ml8p3h96z9hlvz0esm3uwdq9pxssmykz209jrg57znrdvx5y0shy3atk", "p2tr", ["regtest"]],
     ["bcrt1pfeesnyr2tx", "p2a", ["regtest"]],
   ])("%s is %s", (address, type, networks) => {
-    expect(recognise(address)).toEqual({ address, type, networks });
+    expect(recognise(address)).toStrictEqual({ address, type, networks });
   });
 
   it("reads upper-case bech32 as lower case, and keeps base58 as given", () => {
@@ -183,8 +183,8 @@ describe("refusal", () => {
     [new ApiError(502, "Upstream unavailable."), "failed"],
     [new ApiError(0, "The server cannot be reached."), "failed"],
     [new Error("boom"), "failed"],
-  ])("%s is %s", (error, kind) => {
-    expect(refusal(error)).toBe(kind);
+  ])("%s is %s", (thrown, kind) => {
+    expect(refusal(thrown)).toBe(kind);
   });
 });
 
@@ -198,7 +198,7 @@ const utxo = (value: number, height?: number): Utxo => ({
 describe("unspent outputs", () => {
   it("sort unconfirmed first, then newest, then largest", () => {
     const sorted = sortUtxos([utxo(1, 5), utxo(2, 9), utxo(3), utxo(9, 5)]);
-    expect(sorted.map((u) => u.value)).toEqual([3, 2, 9, 1]);
+    expect(sorted.map((u) => u.value)).toStrictEqual([3, 2, 9, 1]);
   });
 
   it("count confirmations from the tip", () => {
@@ -214,7 +214,7 @@ describe("mergePages", () => {
   const t = (id: string) => tx([], [], { txid: id });
   it("puts the fresh first page first and drops what it repeats", () => {
     const merged = mergePages([t("new"), t("a"), t("b")], [t("b"), t("c")]);
-    expect(merged.map((x) => x.txid)).toEqual(["new", "a", "b", "c"]);
+    expect(merged.map((x) => x.txid)).toStrictEqual(["new", "a", "b", "c"]);
   });
 });
 
@@ -237,21 +237,21 @@ describe("keptAfterRefresh", () => {
 
   it("keeps what was loaded after a page that pushed one transaction down", () => {
     const kept = keptAfterRefresh(range(0, 24), range(1, 50), 25);
-    expect(ids(kept)).toEqual(ids(range(25, 50)));
+    expect(ids(kept)).toStrictEqual(ids(range(25, 50)));
   });
 
   it("starts over when more arrived than a page holds, rather than skip any", () => {
-    expect(keptAfterRefresh(range(1, 25), range(31, 80), 25)).toEqual([]);
+    expect(keptAfterRefresh(range(1, 25), range(31, 80), 25)).toStrictEqual([]);
   });
 
   it("drops everything else when the fresh page is the whole history, as after a reorg", () => {
-    expect(keptAfterRefresh([], [c(1)], 25)).toEqual([]);
-    expect(keptAfterRefresh(range(1, 3), range(1, 30), 25)).toEqual([]);
+    expect(keptAfterRefresh([], [c(1)], 25)).toStrictEqual([]);
+    expect(keptAfterRefresh(range(1, 3), range(1, 30), 25)).toStrictEqual([]);
   });
 
   it("measures from the last confirmed transaction and drops unconfirmed leftovers", () => {
     const fresh = [u(1), ...range(0, 24)];
     const shown = [u(2), ...range(1, 25), u(3), c(26)];
-    expect(ids(keptAfterRefresh(fresh, shown, 25))).toEqual(["c25", "c26"]);
+    expect(ids(keptAfterRefresh(fresh, shown, 25))).toStrictEqual(["c25", "c26"]);
   });
 });

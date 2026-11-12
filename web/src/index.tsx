@@ -24,7 +24,9 @@ const root = document.getElementById("root");
 if (root) {
   // Lay text out once: in the preloaded font if it is here in time, otherwise in the fallbacks for good.
   const font = document.fonts.load("1em Recursive").catch(() => []);
-  const timeout = new Promise<[]>((resolve) => setTimeout(() => resolve([]), FONT_WAIT_MS));
+  const timeout = new Promise<[]>((resolve) => {
+    setTimeout(() => resolve([]), FONT_WAIT_MS);
+  });
   void Promise.race([font, timeout]).then((faces) => {
     if (!faces.some((f) => f.status === "loaded")) useFallbackFonts();
     render(() => <Router root={Shell}>{routes}</Router>, root);

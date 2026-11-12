@@ -119,6 +119,7 @@ export function refusal(error: unknown): Refusal {
  */
 export function sortUtxos(utxos: readonly Utxo[]): Utxo[] {
   const height = (u: Utxo) => (u.status.confirmed ? (u.status.block_height ?? 0) : Infinity);
+  // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh copy; toSorted is newer than the browsers we build for
   return [...utxos].sort((a, b) => height(b) - height(a) || b.value - a.value);
 }
 
@@ -160,6 +161,7 @@ export function keptAfterRefresh(
   size: number,
 ): Transaction[] {
   if (!pageIsFull(fresh, size)) return [];
+  // oxlint-disable-next-line unicorn/prefer-array-find -- findLast is newer than the browsers we build for
   const edge = fresh.filter((t) => t.status.confirmed).at(-1)?.txid;
   const i = shown.findIndex((t) => t.txid === edge);
   return i === -1 ? [] : shown.slice(i + 1).filter((t) => t.status.confirmed);

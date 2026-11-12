@@ -1,0 +1,191 @@
+// Every category is an error, type-aware rules included; warnings fail the check too. A rule is
+// off below only with its reason. A one-off exception is a line-level disable with `-- reason`.
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise", "jsx-a11y"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error",
+    "pedantic": "error",
+    "style": "error",
+    "restriction": "error"
+  },
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "env": { "browser": true, "es2022": true },
+  // Solid writes a label's `for` as `for`, not React's `htmlFor`.
+  "settings": { "jsx-a11y": { "attributes": { "for": ["htmlFor", "for"] } } },
+  "ignorePatterns": ["dist"],
+  "rules": {
+    // Tuned rather than off.
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    // Optional boolean and string props are tested by truth everywhere in Solid; numbers and
+    // unknown values still need an explicit comparison, because 0 sats and a thrown error matter.
+    "typescript/strict-boolean-expressions": [
+      "error",
+      { "allowNullableBoolean": true, "allowNullableString": true }
+    ],
+    // `!!x` is explicit enough; `+x` and `"" + x` are still caught.
+    "eslint/no-implicit-coercion": ["error", { "boolean": false }],
+    // Calling a `.then(ok, failed)` is handling the rejection.
+    "promise/catch-or-return": ["error", { "allowThen": true }],
+    // Declaring helpers and components below their first use reads top-down; TypeScript already
+    // rejects a use in the temporal dead zone.
+    "eslint/no-use-before-define": [
+      "error",
+      { "functions": false, "typedefs": false, "variables": false }
+    ],
+
+    // Fights Solid: `let el!: HTMLElement` is assigned by `ref={el}`, which the rule cannot see.
+    "eslint/no-unassigned-vars": "off",
+    // Fights Solid: `const x = props.x` is how props stay reactive; destructuring breaks that.
+    "eslint/prefer-destructuring": "off",
+    // Wants <output> for role="status"; swapping a <p> or <div> for a form element changes layout
+    // and semantics, and role="status" is valid ARIA.
+    "jsx-a11y/prefer-tag-over-role": "off",
+    // Flags `onClick={() => setOpen(false)}` (96 places): returning a setter's value is harmless.
+    "typescript/no-confusing-void-expression": "off",
+    "typescript/strict-void-return": "off",
+    // Wants `readonly` deep in every parameter type, DOM events included (357 places).
+    "typescript/prefer-readonly-parameter-types": "off",
+    // Would turn `lazy(() => import("./Page"))` into `async () =>` everywhere: more bytes, no gain.
+    "typescript/promise-function-async": "off",
+    // Contradicts typescript/consistent-return, which wants `return undefined` spelled out.
+    "unicorn/no-useless-undefined": "off",
+    // A `.then` inside a synchronous Solid effect or animation callback is the right shape;
+    // `.then(ok, failed)` is not the same as `.then(ok).catch(failed)`.
+    "promise/prefer-await-to-then": "off",
+    "promise/prefer-catch": "off",
+    "promise/always-return": "off",
+    "unicorn/prefer-top-level-await": "off",
+    "promise/avoid-new": "off",
+    // Number() is not parseFloat(): "1.5s" parses to 1.5 and coerces to NaN.
+    "unicorn/prefer-number-coercion": "off",
+    // Hexadecimal digits: oxfmt prints them lowercase, the rule wants them uppercase.
+    "unicorn/number-literal-case": "off",
+    // Wants 0xffffffff as 0xff_ff_ff_ff and 1_500 as 1500; sats are grouped by meaning here.
+    "unicorn/numeric-separators-style": "off",
+    // Flags every narrowing cast, `(el as HTMLElement).dataset` after a querySelector among them
+    // (64 places); unsafe values are caught by the no-unsafe-* rules instead.
+    "typescript/no-unsafe-type-assertion": "off",
+    // Wants hoisting of local helpers out of components, and flags a placeholder that is
+    // reassigned later (`let refreshHistory = () => {}`).
+    "unicorn/consistent-function-scoping": "off",
+    // Turning `forEach((x, i) => { if (…) return; … })` into for-of rewrites working animation
+    // code (`return` becomes `continue`) for no gain.
+    "unicorn/no-array-for-each": "off",
+    // getElementById is the direct call for an id.
+    "unicorn/prefer-query-selector": "off",
+    // The `u` flag changes nothing for the ASCII patterns here (hex, addresses), in 53 places.
+    "eslint/require-unicode-regexp": "off",
+    // Duplicated by typescript/require-await, which understands returned promises.
+    "eslint/require-await": "off",
+    // Taste or size limits that flag ordinary code: a page component is long, a fee table has
+    // numbers in it, `(a, b) => a - b` has short names, JSX renders with ternaries.
+    "eslint/max-lines-per-function": "off",
+    "eslint/max-lines": "off",
+    "eslint/max-statements": "off",
+    "eslint/max-params": "off",
+    "eslint/complexity": "off",
+    "import/max-dependencies": "off",
+    "unicorn/max-nested-calls": "off",
+    "eslint/no-magic-numbers": "off",
+    "eslint/id-length": "off",
+    "eslint/no-ternary": "off",
+    "eslint/no-nested-ternary": "off",
+    "unicorn/no-nested-ternary": "off",
+    "eslint/no-inline-comments": "off",
+    "eslint/capitalized-comments": "off",
+    "eslint/one-var": "off",
+    "eslint/curly": "off",
+    "eslint/sort-keys": "off",
+    "eslint/sort-imports": "off",
+    "eslint/func-style": "off",
+    "eslint/init-declarations": "off",
+    "eslint/prefer-named-capture-group": "off",
+    "eslint/no-continue": "off",
+    "eslint/no-plusplus": "off",
+    "unicorn/no-null": "off",
+    "unicorn/filename-case": "off",
+    "unicorn/prefer-global-this": "off",
+    "unicorn/catch-error-name": "off",
+    "unicorn/no-await-expression-member": "off",
+    "unicorn/prefer-string-raw": "off",
+    "unicorn/no-array-reduce": "off",
+    "unicorn/import-style": "off",
+    "typescript/explicit-function-return-type": "off",
+    "typescript/explicit-module-boundary-types": "off",
+    "typescript/explicit-member-accessibility": "off",
+    "import/consistent-type-specifier-style": "off",
+    // Export style: these contradict one another (named only, default only, grouped, last).
+    "import/no-named-export": "off",
+    "import/group-exports": "off",
+    "import/exports-last": "off",
+    "import/prefer-default-export": "off",
+    "import/no-default-export": "off",
+    // Ordinary language features: byte decoding needs bitwise operators, `void` marks a promise
+    // deliberately not awaited, `undefined` is a value under exactOptionalPropertyTypes, a
+    // TypeScript switch is checked for exhaustiveness instead of needing a default, relative
+    // imports are how the app is laid out, scripts and configs run on Node.
+    "eslint/no-bitwise": "off",
+    "eslint/no-void": "off",
+    "eslint/no-undefined": "off",
+    "eslint/default-case": "off",
+    "import/no-relative-parent-imports": "off",
+    "import/no-nodejs-modules": "off",
+    // Contradicts typescript/no-non-null-assertion, which is on.
+    "typescript/non-nullable-type-assertion-style": "off",
+    // Ban syntax that every browser we build for has.
+    "oxc/no-optional-chaining": "off",
+    "oxc/no-async-await": "off",
+    "oxc/no-rest-spread-properties": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/components/test-utils.tsx"],
+      "plugins": ["vitest"],
+      "rules": {
+        // Fake servers in tests branch on the request, and stubs are empty or async on purpose.
+        "vitest/no-conditional-in-test": "off",
+        "eslint/no-empty-function": "off",
+        "typescript/require-await": "off",
+        // These two weaken assertions (toBe(false) becomes toBeFalsy()).
+        "vitest/prefer-to-be-falsy": "off",
+        "vitest/prefer-to-be-truthy": "off",
+        // Contradicts vitest/prefer-called-once, which is on.
+        "vitest/prefer-called-times": "off",
+        // Taste: our tests import from vitest, use hooks, name things in sentences.
+        "vitest/no-importing-vitest-globals": "off",
+        "vitest/prefer-expect-assertions": "off",
+        "vitest/require-test-timeout": "off",
+        "vitest/max-expects": "off",
+        "vitest/prefer-describe-function-title": "off",
+        "vitest/prefer-lowercase-title": "off",
+        "vitest/require-top-level-describe": "off",
+        "vitest/no-hooks": "off",
+        "vitest/require-hook": "off",
+        "vitest/padding-around-test-blocks": "off"
+      }
+    },
+    {
+      // Tests step through time and pages in order.
+      "files": ["src/**/*.test.ts", "src/**/*.test.tsx", "e2e/**"],
+      "rules": { "eslint/no-await-in-loop": "off" }
+    },
+    {
+      // Command-line scripts print and exit.
+      "files": ["scripts/**", "*.config.ts"],
+      "env": { "node": true },
+      "rules": { "eslint/no-console": "off", "unicorn/no-process-exit": "off" }
+    },
+    {
+      // A classic script, run before the app's modules (see its header).
+      "files": ["public/boot.js"],
+      "rules": { "import/unambiguous": "off" }
+    }
+  ]
+}

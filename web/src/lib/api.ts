@@ -124,6 +124,7 @@ export function createApi<T>(
   return createResource(
     () => {
       const p = path();
+      // oxlint-disable-next-line typescript/strict-boolean-expressions -- every falsy path means "no request"
       return p ? `${apiBase(network())}${p}` : false;
     },
     (url): T | Promise<T> => {

@@ -1,9 +1,10 @@
 // Mines on the run's node, so it runs after every other test (the `mines` project).
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
-const heights = (page: import("@playwright/test").Page) =>
+const heights = (page: Page) =>
   page.$$eval(".home-strip__lane > li[data-height]:not(.home-tile--leaving)", (els) =>
-    els.map((e) => Number((e as HTMLElement).dataset.height)),
+    els.map((e) => Number((e as HTMLElement).dataset["height"])),
   );
 
 test("a new block lands in the strip without a reload, and a burst leaves it correct", async ({

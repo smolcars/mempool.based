@@ -37,9 +37,9 @@ describe("isImmutable", () => {
 
 describe("fetchApi", () => {
   it("prefixes the network and parses JSON", async () => {
-    const fetch = vi.fn(async () => reply(200, '{"height":5}'));
+    const fetch = vi.fn<() => Promise<Response>>(async () => reply(200, '{"height":5}'));
     vi.stubGlobal("fetch", fetch);
-    await expect(fetchApi("signet", "/block/ab")).resolves.toEqual({ height: 5 });
+    await expect(fetchApi("signet", "/block/ab")).resolves.toStrictEqual({ height: 5 });
     expect(fetch).toHaveBeenCalledWith("/signet/api/block/ab", expect.anything());
   });
 
@@ -67,18 +67,21 @@ describe("fetchApi", () => {
 
   it("passes an abort through instead of reporting it as an error", async () => {
     const controller = new AbortController();
-    vi.stubGlobal("fetch", (_url: string, init: RequestInit) => {
-      return new Promise((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-      });
-    });
+    vi.stubGlobal(
+      "fetch",
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- fetch rejects with the abort reason, whatever it is
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
     const pending = fetchApi("mainnet", "/x", { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.not.toBeInstanceOf(ApiError);
   });
 
   it("caches immutable replies and nothing else", async () => {
-    const fetch = vi.fn(async (url: string) =>
+    const fetch = vi.fn<(url: string) => Promise<Response>>(async (url) =>
       url.endsWith("/block/ab")
         ? reply(200, "1", { "cache-control": "public, max-age=31536000, immutable" })
         : reply(200, "2", { "cache-control": "max-age=5" }),
@@ -90,7 +93,7 @@ describe("fetchApi", () => {
     await fetchApi("mainnet", "/blocks");
     // Same path on another network is another resource.
     await fetchApi("signet", "/block/ab");
-    expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+    expect(fetch.mock.calls.map((c) => c[0])).toStrictEqual([
       "/api/block/ab",
       "/api/blocks",
       "/api/blocks",

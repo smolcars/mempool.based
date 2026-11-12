@@ -14,7 +14,7 @@ export function groupDigits(n: number): string {
   const rounded = Math.round(n);
   const digits = Math.abs(rounded)
     .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, NNBSP);
+    .replaceAll(/\B(?=(\d{3})+(?!\d))/g, NNBSP);
   return rounded < 0 ? `−${digits}` : digits;
 }
 

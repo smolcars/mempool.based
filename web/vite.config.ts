@@ -6,7 +6,7 @@ import solid from "vite-plugin-solid";
 import { defineConfig } from "vitest/config";
 
 // The dev server proxies the Rust server, found where the server itself listens.
-const server = `http://${process.env.LISTEN_ADDR ?? "127.0.0.1:8080"}`;
+const server = `http://${process.env["LISTEN_ADDR"] ?? "127.0.0.1:8080"}`;
 
 // Writes .br and .gz beside each text file in the build; the server sends them to clients that accept them.
 function precompress(): Plugin {

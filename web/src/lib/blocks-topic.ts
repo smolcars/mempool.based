@@ -21,30 +21,30 @@ export function isBlock(v: unknown): v is Block {
   if (typeof v !== "object" || v === null) return false;
   const b = v as Record<string, unknown>;
   return (
-    isHash(b.id) &&
-    isHeight(b.height) &&
-    (b.previousblockhash === null || isHash(b.previousblockhash)) &&
-    isCount(b.timestamp) &&
-    isCount(b.tx_count) &&
-    isCount(b.weight)
+    isHash(b["id"]) &&
+    isHeight(b["height"]) &&
+    (b["previousblockhash"] === null || isHash(b["previousblockhash"])) &&
+    isCount(b["timestamp"]) &&
+    isCount(b["tx_count"]) &&
+    isCount(b["weight"])
   );
 }
 
 function isTip(v: unknown): v is ChainTip {
   if (typeof v !== "object" || v === null) return false;
   const t = v as Record<string, unknown>;
-  return isHeight(t.height) && isHash(t.hash);
+  return isHeight(t["height"]) && isHash(t["hash"]);
 }
 
 export const blocksTopic: Topic<BlocksMessage> = {
   name: "blocks",
   parse(m) {
-    if (m.type === "block" && isBlock(m.block)) return { type: "block", block: m.block };
-    if (m.type === "reorg" && isHeight(m.fork_height)) {
-      return { type: "reorg", forkHeight: m.fork_height };
+    if (m["type"] === "block" && isBlock(m["block"])) return { type: "block", block: m["block"] };
+    if (m["type"] === "reorg" && isHeight(m["fork_height"])) {
+      return { type: "reorg", forkHeight: m["fork_height"] };
     }
-    if (m.type === "resync" && (m.tip === null || isTip(m.tip))) {
-      return { type: "resync", tip: m.tip };
+    if (m["type"] === "resync" && (m["tip"] === null || isTip(m["tip"]))) {
+      return { type: "resync", tip: m["tip"] };
     }
     return undefined;
   },

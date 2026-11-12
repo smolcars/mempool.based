@@ -92,9 +92,9 @@ function TransactionView(props: { txid: string }) {
     as: "text",
   });
   const retry = () => {
-    refetch();
-    refetchSpends();
-    refetchTip();
+    void refetch();
+    void refetchSpends();
+    void refetchTip();
   };
 
   const ready = () => (tx.state === "ready" ? tx() : undefined);
@@ -116,7 +116,7 @@ function TransactionView(props: { txid: string }) {
   };
   const status = () => {
     const l = live();
-    return l && l !== "removed" ? l : undefined;
+    return l !== undefined && l !== "removed" ? l : undefined;
   };
   const confs = () => confirmations(status()?.block_height, tip());
 
@@ -124,7 +124,7 @@ function TransactionView(props: { txid: string }) {
   // A memo, so the effect below restarts only when watching starts or stops, not on every tip.
   const watching = createMemo(() => {
     const l = live();
-    if (!l || l === "removed") return false;
+    if (l === undefined || l === "removed") return false;
     return (
       !l.confirmed ||
       (confs() ?? 0) < (ready() && isCoinbase(ready() as Transaction) ? MATURE : SETTLED)
@@ -140,7 +140,7 @@ function TransactionView(props: { txid: string }) {
       busy = true;
       try {
         const now = live();
-        if (!now || now === "removed") return;
+        if (now === undefined || now === "removed") return;
         // Status is checked while confirmed too: a reorg can send a young transaction back.
         try {
           const next = await fetchApi<TxStatus>(network(), `/tx/${props.txid}/status`, {
@@ -189,7 +189,11 @@ function TransactionView(props: { txid: string }) {
           <h1>Transaction</h1>
           <Show
             when={live()}
-            fallback={!tx.error && <span class="tx-status tx-status--pending" aria-hidden="true" />}
+            fallback={
+              tx.error === undefined && (
+                <span class="tx-status tx-status--pending" aria-hidden="true" />
+              )
+            }
           >
             {(l) => <StatusBadge live={l()} />}
           </Show>
@@ -375,7 +379,9 @@ function Body(props: {
   const v = () => vsize(props.tx);
   const rate = () => {
     const size = v();
-    return !coinbase() && props.tx.fee !== undefined && size ? props.tx.fee / size : undefined;
+    return !coinbase() && props.tx.fee !== undefined && size !== undefined && size !== 0
+      ? props.tx.fee / size
+      : undefined;
   };
   const lock = () => lockTimeMeaning(props.tx.locktime, props.tx.vin);
   const [raw, setRaw] = createSignal<{ hex?: string; error?: unknown; loading?: boolean }>({});
@@ -538,11 +544,16 @@ function Body(props: {
                     <ErrorState
                       title="Could not load the raw transaction"
                       error={raw().error}
-                      retry={loadRaw}
+                      retry={() => void loadRaw()}
                     />
                   </Match>
                   <Match when={true}>
-                    <button class="btn" type="button" onClick={loadRaw} disabled={raw().loading}>
+                    <button
+                      class="btn"
+                      type="button"
+                      onClick={() => void loadRaw()}
+                      disabled={raw().loading}
+                    >
                       {raw().loading ? "Loading raw hex…" : "Show raw hex"}
                     </button>
                     <span class="tx-fact__sub num">

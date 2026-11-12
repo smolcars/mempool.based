@@ -10,7 +10,9 @@ const ME = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
 const OTHER = "bc1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qccfmv3";
 const txid = (n: number) => n.toString(16).padStart(64, "0");
 
-type Reply = unknown | ((url: string) => Response | Promise<Response>);
+type Handler = (url: string) => Response | Promise<Response>;
+// A JSON body, or a handler that answers.
+type Reply = Handler | object | string | number;
 let calls: string[] = [];
 
 afterEach(() => {
@@ -23,12 +25,12 @@ afterEach(() => {
 /** Answers each API path (after the network's `/api`) from `replies`; anything else is a 404. */
 function serve(replies: Record<string, Reply>) {
   vi.stubGlobal("fetch", async (input: string) => {
-    const url = String(input);
+    const url = input;
     calls.push(url);
     const path = url.replace(/^(\/\w+)?\/api/, "");
     const reply = url === "/app/config" ? replies["/app/config"] : replies[path];
     if (reply === undefined) return Response.json({ error: "not found" }, { status: 404 });
-    if (typeof reply === "function") return reply(url);
+    if (typeof reply === "function") return (reply as Handler)(url);
     return Response.json(reply);
   });
 }
@@ -105,8 +107,8 @@ describe("address page", () => {
     expect(el.querySelector("h1")?.textContent).toBe("Address");
     expect(text(el.querySelector(".address-type") as Element)).toBe("P2WPKH");
     expect(text(el.querySelector(".hash--full") as Element)).toContain("bc1qw508");
-    const labels = [...el.querySelectorAll(".address-stat__label")].map(text);
-    expect(labels).toEqual(["Balance", "Received", "Sent", "Transactions", "Unconfirmed"]);
+    const labels = [...el.querySelectorAll(".address-stat__label")].map((e) => text(e));
+    expect(labels).toStrictEqual(["Balance", "Received", "Sent", "Transactions", "Unconfirmed"]);
     expect(el.querySelectorAll(".address-stat .skeleton")).toHaveLength(10);
     expect(el.querySelectorAll("tbody tr .skeleton").length).toBeGreaterThan(0);
     expect(text(el)).toContain("Loading transactions");
@@ -146,8 +148,8 @@ describe("address page", () => {
     });
     const el = open(`/address/${ME}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
-    const values = [...el.querySelectorAll(".address-stat__value")].map(text);
-    expect(values).toEqual([
+    const values = [...el.querySelectorAll(".address-stat__value")].map((e) => text(e));
+    expect(values).toStrictEqual([
       "1.00000000 BTC",
       "1.50000000 BTC",
       "0.50000000 BTC",
@@ -156,7 +158,7 @@ describe("address page", () => {
     ]);
     const rows = [...el.querySelectorAll("tbody tr")];
     const change = rows.map((r) => text(r.querySelectorAll("td")[2] as Element));
-    expect(change).toEqual(["+0.00050000", "−0.00040210", "−0.00000210"]);
+    expect(change).toStrictEqual(["+0.00050000", "−0.00040210", "−0.00000210"]);
     expect(text(rows[0] as Element)).toContain("Unconfirmed");
     expect(rows[1]?.querySelector("a")?.getAttribute("href")).toBe(`/tx/${txid(2)}`);
     expect(text(el.querySelector(".section__meta") as Element)).toBe("3 of 4");
@@ -221,7 +223,7 @@ describe("address page", () => {
     window.dispatchEvent(new Event("focus"));
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
     const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
-    expect(ids).toEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
+    expect(ids).toStrictEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
     vi.restoreAllMocks();
   });
 
@@ -235,8 +237,8 @@ describe("address page", () => {
       [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 80))),
       [`/address/${ME}/txs`]: () => Response.json(firstPage),
       [`/address/${ME}/txs?after_txid=${txid(55)}`]: () =>
-        new Promise<Response>((r) => {
-          release = r;
+        new Promise<Response>((resolve) => {
+          release = resolve;
         }),
     });
     const el = open(`/address/${ME}`);
@@ -252,10 +254,10 @@ describe("address page", () => {
     );
     release(Response.json(range(56, 80)));
     await until(() =>
-      expect([...el.querySelectorAll("button")].map(text)).toContain("Show 25 more"),
+      expect([...el.querySelectorAll("button")].map((e) => text(e))).toContain("Show 25 more"),
     );
     const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
-    expect(ids).toEqual(range(1, 25).map((t) => `/tx/${t.txid}`));
+    expect(ids).toStrictEqual(range(1, 25).map((t) => `/tx/${t.txid}`));
     vi.restoreAllMocks();
   });
 
@@ -269,8 +271,8 @@ describe("address page", () => {
       [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 80))),
       [`/address/${ME}/txs`]: () => Response.json(firstPage),
       [`/address/${ME}/txs?after_txid=${txid(55)}`]: () =>
-        new Promise<Response>((r) => {
-          release = r;
+        new Promise<Response>((resolve) => {
+          release = resolve;
         }),
     });
     const el = open(`/address/${ME}`);
@@ -284,7 +286,9 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     release(Response.json(range(56, 80)));
     // The reply has nothing on screen to wait for, so give it time to land.
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1);
     vi.restoreAllMocks();
   });
@@ -306,7 +310,7 @@ describe("address page", () => {
       '<img src=x onerror="alert(1)">',
     );
     expect(el.querySelector("img")).toBeNull();
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
   });
 
   it("treats an address the server rejects as malformed", async () => {
@@ -325,10 +329,10 @@ describe("address page", () => {
     expect(text(el)).toContain("This is a Signet or Testnet4 address");
     await until(() => expect(el.querySelector(".address-elsewhere a")).not.toBeNull());
     const links = [...el.querySelectorAll(".address-elsewhere a")];
-    expect(links.map((a) => [text(a), a.getAttribute("href")])).toEqual([
+    expect(links.map((a) => [text(a), a.getAttribute("href")])).toStrictEqual([
       ["Open it on Signet", `/signet/address/${tb}`],
     ]);
-    expect(calls).toEqual(["/app/config"]);
+    expect(calls).toStrictEqual(["/app/config"]);
   });
 
   it("says when no enabled network serves the address", async () => {
@@ -391,7 +395,10 @@ describe("address page", () => {
       txid: txid(n),
       vout: n,
       value,
-      status: height ? { confirmed: true, block_height: height } : { confirmed: false },
+      status:
+        height !== undefined && height !== 0
+          ? { confirmed: true, block_height: height }
+          : { confirmed: false },
     });
     serve({
       [`/address/${ME}`]: stats(),
@@ -405,11 +412,12 @@ describe("address page", () => {
     );
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
     await until(() => expect(text(el.querySelectorAll("tbody tr")[2] as Element)).toContain("11"));
+    // oxlint-disable-next-line oxc/no-map-spread -- three rows of a test; prefer-spread rules out concat
     const rows = [...el.querySelectorAll("tbody tr")].map((r) => [
       text(r.querySelector(".address-outpoint") as Element),
-      ...[...r.querySelectorAll("td")].slice(1).map(text),
+      ...[...r.querySelectorAll("td")].slice(1).map((e) => text(e)),
     ]);
-    expect(rows).toEqual([
+    expect(rows).toStrictEqual([
       ["00000000…00000002:2", "0.00002000", "Unconfirmed"],
       ["00000000…00000003:3", "0.00003000", "1"],
       ["00000000…00000001:1", "0.00001000", "11"],

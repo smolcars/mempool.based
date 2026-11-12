@@ -81,7 +81,9 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const path = `/address/${encodeURIComponent(props.address)}`;
   const [stats, { refetch: refetchStats }] = createApi<AddressStats>(() => path);
   const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(() => `${path}/txs`);
-  let refreshHistory = () => {};
+  let refreshHistory = () => {
+    // Replaced by History once it mounts.
+  };
 
   // A refusal that holds for the whole address, from whichever request answered first.
   const pageRefusal = () => {
@@ -93,8 +95,8 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
     return undefined;
   };
   const retryAll = () => {
-    refetchStats();
-    if (first.state === "errored") refetchFirst();
+    void refetchStats();
+    if (first.state === "errored") void refetchFirst();
   };
 
   // shortcut: refreshes totals and the first page of history when the tab regains focus;
@@ -103,8 +105,8 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const refresh = () => {
     if (document.visibilityState !== "visible" || Date.now() - lastRefresh < REFRESH_GAP_MS) return;
     lastRefresh = Date.now();
-    if (stats.state === "ready") refetchStats();
-    if (first.state === "ready") refetchFirst();
+    if (stats.state === "ready") void refetchStats();
+    if (first.state === "ready") void refetchFirst();
     refreshHistory();
   };
   window.addEventListener("focus", refresh);
@@ -136,7 +138,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
           address={props.address}
           stats={stats}
           first={first}
-          retryFirst={() => refetchFirst()}
+          retryFirst={() => void refetchFirst()}
           onRefresh={(fn) => {
             refreshHistory = fn;
           }}

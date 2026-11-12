@@ -61,19 +61,19 @@ describe("BTC and sats", () => {
   });
 
   it("splits trailing zeros off so they can be dimmed", () => {
-    expect(btcParts(3_500_000)).toEqual({
+    expect(btcParts(3_500_000)).toStrictEqual({
       sign: "",
       whole: "0",
       significant: "035",
       zeros: "00000",
     });
-    expect(btcParts(100_000_000)).toEqual({
+    expect(btcParts(100_000_000)).toStrictEqual({
       sign: "",
       whole: "1",
       significant: "",
       zeros: "00000000",
     });
-    expect(btcParts(-12_345)).toEqual({
+    expect(btcParts(-12_345)).toStrictEqual({
       sign: "−",
       whole: "0",
       significant: "00012345",
@@ -217,8 +217,8 @@ describe("hashes", () => {
     expect(groups).toHaveLength(8);
     expect(groups[0]).toBe("65428488");
     expect(groups.join("")).toBe(txid);
-    expect(hashGroups("abcdefghij")).toEqual(["abcdefgh", "ij"]);
-    expect(hashGroups("")).toEqual([]);
+    expect(hashGroups("abcdefghij")).toStrictEqual(["abcdefgh", "ij"]);
+    expect(hashGroups("")).toStrictEqual([]);
   });
 });
 

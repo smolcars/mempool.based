@@ -35,7 +35,7 @@ describe("classify", () => {
     ["755187", "nonstandard", "Non-standard"],
     ["", "nonstandard", "Empty script"],
   ])("%s is %s", (hex, kind, label) => {
-    expect(classify(hex)).toEqual({ kind, label });
+    expect(classify(hex)).toStrictEqual({ kind, label });
   });
 
   it("does not mistake near misses for standard types", () => {
@@ -77,19 +77,19 @@ describe("disassemble", () => {
     const big = `4d0010${"ab".repeat(0x1000)}`;
     const r = disassemble(big, 100);
     expect(r.truncated).toBe(true);
-    expect(r.text.length).toBe(100);
+    expect(r.text).toHaveLength(100);
     expect(disassemble(big).truncated).toBe(false);
   });
 });
 
 describe("OP_RETURN data", () => {
   it("joins the pushes after OP_RETURN", () => {
-    expect([...opReturnData(`6a${push(enc("hello"))}${push(enc(" world"))}`)]).toEqual([
+    expect([...opReturnData(`6a${push(enc("hello"))}${push(enc(" world"))}`)]).toStrictEqual([
       ...new TextEncoder().encode("hello world"),
     ]);
-    expect(opReturnData(`76a914${h20}88ac`).length).toBe(0);
+    expect(opReturnData(`76a914${h20}88ac`)).toHaveLength(0);
     // Runes-style: a non-push opcode, then data.
-    expect(opReturnData(`6a5d${push("0102")}`)).toEqual(new Uint8Array([1, 2]));
+    expect(opReturnData(`6a5d${push("0102")}`)).toStrictEqual(new Uint8Array([1, 2]));
   });
 
   it("shows hostile text as inert, visible text", () => {
@@ -134,7 +134,7 @@ describe("lastPush", () => {
 
 describe("hexToBytes", () => {
   it("stops at the first bad pair", () => {
-    expect([...hexToBytes("01zz02")]).toEqual([1]);
-    expect([...hexToBytes("abc")]).toEqual([0xab]);
+    expect([...hexToBytes("01zz02")]).toStrictEqual([1]);
+    expect([...hexToBytes("abc")]).toStrictEqual([0xab]);
   });
 });

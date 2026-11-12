@@ -128,12 +128,12 @@ export default function BlocksPage() {
         }
       >
         <Show
-          when={!failed(blocks)}
+          when={failed(blocks) === undefined}
           fallback={
             <ErrorState
               title="Could not load the blocks"
               error={failed(blocks)}
-              retry={() => blocksCtl.refetch()}
+              retry={() => void blocksCtl.refetch()}
             />
           }
         >

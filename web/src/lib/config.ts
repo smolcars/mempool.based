@@ -13,6 +13,7 @@ export function parseConfig(body: unknown): AppConfig | null {
   const networks = "networks" in body && Array.isArray(body.networks) ? body.networks : null;
   if (!networks) return null;
   const version = "version" in body && typeof body.version === "string" ? body.version : "";
+  // oxlint-disable-next-line unicorn/no-array-callback-reference -- isNetwork takes one argument
   return { networks: networks.filter(isNetwork), version };
 }
 

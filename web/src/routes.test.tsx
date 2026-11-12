@@ -30,7 +30,7 @@ async function open(url: string, networks = ["mainnet", "signet", "testnet4"]) {
 describe("routes", () => {
   it.each([
     ["/", "Blocks"],
-    ["/block/840000", "Block 840\u202f000"],
+    ["/block/840000", "Block 840\u202F000"],
     ["/blocks", "Blocks"],
     ["/signet/blocks/5", "Blocks"],
     ["/tx/ab", "Transaction"],
@@ -49,7 +49,7 @@ describe("routes", () => {
 
   it("marks test networks and keeps links on them", async () => {
     const { el } = await open("/testnet4/tx/ab");
-    expect(document.documentElement.dataset.network).toBe("testnet4");
+    expect(document.documentElement.dataset["network"]).toBe("testnet4");
     expect(el.querySelector(".network-band")?.textContent).toBe(
       "Testnet4 is a test network. Coins here have no value.",
     );
@@ -64,7 +64,7 @@ describe("routes", () => {
     const { el } = await open("/signet/block/5?x=1");
     await vi.waitFor(() => expect(el.querySelectorAll(".network__option")).toHaveLength(3));
     const hrefs = [...el.querySelectorAll(".network__option")].map((a) => a.getAttribute("href"));
-    expect(hrefs).toEqual(["/block/5?x=1", "/signet/block/5?x=1", "/testnet4/block/5?x=1"]);
+    expect(hrefs).toStrictEqual(["/block/5?x=1", "/signet/block/5?x=1", "/testnet4/block/5?x=1"]);
     expect(el.querySelector(".network-band")).not.toBeNull();
   });
 

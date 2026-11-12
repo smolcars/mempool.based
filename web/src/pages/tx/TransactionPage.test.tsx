@@ -22,7 +22,7 @@ const out = (value: number, scriptpubkey: string, address?: string) => ({
   value,
   ...(address ? { scriptpubkey_address: address } : {}),
 });
-const P2WPKH = `0014${"05982249066c3cabd6265565b81bb024acc28488"}`;
+const P2WPKH = `001405982249066c3cabd6265565b81bb024acc28488`;
 const payment = (status: TxStatus): Transaction => ({
   txid: TXID,
   version: 2,
@@ -47,8 +47,7 @@ const payment = (status: TxStatus): Transaction => ({
 
 type Reply = { status: number; body: unknown } | (() => { status: number; body: unknown });
 let replies: Record<string, Reply>;
-const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-  const url = String(input);
+const fetchMock = vi.fn<(url: string) => Promise<Response>>(async (url) => {
   const r = replies[url];
   const reply =
     typeof r === "function" ? r() : (r ?? { status: 404, body: { error: "not found" } });
@@ -91,9 +90,13 @@ function page(path: string): HTMLElement {
 }
 
 const settle = async () => {
-  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
 };
-const text = (el: Element) => el.textContent?.replace(/\s+/g, " ") ?? "";
+const text = (el: Element) => el.textContent?.replaceAll(/\s+/g, " ") ?? "";
 const api = (path: string) => `/api${path}`;
 const serve = (tx: Transaction, spends: Outspend[] = [], tip = "975518") => {
   replies = {
@@ -198,7 +201,7 @@ describe("TransactionPage", () => {
     const calls = fetchMock.mock.calls.length;
     vi.advanceTimersByTime(POLL_MS * 3);
     await settle();
-    expect(fetchMock.mock.calls.length).toBe(calls);
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
   it("goes back to unconfirmed when its block leaves the chain", async () => {

@@ -60,7 +60,7 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
     <section class="home-fees" aria-labelledby="fees-title">
       <SectionHeader title="Fee to pay now" id="fees-title" />
       <Show
-        when={props.feed.data() || !props.feed.error()}
+        when={props.feed.data() ?? props.feed.error() === undefined}
         fallback={
           <ErrorState
             title="Could not load fee estimates"

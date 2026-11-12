@@ -40,6 +40,7 @@ export function Code(props: {
         </Show>
       </div>
       <Show when={props.value !== ""} fallback={<p class="tx-code__empty">Empty</p>}>
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrolling box must take focus so the keyboard can scroll it */}
         <pre class="tx-code__text" tabindex="0">
           {shown()}
         </pre>
@@ -49,7 +50,7 @@ export function Code(props: {
           when={props.value.length <= SHOW_ALL_MAX && !props.cut}
           fallback={
             <p class="tx-code__note">
-              Too long to show in full here.{props.copy !== false ? " Copy it instead." : ""}
+              Too long to show in full here.{props.copy === false ? "" : " Copy it instead."}
             </p>
           }
         >

@@ -245,7 +245,7 @@ export function classify(hex: string): ScriptClass {
 /** `OP_m <pubkey>… OP_n OP_CHECKMULTISIG` with n keys: returns [m, n]. */
 function bareMultisig(b: Uint8Array): [number, number] | null {
   const m = (b[0] ?? 0) - 0x50;
-  if (m < 1 || m > 16 || b[b.length - 1] !== 0xae) return null;
+  if (m < 1 || m > 16 || b.at(-1) !== 0xae) return null;
   let i = 1;
   let keys = 0;
   while (i < b.length - 2 && isPubkeyPush(b, i)) {
