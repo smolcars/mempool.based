@@ -44,9 +44,12 @@ for (const width of [320, 360]) {
 // Without the web font every engine draws figures in its own monospace, which can be wider: the
 // blocks list must still fit a 320 px phone.
 test.describe("without the web font", () => {
-  // Each engine reports the refused font in its own words.
+  // Each engine reports the refused font in its own words. WebKit also calls a summary fetch that
+  // the next page's load cancels an "access control" failure: the app is same-origin.
   test.use({
-    consoleErrorsAllowed: [/status of (429|503)|font|Failed to load resource|ERR_FAILED/i],
+    consoleErrorsAllowed: [
+      /status of (429|503)|font|Failed to load resource|ERR_FAILED|due to access control checks/i,
+    ],
   });
 
   test("the blocks list fits 320 px when the web font never arrives", async ({ page }) => {

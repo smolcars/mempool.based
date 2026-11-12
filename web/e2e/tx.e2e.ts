@@ -12,8 +12,11 @@ test("a confirmed transaction names every output type and links where the money 
   );
 
   const outputs = page.getByRole("list", { name: "Outputs" });
+  // A phone's card leads with the amount and where it went; its type waits in the inspector.
+  const wide = (page.viewportSize()?.width ?? 0) > 640;
   for (const type of ["P2PKH", "P2SH", "P2WPKH", "P2WSH", "P2TR", "Pay to anchor"]) {
-    await expect(outputs.getByText(type, { exact: true }).first()).toBeVisible();
+    const named = outputs.getByText(type, { exact: true }).first();
+    await (wide ? expect(named).toBeVisible() : expect(named).toBeAttached());
   }
   await expect(outputs).toContainText("OP_RETURN “mempool.based regtest”Unspendable");
   // Amounts keep their unit for screen readers, though the cards show bare numbers.
