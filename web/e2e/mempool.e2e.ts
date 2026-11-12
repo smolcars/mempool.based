@@ -49,7 +49,8 @@ test("the page shows the minutes the server stored, with the gap where none was"
   ).toBeVisible();
   const column = (await figures.locator("th").allInnerTexts()).indexOf("Transactions");
   expect(column).toBeGreaterThan(0);
-  // A minute the server records live while the test runs is not in the 900s.
+  // The stored minutes are the oldest rows, exactly, so nothing fills the gap; a minute the server
+  // records live while the test runs is newer than all of them.
   const counts = await figures.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
-  expect(counts.filter((c) => /^9\d\d$/.test(c))).toEqual(STORED);
+  expect(counts.slice(-STORED.length)).toEqual(STORED);
 });
