@@ -49,7 +49,8 @@ jobs:
           echo "$CARGO_AUDIT_SHA256  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
           tar xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP" "$name/cargo-audit"
           echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
-      - id: audit
+      - name: Audit
+        id: audit
         env:
           # Read-only, for GitHub's advisory API: the fixed versions bun audit does not report.
           GITHUB_TOKEN: ${{ github.token }}
