@@ -564,6 +564,14 @@ fn ok(route: &'static str, content_type: &'static str, body: Bytes, source: Sour
     res
 }
 
+/// Marks `res` not to be kept when its audits could not be read: it shows none for now.
+fn unkept_unless(read: bool, mut res: Response) -> Response {
+    if !read {
+        res.extensions_mut().insert(crate::answers::Unkept);
+    }
+    res
+}
+
 /// The hash in the path, before anything is asked of the node.
 fn parse_hash(hash: &str, uri: &Uri) -> Result<BlockHash, Answer> {
     if uri.query().is_some_and(|q| !q.is_empty()) {
@@ -591,13 +599,17 @@ pub async fn facts(
                 (s.facts.clone(), source)
             }
         };
-        let audit = crate::audits::totals(&ctx, &[hash]).await.pop().flatten();
+        let (mut audits, read) = crate::audits::totals(&ctx, &[hash]).await;
+        let audit = audits.pop().flatten();
         let body = serde_json::to_vec(&Published {
             facts: &facts,
             audit: audit.as_ref(),
         })
         .map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
-        Ok(ok(ROUTE, "application/json", body.into(), source))
+        Ok(unkept_unless(
+            read,
+            ok(ROUTE, "application/json", body.into(), source),
+        ))
     };
     answer
         .await
@@ -676,7 +688,7 @@ pub async fn batch(
             facts.push(s.facts.clone());
         }
         let ids: Vec<BlockHash> = facts.iter().map(|f| f.id).collect();
-        let audits = crate::audits::totals(&ctx, &ids).await;
+        let (audits, read) = crate::audits::totals(&ctx, &ids).await;
         let published: Vec<Published> = facts
             .iter()
             .zip(&audits)
@@ -686,7 +698,10 @@ pub async fn batch(
             })
             .collect();
         let body = serde_json::to_vec(&published).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
-        Ok(ok(ROUTE, "application/json", body.into(), source))
+        Ok(unkept_unless(
+            read,
+            ok(ROUTE, "application/json", body.into(), source),
+        ))
     };
     answer
         .await

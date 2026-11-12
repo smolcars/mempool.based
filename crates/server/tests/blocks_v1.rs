@@ -343,6 +343,12 @@ async fn fill(dir: &Path, chain: &[Header]) {
         .unwrap();
     // The tip was watched: it has an audit.
     let tip = &chain[TIP as usize];
+    engine::audit::write(&store, audit(tip, TIP)).await.unwrap();
+    store.close().await;
+}
+
+/// An audit of `h` scoring 99.5.
+fn audit(h: &Header, height: u32) -> Audit {
     let totals = Totals {
         match_rate: 99.5,
         expected: Side {
@@ -360,21 +366,19 @@ async fn fill(dir: &Path, chain: &[Header]) {
         added: Default::default(),
         unseen: Default::default(),
     };
-    let audit = Audit {
-        id: tip.block_hash(),
-        height: TIP,
-        time: tip.time,
-        seen_at: tip.time,
+    Audit {
+        id: h.block_hash(),
+        height,
+        time: h.time,
+        seen_at: h.time,
         totals,
         txs: Vec::new(),
-    };
-    engine::audit::write(&store, audit).await.unwrap();
-    store.close().await;
+    }
 }
 
-/// Replaces the table's row at `height` with `hash`, as `follow` does after a reorg.
-async fn replace_row(dir: &Path, height: u32, hash: BlockHash, time: u32) {
-    let store = Store::open(dir, "regtest", Options::default()).unwrap();
+/// Replaces the table's row at `height` with `hash`, as `follow` does after a reorg, through the
+/// server's own store.
+async fn replace_row(store: &Store, height: u32, hash: BlockHash, time: u32) {
     store
         .write(move |sql| {
             sql.prepare("DELETE FROM blocks WHERE height = ?1")?
@@ -407,7 +411,6 @@ async fn replace_row(dir: &Path, height: u32, hash: BlockHash, time: u32) {
         })
         .await
         .unwrap();
-    store.close().await;
 }
 
 fn hex(s: &str) -> Vec<u8> {
@@ -425,6 +428,15 @@ async fn start(port: u16, data: Option<&Path>) -> String {
 
 /// [`start`] with more variables, which win over its own.
 async fn start_with(port: u16, data: Option<&Path>, extra: &[(&'static str, String)]) -> String {
+    start_app(port, data, extra).await.0
+}
+
+/// [`start_with`], and the server's store when it has one.
+async fn start_app(
+    port: u16,
+    data: Option<&Path>,
+    extra: &[(&'static str, String)],
+) -> (String, Option<Arc<Store>>) {
     let mut vars: HashMap<&str, String> = [
         ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
         ("REGTEST_RPC_PORT", port.to_string()),
@@ -446,8 +458,12 @@ async fn start_with(port: u16, data: Option<&Path>, extra: &[(&'static str, Stri
     config.limits.client_burst = 10_000;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(App::new(&config).serve(listener, std::future::pending()));
-    addr
+    let app = App::new(&config);
+    let store = app
+        .network(rbitcoin_space::Network::Regtest)
+        .and_then(|n| Some(Arc::clone(&n.blocks.as_ref()?.store)));
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    (addr, store)
 }
 
 #[derive(Debug)]
@@ -655,6 +671,7 @@ struct Setup {
     addr: String,
     node: Arc<Node>,
     chain: Vec<Header>,
+    store: Arc<Store>,
     dir: Dir,
 }
 
@@ -663,11 +680,12 @@ async fn setup(name: &str) -> Setup {
     let dir = dir(name);
     fill(&dir.0, &chain).await;
     let (port, node) = mock(&chain).await;
-    let addr = start(port, Some(&dir.0)).await;
+    let (addr, store) = start_app(port, Some(&dir.0), &[]).await;
     Setup {
         addr,
         node,
         chain,
+        store: store.unwrap(),
         dir,
     }
 }
@@ -932,7 +950,7 @@ async fn a_reorg_of_the_tip_shows_the_new_block_once_the_table_has_it() {
     assert_eq!(r.json()[0]["id"], old.to_string());
 
     // Then the table follows: the list shows the new tip, read fresh, never the cached one.
-    replace_row(&s.dir.0, TIP, new.block_hash(), new.time).await;
+    replace_row(&s.store, TIP, new.block_hash(), new.time).await;
     let r = get(&s.addr, &format!("{V1}/blocks")).await;
     assert_eq!(r.status, 200, "{}", r.text());
     let blocks = r.json();
@@ -1169,5 +1187,121 @@ async fn a_replacement_at_the_same_height_served_late_still_reaches_the_table() 
         );
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    drop(dir);
+}
+
+// Kept answers (`crate::answers`).
+
+/// What a client sees of an answer, less the headers that differ per request.
+fn seen(r: &Reply) -> (u16, Vec<String>, Vec<u8>) {
+    let mut head: Vec<String> = r
+        .head
+        .lines()
+        .skip(1)
+        .filter(|l| !l.starts_with("date:") && !l.starts_with("x-request-id:"))
+        .map(str::to_owned)
+        .collect();
+    head.sort();
+    (r.status, head, r.body.clone())
+}
+
+/// Each target from the server, twice, against a server started now on the same table, which
+/// has kept nothing: the same status, headers and bytes.
+async fn same_as_fresh(addr: &str, port: u16, dir: &Path, targets: &[String], when: &str) {
+    let fresh = start(port, Some(dir)).await;
+    for t in targets {
+        let first = get(addr, t).await;
+        let again = get(addr, t).await;
+        let uncached = get(&fresh, t).await;
+        assert_eq!(seen(&first), seen(&uncached), "{when}: {t}");
+        assert_eq!(seen(&again), seen(&first), "{when}: {t}, again");
+    }
+}
+
+#[tokio::test]
+async fn kept_answers_follow_every_write_and_match_an_uncached_server() {
+    let chain = chain();
+    let dir = dir("kept");
+    fill(&dir.0, &chain).await;
+    let (port, node) = mock(&chain).await;
+    let (addr, store) = start_app(port, Some(&dir.0), &[]).await;
+    let store = store.unwrap();
+    let at = |h: u32| chain[h as usize].block_hash();
+    let targets = [
+        format!("{V1}/blocks"),
+        format!("{V1}/blocks/{}", HOLE + 5),
+        format!("{V1}/block/{}", at(TIP - 1)),
+        format!("/regtest/app/block/{}/summary", at(TIP - 2)),
+        format!(
+            "/regtest/app/blocks/summary?hashes={},{}",
+            at(TIP - 1),
+            at(TIP)
+        ),
+        format!("{V1}/mining/blocks/audit/scores"),
+        format!("{V1}/mining/blocks/audit/score/{}", at(TIP - 1)),
+    ];
+    same_as_fresh(&addr, port, &dir.0, &targets, "at start").await;
+
+    // A write from another connection moves no version: the answer is kept, so it is served
+    // from memory. (The server's own writer is the only writer in service.)
+    let list = get(&addr, &targets[0]).await;
+    let other = Store::open(&dir.0, "regtest", Options::default()).unwrap();
+    other
+        .write(move |sql| {
+            sql.prepare("UPDATE blocks SET fees = fees + 1 WHERE height = ?1")?
+                .execute(params![TIP])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    other.close().await;
+    assert_eq!(seen(&get(&addr, &targets[0]).await), seen(&list));
+
+    // A new block.
+    let next = mine(at(TIP), TIP + 1, 0);
+    let b = esplora(&next, TIP + 1);
+    node.best.lock().unwrap().push(b.clone());
+    node.known
+        .lock()
+        .unwrap()
+        .insert(next.block_hash().to_string(), b);
+    replace_row(&store, TIP + 1, next.block_hash(), next.time).await;
+    let r = get(&addr, &targets[0]).await;
+    assert_eq!(r.json()[0]["id"], next.block_hash().to_string());
+    assert_eq!(r.json()[1]["extras"]["totalFees"], json!(10_000 + TIP + 1));
+    same_as_fresh(&addr, port, &dir.0, &targets, "after a new block").await;
+
+    // The backfill fills the hole the list from HOLE + 5 was cut at.
+    assert_eq!(
+        get(&addr, &targets[1]).await.header("x-data-complete"),
+        Some("false")
+    );
+    replace_row(&store, HOLE, at(HOLE), chain[HOLE as usize].time).await;
+    assert_eq!(
+        get(&addr, &targets[1]).await.header("x-data-complete"),
+        Some("true")
+    );
+    same_as_fresh(&addr, port, &dir.0, &targets, "after a backfilled row").await;
+
+    // A new audit.
+    assert_eq!(get(&addr, &targets[6]).await.status, 404);
+    engine::audit::write(&store, audit(&chain[TIP as usize - 1], TIP - 1))
+        .await
+        .unwrap();
+    assert_eq!(get(&addr, &targets[6]).await.status, 200);
+    assert_eq!(
+        get(&addr, &targets[2]).await.json()["extras"]["matchRate"],
+        json!(99.5)
+    );
+    same_as_fresh(&addr, port, &dir.0, &targets, "after an audit").await;
+
+    // A reorg of the new tip.
+    let other = mine(at(TIP), TIP + 1, 1);
+    let b = esplora(&other, TIP + 1);
+    node.set_best(TIP + 1, b);
+    replace_row(&store, TIP + 1, other.block_hash(), other.time).await;
+    let r = get(&addr, &targets[0]).await;
+    assert_eq!(r.json()[0]["id"], other.block_hash().to_string());
+    same_as_fresh(&addr, port, &dir.0, &targets, "after a reorg").await;
     drop(dir);
 }

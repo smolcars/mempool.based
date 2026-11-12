@@ -158,7 +158,8 @@ pub enum Source {
     Coalesced,
     /// It got a hot answer younger than [`HOT_TTL`]: no upstream call.
     Hot,
-    /// A block summary from the summary cache (`crate::summary`): no upstream call.
+    /// From memory: the summary cache (`crate::summary`) or a kept answer (`crate::answers`).
+    /// No upstream call and no store read.
     Cached,
     /// Block facts from the block table (`crate::blocks`): no upstream call.
     Stored,
@@ -288,13 +289,102 @@ async fn read(ctx: &NetworkContext, client: &Client, route: Route) -> Response {
         }
         return heavy(ctx, client, route, key).await;
     }
+    let kept_key = block_of(&route).map(|_| kept_key(&route));
+    if let Some(k) = &kept_key
+        && let Some(kept) = ctx.answers.get(k, 0)
+    {
+        let mut res = kept.response(Some(Source::Cached));
+        tip_headers(
+            res.headers_mut(),
+            ctx.electrum.tip().map(|t| (t.hash, t.height)),
+        );
+        return res;
+    }
     let ttl = if is_hot(&route) {
         HOT_TTL
     } else {
         Duration::ZERO
     };
     let (answer, source) = ctx.api.flights.run(key, ttl, ctx.esplora.raw(&route)).await;
-    respond(&route, answer, source)
+    let keep = kept_key.and_then(|k| Some((k, buried(ctx, &route, &answer)?)));
+    let res = respond(&route, answer, source);
+    if let Some((k, body)) = keep {
+        let mut headers = res.headers().clone();
+        // A kept answer is stamped with the tip when it is served, not when it was fetched.
+        tip_headers(&mut headers, None);
+        let outcome = res.extensions().get::<ApiOutcome>().copied();
+        let kept = crate::answers::Kept::new(headers, body, outcome);
+        ctx.answers.insert(k, 0, Arc::new(kept));
+    }
+    res
+}
+
+/// Blocks at least this far under the node's tip are taken never to leave the best chain: the
+/// block table's own zone (`engine::blocks::ZONE`, 100 blocks). No reorg that deep has happened.
+const BURIED: u32 = engine::blocks::ZONE;
+
+/// The block an immutable block route is fixed by.
+fn block_of(route: &Route) -> Option<BlockHash> {
+    match route {
+        Route::Block(h)
+        | Route::BlockHeader(h)
+        | Route::BlockRaw(h)
+        | Route::BlockTxids(h)
+        | Route::BlockTxid { hash: h, .. } => Some(*h),
+        _ => None,
+    }
+}
+
+/// Where the pass-through keeps a route's answer among the network's kept answers.
+fn kept_key(route: &Route) -> String {
+    let mut key = String::from("esplora ");
+    route.write_path(&mut key);
+    key
+}
+
+/// The two fields of a block's JSON that say which block it is and where.
+#[derive(serde::Deserialize)]
+struct Placed {
+    id: BlockHash,
+    height: u32,
+}
+
+/// The body to keep, when the node's answer is one we serve `immutable` and its block was at
+/// least [`BURIED`] deep under the tip the node stamped it with. The node serves no block off
+/// its best chain, so a block that leaves the chain before it is buried is never kept. The
+/// height is the answer's own for the block JSON; for the block's other routes, the one in its
+/// kept JSON or in the headers the `/api/v1` block routes hold.
+fn buried(ctx: &NetworkContext, route: &Route, answer: &Answer) -> Option<Bytes> {
+    let raw = answer.as_ref().ok()?;
+    let (hash, tip) = (block_of(route)?, raw.tip?);
+    if raw.status != StatusCode::OK || cache_control(route, &raw.body) != IMMUTABLE {
+        return None;
+    }
+    let placed = |body: &[u8]| {
+        serde_json::from_slice::<Placed>(body)
+            .ok()
+            .filter(|p| p.id == hash)
+            .map(|p| p.height)
+    };
+    let height = match route {
+        Route::Block(_) => placed(&raw.body)?,
+        _ => match ctx.block_headers.height(&hash) {
+            Some(h) => h,
+            None => placed(ctx.answers.get(&kept_key(&Route::Block(hash)), 0)?.body())?,
+        },
+    };
+    (height.saturating_add(BURIED) <= tip.height).then(|| raw.body.clone())
+}
+
+fn tip_headers(h: &mut axum::http::HeaderMap, tip: Option<(BlockHash, u32)>) {
+    h.remove(CHAIN_TIP);
+    h.remove(CHAIN_TIP_HEIGHT);
+    if let Some((hash, height)) = tip
+        && let Ok(v) = HeaderValue::from_str(&hash.to_string())
+    {
+        h.insert(CHAIN_TIP, v);
+        h.insert(CHAIN_TIP_HEIGHT, HeaderValue::from(height));
+    }
 }
 
 /// `GET /api/v1/blocks/tip/height`: `/blocks/tip/height`'s answer, sharing its calls and cache.

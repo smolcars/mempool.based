@@ -364,7 +364,7 @@ async fn a_failed_or_panicking_write_rolls_back_and_the_writer_survives() {
         })
         .await;
     assert!(matches!(failed, Err(Error::Sql(_))));
-    let panicked = store
+    let panicked: Result<(), Error> = store
         .write(|sql| -> Result<(), Error> {
             sql.prepare("INSERT INTO items (id, label) VALUES (2, 'x')")?
                 .execute([])?;
@@ -740,7 +740,7 @@ async fn a_write_cannot_end_its_own_transaction() {
         assert_eq!(count(&store).await, 0, "fail={fail}");
     }
     // Whatever the closure does with the refusal, an error or a panic still rolls back.
-    let panicked = store
+    let panicked: Result<(), Error> = store
         .write(|sql| -> Result<(), Error> {
             sql.prepare("INSERT INTO items (label) VALUES ('x')")?
                 .execute([])?;
@@ -1035,4 +1035,221 @@ async fn bulk_insert_benchmark() {
     let store = open(&dir.0, &[BLOCKS]).unwrap();
     println!("reopen with quick_check: {:.2?}", start.elapsed());
     store.close().await;
+}
+
+const TRACKED: Migration = (
+    "0001_tracked.sql",
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL);
+     CREATE TABLE blocks (id INTEGER PRIMARY KEY);
+     CREATE TABLE audits (id INTEGER PRIMARY KEY,
+         item INTEGER REFERENCES items (id) ON DELETE CASCADE);
+     CREATE TABLE mempool_history (t INTEGER PRIMARY KEY) WITHOUT ROWID;
+     CREATE TABLE log (label TEXT NOT NULL);
+     CREATE TRIGGER items_to_blocks AFTER INSERT ON items WHEN NEW.label = 'block'
+         BEGIN INSERT INTO blocks (id) VALUES (NEW.id); END;",
+);
+/// A migration that writes a tracked table.
+const SEED: Migration = ("0002_seed.sql", "INSERT INTO blocks (id) VALUES (100);");
+
+async fn run(store: &Store, sql: &'static str) {
+    store
+        .write(move |s| {
+            s.prepare(sql)?.execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+/// Each tracked table's version, read the moment a write has returned: `None` there would mean
+/// the write was still marked open after the caller resumed.
+fn versions(store: &Store) -> [u64; 3] {
+    [Table::Blocks, Table::Audits, Table::MempoolHistory]
+        .map(|t| store.version(&[t]).expect("no write is open"))
+}
+
+/// The versions after `write`, as steps from `before`: 1 for a table the write marked.
+fn steps(before: [u64; 3], after: [u64; 3]) -> [u64; 3] {
+    [0, 1, 2].map(|i| (after[i] - before[i]) / 2)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_write_path_moves_the_version_of_exactly_the_tables_it_writes() {
+    let dir = TempDir::new();
+    let store = open(&dir.0, &[TRACKED, SEED]).unwrap();
+    // The seeding migration wrote `blocks`; nothing else moved.
+    assert_eq!(versions(&store), [2, 0, 0]);
+    // [blocks, audits, mempool_history]
+    let cases: [(&str, &'static str, [u64; 3]); 10] = [
+        (
+            "an untracked table",
+            "INSERT INTO log (label) VALUES ('x')",
+            [0, 0, 0],
+        ),
+        // A trigger's writes are authorized when the statement is prepared, whether or not it
+        // fires: the table is marked even here, which costs a recomputation, never a stale answer.
+        (
+            "a trigger that does not fire",
+            "INSERT INTO items (label) VALUES ('x')",
+            [1, 0, 0],
+        ),
+        (
+            "a read of a tracked table",
+            "INSERT INTO log SELECT id FROM blocks",
+            [0, 0, 0],
+        ),
+        ("an insert", "INSERT INTO blocks (id) VALUES (1)", [1, 0, 0]),
+        (
+            "an update",
+            "UPDATE blocks SET id = 2 WHERE id = 1",
+            [1, 0, 0],
+        ),
+        (
+            "a replace",
+            "REPLACE INTO blocks (id) VALUES (2)",
+            [1, 0, 0],
+        ),
+        (
+            "a table without rowids",
+            "INSERT OR REPLACE INTO mempool_history (t) VALUES (1)",
+            [0, 0, 1],
+        ),
+        (
+            "a trigger",
+            "INSERT INTO items (id, label) VALUES (50, 'block')",
+            [1, 0, 0],
+        ),
+        ("a whole-table delete", "DELETE FROM blocks", [1, 0, 0]),
+        (
+            "an insert selecting another table",
+            "INSERT INTO log SELECT label FROM items",
+            [0, 0, 0],
+        ),
+    ];
+    for (what, sql, want) in cases {
+        let before = versions(&store);
+        run(&store, sql).await;
+        assert_eq!(steps(before, versions(&store)), want, "{what}");
+    }
+
+    // A foreign key's cascade: deleting an item deletes its audits.
+    run(&store, "INSERT INTO audits (id, item) VALUES (1, 50)").await;
+    let before = versions(&store);
+    run(&store, "DELETE FROM items WHERE id = 50").await;
+    assert_eq!(steps(before, versions(&store)), [0, 1, 0], "a cascade");
+
+    // One statement prepared once and run 1,000 times, and a batch over two tables: one step
+    // each, however many rows. Statements cannot outlive their write.
+    let before = versions(&store);
+    store
+        .write(|sql| {
+            let mut insert = sql.prepare("INSERT INTO blocks (id) VALUES (?1)")?;
+            for i in 1_000..2_000 {
+                insert.execute(params![i])?;
+            }
+            sql.prepare("INSERT INTO audits (id) VALUES (7)")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(steps(before, versions(&store)), [1, 1, 0], "a batch");
+    // The next write prepares its statement again, and moves the version again.
+    let before = versions(&store);
+    run(&store, "INSERT INTO blocks (id) VALUES (5000)").await;
+    assert_eq!(steps(before, versions(&store)), [1, 0, 0], "the next write");
+
+    // A rolled-back write still moves the version: an answer is recomputed, never kept stale.
+    let before = versions(&store);
+    let failed = store
+        .write(|s| {
+            s.prepare("INSERT INTO audits (id) VALUES (99)")?
+                .execute([])?;
+            Err::<(), _>(Error::Full)
+        })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(steps(before, versions(&store)), [0, 1, 0], "a rollback");
+    // So does a write that panics.
+    let before = versions(&store);
+    let panicked: Result<(), Error> = store
+        .write(|s| {
+            s.prepare("INSERT INTO audits (id) VALUES (98)")?
+                .execute([])?;
+            panic!("boom")
+        })
+        .await;
+    assert!(matches!(panicked, Err(Error::Panicked)));
+    assert_eq!(steps(before, versions(&store)), [0, 1, 0], "a panic");
+    // A combined version moves when either table does.
+    let both = store.version(&[Table::Blocks, Table::Audits]).unwrap();
+    run(&store, "INSERT INTO audits (id) VALUES (8)").await;
+    assert_ne!(
+        store.version(&[Table::Blocks, Table::Audits]).unwrap(),
+        both
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_version_has_moved_by_the_time_a_write_returns() {
+    let dir = TempDir::new();
+    let store = open(&dir.0, &[TRACKED]).unwrap();
+    for i in 0..500 {
+        let before = store.version(&[Table::Blocks]).unwrap();
+        store
+            .write(move |sql| {
+                sql.prepare("INSERT INTO blocks (id) VALUES (?1)")?
+                    .execute(params![i])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store.version(&[Table::Blocks]),
+            Some(before + 2),
+            "write {i}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_version_is_none_while_a_write_to_the_table_is_open() {
+    let dir = TempDir::new();
+    let store = Arc::new(open(&dir.0, &[TRACKED]).unwrap());
+    let before = store.version(&[Table::Blocks]).unwrap();
+    let (prepared_tx, prepared) = std_mpsc::channel();
+    let (release, wait) = std_mpsc::channel::<()>();
+    let write = tokio::spawn({
+        let store = store.clone();
+        async move {
+            store
+                .write(move |sql| {
+                    let mut insert = sql.prepare("INSERT INTO blocks (id) VALUES (7)")?;
+                    prepared_tx.send(()).unwrap();
+                    wait.recv().unwrap();
+                    insert.execute([])?;
+                    Ok(())
+                })
+                .await
+        }
+    });
+    tokio::task::spawn_blocking(move || prepared.recv().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(store.version(&[Table::Blocks]), None);
+    assert_eq!(store.version(&[Table::Audits, Table::Blocks]), None);
+    assert!(store.version(&[Table::Audits]).is_some());
+    release.send(()).unwrap();
+    write.await.unwrap().unwrap();
+    let after = store.version(&[Table::Blocks]).unwrap();
+    assert_ne!(after, before);
+    let seen: i64 = store
+        .read(|sql| {
+            Ok(sql
+                .prepare("SELECT count(*) FROM blocks")?
+                .query_row([], |r| r.get(0))?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen, 1);
 }

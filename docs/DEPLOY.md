@@ -25,7 +25,7 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 
 | | Expect |
 |---|---|
-| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` (32 MB) per network as the block summary cache fills, and more with open WebSockets: 64 MB at the peak with 5,000 |
+| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` and `ANSWER_CACHE_MB` (32 MB each) per network as the block summaries and kept answers fill, and more with open WebSockets: 64 MB at the peak with 5,000 |
 | CPU | Under 3% of one core on mainnet with one client; 8% with 5,000 WebSockets open |
 | Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)). The log is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)); the compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
 | Network | Nothing published but the node's P2P port and, through the proxy, 443 |

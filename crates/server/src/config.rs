@@ -144,6 +144,8 @@ pub struct Limits {
     /// How long a page of address history may take the node before the client is told it timed
     /// out (docs/API.md, "Very large addresses"). Fixed; a field so tests can shorten it.
     pub history_timeout: Duration,
+    /// Memory budget of each network's kept answers (`ANSWER_CACHE_MB`, `crate::answers`).
+    pub answer_cache_bytes: usize,
 }
 
 impl Default for Limits {
@@ -163,6 +165,7 @@ impl Default for Limits {
             summary_cache_bytes: 32 << 20,
             // Ordinary pages take 0.3 to 0.5 s on mainnet; every slower one measured took over 10 s.
             history_timeout: Duration::from_secs(5),
+            answer_cache_bytes: 32 << 20,
         }
     }
 }
@@ -425,6 +428,10 @@ impl Config {
             .filter(|b| *b <= 1 << 40)
             .ok_or("BLOCK_SUMMARY_CACHE_MB must be at most 1048576")?,
             history_timeout: d.history_timeout,
+            answer_cache_bytes: positive(&var, "ANSWER_CACHE_MB", d.answer_cache_bytes >> 20)?
+                .checked_mul(1 << 20)
+                .filter(|b| *b <= 1 << 40)
+                .ok_or("ANSWER_CACHE_MB must be at most 1048576")?,
         };
         // Semaphore permits are u32 and tokio caps them lower still; keep well inside both.
         if limits.max_connections > 1 << 20 || limits.max_requests > 1 << 20 {
@@ -1040,7 +1047,11 @@ mod tests {
         assert_eq!(c.limits.summary_cache_bytes, 64 << 20);
         for bad in ["0", "-1", "2000000", "1.5"] {
             assert!(parse(&[("BLOCK_SUMMARY_CACHE_MB", bad)]).is_err(), "{bad}");
+            assert!(parse(&[("ANSWER_CACHE_MB", bad)]).is_err(), "{bad}");
         }
+        assert_eq!(parse(&[]).unwrap().limits.answer_cache_bytes, 32 << 20);
+        let c = parse(&[("ANSWER_CACHE_MB", "8")]).unwrap();
+        assert_eq!(c.limits.answer_cache_bytes, 8 << 20);
         let mut vars = signet();
         vars.retain(|(k, _)| *k != "SIGNET_RPC_USER");
         vars.push(("SIGNET_RPC_USER", "a:b"));

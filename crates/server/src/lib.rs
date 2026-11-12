@@ -4,6 +4,7 @@
 //! enabled network's prefix, `/healthz` (liveness), `/readyz` (readiness, [`health`]), the
 //! frontend, and the limits around all of it.
 
+pub mod answers;
 mod api_v1;
 mod app_config;
 mod audits;
@@ -119,6 +120,8 @@ pub struct NetworkContext {
     pub history: statistics::History,
     /// The mempool.space-shaped socket's own state (`ws::v1`).
     pub v1: Arc<ws::v1::Compat>,
+    /// Answers kept until they can change: store-backed routes and immutable node answers.
+    pub answers: answers::Answers,
     /// Esplora headers by hash for the `/api/v1` block routes.
     pub block_headers: v1_blocks::Headers,
     /// `/api/v1/replacements` and `/api/v1/fullrbf/replacements`, built once per change.
@@ -180,6 +183,7 @@ impl NetworkContext {
             fees: ws::fees::Fees::default(),
             history: statistics::History::default(),
             v1: Arc::new(ws::v1::Compat::new(Some(&url))),
+            answers: answers::Answers::new(all.limits.answer_cache_bytes),
             block_headers: v1_blocks::Headers::default(),
             trees: transactions::Trees::default(),
             lightning: config
@@ -217,6 +221,7 @@ pub struct App {
     sockets: Arc<ws::Sockets>,
     /// Stopped after the last request, so each peer writes its graph.
     lightning: Vec<Arc<lightning::Lightning>>,
+    networks: Vec<Arc<NetworkContext>>,
     /// Summarised once more at shutdown, so the last window's refusals are not lost.
     refusals: Arc<refusals::Refusals>,
     log_client_addr: bool,
@@ -269,6 +274,10 @@ impl App {
                     tokio::spawn(health::watch_address_index(Arc::clone(&ctx)));
                     routes
                         .clone()
+                        .route_layer(middleware::from_fn_with_state(
+                            Arc::clone(&ctx),
+                            answers::keep,
+                        ))
                         .route("/api/{*rest}", any(esplora::handle))
                         .route(
                             "/api/tx",
@@ -301,6 +310,7 @@ impl App {
             };
         }
         let pages = Arc::new(pages::Pages::new(&config.web_dir, enabled_networks.clone()));
+        let contexts = enabled_networks.clone();
         let networks = Arc::new(enabled_networks);
         app = app.route(
             "/readyz",
@@ -369,6 +379,7 @@ impl App {
             limiter,
             sockets,
             lightning: peers,
+            networks: contexts,
             refusals,
             log_client_addr: config.log_client_addr,
         }
@@ -384,6 +395,17 @@ impl App {
     #[doc(hidden)]
     pub fn lightning(&self) -> &[Arc<lightning::Lightning>] {
         &self.lightning
+    }
+
+    /// An enabled network's context. Tests use it to write through the server's own store (a
+    /// write from another connection does not move the versions kept answers follow) and to
+    /// look at its caches.
+    #[doc(hidden)]
+    pub fn network(&self, network: Network) -> Option<Arc<NetworkContext>> {
+        self.networks
+            .iter()
+            .find(|n| n.config.network == network)
+            .cloned()
     }
 
     /// WebSocket state shared by every network.
