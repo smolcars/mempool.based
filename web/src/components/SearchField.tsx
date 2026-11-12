@@ -42,6 +42,8 @@ export function SearchField(props: SearchFieldProps) {
   const [busy, setBusy] = createSignal(false);
   const [miss, setMiss] = createSignal<{ query: string; miss: Miss }>();
   const [said, setSaid] = createSignal("");
+  // A well-formed ID that nothing on this network has: the field says so, not what it looks like.
+  const [nothingFor, setNothingFor] = createSignal<string>();
   let root: HTMLElement | undefined;
   let input: HTMLInputElement | undefined;
 
@@ -66,6 +68,7 @@ export function SearchField(props: SearchFieldProps) {
   const reading = createMemo(() => {
     const m = logic();
     const q = text().trim();
+    if (q !== "" && q === nothingFor()) return { label: "Nothing has this ID", ready: false };
     return m && q !== "" ? m.describe(q, network()) : undefined;
   });
 
@@ -111,6 +114,7 @@ export function SearchField(props: SearchFieldProps) {
       navigate(onNetwork(net, outcome.path));
     } else {
       setMiss({ query, miss: outcome });
+      if (outcome.kind === "missing" && outcome.query?.kind === "hash") setNothingFor(query);
       setSaid(summary(outcome, NETWORK_NAMES[net]));
     }
   };
@@ -169,6 +173,7 @@ export function SearchField(props: SearchFieldProps) {
           onPointerEnter={warm}
           onInput={(e) => {
             setText(e.currentTarget.value);
+            setNothingFor(undefined);
             stop();
           }}
           onKeyDown={(e) => {

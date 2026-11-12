@@ -85,15 +85,15 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, frontend at `master` commit `4809cc7` (2026-11-12):
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with the frontend fixes of FE4 on top of the live mempool home page and the projected-block page:
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
-| Home | 17 | 9 | 1 | 4 |
+| Home | 18 | 4 | 1 | 2 |
 | Blocks | 16 | 13 | 0 | 2 |
 | Block | 22 | 6 | 0 | 5 |
 | Transaction | 13 | 4 | 0 | 3 |
-| Address | 15 | 3 | 0 | 2 |
+| Address | 17 | 3 | 0 | 2 |
 | Mining, Lightning | 11 | 1 | 0 | 1 |
 
 An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
@@ -108,6 +108,8 @@ An open home page then polls about once every 3 seconds. Static files are `/asse
 | Static files, fixed | 400 at once, 100 a second, 96 in flight | Twenty cold loads of the heaviest page (22 files) at once, and three of them with every file in flight together (66) |
 
 `crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
+
+The browser tests run at these defaults too, each test as a client of its own behind a trusted proxy ([`FRONTEND.md`](FRONTEND.md#browser-tests)), and fail on any refusal. `CLIENT_MAX_CONNECTIONS` does not apply to a trusted proxy's connections, so they do not exercise it.
 
 ### Static files
 

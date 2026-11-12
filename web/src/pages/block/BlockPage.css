@@ -302,6 +302,14 @@
   .block-txs {
     margin-top: var(--space-5);
   }
+  .block-txcell {
+    display: grid;
+    justify-items: start;
+  }
+  .block-txcell__rate {
+    display: none;
+    font-size: var(--text-xs);
+  }
   /* Rows load above this button; never let the browser anchor the scroll on it and jump. */
   .block-txs__more {
     display: grid;
@@ -333,6 +341,9 @@
     /* Copy lives on the transaction page; here the room goes to the numbers. */
     .block-txs .copy {
       display: none;
+    }
+    .block-txcell__rate {
+      display: inline;
     }
     .block-facts--header .block-fact {
       grid-template-columns: 6.5rem minmax(0, 1fr);

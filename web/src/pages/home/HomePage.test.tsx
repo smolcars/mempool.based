@@ -547,9 +547,7 @@ describe("the difficulty adjustment", () => {
       const panel = () => el.querySelector(".home-difficulty");
       await vi.waitFor(() => expect(n).toBe(1));
       expect(panel()?.querySelector('[role="alert"]')).toBeNull();
-      expect(panel()?.querySelector(".home-difficulty__stats")?.getAttribute("aria-busy")).toBe(
-        "true",
-      );
+      expect(panel()?.querySelector(".difficulty__stats")?.getAttribute("aria-busy")).toBe("true");
       vi.advanceTimersByTime(1_300);
       await vi.waitFor(() => expect(panel()?.textContent).toContain("Down 7.05%"));
     } finally {

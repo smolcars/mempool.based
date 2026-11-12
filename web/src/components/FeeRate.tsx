@@ -1,10 +1,11 @@
-import { For, Show } from "solid-js";
+import { For } from "solid-js";
 import { FEE_KEY_BOUNDS, feeColor, formatFeeRate } from "../lib/format";
 import "./FeeRate.css";
 
 /**
  * A fee rate with its band's swatch. The color is taken from the printed value, so it always
- * agrees with the number. `approx` prefixes `~` for projected values.
+ * agrees with the number. `approx` prefixes `~` for projected values. `unit={false}` hides the
+ * unit from sight only, as for {@link Amount}.
  */
 export function FeeRate(props: { rate: number; unit?: boolean; approx?: boolean }) {
   return (
@@ -14,9 +15,7 @@ export function FeeRate(props: { rate: number; unit?: boolean; approx?: boolean 
         {props.approx ? "~" : ""}
         {formatFeeRate(props.rate)}
       </span>
-      <Show when={props.unit !== false}>
-        <span class="unit"> sat/vB</span>
-      </Show>
+      <span classList={{ unit: true, "visually-hidden": props.unit === false }}> sat/vB</span>
     </span>
   );
 }

@@ -1,5 +1,5 @@
 // A mined block's fee facts from GET /app/block(s)/…/summary (docs/FRONTEND.md "Block summaries").
-import { fetchApp, withRetry } from "./api";
+import { fetchApp } from "./api";
 import type { Hash } from "./esplora";
 import type { Network } from "./network";
 
@@ -94,10 +94,7 @@ export async function fetchSummaries(
     const part = missing.slice(i, i + SUMMARY_BATCH);
     const path = `/blocks/summary?hashes=${part.map((h) => encodeURIComponent(h)).join(",")}`;
     // oxlint-disable-next-line no-await-in-loop -- one batch at a time, so a page never floods the server
-    const reply = await withRetry(
-      () => fetchApp<unknown>(network, path, signal ? { signal } : {}),
-      signal,
-    );
+    const reply = await fetchApp<unknown>(network, path, signal ? { signal } : {});
     if (Array.isArray(reply)) {
       for (const s of reply) if (isSummary(s)) rememberSummary(network, s);
     }

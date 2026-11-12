@@ -157,6 +157,29 @@ describe("TransactionPage", () => {
     );
   });
 
+  it("never calls the genesis coinbase or an OP_RETURN output spendable or unspent", async () => {
+    const genesis: Transaction = {
+      ...payment({ ...confirmed, block_height: 0 }),
+      fee: 0,
+      vin: [{ txid: "00".repeat(32), vout: 0xffffffff, is_coinbase: true, sequence: 0 }],
+      vout: [out(5_000_000_000, `41${"04".repeat(65)}ac`), out(0, "6a0568656c6c6f")],
+    };
+    // The node reports both as not spent, which is true and misleading.
+    serve(genesis, [{ spent: false }, { spent: false }], "975517");
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    expect(text(el)).toContain("Never spendable");
+    expect(text(el)).not.toContain("its outputs can be spent");
+    const outs = text(el.querySelector(".tx-flow__col--out") as Element);
+    expect(outs).not.toContain("Unspent");
+    expect(outs.match(/Unspendable/g)).toHaveLength(2);
+    el.querySelector<HTMLButtonElement>(".tx-flow__col--out .tx-flow__open")?.click();
+    await settle();
+    expect(text(el.querySelector("#tx-inspector") as Element)).toContain(
+      "Unspendable: the genesis block's reward was never added to the coins that can be spent",
+    );
+  });
+
   it("notices when an unconfirmed transaction confirms, without a reload", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     serve(payment({ confirmed: false }));
@@ -259,7 +282,7 @@ describe("TransactionPage", () => {
   });
 
   it("offers a retry when the node is unavailable, and retries every request that failed", async () => {
-    const down = { status: 503, body: { error: "node unavailable" } };
+    const down = { status: 502, body: { error: "node unavailable" } };
     replies = {
       [api(`/tx/${TXID}`)]: down,
       [api(`/tx/${TXID}/outspends`)]: down,
@@ -280,9 +303,26 @@ describe("TransactionPage", () => {
     expect(text(el)).toContain("3 confirmations of 6 so far.");
   });
 
+  it("keeps loading while the server says it is busy, then shows the transaction", async () => {
+    vi.useFakeTimers();
+    serve(payment(confirmed));
+    let asked = 0;
+    replies[api(`/tx/${TXID}`)] = () =>
+      ++asked === 1
+        ? { status: 503, body: { error: "node busy; retry" } }
+        : { status: 200, body: payment(confirmed) };
+    const el = page(`/tx/${TXID}`);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(text(el)).toContain("Loading transaction");
+    expect(el.querySelector(".state--error")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(asked).toBe(2);
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+  });
+
   it("says when spending could not be checked instead of waiting forever", async () => {
     serve(payment(confirmed));
-    replies[api(`/tx/${TXID}/outspends`)] = { status: 503, body: { error: "node unavailable" } };
+    replies[api(`/tx/${TXID}/outspends`)] = { status: 502, body: { error: "node unavailable" } };
     const el = page(`/tx/${TXID}`);
     await settle();
     el.querySelector<HTMLButtonElement>(".tx-flow__col--out .tx-flow__open")?.click();

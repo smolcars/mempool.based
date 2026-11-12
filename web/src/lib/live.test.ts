@@ -323,6 +323,19 @@ describe("LiveConnection", () => {
     expect(c.status()).toBe("live");
   });
 
+  it("goes offline with the browser even while its socket still looks open", () => {
+    const c = connect();
+    c.add(echo, { message: () => {}, resync: () => {} });
+    FakeSocket.last().hello();
+    expect(c.status()).toBe("live");
+    online = false;
+    window.dispatchEvent(new Event("offline"));
+    expect(c.status()).toBe("offline");
+    online = true;
+    window.dispatchEvent(new Event("online"));
+    expect(FakeSocket.all).toHaveLength(2);
+  });
+
   it("forgets a dropped socket, so a late message from it reaches nobody", () => {
     const c = connect();
     const got: unknown[] = [];

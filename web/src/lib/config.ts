@@ -17,10 +17,16 @@ export function parseConfig(body: unknown): AppConfig | null {
   return { networks: networks.filter(isNetwork), version };
 }
 
-/** The server's config, or null when it cannot be had; the shell then offers only the current network. */
+/**
+ * The server's config, or null when it cannot be had; the shell then offers only the current
+ * network. Never from a cache: the shell compares versions to tell when the site was updated.
+ */
 export async function fetchConfig(): Promise<AppConfig | null> {
   try {
-    const res = await fetch("/app/config", { headers: { accept: "application/json" } });
+    const res = await fetch("/app/config", {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
     return res.ok ? parseConfig(await res.json()) : null;
   } catch {
     return null;

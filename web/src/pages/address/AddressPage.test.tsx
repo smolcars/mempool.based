@@ -158,7 +158,7 @@ describe("address page", () => {
     ]);
     const rows = [...el.querySelectorAll("tbody tr")];
     const change = rows.map((r) => text(r.querySelectorAll("td")[2] as Element));
-    expect(change).toStrictEqual(["+0.00050000", "−0.00040210", "−0.00000210"]);
+    expect(change).toStrictEqual(["+0.00050000 BTC", "−0.00040210 BTC", "−0.00000210 BTC"]);
     expect(text(rows[0] as Element)).toContain("Unconfirmed");
     expect(rows[1]?.querySelector("a")?.getAttribute("href")).toBe(`/tx/${txid(2)}`);
     expect(text(el.querySelector(".section__meta") as Element)).toBe("3 of 4");
@@ -418,9 +418,9 @@ describe("address page", () => {
       ...[...r.querySelectorAll("td")].slice(1).map((e) => text(e)),
     ]);
     expect(rows).toStrictEqual([
-      ["00000000…00000002:2", "0.00002000", "Unconfirmed"],
-      ["00000000…00000003:3", "0.00003000", "1"],
-      ["00000000…00000001:1", "0.00001000", "11"],
+      ["00000000…00000002:2", "0.00002000 BTC", "Unconfirmed"],
+      ["00000000…00000003:3", "0.00003000 BTC", "1"],
+      ["00000000…00000001:1", "0.00001000 BTC", "11"],
     ]);
     expect(text(el.querySelector(".section__meta") as Element)).toBe("3 outputs");
   });
@@ -460,7 +460,7 @@ describe("address page", () => {
         { txid: txid(1), vout: 0, value: 1000, status: { confirmed: true, block_height: 10 } },
       ],
       "/blocks/tip/height": () =>
-        up ? new Response("12") : Response.json({ error: "node unavailable" }, { status: 503 }),
+        up ? new Response("12") : Response.json({ error: "node unavailable" }, { status: 502 }),
     });
     const el = open(`/address/${ME}?view=unspent`);
     await until(() => expect(text(el)).toContain("Could not load the unspent outputs"));

@@ -150,9 +150,13 @@ Weights: `--weight-light` 340 (dimmed zeros), `--weight-regular` 420, `--weight-
 | BTC | Always eight decimals. Trailing zeros in muted color at light weight, so the significant part reads first. Hover shows sats | `0.03500000`, with `00000` dimmed |
 | sats | Grouped integer | `167 sats` |
 | Fee rate | Two decimals under 10, one under 100, none above. Always with a fee swatch | `0.80 sat/vB` |
-| Size | vB under 10 k, then kvB and MvB with two decimals | `209 vB`, `14.62 MvB` |
-| Units | Muted, after a space. In tables the unit moves into the column header ("Value, BTC") and cells hold bare numbers | |
+| Size | One quantity, one unit family, everywhere: serialized size in B, kB, MB; virtual size in vB, kvB, MvB; weight in WU, kWU, MWU. The base unit under 10 000, then k or M (powers of 1 000) with two decimals (`formatSize`). A block's **size** is its serialized size; its virtual size is always written in vB units or labelled "virtual". The same block reads the same string on every page | `209 vB`, `1.69 MB`, `998.52 kvB`, `3.99 MWU` |
+| Units | Muted, after a space. In tables the unit moves into the column header ("Value, BTC") and cells hold bare numbers, except sizes, which keep their unit in the cell because one column spans B to MB. A unit hidden from sight is still in the text for screen readers | |
 | Approximate | `~` for projected values, `≈` for derived counts | `~0.64 sat/vB`, `≈ 15 blocks` |
+
+### Spent state
+
+An output is **Spent** (or **Being spent**, while the spending transaction is unconfirmed), **Unspent**, or **Unspendable**. Unspendable is for outputs that can never be spent, which the node reports as not spent: an `OP_RETURN` output, a locking script over the 10,000-byte limit, and the genesis block's coinbase, which was never added to the set of spendable coins. Never call those Unspent, and never call the genesis coinbase Spendable; the inspector gives the reason.
 
 ### Hashes and copy
 
@@ -353,7 +357,7 @@ Long input or output lists collapse after ten; each "Show more" adds a hundred, 
 Address
 bc1qxy2k gdygjrsq tzq2n0yr f2493p83 kkfjhx0w lh   [copy]  [QR]
 Balance (big)   Received   Sent   Transactions   Unconfirmed
-[balance-over-time line chart, uPlot]
+[balance-over-time line chart]
 Transactions ═════════════════════════════════════════════════════
 time  txid  this address +/-  (positive or text color)  fee rate  status
 ```
@@ -363,12 +367,36 @@ Incoming amounts are `+` in positive color with the sign, outgoing `−` in text
 ### Mining (not in the prototype)
 
 ```text
-Mining ═══════ [24 h | 1 w | 1 m | 1 y]
-Hashrate  Difficulty  Next adjustment (progress bar, estimate)
-[hashrate and difficulty chart]
-Pools: ranked list with share bars; the share bar is a neutral fill, not a fee color
-Recent blocks: the same mined tiles as the strip, in a wrapping grid
+Mining                                        [24 h | 1 w | 1 m | 1 y | All]
+(network note: signet, testnet4, regtest)
+The network now ═══════════════════════════════════════════════════════════
+Hashrate   Difficulty        │ Next difficulty adjustment (the home panel's)
+Hashrate and difficulty ═══════════════════════════════════════════════════
+[area: hashrate; dashed step: difficulty, right axis]
+Pools ═════════════════════════════════════════════════ 895 blocks in the last week
+rank  pool  share bar  blocks  hashrate  empty │ Share of blocks, week by week
+...                                           │ [stacked strata, biggest at the bottom]
+Rewards ═══════════════════════════════════════════════════════════════════
+Paid to miners   New coins   Fees   Per block
+Blocks over time ══════════════════════════════════════════════════════════
+[Fees | Rewards | Fee rates | Size]  one chart at a time
+Recent blocks ═════════════════════════════════════════════════ All blocks
+the same mined tiles as the strip, in a wrapping grid
 ```
+
+Decided while building it, where the layout above left it open:
+
+- **The period is in the address** (`/mining?period=1m`), so a view can be linked; a week is the default. "All" joins the design's four periods, for the whole of history. The period is a row of links, the current one raised with an accent underline.
+- **Charts are drawn with the text color, never fee colors,** since color carries fee and nothing else: the main series a solid line over a pale area, a second series a dashed line on its own right-hand scale. The one exception is the fee-rate chart, whose axis carries the fee scale as its key.
+- **Pool shares over time are strata.** Each pool is a layer, the biggest at the bottom, in alternating shades of the text color with a seam of the page between them: the same core sample as the tiles, laid on its side through time. The seven biggest pools have their own layer and the rest are one, "Other pools". The layer under the pointer turns the accent. Shares are weekly, so the chart appears from a month up; shorter periods say so.
+- **Hashrate needs a week.** Each daily point averages the 7 days before it, so the 24-hour view draws the last week and says why.
+- **Coverage is drawn, not hidden.** Where the server has not stored the start of the period yet, the chart keeps the whole period's width and hatches the part with no data ("No data stored"), and a note above says "Data from 22 Sep 2026 onward". The same hatch is the note's swatch. A period with nothing stored says so and offers all of history.
+- **One readout, no tooltip.** Above each plot a line at a fixed height shows the point under the pointer (the latest otherwise): its time and every figure with its key. It never covers the data, works the same for touch and keys, and never moves the page.
+- **The second level is a switch,** not more charts: fees, rewards, fee rates and size share one chart slot under "Blocks over time", so the page stays one screen of figures and one of charts.
+- **Unknown is a pool.** It is ranked like any other, its page exists, and its row says it is the blocks no tag or address on the list names.
+- **Test networks say what their figures mean.** Signet's blocks come from a few signers the list does not name; testnet4's minimum-difficulty rule makes its hashrate swing; regtest has no pools, a meaningless hashrate and no retargets. A note under the title says so, and figures that mean nothing there say "Not meaningful on regtest".
+- **A pool's page** has its name as the title (dataset text), its site as a plain link only when it is `http` or `https`, its blocks and shares, its weekly share and hashrate, and its blocks 25 at a time.
+- **Nothing moves as it loads.** Each section holds the height its content will take; the coverage notes on a pool's page sit below its figures.
 
 ### Lightning (not in the prototype)
 

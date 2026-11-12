@@ -97,6 +97,11 @@ describe("SearchField", () => {
     expect(panel()?.querySelector("dl")?.textContent).toContain("the whole address");
     expect(el.querySelector('[role="status"]')?.textContent).toContain("Nothing matches");
     expect(path()).toBe("/testnet4/");
+    // The field itself says the ID was understood and nothing has it, until the query changes.
+    const reading = () => el.querySelector(".search__reading")?.textContent;
+    expect(reading()).toBe("Nothing has this ID");
+    type(TXID.slice(1));
+    await vi.waitFor(() => expect(reading()).toBe("63 of 64 characters"));
   });
 
   it("explains an unrecognised query as text, and closes on Escape", async () => {
