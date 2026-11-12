@@ -150,6 +150,32 @@ describe("projected-block page", () => {
     expect(el.querySelector(".projected-found")).toBeNull();
   });
 
+  it("waits for the block's new picture when the tip moves before the mined transactions leave", () => {
+    const { el, ws } = live();
+    ws.receive(projected(100));
+    ws.receive(snapshotFrame(0, 100, [rec(1), rec(2)]));
+    // The projection on the new tip still holds the mined transactions: not told yet.
+    ws.receive(projected(101));
+    ws.receive(deltaFrame(0, 101, 100, [], [rec(3)]));
+    expect(el.querySelector(".projected-found")).toBeNull();
+    expect(el.querySelector("[role=status]")?.textContent).toBe("");
+    // The next projection replaces the block: now it is told, once.
+    ws.receive(projected(101, { txs: 5 }));
+    ws.receive(snapshotFrame(0, 102, [rec(3), rec(4)]));
+    expect(el.querySelector(".projected-found")?.textContent).toContain("Block 101 was found");
+    expect(el.querySelector("[role=status]")?.textContent).toContain("Block 101 was found.");
+  });
+
+  it("tells a found block after a while even when the block's picture does not change", () => {
+    const { el, ws } = live();
+    ws.receive(projected(100));
+    ws.receive(snapshotFrame(0, 100, [rec(1)]));
+    ws.receive(projected(101));
+    expect(el.querySelector(".projected-found")).toBeNull();
+    vi.advanceTimersByTime(8000);
+    expect(el.querySelector(".projected-found")?.textContent).toContain("Block 101 was found");
+  });
+
   it("tells a later block where its transactions went when blocks are found in a burst", () => {
     const { el, ws } = live("/regtest/block/next/4");
     expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["projected", "projected-txs:3"] }]);

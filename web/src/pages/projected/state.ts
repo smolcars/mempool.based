@@ -58,8 +58,11 @@ export interface PageState {
   /** `waiting` for the first projection, `off` when the server has no mempool for this network. */
   status: "waiting" | "off" | "live";
   projection?: Projection;
-  /** The last change of tip seen while watching, with when (ms), until the reader dismisses it. */
-  change?: { change: TipChange; at: number };
+  /**
+   * The last change of tip seen while watching, with when (ms) and the projection that first sat
+   * on the new tip, until the reader dismisses it.
+   */
+  change?: { change: TipChange; at: number; seq: number };
   /** When the server last said it lost its node (ms), while it still says so. */
   staleSince?: number;
 }
@@ -85,7 +88,7 @@ export function onProjected(state: PageState, msg: ProjectedMessage, now: number
     change = { ...change, first: last.change.first };
   }
   const next: PageState = { status: "live", projection: p };
-  const kept = change ? { change, at: now } : state.change;
+  const kept = change ? { change, at: now, seq: p.seq } : state.change;
   if (kept) next.change = kept;
   const since = p.stale ? (state.staleSince ?? now) : undefined;
   if (since !== undefined) next.staleSince = since;

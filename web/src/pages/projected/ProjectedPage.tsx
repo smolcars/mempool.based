@@ -7,6 +7,7 @@ import {
   lazy,
   Match,
   on,
+  onCleanup,
   onMount,
   Show,
   Suspense,
@@ -55,6 +56,9 @@ import "./ProjectedPage.css";
 
 // WebGL and its layout load only when a page draws them.
 const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
+
+/** The longest the found moment waits for the block's new picture. */
+const FOUND_WAIT_MS = 8000;
 
 /** Rows in a page of the list. */
 const PAGE = 25;
@@ -137,6 +141,10 @@ function ProjectedView(props: { index: number }) {
           // The first picture is not news; after it, rows that came in flash once.
           setFresh(new Set(first ? [] : r.added));
           if (!first) setLastChange({ in: r.added.length, out: r.removed.length, at: Date.now() });
+          const c = state().change;
+          if (r.snapshot && c && model.seq !== undefined && model.seq >= BigInt(c.seq)) {
+            setShown(c.at);
+          }
         }
       },
       resync: () => model.expectSnapshot(),
@@ -172,12 +180,34 @@ function ProjectedView(props: { index: number }) {
 
   // ---- When the chain moves: say so once, politely ----
   const change = () => state().change;
-  const [announce, setAnnounce] = createSignal("");
+  // On mainnet the tip can move one projection before the mined transactions leave the block (the
+  // tracker's listing and tip are not read at once, docs/MEMPOOL.md). So on a page with a map the
+  // moment waits for the block's new picture, a snapshot from that projection on, or FOUND_WAIT_MS.
+  const [shown, setShown] = createSignal<number>();
+  let wait: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(wait));
   createEffect(
     on(
       () => change()?.at,
+      (at) => {
+        clearTimeout(wait);
+        if (at === undefined) return;
+        if (!hasMap || model.txs.size === 0) setShown(at);
+        else wait = setTimeout(() => setShown(at), FOUND_WAIT_MS);
+      },
+      { defer: true },
+    ),
+  );
+  const told = () => {
+    const c = change();
+    return c && shown() === c.at ? c : undefined;
+  };
+  const [announce, setAnnounce] = createSignal("");
+  createEffect(
+    on(
+      shown,
       () => {
-        const c = change();
+        const c = told();
         if (c) setAnnounce(sentence(c.change, index));
       },
       { defer: true },
@@ -257,7 +287,7 @@ function ProjectedView(props: { index: number }) {
         {announce()}
       </p>
 
-      <Show when={change()}>
+      <Show when={told()}>
         {(c) => (
           <ChangeNotice
             change={c().change}
@@ -293,7 +323,7 @@ function ProjectedView(props: { index: number }) {
             block={block()}
             txs={hasMap ? txs() : undefined}
             highlight={highlight()}
-            found={change()?.at}
+            found={told()?.at}
             lastChange={lastChange()}
           />
           <dl class="projected-facts">

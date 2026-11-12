@@ -57,6 +57,7 @@ describe("onProjected", () => {
     expect(s.change).toStrictEqual({
       change: { kind: "found", first: 101, tip: tip(101) },
       at: 1000,
+      seq: 101,
     });
     expect(dismissChange(s).change).toBeUndefined();
   });
@@ -81,6 +82,7 @@ describe("onProjected", () => {
     expect(stepwise.change).toStrictEqual({
       change: { kind: "found", first: 101, tip: tip(103) },
       at: 4000,
+      seq: 103,
     });
     // Long after the last one, a new block is news of its own.
     const later = run([[projected(104), 4000 + BURST_MS]], stepwise);
