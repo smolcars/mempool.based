@@ -18,7 +18,7 @@ let store = Store::open(&data_dir, "mainnet", Options::default())?; // blocking:
 
 // A write is one transaction. It resolves once committed and on disk; Err or a panic rolls back.
 store.write(move |sql| {
-    let mut insert = sql.prepare("INSERT INTO block_summaries (height, fees) VALUES (?1, ?2)")?;
+    let mut insert = sql.prepare("INSERT INTO blocks (height, fees) VALUES (?1, ?2)")?;
     for b in &blocks {
         insert.execute(params![b.height, b.fees])?;
     }
@@ -27,7 +27,7 @@ store.write(move |sql| {
 
 // A read runs on tokio's blocking pool and is interrupted past Options::read_time_limit.
 let fees: Option<i64> = store.read(move |sql| {
-    Ok(sql.prepare("SELECT fees FROM block_summaries WHERE height = ?1")?
+    Ok(sql.prepare("SELECT fees FROM blocks WHERE height = ?1")?
         .query_row(params![height], |r| r.get(0))
         .optional()?)
 }).await?;
@@ -42,7 +42,7 @@ let fees: Option<i64> = store.read(move |sql| {
 
 ## Adding a migration
 
-1. Add `crates/engine/src/store/migrations/NNNN_short_name.sql`, numbered one past the last (`0001_block_summaries.sql`, `0002_…`). Lowercase letters, digits and underscores.
+1. Add `crates/engine/src/store/migrations/NNNN_short_name.sql`, numbered one past the last (`0001_blocks.sql`, `0002_…`). Lowercase letters, digits and underscores.
 2. Run `cargo test -p engine store`. It fails and prints the line to append to `migrations/CHECKSUMS`. Append it.
 3. That is all: `build.rs` compiles every `.sql` file in the directory into the binary, in name order.
 
@@ -58,6 +58,115 @@ What fails loudly:
 | A database written by a newer build | `Store::open` refuses with `OpenError::TooNew` and leaves the schema alone |
 
 Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; they are refused and the open fails), and nothing that cannot run in one (`VACUUM`, `PRAGMA journal_mode`). SQLite's `ALTER TABLE` is limited; to reshape a table, create the new one, copy, drop and rename in the same migration.
+
+## Tables
+
+| Table | Migration | Holds | Rebuildable |
+|---|---|---|---|
+| [`blocks`](#blocks) | `0001_blocks.sql` | One row per block on the best chain | Yes, by backfill |
+
+### Adding a table
+
+Follow `blocks` (`crates/engine/src/blocks/`):
+
+1. **The migration:** the table, its indexes and a comment on each column, as above. Prefer `STRICT`. Every column earns its place by a use that is planned; a later need gets a later migration.
+2. **A module in `crates/engine/`** owning every statement on the table: static SQL in one file (`db.rs`), typed reads for the tasks that use it (`async fn` taking `&Store`, returning plain structs), and the writers. Nothing outside it writes SQL for the table.
+3. **I/O through a trait** (`Source`) with a real implementation over the node clients and a mock in the tests, so the logic is tested without a node.
+4. **Report, don't log:** the engine returns errors and calls an observer with typed events; the server turns them into log events (`crates/server/src/blocks.rs`).
+5. **Say here** which of its data is rebuildable and which is lost with the file.
+
+### blocks
+
+One row per block on the best chain: what the mining dashboard and the history charts (fees, rewards, fee rates, sizes, block times, difficulty, pools) need for any period without asking the node about each block. The code is `crates/engine/src/blocks/`.
+
+| Column | Type | Why |
+|---|---|---|
+| `height` | integer key | Position on the best chain; every range and page is by height |
+| `hash` | 32-byte blob, unique | Lookups by hash (the block facts route) and the reorg check. The bitcoin crate's internal byte order, the reverse of the printed hash |
+| `time` | integer, indexed | Header timestamp: per-day buckets, block intervals, and periods asked by time |
+| `tx_count` | integer | Transactions per block and per period; the coinbase included |
+| `size`, `weight` | integer | Block size charts and fullness |
+| `paying_weight` | integer | The weight of every transaction but the coinbase, which the block facts route serves as `weight` |
+| `fees`, `subsidy`, `reward` | integer, sats | Fee and reward charts. `reward` is the coinbase's outputs summed: what the miner took, which can be less than subsidy plus fees |
+| `difficulty` | real | Difficulty and hashrate charts (hashrate ≈ difficulty × 2³² / interval) |
+| `coinbase_tag` | blob, ≤ 100 bytes | The coinbase input's script, for pool attribution by tag. Consensus caps it at 100 bytes |
+| `payouts` | blob | The coinbase's outputs paying more than zero, at most 8, each at most 128 bytes, as a length byte and the script: pool attribution by payout address. Longer scripts are no address and are left out |
+| `rated` | integer, 0 or 1 | Completeness: 1 once the columns below are known |
+| `fee_min` … `fee_max` | real, nullable | Size-weighted fee-rate percentiles in sat/vB, unrounded (min, p10, p25, median, p75, p90, max). Null until rated, and for a rated block that holds only its coinbase |
+| `band0` … `band9` | integer, nullable | Virtual size paying in each of the design's ten fee bands; they sum to the paying transactions' virtual size |
+
+The coinbase tag and scripts are written by whoever mined the block. They are stored as bytes, bounded as above, and never interpreted or turned into text here; a page renders them as text ([`SECURITY.md`](SECURITY.md) rule 14).
+
+**Completeness.** A row exists only once its totals and coinbase are known, so every row has everything above `rated`. `rated = 0` means the fee rates are still to come; a partial index on those rows lets the backfill find the next one at once. A height with no row is a block not yet backfilled.
+
+**Size.** About 300 bytes a row with its indexes: 295 MB for a table filled to mainnet's 975,000 blocks.
+
+**Rebuildable.** Everything here is derived from the node. Deleting the file loses nothing the backfill cannot redo.
+
+#### Writers
+
+| Writer | Heights | Does |
+|---|---|---|
+| `follow` | the newest 100 (`ZONE`) | On every new tip: reads Esplora's headers for the zone and compares each hash with the table. A row whose hash differs is stale; it is replaced, and every row above the tip is deleted, in one write. Below the zone it also checks the highest stored row, jumping any heights not stored yet (after downtime, say), and walks down while pages of ten headers hold stale rows, jumping gaps the same way, so a reorg of any depth is repaired in one call at one page more than its stale rows. It reads the tip again at the end and writes nothing if it moved, so every page comes from one chain. Missing rows in the zone are added; replacements are read 50 blocks a batch. The newest 10 get their fee rates from the summaries the server computes for every new block anyway, so a new block costs the node one `getblockstats` and a coinbase lookup more, nothing heavier |
+| `backfill` | below the zone | Adds rows the table lacks and rates rows that lack fee rates, newest first. Never overwrites a row. Current rows must never land above stale ones, since `follow`'s walk stops at the first page that agrees and would never reach them. So the backfill starts only after `follow` has succeeded once; drops a batch read before any `follow` write that replaced rows; and before writing a batch checks the highest stored row below it against the node (by the batch's parent hash when adjacent, else one page of headers). A stale one is deleted instead, and the next steps check the rows under it the same way and refill the heights |
+
+Fee rates are written with `UPDATE … WHERE height = ? AND hash = ?`, so rates computed for a block that has since left the chain never land on its replacement.
+
+#### Backfill
+
+Two tiers, one step of each in turn:
+
+| Tier | Step | Node calls per step |
+|---|---|---|
+| Totals | one run of up to 50 consecutive missing heights, highest first, so the row checked below it is the only one beneath it | Esplora `/blocks/:height` (ten blocks each), one batched `getblockstats` asking only `totalfee`, `subsidy` and `total_weight`, Esplora `/block/:hash/txid/0` per block, one batched `getrawtransaction` for the coinbases |
+| Rates | the highest unrated row within `BACKFILL_FEE_RATE_DEPTH` of the tip | One `getblock` at verbosity 2, through the same statistics code as the block facts route |
+
+**Gentle by construction.** The backfill and `follow` share their own RPC client with one slot, so they never hold one of the four slots the mempool tracker and the summary routes share, and the node sees at most one RPC call from them at a time. Their Esplora requests are small (ten headers, one txid) and each task makes one at a time, so at most two are in flight. After each step the backfill waits so that it keeps that call busy for at most `BACKFILL_BUSY_PERCENT` of the time (50 by default). A failure of any kind, the node's 503 (`busy`) included, pauses it for 5 s, doubling up to 5 minutes, and is logged at the 1st, 2nd, 4th, 8th… in a row.
+
+**Resumable.** The table is the progress. Each pass starts at the tip and reads the table 10,000 heights at a time looking for missing rows (about 100 reads, well under a second, for a full table), so a restart or a pause (`BACKFILL_ENABLED=false`, then `true`) costs those reads and nothing else. The tip is checked every minute, and a new one restarts the pass from the top, so new blocks below the zone are filled first.
+
+**Observable.** `block_backfill_progress` every minute ([`LOGGING.md`](LOGGING.md)), and the same numbers in `BlockTable::progress` for a status page.
+
+**Cost on mainnet,** measured with `cargo run --release -p engine --example blocks_probe` against a synced rbitcoin v0.9.2 over a private network, paced at 50%, on bounded ranges of each era. Time per block is the node calls' wall time including the round trips; at 50% busy, wall time is twice that.
+
+| Tier | Blocks around | Node time a block | Read a block |
+|---|---|---|---|
+| Totals | 0 to 75,000 (2009–10) | 7 to 10 ms | 0.9 KB |
+| Totals | 225,000 (2013) | 12 to 14 ms | 0.9 KB |
+| Totals | 375,000 to 525,000 (2015–18) | 12 to 22 ms | 1.1 KB |
+| Totals | 675,000 (2021) | 21 to 25 ms | 1.3 KB |
+| Totals | 862,000 to the tip (2024–26) | 32 to 35 ms | 1.3 to 1.4 KB |
+| Rates | 75,000 | 38 ms | 5 KB |
+| Rates | 225,000 to 375,000 | 0.2 to 0.45 s | 2 to 4 MB |
+| Rates | 525,000 | 1 s | 4.7 MB |
+| Rates | 675,000 | 1.6 s | 9.2 MB |
+| Rates | 862,000 to the tip | 0.8 to 2.2 s | 10.5 MB |
+
+For all of mainnet (975,000 blocks), extrapolated era by era:
+
+| Work | Node time | Read | At the default 50% |
+|---|---|---|---|
+| Totals for every block | 5.7 h | 1.2 GB | 11.4 h alone |
+| Fee rates for a year (52,560 blocks, the default) | 13.4 h | 550 GB | 27 h alone |
+| Both, interleaved as the backfill runs them | 19 h | 550 GB | totals complete after about 21 h, everything after about 38 h |
+| Fee rates for all of history | about 9.7 days | | why the default is a year |
+
+**What it costs the node per hour** at 50%: one call from the backfill for half the hour, so 30 minutes of one of the node's 16 RPC work slots, and nothing while the other four shared slots are busy, since it never uses them. While it rates recent blocks it reads about 7 GB an hour (one 10 MB `getblock` every 5 s), most of it the node's JSON encoding; once the year is rated, about 80 MB an hour, and when caught up, one `getblockstats` and a coinbase lookup per new block. Old blocks' totals are mostly round trips: `/block/:hash/txid/0` is one request per block, about 8 ms over the network measured and far less on the node's own host.
+
+Unfiltered `getblockstats` took about 1 s per recent block (its UTXO statistics), forty times the filtered call; the backfill never asks for them ([`RBITCOIN.md`](RBITCOIN.md)).
+
+#### Reading
+
+`crates/engine/src/blocks/db.rs`, each an `async fn` on a read-only connection:
+
+| Call | Returns | 975,000 rows, the last year rated |
+|---|---|---|
+| `by_height(store, h)`, `by_hash(store, hash)`, `by_hashes(store, hashes)` | `Row`: every column, `rates: Option<Rated>` for completeness, `Row::facts()` in the block facts route's shape | 0.04 to 0.15 ms |
+| `page(store, below, limit)` | Up to `limit` (at most 1,000) rows below a height, newest first; missing heights skipped | 0.1 to 0.3 ms for 15 or 100 rows, at the top or deep in history |
+| `heights_between(store, from, to)` | The heights timestamped in a period, through the `time` index | 1.7 to 2.6 ms for a year |
+| `periods(store, from, to, Period::Day \| Period::Blocks(n))` | One `Bucket` per UTC day or per `n` heights, oldest first: block count, first and last height and time, sums of transactions, size, weight, fees, subsidy and reward, mean difficulty, and mean fee-rate percentiles over the rated blocks | 31 to 42 ms for a year by day; 0.5 to 0.8 s for all of history in 2,016-block buckets |
+
+Measured on the machine and load described under [Measurements](#measurements) with `cargo test --release -p engine -- --ignored --nocapture read_benchmark`: 975,000 realistic rows written in 7 s, 295 MB.
 
 ## Pragmas
 

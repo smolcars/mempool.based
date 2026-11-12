@@ -19,6 +19,7 @@ pub use model::{Delta, Mempool, Removal, TxInfo};
 pub use tracker::{
     Config, CycleStats, Event, NodeSource, Source, SourceError, Subscription, Tracker,
 };
+pub(crate) use tracker::{esplora_err, rpc_err};
 
 #[cfg(test)]
 mod tests;

@@ -247,6 +247,12 @@ impl Esplora {
         self.json(Route::BlockStatus(hash)).await
     }
 
+    /// The txid at `index` in the block; index 0 is the coinbase.
+    pub async fn block_txid(&self, hash: BlockHash, index: u32) -> Result<Stamped<Txid>, Error> {
+        self.typed(Route::BlockTxid { hash, index }, parse_text)
+            .await
+    }
+
     pub async fn block_txids(&self, hash: BlockHash) -> Result<Stamped<Vec<Txid>>, Error> {
         self.json(Route::BlockTxids(hash)).await
     }

@@ -70,6 +70,14 @@ async fn rpc(
             json!({"result": null, "error": {"code": -5, "message": "Block not found"}, "id": 0});
         return (axum::http::StatusCode::NOT_FOUND, Json(e));
     }
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({"result": block_json(&hash), "error": null, "id": 0})),
+    )
+}
+
+/// The block the mock answers for `hash`.
+fn block_json(hash: &str) -> Value {
     let tx = (0..TXS)
         .map(|i| {
             let mut t = json!({"txid": "00".repeat(32), "vsize": 100, "weight": 400, "size": 100,
@@ -80,12 +88,8 @@ async fn rpc(
             t
         })
         .collect::<Vec<_>>();
-    let block = json!({"hash": hash, "confirmations": 1, "height": 800_000, "time": 1, "mediantime": 1,
-        "size": 1000, "strippedsize": 900, "weight": 4000, "tx": tx});
-    (
-        axum::http::StatusCode::OK,
-        Json(json!({"result": block, "error": null, "id": 0})),
-    )
+    json!({"hash": hash, "confirmations": 1, "height": 800_000, "time": 1, "mediantime": 1,
+        "size": 1000, "strippedsize": 900, "weight": 4000, "tx": tx})
 }
 
 async fn mock(delay: Duration) -> (u16, Arc<Node>) {
@@ -105,6 +109,14 @@ async fn mock(delay: Duration) -> (u16, Arc<Node>) {
 /// The server on port 0 against a mock node answering after `delay`, with room for
 /// `cache_entries` summaries. Clients are told apart by `X-Real-IP`.
 async fn start(delay: Duration, cache_entries: usize) -> (String, Arc<Node>) {
+    start_with(delay, cache_entries, &[]).await
+}
+
+async fn start_with(
+    delay: Duration,
+    cache_entries: usize,
+    extra: &[(&'static str, String)],
+) -> (String, Arc<Node>) {
     capture();
     let (port, node) = mock(delay).await;
     let vars: HashMap<&str, String> = [
@@ -117,6 +129,7 @@ async fn start(delay: Duration, cache_entries: usize) -> (String, Arc<Node>) {
         ("TRUSTED_PROXY_HEADER", "X-Real-IP".to_owned()),
     ]
     .into_iter()
+    .chain(extra.iter().cloned())
     .collect();
     let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
     config.limits.client_rate_per_sec = 10_000;
@@ -311,6 +324,81 @@ async fn facts_records_and_batches_are_served_and_cached_for_good() {
     stream.read_to_string(&mut raw).await.unwrap();
     assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
     assert!(raw.ends_with("\r\n\r\n"), "{raw}");
+}
+
+/// Writes a rated row for the mock's block `hash`, as the backfill would.
+async fn store_row(dir: &std::path::Path, hash: &str) {
+    use engine::store::{Options, Store, params};
+    let block: node::rpc::model::Block = serde_json::from_value(block_json(hash)).unwrap();
+    let f = engine::blocks::stats::facts(&block);
+    let r = f.fee_rate.unwrap();
+    let store = Store::open(dir, "regtest", Options::default()).unwrap();
+    let id = *bitcoin::hashes::Hash::as_byte_array(&f.id);
+    let b = f.fee_bands.map(|b| b as i64);
+    store
+        .write(move |sql| {
+            sql.prepare(
+                "INSERT INTO blocks VALUES (?1, ?2, 1, ?3, 1000, 4000, ?4, ?5, 0, 0, 1.0, x'', x'', \
+                 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            )?
+            .execute(params![
+                f.height, &id[..], f.tx_count as i64, f.weight as i64, f.fees as i64,
+                r.min, r.p10, r.p25, r.median, r.p75, r.p90, r.max,
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9]
+            ])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    store.close().await;
+}
+
+#[tokio::test]
+async fn a_block_in_the_table_is_answered_without_the_node() {
+    let a = hash(1);
+    // The answer computed from the node, to compare with.
+    let (addr, _) = start(Duration::ZERO, 100).await;
+    let computed = get(&addr, &summary(&a), "192.0.2.1").await;
+    assert_eq!(computed.status, 200);
+
+    let dir = std::env::temp_dir().join(format!("mempool-based-summary-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    store_row(&dir, &a).await;
+    let (addr, node) = start_with(
+        Duration::ZERO,
+        100,
+        &[
+            ("DATA_DIR", dir.display().to_string()),
+            ("BACKFILL_ENABLED", "false".to_owned()),
+        ],
+    )
+    .await;
+    let r = get(&addr, &summary(&a), "192.0.2.1").await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
+    assert_eq!(r.body, computed.body, "the same answer, byte for byte");
+    assert_eq!(request_event(&r).await["source"], "stored");
+    assert_eq!(node.total(), 0, "no node call");
+
+    // A batch asks the node only for what the table lacks.
+    let b = hash(2);
+    let r = get(
+        &addr,
+        &format!("/regtest/app/blocks/summary?hashes={a},{b}"),
+        "192.0.2.1",
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()[0]["id"], a.as_str());
+    assert_eq!((node.calls(&a), node.calls(&b)), (0, 1));
+    let r = get(
+        &addr,
+        &format!("/regtest/app/blocks/summary?hashes={a},{a}"),
+        "192.0.2.1",
+    )
+    .await;
+    assert_eq!(request_event(&r).await["source"], "stored");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

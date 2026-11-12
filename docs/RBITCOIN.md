@@ -59,6 +59,8 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 | Position lookup, single | 28 ms | 0.5 KB |
 | Position lookup, batch of 3 | 14 ms | 1 KB |
 | `getblockstats` | 97 ms | tiny |
+| `getblockstats`, every stat, recent block not in the node's cache | about 1 s | tiny |
+| `getblockstats` asking for a few totals (`totalfee`, `subsidy`, `total_weight`), batch of 20 | 20 to 30 ms a block | tiny |
 | Electrum `mempool.get_fee_histogram` | 151 ms | 5 KB |
 | `GET /fee-estimates` | 200 ms | 0.3 KB |
 | `getrawmempool` (txids) | 260 ms | 3.6 MB |
@@ -72,6 +74,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 
 - **Never poll verbose `getrawmempool`.** Use it at most once at startup. Diff txids and fetch details for new ones.
 - **Batch RPC calls.** A JSON-RPC array is one HTTP request and one work-queue slot, and answers in order. 1,000 `getrawtransaction` calls in one array take about 300 ms ([`MEMPOOL.md`](MEMPOOL.md)).
+- **Ask `getblockstats` for the stats you need.** With no list it also computes its UTXO statistics, about a second per recent block; any short list of totals costs 20 to 30 ms.
 - **Compute fee-rate percentiles ourselves.** `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
 - **Expect 503 on huge addresses.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused. Use the paged routes and surface the limit to the user.
 - **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.

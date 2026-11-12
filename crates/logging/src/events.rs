@@ -51,6 +51,12 @@ pub struct ServerStarting<'a> {
     pub ws_send_queue: usize,
     pub ws_idle_timeout_secs: u64,
     pub block_summary_cache_mb: usize,
+    /// Left out when `DATA_DIR` is unset and the server runs without a store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
+    pub backfill_enabled: bool,
+    pub backfill_busy_percent: u32,
+    pub backfill_fee_rate_depth: u32,
 }
 event!(ServerStarting<'a>, "server_starting", Info);
 
@@ -365,6 +371,106 @@ pub struct DifficultyRefreshFailed {
     pub failures: u32,
 }
 event!(DifficultyRefreshFailed, "difficulty_refresh_failed", Warn);
+// The store and the block table.
+
+/// A network's SQLite file could not be opened; that network runs without a store.
+#[derive(Debug, Serialize)]
+pub struct StoreOpenFailed {
+    pub network: &'static str,
+    /// Names the file and the cause; never data from a client.
+    pub error: String,
+}
+event!(StoreOpenFailed, "store_open_failed", Error);
+
+/// A schema migration was applied while opening the file.
+#[derive(Debug, Serialize)]
+pub struct StoreMigrationApplied<'a> {
+    pub network: &'static str,
+    pub migration: &'a str,
+    pub duration_ms: f64,
+}
+event!(StoreMigrationApplied<'a>, "store_migration_applied", Info);
+
+/// One write held the writer for a second or more.
+#[derive(Debug, Serialize)]
+pub struct StoreSlowWrite {
+    pub network: &'static str,
+    pub duration_ms: f64,
+    /// Writes waiting behind it.
+    pub queue_depth: usize,
+}
+event!(StoreSlowWrite, "store_slow_write", Warn);
+
+/// A read ran past its time limit and was stopped.
+#[derive(Debug, Serialize)]
+pub struct StoreReadTimedOut {
+    pub network: &'static str,
+    pub limit_ms: u64,
+}
+event!(StoreReadTimedOut, "store_read_timed_out", Warn);
+
+/// The newest rows of the block table were checked against a new tip. Debug: once per block.
+#[derive(Debug, Serialize)]
+pub struct BlockRowsFollowed {
+    pub network: &'static str,
+    pub tip: u32,
+    /// Rows added or replaced, and rows given fee rates.
+    pub written: usize,
+    pub rated: usize,
+    pub duration_ms: f64,
+}
+event!(BlockRowsFollowed, "block_rows_followed", Debug);
+
+/// Rows described blocks a reorg took off the best chain; they were replaced or removed.
+#[derive(Debug, Serialize)]
+pub struct BlockRowsReorged {
+    pub network: &'static str,
+    /// The highest height whose row still agreed.
+    pub fork_height: u32,
+    pub stale: usize,
+}
+event!(BlockRowsReorged, "block_rows_reorged", Warn);
+
+/// Filling the block table failed; it is retried after a pause. At the 1st, 2nd, 4th, 8th…
+/// failure in a row.
+#[derive(Debug, Serialize)]
+pub struct BlockRowsFailed {
+    pub network: &'static str,
+    /// `follow`, or the backfill's `tip`, `totals` or `rates`.
+    pub task: &'static str,
+    /// `busy`, `too_big`, `node` or `store`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(BlockRowsFailed, "block_rows_failed", Warn);
+
+/// Filling the block table worked again after failures.
+#[derive(Debug, Serialize)]
+pub struct BlockRowsRecovered {
+    pub network: &'static str,
+    /// `follow` or `backfill`.
+    pub task: &'static str,
+    pub failures: u32,
+}
+event!(BlockRowsRecovered, "block_rows_recovered", Info);
+
+/// Where the backfill stands: every minute while it works, and when it has caught up.
+#[derive(Debug, Serialize)]
+pub struct BlockBackfillProgress {
+    pub network: &'static str,
+    pub tip: u32,
+    /// Rows in the table, and how many have fee rates.
+    pub rows: u64,
+    pub rated: u64,
+    pub totals_done: bool,
+    pub rates_done: bool,
+    /// Since the server started: rows added, rows rated, time spent working and bytes read.
+    pub totals_written: u64,
+    pub rates_written: u64,
+    pub busy_ms: u64,
+    pub bytes: u64,
+}
+event!(BlockBackfillProgress, "block_backfill_progress", Info);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -416,6 +522,10 @@ mod tests {
                 ws_send_queue: 1,
                 ws_idle_timeout_secs: 1,
                 block_summary_cache_mb: 1,
+                data_dir: Some("data".into()),
+                backfill_enabled: true,
+                backfill_busy_percent: 50,
+                backfill_fee_rate_depth: 52_560,
             }),
             both(&NetworkEnabled {
                 network: n,
@@ -542,6 +652,59 @@ mod tests {
                 height: 975_523,
                 error: "timeout",
                 failures: 2,
+            }),
+            both(&StoreOpenFailed {
+                network: n,
+                error: "data/signet.sqlite is corrupt".into(),
+            }),
+            both(&StoreMigrationApplied {
+                network: n,
+                migration: "0001_blocks.sql",
+                duration_ms: 1.5,
+            }),
+            both(&StoreSlowWrite {
+                network: n,
+                duration_ms: 1200.0,
+                queue_depth: 3,
+            }),
+            both(&StoreReadTimedOut {
+                network: n,
+                limit_ms: 2000,
+            }),
+            both(&BlockRowsFollowed {
+                network: n,
+                tip: 9,
+                written: 1,
+                rated: 1,
+                duration_ms: 40.0,
+            }),
+            both(&BlockRowsReorged {
+                network: n,
+                fork_height: 8,
+                stale: 1,
+            }),
+            both(&BlockRowsFailed {
+                network: n,
+                task: "totals",
+                error: "busy",
+                failures: 4,
+            }),
+            both(&BlockRowsRecovered {
+                network: n,
+                task: "backfill",
+                failures: 4,
+            }),
+            both(&BlockBackfillProgress {
+                network: n,
+                tip: 9,
+                rows: 5,
+                rated: 2,
+                totals_done: false,
+                rates_done: false,
+                totals_written: 5,
+                rates_written: 2,
+                busy_ms: 1000,
+                bytes: 4096,
             }),
         ]
     }

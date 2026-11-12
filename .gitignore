@@ -20,3 +20,6 @@ node_modules/
 /data/
 
 .DS_Store
+
+# Python
+__pycache__/

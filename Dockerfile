@@ -29,15 +29,18 @@ COPY crates/ crates/
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-$TARGETPLATFORM,target=/src/target \
     cargo build --release --locked -p mempool-based \
-    && cp target/release/mempool-based /mempool-based
+    && cp target/release/mempool-based /mempool-based \
+    && mkdir /data
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=server /mempool-based /usr/local/bin/mempool-based
 COPY --from=web /src/web/dist /srv/web
+# The one writable place, for the SQLite store. A volume mounted here starts with this owner.
+COPY --from=server --chown=65532:65532 /data /data
 ENV LISTEN_ADDR=0.0.0.0:8080 \
     WEB_DIR=/srv/web
 EXPOSE 8080
-# distroless "nonroot": uid and gid 65532. Nothing in the image is writable by it.
+# distroless "nonroot": uid and gid 65532. Only /data, for a volume, is writable by it.
 USER 65532:65532
 HEALTHCHECK --interval=30s --timeout=6s --start-period=10s --start-interval=1s \
     CMD ["/usr/local/bin/mempool-based", "healthcheck"]

@@ -13,7 +13,7 @@
 //!
 //! A summary is fixed by the block's hash, so answers are cached for good by clients and proxies.
 
-pub mod stats;
+pub use engine::blocks::stats;
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -183,6 +183,11 @@ impl Summaries {
         }
     }
 
+    /// The newest block as [`Summaries::new_tip`] last heard of it; the block table follows it.
+    pub fn tips(&self) -> watch::Receiver<Option<(BlockHash, Instant)>> {
+        self.tip.subscribe()
+    }
+
     /// Tells the [`worker`] about a new best block, announced at `since`.
     pub fn new_tip(&self, hash: BlockHash, since: Instant) {
         self.tip.send_replace(Some((hash, since)));
@@ -346,6 +351,34 @@ async fn wait(mut flight: Flight) -> Outcome {
     }
 }
 
+/// A block's facts for the block table: cached, or computed as the [`worker`] computes a new
+/// block's, outside the client limits. `None` when the node gave no summary.
+pub async fn new_block_facts(ctx: &Arc<NetworkContext>, hash: BlockHash) -> Option<Facts> {
+    let s = match ctx.summaries.start(ctx, hash, Cause::NewBlock).ok()? {
+        Start::Cached(s) => s,
+        Start::Joined(f) | Start::Started(f) => wait(f).await.ok()?,
+    };
+    Some(s.facts.clone())
+}
+
+/// Facts the block table holds for these blocks, in order: an old block costs the node nothing
+/// once backfilled. `None` where it has no rated row, or the read failed and the node answers.
+async fn stored(ctx: &NetworkContext, hashes: &[BlockHash]) -> Vec<Option<Facts>> {
+    let rows = match &ctx.blocks {
+        Some(t) => engine::blocks::by_hashes(&t.store, hashes.to_vec())
+            .await
+            .ok(),
+        None => None,
+    };
+    match rows {
+        Some(rows) => rows
+            .into_iter()
+            .map(|r| r.and_then(|r| r.facts()))
+            .collect(),
+        None => vec![None; hashes.len()],
+    }
+}
+
 /// A summary for a client request, and where it came from.
 async fn get(
     ctx: &Arc<NetworkContext>,
@@ -436,8 +469,14 @@ pub async fn facts(
     const ROUTE: &str = "block_summary";
     let answer = async {
         let hash = parse_hash(&hash, &uri)?;
-        let (s, source) = get(&ctx, hash, client.addr).await?;
-        let body = serde_json::to_vec(&s.facts).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        let (facts, source) = match stored(&ctx, &[hash]).await.pop().flatten() {
+            Some(f) => (f, Source::Stored),
+            None => {
+                let (s, source) = get(&ctx, hash, client.addr).await?;
+                (s.facts.clone(), source)
+            }
+        };
+        let body = serde_json::to_vec(&facts).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
         Ok(ok(ROUTE, "application/json", body.into(), source))
     };
     answer
@@ -464,8 +503,9 @@ pub async fn txs(
 }
 
 /// `GET /app/blocks/summary?hashes=<hash>,<hash>,…`: up to [`MAX_BATCH`] [`Facts`], in order.
-/// Every computation is started before any is awaited, so a refusal answers at once and the work
-/// admitted before it goes on into the cache, where the client's retry finds it.
+/// Blocks the block table holds cost nothing. Every other computation is started before any is
+/// awaited, so a refusal answers at once and the work admitted before it goes on into the cache,
+/// where the client's retry finds it.
 pub async fn batch(
     State(ctx): State<Arc<NetworkContext>>,
     Extension(client): Extension<Client>,
@@ -475,17 +515,30 @@ pub async fn batch(
     let answer = async {
         let hashes = parse_batch(uri.query())?;
         let started = Instant::now();
+        let stored = stored(&ctx, &hashes).await;
         let mut starts = Vec::with_capacity(hashes.len());
-        for hash in hashes {
-            let start = ctx
-                .summaries
-                .start(&ctx, hash, Cause::Request(client.addr))
-                .map_err(Answer::Refused)?;
+        for (hash, known) in hashes.into_iter().zip(&stored) {
+            let start = match known {
+                Some(_) => None,
+                None => Some(
+                    ctx.summaries
+                        .start(&ctx, hash, Cause::Request(client.addr))
+                        .map_err(Answer::Refused)?,
+                ),
+            };
             starts.push(start);
         }
-        let mut source = Source::Cached;
+        let mut source = if starts.iter().all(Option::is_none) {
+            Source::Stored
+        } else {
+            Source::Cached
+        };
         let mut facts = Vec::with_capacity(starts.len());
-        for start in starts {
+        for (start, known) in starts.into_iter().zip(stored) {
+            let Some(start) = start else {
+                facts.extend(known);
+                continue;
+            };
             let s = match start {
                 Start::Cached(s) => s,
                 Start::Joined(f) => {
@@ -500,10 +553,9 @@ pub async fn batch(
                     s.map_err(|e| Answer::Failed(e, source))?
                 }
             };
-            facts.push(s);
+            facts.push(s.facts.clone());
         }
-        let all: Vec<&Facts> = facts.iter().map(|s| &s.facts).collect();
-        let body = serde_json::to_vec(&all).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
+        let body = serde_json::to_vec(&facts).map_err(|_| Answer::Bad(ApiError::INTERNAL))?;
         Ok(ok(ROUTE, "application/json", body.into(), source))
     };
     answer

@@ -5,6 +5,7 @@
 
 mod api_v1;
 mod app_config;
+pub mod blocks;
 pub mod config;
 pub mod difficulty;
 pub mod error;
@@ -83,6 +84,8 @@ pub struct NetworkContext {
     pub sockets: Arc<ws::Sockets>,
     /// Kept current by [`difficulty::run`]; read by `/api/v1/difficulty-adjustment`.
     pub difficulty: difficulty::Difficulty,
+    /// The block table, when `DATA_DIR` is set and the file opened.
+    pub blocks: Option<blocks::BlockTable>,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -101,7 +104,12 @@ impl NetworkContext {
             config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
         };
         let rpc = &config.rpc;
+        let table = all
+            .data_dir
+            .as_deref()
+            .and_then(|dir| blocks::BlockTable::open(dir, config, &url));
         Some(Self {
+            blocks: table,
             rpc: node::rpc::Rpc::new(&rpc.host, rpc.port, &rpc.user, rpc.password.expose()).ok()?,
             summaries: summary::Summaries::new(
                 all.limits.summary_cache_bytes,
@@ -164,6 +172,7 @@ impl App {
                     tokio::spawn(ws::feed(Arc::clone(&ctx), events));
                     tokio::spawn(summary::worker(Arc::clone(&ctx)));
                     tokio::spawn(difficulty::run(Arc::clone(&ctx), ctx.electrum.events()));
+                    blocks::spawn(&ctx, config.backfill);
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()
