@@ -29,7 +29,7 @@ async function open(url: string, networks = ["mainnet", "signet", "testnet4"]) {
 
 describe("routes", () => {
   it.each([
-    ["/", "Blocks and mempool"],
+    ["/", "Blocks"],
     ["/block/840000", "Block 840\u202f000"],
     ["/blocks", "Blocks"],
     ["/signet/blocks/5", "Blocks"],
@@ -38,8 +38,8 @@ describe("routes", () => {
     ["/mining", "Mining"],
     ["/lightning", "Lightning"],
     ["/nope", "Page not found"],
-    ["/signet", "Blocks and mempool"],
-    ["/signet/", "Blocks and mempool"],
+    ["/signet", "Blocks"],
+    ["/signet/", "Blocks"],
     ["/testnet4/tx/ab", "Transaction"],
     ["/signet/nope/deeper", "Page not found"],
   ])("%s shows %s", async (url, heading) => {
