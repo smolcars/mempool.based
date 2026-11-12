@@ -23,7 +23,7 @@ export function Shell(props: RouteSectionProps) {
   let main: HTMLElement | undefined;
 
   createEffect(() => {
-    document.documentElement.dataset.network = network();
+    document.documentElement.dataset["network"] = network();
   });
 
   // A path on a network this server does not serve (mainnet at the root) moves to one it does.

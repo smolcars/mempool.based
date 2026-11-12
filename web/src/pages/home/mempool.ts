@@ -8,11 +8,11 @@ export function isMempoolSummary(v: unknown): v is MempoolSummary {
   if (typeof v !== "object" || v === null) return false;
   const m = v as Record<string, unknown>;
   return (
-    isNum(m.count) &&
-    isNum(m.vsize) &&
-    isNum(m.total_fee) &&
-    Array.isArray(m.fee_histogram) &&
-    m.fee_histogram.every((p) => Array.isArray(p) && isNum(p[0]) && isNum(p[1]))
+    isNum(m["count"]) &&
+    isNum(m["vsize"]) &&
+    isNum(m["total_fee"]) &&
+    Array.isArray(m["fee_histogram"]) &&
+    m["fee_histogram"].every((p) => Array.isArray(p) && isNum(p[0]) && isNum(p[1]))
   );
 }
 
@@ -32,10 +32,10 @@ export function isRecentList(v: unknown): v is RecentTx[] {
       if (typeof t !== "object" || t === null) return false;
       const r = t as Record<string, unknown>;
       return (
-        typeof r.txid === "string" &&
-        /^[0-9a-f]{64}$/.test(r.txid) &&
-        isNum(r.fee) &&
-        isNum(r.vsize)
+        typeof r["txid"] === "string" &&
+        /^[0-9a-f]{64}$/.test(r["txid"]) &&
+        isNum(r["fee"]) &&
+        isNum(r["vsize"])
       );
     })
   );

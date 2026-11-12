@@ -95,7 +95,7 @@ export function Flow(props: {
     const mid = W / 2;
     const thicknesses = (col: HTMLUListElement) =>
       ([...col.children] as HTMLElement[]).map((el) =>
-        Math.max(1.5, (Number(el.dataset.value) / total) * T),
+        Math.max(1.5, (Number(el.dataset["value"]) / total) * T),
       );
     const tIn = thicknesses(inCol);
     const tOut = thicknesses(outCol);
@@ -114,8 +114,8 @@ export function Flow(props: {
         const f = (n: number) => n.toFixed(1);
         return {
           d: `M${f(a.x)},${f(a.y0)} C${f(a.x + c)},${f(a.y0)} ${f(b.x - c)},${f(b.y0)} ${f(b.x)},${f(b.y0)} L${f(b.x)},${f(b.y1)} C${f(b.x - c)},${f(b.y1)} ${f(a.x + c)},${f(a.y1)} ${f(a.x)},${f(a.y1)} Z`,
-          kind: (el.dataset.kind as Ribbon["kind"]) ?? (toRight ? "in" : "out"),
-          key: `${toRight ? "i" : "o"}${el.dataset.key ?? k}`,
+          kind: (el.dataset["kind"] as Ribbon["kind"]) ?? (toRight ? "in" : "out"),
+          key: `${toRight ? "i" : "o"}${el.dataset["key"] ?? k}`,
         };
       });
     };
@@ -137,7 +137,7 @@ export function Flow(props: {
     if (!d) return;
     // Value flows in from the left, then out to the right; the stagger stops after a dozen.
     [...svgEl.querySelectorAll<SVGPathElement>(".tx-ribbon")].forEach((p, k) => {
-      const out = p.dataset.side === "out";
+      const out = p.dataset["side"] === "out";
       p.animate(
         [
           { opacity: 0, transform: "translateX(-8px)" },

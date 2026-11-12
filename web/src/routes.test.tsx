@@ -49,7 +49,7 @@ describe("routes", () => {
 
   it("marks test networks and keeps links on them", async () => {
     const { el } = await open("/testnet4/tx/ab");
-    expect(document.documentElement.dataset.network).toBe("testnet4");
+    expect(document.documentElement.dataset["network"]).toBe("testnet4");
     expect(el.querySelector(".network-band")?.textContent).toBe(
       "Testnet4 is a test network. Coins here have no value.",
     );

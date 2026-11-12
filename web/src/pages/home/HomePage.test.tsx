@@ -55,7 +55,7 @@ afterEach(() => {
 
 const tileHeights = (el: HTMLElement) =>
   [...el.querySelectorAll<HTMLElement>(".home-strip__lane > li[data-height]")].map((li) =>
-    Number(li.dataset.height),
+    Number(li.dataset["height"]),
   );
 const blocksFetches = () => requests.filter((p) => p === "/blocks").length;
 
@@ -239,7 +239,7 @@ describe("the strip, kept live", () => {
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(10, "b") });
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11, "b") });
     const ids = [...el.querySelectorAll<HTMLElement>(".home-strip__lane > li[data-id]")].map(
-      (li) => li.dataset.id,
+      (li) => li.dataset["id"],
     );
     expect(ids.slice(0, 3)).toStrictEqual([
       fakeBlock(11, "b").id,

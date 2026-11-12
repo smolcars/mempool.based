@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures";
 
 const heights = (page: Page) =>
   page.$$eval(".home-strip__lane > li[data-height]:not(.home-tile--leaving)", (els) =>
-    els.map((e) => Number((e as HTMLElement).dataset.height)),
+    els.map((e) => Number((e as HTMLElement).dataset["height"])),
   );
 
 test("a new block lands in the strip without a reload, and a burst leaves it correct", async ({

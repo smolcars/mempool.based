@@ -182,13 +182,13 @@ export class LiveConnection {
     if (typeof msg !== "object" || msg === null || Array.isArray(msg)) return;
     const m = msg as Record<string, unknown>;
     if (!this.greeted) {
-      if (m.type === "hello") this.hello(m);
+      if (m["type"] === "hello") this.hello(m);
       return;
     }
-    if (typeof m.topic !== "string") return; // pong, and connection messages added later
+    if (typeof m["topic"] !== "string") return; // pong, and connection messages added later
     // oxlint-disable-next-line unicorn/no-useless-spread -- a copy: a handler may subscribe while this runs
     for (const sub of [...this.subscribers]) {
-      if (sub.topic.name !== m.topic || !this.subscribers.has(sub)) continue;
+      if (sub.topic.name !== m["topic"] || !this.subscribers.has(sub)) continue;
       const parsed = sub.topic.parse(m);
       if (parsed !== undefined) sub.handlers.message(parsed);
     }
@@ -196,7 +196,7 @@ export class LiveConnection {
 
   private hello(m: Record<string, unknown>): void {
     clearTimeout(this.helloTimer);
-    if (m.v !== PROTOCOL_VERSION || m.network !== this.network) {
+    if (m["v"] !== PROTOCOL_VERSION || m["network"] !== this.network) {
       // A server speaking another version: this page is out of date, and retrying won't change that.
       this.stop();
       return;

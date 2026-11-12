@@ -75,7 +75,7 @@ describe("Hash", () => {
     const button = q<HTMLButtonElement>(el, "button");
     expect(button.textContent).toBe("Copy transaction ID");
     button.click();
-    await vi.waitFor(() => expect(button.dataset.copied).toBeDefined());
+    await vi.waitFor(() => expect(button.dataset["copied"]).toBeDefined());
     expect(writeText).toHaveBeenCalledWith(txid);
     expect(button.textContent).toBe("Copied");
   });

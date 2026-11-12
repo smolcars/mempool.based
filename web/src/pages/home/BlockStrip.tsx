@@ -108,19 +108,19 @@ export function BlockStrip(props: {
       // First: where everything is now, mid-animation included.
       const first = new Map<string, DOMRect>();
       for (const el of lane.children) {
-        const id = (el as HTMLElement).dataset.id;
+        const id = (el as HTMLElement).dataset["id"];
         if (id) first.set(id, el.getBoundingClientRect());
       }
       const from = next.getBoundingClientRect();
       const laneBox = lane.getBoundingClientRect();
       const keep = new Set(list.map((b) => b.id));
       const leaving = [...lane.children].filter((el) => {
-        const id = (el as HTMLElement).dataset.id;
+        const id = (el as HTMLElement).dataset["id"];
         return id ? !keep.has(id) : false;
       });
       const ghostsOut = leaving.map((el) => {
         const g = el.cloneNode(true) as HTMLElement;
-        const r = first.get(g.dataset.id ?? "");
+        const r = first.get(g.dataset["id"] ?? "");
         return { g, left: r ? r.left - laneBox.left : 0 };
       });
       const oldTip = before[0]?.height ?? Number.POSITIVE_INFINITY;
@@ -140,13 +140,13 @@ export function BlockStrip(props: {
     if (!lane || !next) return;
     const m: Motion = motion();
     const tiles = [...lane.children] as HTMLElement[];
-    const arriving = tiles.filter((el) => !first.has(el.dataset.id ?? ""));
-    const crossing = arriving.filter((el) => Number(el.dataset.height) > oldTip);
+    const arriving = tiles.filter((el) => !first.has(el.dataset["id"] ?? ""));
+    const crossing = arriving.filter((el) => Number(el.dataset["height"]) > oldTip);
 
     // Mined tiles shift along, the farthest first so none catches the one ahead.
     if (!m.reduced) {
       tiles.forEach((el, i) => {
-        const was = first.get(el.dataset.id ?? "");
+        const was = first.get(el.dataset["id"] ?? "");
         if (!was) return;
         const dx = was.left - el.getBoundingClientRect().left;
         if (Math.abs(dx) < 1) return;

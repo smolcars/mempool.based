@@ -4,7 +4,7 @@ import { backoff, LiveConnection, liveUrl, TIMING, type Topic } from "./live";
 
 const echo: Topic<Record<string, unknown>> = {
   name: "blocks",
-  parse: (m) => (m.type === "block" ? m : undefined),
+  parse: (m) => (m["type"] === "block" ? m : undefined),
 };
 const other: Topic<Record<string, unknown>> = { name: "mempool", parse: (m) => m };
 

@@ -20,7 +20,9 @@ const gz = (f) => gzipSync(readFileSync(new URL(f, assets)), { level: 9 }).lengt
 const kb = (n) => `${(n / 1024).toFixed(1).padStart(7)} KB`;
 
 const html = readFileSync(new URL("index.html", dist), "utf8");
-const entries = [...html.matchAll(/(?:src|href)="\/assets\/([\w-]+\.js)"/g)].map((m) => m[1]);
+const entries = [...html.matchAll(/(?:src|href)="\/assets\/([\w-]+\.js)"/g)]
+  .map((m) => m[1])
+  .filter((f) => f !== undefined);
 const home = files.find((f) => HOME_CHUNK.test(f));
 if (entries.length === 0 || !home) {
   console.error("Cannot find the entry script in index.html or the HomePage chunk.");
@@ -35,7 +37,9 @@ const visit = (f) => {
   if (firstLoad.has(f)) return;
   firstLoad.add(f);
   const code = readFileSync(new URL(f, assets), "utf8");
-  for (const m of code.matchAll(/(?:\bfrom|\bimport)\s*"\.\/([\w-]+\.js)"/g)) visit(m[1]);
+  for (const m of code.matchAll(/(?:\bfrom|\bimport)\s*"\.\/([\w-]+\.js)"/g)) {
+    if (m[1] !== undefined) visit(m[1]);
+  }
 };
 for (const f of [...entries, home]) visit(f);
 
