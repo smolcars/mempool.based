@@ -237,11 +237,22 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                 messages += u64::from(serve(&ctx, answer, &mut published));
                 if fetch {
                     asked = Some(Instant::now());
-                    if let Ok(Some(r)) = tokio::time::timeout(NODE_WAIT, node_estimates(&ctx)).await {
-                        node = Some((Instant::now(), r));
+                    let fetching = node_estimates(&ctx);
+                    tokio::pin!(fetching);
+                    // Wait no longer than the estimates being served stay young; if they expire
+                    // first, withdraw them, then give the node the rest of its time.
+                    let left = node.map_or(NODE_WAIT, |(at, _)| NODE_MAX_AGE.saturating_sub(at.elapsed()));
+                    let mut got = tokio::time::timeout(left.min(NODE_WAIT), &mut fetching).await.ok();
+                    if got.is_none() && left < NODE_WAIT {
                         let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
                         messages += u64::from(serve(&ctx, answer, &mut published));
+                        got = tokio::time::timeout(NODE_WAIT - left, &mut fetching).await.ok();
                     }
+                    if let Some(Some(r)) = got {
+                        node = Some((Instant::now(), r));
+                    }
+                    let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
+                    messages += u64::from(serve(&ctx, answer, &mut published));
                 }
             }
             _ = summary.tick() => {
