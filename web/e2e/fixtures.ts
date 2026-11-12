@@ -81,7 +81,9 @@ export const test = base.extend<{
       context.on("response", (r) => {
         const path = new URL(r.url()).pathname;
         if ((r.status() !== 429 && r.status() !== 503) || HANDLED.test(path)) return;
-        // No page code retries a refused page or file, so end the test now with the reason
+        // Only the server's own answers: a test's `page.route` stand-ins carry no request id.
+        if (r.headers()["x-request-id"] === undefined) return;
+        // At the defaults no page load may trip a limit, so end the test now with the reason
         // instead of letting a later assertion time out. e2e.sh prints which limit refused it.
         const why = `the server refused ${r.request().method()} ${path} with ${r.status()}: a page or static file over its limits (docs/CONFIG.md "Static files")`;
         if (refused.size === 0) void context.close({ reason: why });
