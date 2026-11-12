@@ -567,6 +567,10 @@ fn stats(ctx: &NetworkContext) -> Option<Value> {
             }),
         );
     }
+    // From the newest mempool history sample: absent without one, never a made-up zero.
+    if let Some(rate) = ctx.history.inflow(engine::history::unix_now()) {
+        m.insert("vBytesPerSecond".into(), rate.into());
+    }
     if let Some(a) = ctx.fees.current() {
         m.insert(
             "fees".into(),

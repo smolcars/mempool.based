@@ -481,6 +481,8 @@ The mempool through time, from the history table ([`STORE.md`](STORE.md#mempool_
 | `GET /api/v1/statistics/:interval` | `[{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}]`, newest first, the reference's shape (below) |
 | `GET /app/mempool/history/:interval` | Our own shape for our chart, with our ten bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)) |
 
+Each new sample is also pushed as `live-2h-chart` on `/api/v1/ws`, serialized by the same function as a `/statistics/2h` point, and its inflow is that socket's `vBytesPerSecond` ([`WS.md`](WS.md#what-the-server-sends)).
+
 **Intervals** are exactly `2h`, `24h`, `1w`, `1m` (30 days), `3m`, `6m`, `1y` (365 days), `2y`, `3y`, `4y` or `all`; anything else is `400 invalid interval`. The reference answered `2h`, `24h`, `1w`, `1m`, `1y`, `3y` and `all` and refused `5h` (the others were not asked). Each has a fixed step, so no answer holds more than 1,460 points, and a point never mixes rows coarser than itself:
 
 | Interval | `2h` | `24h` | `1w` | `1m` | `3m` | `6m` | `1y` | `2y`, `3y` | `4y` | `all` |

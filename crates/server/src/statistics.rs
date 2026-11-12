@@ -36,6 +36,9 @@ const NO_TABLE: ApiError = ApiError::new(
     "mempool history needs a data directory on this server",
 );
 const CACHE: &str = "public, max-age=1";
+/// The newest sample is sent as the inflow rate while it is at most this old: the minute just
+/// sampled and the next, whose sample may still be on its way.
+const FRESH: u64 = 2 * MINUTE;
 
 /// The reference's ranges are whole sat/vB with these lower bounds; ours are the design's ten
 /// bands. Each band goes, whole, to the range holding its lower bound: bands 0 to 3 (under 1)
@@ -54,6 +57,8 @@ pub struct History {
     /// Samples written since start: an answer computed before the latest is out of date.
     written: Arc<AtomicU64>,
     failures: AtomicU32,
+    /// The newest sample written since start: `vBytesPerSecond` on `/api/v1/ws`.
+    pub(crate) latest: Arc<Mutex<Option<Point>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,6 +168,15 @@ async fn serve(ctx: &NetworkContext, shape: Shape, i: &str, route: &'static str)
 }
 
 impl History {
+    /// What entered the mempool per second, in sigop-adjusted virtual bytes, over the minute
+    /// before the newest sample: `None` before the first sample since start, without a store,
+    /// or when the newest is more than [`FRESH`] old (the sampler is skipping minutes).
+    pub fn inflow(&self, now: u64) -> Option<u64> {
+        let p = (*self.latest.lock().unwrap_or_else(PoisonError::into_inner))?;
+        (now.saturating_sub(p.time) <= FRESH)
+            .then(|| (p.sums.flow.in_vsize as f64 / MINUTE as f64).round() as u64)
+    }
+
     fn get(&self, key: (Shape, Interval)) -> Option<Arc<Answer>> {
         self.answers
             .lock()
@@ -258,9 +272,10 @@ fn reference_point(p: &Point, short: bool) -> ReferencePoint {
     }
 }
 
-/// A sample was written: sent as `live-2h-chart`, the point `/api/v1/statistics/2h` now lists
-/// first, encoded once for every socket wanting it.
-pub(crate) fn sampled(hub: &Hub, sample: &Point) {
+/// A sample was written: kept as the newest for `vBytesPerSecond`, and sent as `live-2h-chart`,
+/// the point `/api/v1/statistics/2h` now lists first, encoded once for every socket wanting it.
+pub(crate) fn sampled(latest: &Mutex<Option<Point>>, hub: &Hub, sample: &Point) {
+    *latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(*sample);
     let msg = json!({ "live-2h-chart": reference_point(sample, true) });
     // No state for new subscribers: the reference sends nothing on `want`, only each new sample.
     hub.publish(
@@ -310,8 +325,8 @@ fn app(s: &Series, interval: Interval) -> Value {
 
 /// Starts the network's sampler when it has a store, and turns what it reports into log lines:
 /// a roll-up when one moved rows, skipped minutes at the 1st, 2nd, 4th… in a row, and the
-/// first minute sampled after them. Each sample written is sent as `live-2h-chart` on
-/// `/api/v1/ws`.
+/// first minute sampled after them. Each sample written is kept for `vBytesPerSecond` and sent
+/// as `live-2h-chart` on `/api/v1/ws`.
 pub fn start(
     ctx: &NetworkContext,
     tracker: &Tracker,
@@ -320,11 +335,12 @@ pub fn start(
     let store = Arc::clone(&ctx.blocks.as_ref()?.store);
     let network = ctx.config.network;
     let written = Arc::clone(&ctx.history.written);
+    let latest = Arc::clone(&ctx.history.latest);
     let hub = Arc::clone(&ctx.hub);
     let skipped = AtomicU32::new(0);
     let observer = move |e: &history::Event| {
         if let history::Event::Written { sample, .. } = e {
-            sampled(&hub, sample);
+            sampled(&latest, &hub, sample);
         }
         report(network, &written, &skipped, e);
     };

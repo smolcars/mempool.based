@@ -599,8 +599,7 @@ fn esplora(name: &str) -> Value {
 
 /// What the reference sends that we do not, by message: each is listed in `docs/WS.md`.
 const OMITTED: &[&str] = &[
-    // Not computed by us (vBytesPerSecond) or not node settings rbitcoin reports.
-    ".vBytesPerSecond",
+    // Not node settings rbitcoin reports.
     ".mempoolInfo.permitbaremultisig",
     ".mempoolInfo.maxdatacarriersize",
     ".mempoolInfo.optimal",
@@ -646,7 +645,7 @@ async fn every_message_has_the_reference_shape() {
     let id: Txid = "ab".repeat(32).parse().unwrap();
     latest(&ctx.v1, [(id, 1_794_480_209, 396, 110, 87_794)].into_iter());
     let sample = sample(engine::history::unix_now() / 60 * 60, 85_320);
-    crate::statistics::sampled(&ctx.hub, &sample);
+    crate::statistics::sampled(&ctx.history.latest, &ctx.hub, &sample);
     let mut stats = stats(ctx).unwrap();
     let rates = engine::fees::Rates {
         levels: [2_533, 1_834, 1_293, 200],
@@ -778,7 +777,7 @@ fn live_chart(p: &engine::history::Point) -> Value {
         &mut s,
         &json!({"action": "want", "data": ["live-2h-chart"]}),
     );
-    crate::statistics::sampled(&ctx.hub, p);
+    crate::statistics::sampled(&ctx.history.latest, &ctx.hub, p);
     let mut all = c.all();
     assert_eq!(all.len(), 1);
     all.remove(0)
@@ -821,8 +820,9 @@ async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
             .collect::<Vec<_>>()
     };
 
-    // Before the first sample: no chart message on `want`, as on the reference.
+    // Before the first sample: no chart message on `want`, as on the reference, and no rate.
     assert!(chart_frames(&mut rxs).iter().all(Vec::is_empty));
+    assert!(stats(&ctx).is_none_or(|s| s.get("vBytesPerSecond").is_none()));
 
     // A sample is stored and written: every subscriber gets the same frame, encoded once, and it
     // is the point the HTTP route now lists first.
@@ -830,7 +830,7 @@ async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
     let p = sample(now, 85_320);
     let store = &ctx.blocks.as_ref().unwrap().store;
     engine::history::record(store, p, now).await.unwrap();
-    crate::statistics::sampled(&ctx.hub, &p);
+    crate::statistics::sampled(&ctx.history.latest, &ctx.hub, &p);
     let got = chart_frames(&mut rxs);
     assert!(got.iter().all(|f| f.len() == 1), "one message each");
     let first = got[0][0].as_bytes();
@@ -856,6 +856,12 @@ async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
     );
     assert_eq!(other.all(), Vec::<Value>::new());
 
+    // `vBytesPerSecond` is that minute's inflow, whole vbytes a second…
+    assert_eq!(stats(&ctx).unwrap()["vBytesPerSecond"], json!(1_422));
+    // …while the sample is at most two minutes old; then it is left out, not zeroed.
+    let old = sample(now - 3 * 60, 85_320);
+    crate::statistics::sampled(&ctx.history.latest, &ctx.hub, &old);
+    assert!(stats(&ctx).is_none_or(|s| s.get("vBytesPerSecond").is_none()));
     drop((sessions, o));
     drop(ctx);
     let _ = std::fs::remove_dir_all(&dir);
@@ -863,7 +869,7 @@ async fn each_sample_is_the_statistics_point_sent_once_to_every_subscriber() {
 
 #[tokio::test]
 async fn without_a_data_directory_the_chart_is_wanted_but_never_comes() {
-    // No store, so no sampler: `live-2h-chart` is accepted and silent.
+    // No store, so no sampler: `live-2h-chart` is accepted and silent, and `stats` has no rate.
     let mock = Mock::new();
     let server = Server::start(&mock, |_| {});
     mock.send(&[coin(1)], 1, 2_000, 200);
@@ -878,6 +884,9 @@ async fn without_a_data_directory_the_chart_is_wanted_but_never_comes() {
         &json!({"action": "want", "data": ["live-2h-chart"]}),
     );
     assert_eq!(ctx.hub.subscribers(Topic::V1LiveChart), 1);
+    let st = stats(ctx).unwrap();
+    assert!(st.get("mempoolInfo").is_some());
+    assert!(st.get("vBytesPerSecond").is_none());
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(c.all(), Vec::<Value>::new());
 }

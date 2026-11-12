@@ -17,6 +17,11 @@ Observed on mempool.space's public socket on 2026-11-12 (mainnet, two connection
 - On a block, one frame carried `block`, `mempoolInfo`, `vBytesPerSecond`, `fees`, `da`, `mempool-blocks`, `txConfirmed` (the tracked txid, a string) and `block-transactions` (the followed address's confirmed transaction: Esplora JSON with the reference's own fields added).
 - A connection that had sent only `track-tx` and `track-addresses`, and no `want`, was dropped after 226 s without a close frame.
 
+A third connection the same day (about three minutes, `want ["stats","live-2h-chart"]`) showed:
+
+- `live-2h-chart` sends nothing on `want`. Then one sample a minute, `{"live-2h-chart":{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}}`: a `GET /api/v1/statistics/2h` point, `added` the second it sampled. Two more came within three seconds of a minute's, the mempool 2,600 transactions smaller in the second: a block had arrived.
+- `vBytesPerSecond` (an integer) changed in almost every frame, by a few vB/s at a time; the chart sample's `vbytes_per_second` equalled the `vBytesPerSecond` sent at the same moment.
+
 ## Client to server
 
 | Message | Effect | Source | Status | M | Live | Note |
@@ -47,7 +52,7 @@ Observed on mempool.space's public socket on 2026-11-12 (mainnet, two connection
 | `blocks` | The last 8 blocks with `extras` | Esplora; store for extras | served | M2 | ref | The node's Esplora JSON for the last 8, oldest first; no `extras` or `stale` |
 | `block` | A new block with `extras` | Electrum header push; store | served | M2 | ref | The node's Esplora JSON, at the same moment as `/app/ws`; no `extras` or `stale` |
 | `mempoolInfo` | The node's `getmempoolinfo` | rbitcoin RPC `getmempoolinfo` | served | M2 | ref | The node's `getmempoolinfo` as the tracker last read it |
-| `vBytesPerSecond` | Mempool inflow rate | Engine | planned | M3 | ref | Not sent. The store's once-a-minute samples have the rate (`vbytes_per_second` in `GET /api/v1/statistics/:interval`), so it needs no new data |
+| `vBytesPerSecond` | Mempool inflow rate | Mempool history sampler | served | M3 | ref | In `stats`: the last sampled minute's inflow, whole vB/s, changing once a minute; left out without a sample from the last two minutes, so not without a data directory ([`WS.md`](../WS.md#the-inflow-rate)) |
 | `mempool-blocks` | Projected block summaries | Engine | served | M2 | ref | `/api/v1/fees/mempool-blocks`' answer |
 | `transactions` | The latest few mempool entries | Engine | served | M2 | ref | `vsize` is the sigop-adjusted integer |
 | `fees` | Recommended fees | Engine | served | M2 | ref | `/api/v1/fees/precise`' answer: the reference's socket also sends decimals |
