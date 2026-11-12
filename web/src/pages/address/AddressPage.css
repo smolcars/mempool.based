@@ -257,6 +257,11 @@
     border-radius: 0 var(--radius-m) var(--radius-m) 0;
     background: var(--color-surface);
   }
+  /* Inside a panel the panel is the frame: the notice drops its own surface and offset. */
+  .panel .address-notice {
+    margin-top: 0;
+    background: var(--color-surface-sunken);
+  }
   .address-notice--caution {
     border-left-color: var(--color-caution);
   }

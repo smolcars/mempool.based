@@ -125,15 +125,20 @@ test("an address of another network and a malformed one are named as such", asyn
   await expect(page.getByText("This is not a valid address")).toBeVisible();
 });
 
-test("the live line never sits on the address", async ({ page }) => {
-  for (const width of [390, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(`/regtest/address/${chain.addresses.p2wpkh}`);
-    const live = page.locator(".address-live");
-    await expect(live).toBeVisible();
-    const a = await page.locator(".address-head .hash--full").boundingBox();
-    const b = await live.boundingBox();
-    if (!a || !b) throw new Error("missing address or live line");
-    expect(b.y, `at ${width} px`).toBeGreaterThanOrEqual(a.y + a.height);
+// The live line (or "Not live" and why) once sat over the address's second line on a phone.
+test("the live line never sits on the address, however many lines the address takes", async ({
+  page,
+}) => {
+  for (const address of [chain.addresses.p2wpkh, chain.addresses.p2tr]) {
+    for (const width of [320, 390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/regtest/address/${address}`);
+      const live = page.locator(".address-live");
+      await expect(live).toBeVisible();
+      const a = await page.locator(".address-head .hash--full").boundingBox();
+      const b = await live.boundingBox();
+      if (!a || !b) throw new Error("missing address or live line");
+      expect(b.y, `${address.slice(0, 6)} at ${width} px`).toBeGreaterThanOrEqual(a.y + a.height);
+    }
   }
 });

@@ -26,7 +26,7 @@ import {
   sortUtxos,
   txFeeRate,
 } from "./address";
-import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
+import { Skeleton, settled, UnconfirmedMark } from "./parts";
 
 /** Confirmed transactions per page of address history; the first page adds the unconfirmed ones. */
 export const PAGE = 25;
@@ -290,10 +290,10 @@ export function History(props: {
         >
           <Switch>
             <Match when={statsFailure() === "too-large"}>
-              <Notice title="Unspent outputs are not available for this address">
+              <Empty title="Unspent outputs are not available for this address">
                 The node refuses to list them for the same reason it refuses the totals: the address
                 has too much history.
-              </Notice>
+              </Empty>
             </Match>
             <Match when={true}>
               <Unspent
@@ -384,10 +384,11 @@ function Transactions(props: {
   return (
     <Switch>
       <Match when={props.tooLarge}>
-        <Notice title="Transactions are not available for this address">
+        {/* A refusal that is no failure: said as the other empty states inside a panel are. */}
+        <Empty title="Transactions are not available for this address">
           The server does not list them for the same reason the node refuses the totals: the address
           has too much history.
-        </Notice>
+        </Empty>
       </Match>
       <Match when={props.first.state === "errored"}>
         <ErrorState
