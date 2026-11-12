@@ -188,12 +188,6 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
             } else if held.is_some() {
                 tick.reset_immediately();
             },
-            () = async {
-                match release {
-                    Some(at) => tokio::time::sleep_until(at).await,
-                    None => std::future::pending().await,
-                }
-            } => tick.reset_immediately(),
             d = async {
                 match &mut projected {
                     Some(sub) => sub.recv().await,
@@ -236,7 +230,17 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     _ => return,
                 }
             }
-            _ = tick.tick() => {
+            // The hold's deadline runs the tick's work itself: a wake-up that only reset the
+            // interval stayed due, and fired again on every pass until the tick won.
+            () = async {
+                match release {
+                    Some(at) => tokio::select! {
+                        _ = tick.tick() => {}
+                        () = tokio::time::sleep_until(at) => {}
+                    },
+                    None => drop(tick.tick().await),
+                }
+            } => {
                 let now = SystemTime::now();
                 let (own, reason) = match &engines {
                     Some(e) => {

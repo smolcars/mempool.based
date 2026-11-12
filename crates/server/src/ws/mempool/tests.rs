@@ -1047,6 +1047,151 @@ async fn fees_follow_the_projection_and_are_withdrawn_while_it_is_stale() {
     task.abort();
 }
 
+/// A fees task of its own on `s`'s engines, warmed up, publishing on an interval long enough
+/// that only a block or a hold's deadline explains a message, with a subscriber to `fees` and
+/// `blocks` on its context.
+async fn held_fees_task(
+    s: &Server,
+) -> (Arc<NetworkContext>, JoinHandle<()>, mpsc::Receiver<Frame>) {
+    let ctx = context(true, Duration::from_secs(600));
+    let mut rec = engine::fees::Recommender::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rec.gap(now - 400);
+    let engines = crate::ws::fees::Engines {
+        tracker: s.tracker.clone(),
+        projector: s.projector.clone(),
+    };
+    let task = tokio::spawn(crate::ws::fees::run(Arc::clone(&ctx), Some(engines), rec));
+    let (conn, rx) = conn(1024);
+    ctx.hub.subscribe(Topic::Blocks, &conn);
+    ctx.hub.subscribe(Topic::Fees, &conn);
+    (ctx, task, rx)
+}
+
+/// The next frame as (topic, the tip height of a `fees` message or the height of a `block`
+/// message), and when it came.
+async fn next_labelled(rx: &mut mpsc::Receiver<Frame>) -> ((String, Option<u64>), Instant) {
+    let f = tokio::time::timeout(Duration::from_secs(3600), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let v: Value = serde_json::from_slice(open(&f).1).unwrap();
+    let height = match v["type"].as_str() {
+        Some("fees") => v["tip"]["height"].as_u64(),
+        Some("block") => v["block"]["height"].as_u64(),
+        _ => None,
+    };
+    (
+        (v["topic"].as_str().unwrap().to_owned(), height),
+        Instant::now(),
+    )
+}
+
+/// Mines a block the engines see before the `blocks` topic announces it, and returns its tip and
+/// the moment the fees task computed its answer on it: the moment the hold began.
+async fn mine_unannounced(s: &Server, ctx: &NetworkContext) -> (ChainTip, Instant) {
+    s.mock.mine(1);
+    let tip = s.mock.node().tip.unwrap();
+    s.tracker.block_found(tip);
+    while ctx.fees.current().and_then(|a| a.tip) != Some(tip) {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    (tip, Instant::now())
+}
+
+/// The `blocks` feed's message for `tip` on `ctx`, and the record of what it announced.
+fn announce_on(ctx: &NetworkContext, tip: ChainTip) {
+    let msg = json!({ "topic": "blocks", "type": "block", "block": { "id": tip.hash, "height": tip.height } });
+    ctx.hub.announce_tip(Some(tip.hash), || {
+        ctx.hub.publish(
+            Topic::Blocks,
+            &Frame::text(msg.to_string().as_bytes()),
+            Snapshot::Replace,
+        );
+    });
+}
+
+/// docs/WS.md "When a block is found": a fee answer on a block not yet announced is held until
+/// the block's message, or released by the fees task's own wake-up at the hold's deadline, on
+/// a paused clock, whatever the interval.
+#[tokio::test]
+async fn a_held_fee_answer_goes_out_after_its_block_or_at_the_deadline_exactly_once() {
+    const HOLD: Duration = super::HOLD;
+    let mock = Mock::new();
+    for i in 0..10 {
+        mock.add(2_000 + i, 1_000);
+    }
+    let s = Server::start(&mock, Duration::from_secs(600));
+    s.settle().await;
+    let (ctx, task, mut rx) = held_fees_task(&s).await;
+    announce_on(&ctx, s.mock.node().tip.unwrap());
+    let mut first = None;
+    while first != Some(("fees".to_owned(), Some(0))) {
+        first = Some(next_labelled(&mut rx).await.0);
+    }
+    tokio::time::pause();
+
+    // Never announced: out at the deadline, not before, once.
+    let (tip, held) = mine_unannounced(&s, &ctx).await;
+    let (msg, at) = next_labelled(&mut rx).await;
+    assert_eq!(msg, ("fees".to_owned(), Some(u64::from(tip.height))));
+    assert_eq!(at - held, HOLD);
+    tokio::time::sleep(HOLD * 10).await;
+    assert!(rx.try_recv().is_err(), "released more than once");
+    // The block's message, late, sends nothing more: the answer already agrees.
+    announce_on(&ctx, tip);
+    assert_eq!(next_labelled(&mut rx).await.0.0, "blocks");
+    tokio::time::sleep(HOLD * 2).await;
+    assert!(rx.try_recv().is_err());
+
+    // Announced before the deadline: out right after the block's message. The released hold
+    // before it neither lets this one out early nor keeps it waiting.
+    let (tip, held) = mine_unannounced(&s, &ctx).await;
+    tokio::time::sleep(HOLD / 3).await;
+    assert!(rx.try_recv().is_err(), "out before its block");
+    announce_on(&ctx, tip);
+    let announced = Instant::now();
+    let h = Some(u64::from(tip.height));
+    assert_eq!(next_labelled(&mut rx).await.0, ("blocks".to_owned(), h));
+    let (msg, at) = next_labelled(&mut rx).await;
+    assert_eq!(msg, ("fees".to_owned(), h));
+    // The timer wheel's resolution is a millisecond.
+    assert!(
+        at - announced <= Duration::from_millis(1),
+        "{:?}",
+        at - announced
+    );
+    assert!(at - held < HOLD);
+    tokio::time::sleep(HOLD * 2).await;
+    assert!(rx.try_recv().is_err(), "sent again at the old deadline");
+
+    // Announced first, then seen by the engines: no hold at all.
+    s.mock.mine(1);
+    let tip = s.mock.node().tip.unwrap();
+    announce_on(&ctx, tip);
+    let announced = Instant::now();
+    s.tracker.block_found(tip);
+    let h = Some(u64::from(tip.height));
+    assert_eq!(next_labelled(&mut rx).await.0, ("blocks".to_owned(), h));
+    let (msg, at) = next_labelled(&mut rx).await;
+    assert_eq!(msg, ("fees".to_owned(), h));
+    assert!(
+        at - announced < Duration::from_millis(100),
+        "{:?}",
+        at - announced
+    );
+
+    // And the deadline again, after all that.
+    let (tip, held) = mine_unannounced(&s, &ctx).await;
+    let (msg, at) = next_labelled(&mut rx).await;
+    assert_eq!(msg, ("fees".to_owned(), Some(u64::from(tip.height))));
+    assert_eq!(at - held, HOLD);
+    task.abort();
+}
+
 // A block found: the order and timing `docs/WS.md` promises.
 
 /// What the `blocks` feed does for a new block: its message to subscribers, then the record of
