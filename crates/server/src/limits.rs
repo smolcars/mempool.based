@@ -321,10 +321,12 @@ pub struct Limiter {
     in_flight: Arc<Semaphore>,
     /// Requests whose forwarding header was ignored, for `proxy_header_ignored`.
     ignored_forwarding: Arc<AtomicU64>,
+    /// `LOG_CLIENT_ADDR`: whether that event may name the peer, which may be a visitor.
+    log_client_addr: bool,
 }
 
 impl Limiter {
-    pub fn new(limits: &Limits) -> Self {
+    pub fn new(limits: &Limits, log_client_addr: bool) -> Self {
         Self {
             clients: Clients::new(limits),
             statics: Clients::with_rate(
@@ -336,6 +338,7 @@ impl Limiter {
             limits: limits.clone(),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
             ignored_forwarding: Arc::default(),
+            log_client_addr,
         }
     }
 
@@ -439,20 +442,13 @@ impl Limiter {
         if total.is_power_of_two() {
             logging::emit(&logging::events::ProxyHeaderIgnored {
                 header: header.as_str(),
-                peer: proxy_like(peer).then(|| peer.to_canonical().to_string()),
+                peer: self
+                    .log_client_addr
+                    .then(|| peer.to_canonical().to_string()),
                 trusted_proxies_set: self.limits.trusted_proxy.is_some(),
                 total,
             });
         }
-    }
-}
-
-/// Whether `ip` is an address a proxy in front would connect from (loopback, private, link-local),
-/// rather than one that may be a visitor's own, which is not logged unasked.
-fn proxy_like(ip: IpAddr) -> bool {
-    match ip.to_canonical() {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 
@@ -547,23 +543,6 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
-    }
-
-    #[test]
-    fn only_a_proxy_like_peer_is_named_when_its_header_is_ignored() {
-        for p in [
-            "127.0.0.1",
-            "172.18.0.1",
-            "10.0.0.2",
-            "::1",
-            "fd00::1",
-            "::ffff:192.168.1.1",
-        ] {
-            assert!(proxy_like(ip(p)), "{p}");
-        }
-        for v in ["203.0.113.9", "2001:db8::1", "::ffff:198.51.100.1"] {
-            assert!(!proxy_like(ip(v)), "{v}");
-        }
     }
 
     #[test]
@@ -706,12 +685,15 @@ mod tests {
 
     #[test]
     fn preflights_have_their_own_bounded_table() {
-        let limiter = Limiter::new(&Limits {
-            client_rate_per_sec: 1,
-            client_burst: 1,
-            max_tracked_clients: 2,
-            ..Limits::default()
-        });
+        let limiter = Limiter::new(
+            &Limits {
+                client_rate_per_sec: 1,
+                client_burst: 1,
+                max_tracked_clients: 2,
+                ..Limits::default()
+            },
+            false,
+        );
         let h = HeaderMap::new();
         let check = |m: &Method, path: &str, peer: &str| limiter.check(m, &h, path, ip(peer));
         let api = "/signet/api/tx";

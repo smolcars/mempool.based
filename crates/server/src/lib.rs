@@ -362,7 +362,7 @@ impl App {
         let cache =
             |v| SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static(v));
 
-        let limiter = Limiter::new(&config.limits);
+        let limiter = Limiter::new(&config.limits, config.log_client_addr);
         let refusals = Arc::clone(&sockets.refusals);
         if tokio::runtime::Handle::try_current().is_ok() {
             tokio::spawn(refusals::report(

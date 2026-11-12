@@ -204,7 +204,7 @@ and apply it with `docker compose up -d`. Now load the site from your own machin
 docker compose logs --no-log-prefix server | grep '"http_request"' | tail -n 3
 ```
 
-It must be your own address. If it is the gateway, the server is not reading the header: check both settings. The server says so too, without `LOG_CLIENT_ADDR`: a `proxy_header_ignored` warning at the first request whose header it ignored, with `peer`, the address `TRUSTED_PROXIES` is missing. Then remove `LOG_CLIENT_ADDR` and run `docker compose up -d` again.
+It must be your own address. If it is the gateway, the server is not reading the header: check both settings. The server says so too: a `proxy_header_ignored` warning at the first request whose header it ignored, naming in `peer`, while `LOG_CLIENT_ADDR` is on, the address `TRUSTED_PROXIES` is missing. Then remove `LOG_CLIENT_ADDR` and run `docker compose up -d` again.
 
 How the address is found, `X-Forwarded-For` and chains of proxies are in [`CONFIG.md`](CONFIG.md#client-addresses). Two cautions:
 
@@ -329,7 +329,19 @@ docker compose logs --no-log-prefix server | grep store_migration_applied
 
 Run them from `deploy/`. If the server then stops with `config_invalid`, the new release refuses a setting the old one accepted: the line names it, and the release notes say what changed. It stops before it opens the store, so nothing is migrated until the setting is fixed. Checking out the tag also brings that release's compose file, which may pin a newer rbitcoin; compose then recreates the node too, and the node flushes its state on the way down (it has five minutes).
 
-**Rolling back:** if the new release logged `store_migration_applied`, the old one cannot open the store. Started on it, it logs `store_open_failed` (`database schema version … is newer than this build supports …`) and serves without a store: `/readyz` stays `200` with `store` `open_failed`, and the mining pages and history answer `503`. So stop the server, [restore](#the-data-directory) the backup you took before the upgrade, then set the old version and run `docker compose up -d` as above. What the server observed between the backup and the rollback (audits, mempool history, replacements) is lost. Without a backup, delete `mainnet.sqlite` instead: the old release starts empty and backfills again. Without a migration, only the image changes.
+**Rolling back:** if the new release logged `store_migration_applied`, the old one cannot open the store. Started on it, it logs `store_open_failed` (`database schema version … is newer than this build supports …`) and serves without a store: `/readyz` stays `200` with `store` `open_failed`, and the mining pages and history answer `503`. So restore the backup you took before the upgrade while the server is stopped, and start it again only on the old image (`docker compose start` would restart the new one, which migrates the backup again):
+
+```sh
+VERSION=0.1.0                               # the release you go back to
+docker compose stop server
+docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/backup":/backup:ro alpine:3 \
+  sh -c 'rm -f /data/mainnet.sqlite-wal /data/mainnet.sqlite-shm && cp /backup/mainnet.sqlite /data/ && chown 65532:65532 /data/mainnet.sqlite'
+git fetch --depth 1 origin tag "v$VERSION" && git checkout "v$VERSION"
+sed -i.bak "s|^SERVER_IMAGE=.*|SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space:$VERSION|" .env && rm .env.bak
+docker compose up -d
+```
+
+What the server observed between the backup and the rollback (audits, mempool history, replacements) is lost. Without a backup, delete `mainnet.sqlite` instead: the old release starts empty and backfills again. Without a migration, only the image changes.
 
 ## Switching features
 

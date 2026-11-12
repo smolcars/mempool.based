@@ -243,6 +243,23 @@ async fn client_address_only_when_asked() {
 }
 
 #[tokio::test]
+async fn an_ignored_forwarding_header_names_the_peer_only_when_asked() {
+    let addr = start(config(&[("LOG_CLIENT_ADDR", "true")], roomy())).await;
+    let mut s = TcpStream::connect(&addr).await.unwrap();
+    let req = "GET /app/lookup/x HTTP/1.1\r\nHost: t\r\nX-Real-IP: 203.0.113.9\r\nConnection: close\r\n\r\n";
+    s.write_all(req.as_bytes()).await.unwrap();
+    s.read_to_end(&mut Vec::new()).await.unwrap();
+    let lines = logged().1;
+    assert!(
+        lines.iter().any(|v| v["event"] == "proxy_header_ignored"
+            && v["header"] == "x-real-ip"
+            && v["peer"] == "127.0.0.1"
+            && v["trusted_proxies_set"] == false),
+        "the operator who asked for addresses is told which peer to trust"
+    );
+}
+
+#[tokio::test]
 async fn electrum_failures_are_summarised() {
     capture();
     // A port that was just free and now refuses connections.
@@ -522,7 +539,8 @@ async fn a_proxy_missing_from_trusted_proxies_is_told_apart() {
         .expect("the summary says the forwarding header was ignored");
     assert_eq!(s["clients"], 1);
     assert_eq!(s["top_client_refused"], 49);
-    // Said at the first request already, before any refusal, naming the address to trust.
+    // Said at the first request already, before any refusal. Without `LOG_CLIENT_ADDR` the peer
+    // is not named: without a proxy in front it is the visitor.
     let ignored: Vec<&Value> = lines
         .iter()
         .filter(|v| v["event"] == "proxy_header_ignored" && v["trusted_proxies_set"] == true)
@@ -532,13 +550,10 @@ async fn a_proxy_missing_from_trusted_proxies_is_told_apart() {
         .find(|v| v["total"] == 1)
         .expect("said at once");
     assert_eq!(
-        (
-            first["level"].as_str(),
-            first["header"].as_str(),
-            first["peer"].as_str()
-        ),
-        (Some("warn"), Some("x-forwarded-for"), Some("127.0.0.1"))
+        (first["level"].as_str(), first["header"].as_str()),
+        (Some("warn"), Some("x-forwarded-for"))
     );
+    assert!(first["peer"].is_null(), "{first}");
     assert_eq!(
         ignored.len(),
         6,

@@ -192,8 +192,8 @@ event!(ConnectionsRefused, "connections_refused", Warn);
 pub struct ProxyHeaderIgnored {
     /// The first of the three headers the request had, in lower case.
     pub header: &'static str,
-    /// The peer, when it is a loopback, private or link-local address, as a proxy's is: the value
-    /// `TRUSTED_PROXIES` is missing. Null for any other address, which may be a visitor's.
+    /// The peer, the address `TRUSTED_PROXIES` is missing if it is a proxy. Only with
+    /// `LOG_CLIENT_ADDR=true`, since without a proxy in front it is a visitor's; else null.
     pub peer: Option<String>,
     /// Whether `TRUSTED_PROXIES` is set at all.
     pub trusted_proxies_set: bool,
