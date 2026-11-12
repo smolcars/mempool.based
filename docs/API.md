@@ -164,6 +164,22 @@ The remaining blocks are projected from now, or from the tip's timestamp if that
 
 How we differ from the reference backend, measured side by side: progress, heights, block counts and `previousTime` match exactly and `previousRetarget` up to floating-point rounding. The reference's `timeAvg` divides the time from the period's first block to *now* by the blocks mined, so it grows between blocks and is wrong when the tip is ahead of the clock; ours uses the tip's timestamp. Its `difficultyChange` follows from that average: within 0.01 percentage points of ours on mainnet and signet, but about two points off on testnet4, where tips run hours ahead. `estimatedRetargetDate` and `remainingTime` differ accordingly.
 
+### Backend info
+
+`GET /api/v1/backend-info` says what is running, in the reference's shape and field order, with only what is true here and safe to tell a client. Code: `crates/server/src/api_v1.rs`.
+
+| Field | Here | The reference's |
+|---|---|---|
+| `hostname` | `null` | Its host's name. Private ([`SECURITY.md`](SECURITY.md) rule 17) |
+| `version` | The server's version (`0.1.0`), as `/healthz` and `/app/config` say it | Its own release |
+| `gitCommit` | The commit the binary was built from, the 40 digits `/healthz` reports as `revision` ([`DEPLOY.md`](DEPLOY.md#health)); `null` for a build without one | 9 digits of its own commit |
+| `lightning` | Whether this network serves the Lightning routes | The same |
+| `backend` | `"esplora"`: transactions and addresses come from the node's Esplora | Its address backend: `esplora`, `electrum` or `none` |
+| `coreVersion` | `null` | Its node's user agent. Asking ours would be a node call per request, and it is the node's to say |
+| `osVersion` | `null` | Its host's operating system. Private |
+
+The answer is fixed for the life of the process: no node call, `Cache-Control: public, max-age=1` as every route here. The chain-tip headers are not sent: it is not about a block.
+
 ### Fees
 
 What to pay to be mined within a horizon, and the projected blocks behind it. Computed by us from the projected blocks ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations) has the method and its measured record); code: `crates/engine/src/fees.rs` for the method, `crates/server/src/ws/fees.rs` for the task, `crates/server/src/api_v1.rs` for the routes.

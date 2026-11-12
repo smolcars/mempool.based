@@ -56,9 +56,43 @@ pub fn routes() -> Router<Arc<NetworkContext>> {
         .route("/api/v1/fees/recommended", get(fees_recommended))
         .route("/api/v1/fees/precise", get(fees_precise))
         .route("/api/v1/fees/mempool-blocks", get(fees_mempool_blocks))
+        .route("/api/v1/backend-info", get(backend_info))
         .merge(crate::mining::routes())
         .merge(crate::statistics::routes())
         .merge(crate::v1_blocks::routes())
+}
+
+/// `/backend-info` in the reference's field order. What it says about its own stack (the host's
+/// name and OS, the node's version) is `null` here: private, or a node call (`docs/API.md`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendInfo {
+    hostname: Option<&'static str>,
+    version: &'static str,
+    /// The commit `/healthz` reports, `null` for a build without one.
+    git_commit: Option<&'static str>,
+    lightning: bool,
+    backend: &'static str,
+    core_version: Option<&'static str>,
+    os_version: Option<&'static str>,
+}
+
+async fn backend_info(State(ctx): State<Arc<NetworkContext>>) -> Response {
+    let body = BackendInfo {
+        hostname: None,
+        version: env!("CARGO_PKG_VERSION"),
+        git_commit: (crate::REVISION != "unknown").then_some(crate::REVISION),
+        lightning: ctx.lightning.is_some(),
+        // Transactions and addresses come from the node's Esplora, as the reference's do in
+        // this mode.
+        backend: "esplora",
+        core_version: None,
+        os_version: None,
+    };
+    let mut res = Json(body).into_response();
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(CACHE));
+    res
 }
 
 /// The reference's five levels, in its order. `T` is whole sat/vB (`u64`) or precise (`f64`).
