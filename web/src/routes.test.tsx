@@ -50,7 +50,7 @@ describe("routes", () => {
     expect(el.querySelector('nav[aria-label="Main"] a:nth-child(2)')?.getAttribute("href")).toBe(
       "/testnet4/mining",
     );
-    expect(document.title).toBe("Testnet4: Transaction | mempool.based");
+    expect(document.title).toBe("Testnet4: Transaction | rbitcoin.space");
   });
 
   it("offers the same page on every enabled network", async () => {

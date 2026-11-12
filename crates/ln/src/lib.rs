@@ -18,7 +18,7 @@
 //! ```no_run
 //! # async fn f() -> std::io::Result<()> {
 //! use ln::{Config, Peer};
-//! let config = Config::new(ln::Network::Bitcoin, "/var/lib/mempool-based/ln".into());
+//! let config = Config::new(ln::Network::Bitcoin, "/var/lib/rbitcoin-space/ln".into());
 //! let chain = node::esplora::Esplora::new("http://127.0.0.1:3000").map_err(std::io::Error::other)?;
 //! let (peer, _loaded) = Peer::start(config, chain)?;
 //! let mut events = peer.events();

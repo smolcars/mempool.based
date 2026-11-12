@@ -16,8 +16,8 @@ use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
 use logging::{Format, Level, Settings};
-use mempool_based::summary::{CLIENT_BURST, MAX_PENDING};
-use mempool_based::{App, Config, IMMUTABLE};
+use rbitcoin_space::summary::{CLIENT_BURST, MAX_PENDING};
+use rbitcoin_space::{App, Config, IMMUTABLE};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -422,7 +422,7 @@ async fn a_block_in_the_table_is_answered_without_the_node() {
     let computed = get(&addr, &summary(&a), "192.0.2.1").await;
     assert_eq!(computed.status, 200);
 
-    let dir = std::env::temp_dir().join(format!("mempool-based-summary-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-summary-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     store_row(&dir, &a).await;
     let (addr, node) = start_with(

@@ -16,8 +16,8 @@ use axum::Router;
 use axum::extract::Path;
 use axum::routing::get;
 use logging::{Format, Level, Settings};
-use mempool_based::config::{Network, RequestLog};
-use mempool_based::{App, Config, Limits, NetworkContext};
+use rbitcoin_space::config::{Network, RequestLog};
+use rbitcoin_space::{App, Config, Limits, NetworkContext};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -87,7 +87,7 @@ fn config(vars: &[(&str, &str)], limits: Limits) -> Config {
         map.insert((*k).to_owned(), (*v).to_owned());
     }
     let mut c = Config::from_vars(|k| map.get(k).cloned()).unwrap();
-    c.web_dir = std::env::temp_dir().join("mempool-based-no-web-dir");
+    c.web_dir = std::env::temp_dir().join("rbitcoin-space-no-web-dir");
     c.limits = limits;
     c
 }
@@ -247,7 +247,7 @@ async fn electrum_failures_are_summarised() {
     let mut config = node::electrum::Config::new(addr);
     config.max_reconnect_delay = Duration::from_millis(50);
     let client = node::electrum::Client::spawn(config);
-    let _reporter = mempool_based::report::report_electrum(Network::Regtest, &client);
+    let _reporter = rbitcoin_space::report::report_electrum(Network::Regtest, &client);
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let attempts = loop {
@@ -301,7 +301,7 @@ async fn electrum_reporter_sees_a_client_that_is_already_up() {
         .unwrap()
         .unwrap();
 
-    let _reporter = mempool_based::report::report_electrum(Network::Testnet4, &client);
+    let _reporter = rbitcoin_space::report::report_electrum(Network::Testnet4, &client);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let connected = logged()

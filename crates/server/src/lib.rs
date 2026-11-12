@@ -1,4 +1,4 @@
-//! HTTP surface of the mempool.based server.
+//! HTTP surface of the rbitcoin.space server.
 //!
 //! [`App::new`] builds everything: per-network routes from [`network_routes`] mounted under each
 //! enabled network's prefix, `/healthz` (liveness), `/readyz` (readiness, [`health`]), the

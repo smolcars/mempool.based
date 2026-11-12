@@ -22,7 +22,7 @@ use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, TxMerkleNode};
 use logging::{Format, Level, Settings};
-use mempool_based::{App, Config, WsLimits};
+use rbitcoin_space::{App, Config, WsLimits};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -154,7 +154,7 @@ struct Harness {
     misses: Misses,
     stop: Option<oneshot::Sender<()>>,
     served: tokio::task::JoinHandle<()>,
-    sockets: Arc<mempool_based::ws::Sockets>,
+    sockets: Arc<rbitcoin_space::ws::Sockets>,
     h: Vec<Header>,
 }
 

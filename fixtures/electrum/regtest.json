@@ -3,7 +3,7 @@
   "protocol": "1.6",
   "method": "server.version",
   "params": [
-   "mempool.based",
+   "rbitcoin.space",
    [
     "1.4",
     "1.6"
@@ -271,7 +271,7 @@
   "protocol": "1.4",
   "method": "server.version",
   "params": [
-   "mempool.based",
+   "rbitcoin.space",
    "1.4"
   ],
   "reply": {

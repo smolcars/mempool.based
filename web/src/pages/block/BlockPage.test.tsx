@@ -209,7 +209,7 @@ describe("BlockPage", () => {
     expect(text(next as Element)).toContain("975 412");
     expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
     expect(text(el.querySelector("tbody tr") as Element)).toContain("Coinbase");
-    expect(document.title).toBe("Block 975 411 | mempool.based".replace(" 4", " 4"));
+    expect(document.title).toBe("Block 975 411 | rbitcoin.space".replace(" 4", " 4"));
   });
 
   it("fills the fee facts and the core sample's layers from the summary", async () => {

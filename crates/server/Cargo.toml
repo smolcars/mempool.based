@@ -1,6 +1,6 @@
 [package]
-name = "mempool-based"
-description = "The mempool.based server"
+name = "rbitcoin-space"
+description = "The rbitcoin.space server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

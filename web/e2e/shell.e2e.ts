@@ -4,7 +4,7 @@ test("the app shell loads on /regtest/ with the regtest network shown", async ({
   await page.goto("/regtest/");
   await expect(page.locator("html")).toHaveAttribute("data-network", "regtest");
   await expect(page.getByRole("banner")).toContainText("Regtest");
-  await expect(page).toHaveTitle(/^Regtest: .* \| mempool\.based$/);
+  await expect(page).toHaveTitle(/^Regtest: .* \| rbitcoin\.space$/);
 });
 
 test("a deep link survives a reload", async ({ page }) => {

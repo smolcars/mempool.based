@@ -16,8 +16,8 @@ use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::Request;
 use axum::routing::{get, post};
-use mempool_based::config::{IpNet, TrustedProxy};
-use mempool_based::{App, Config, IMMUTABLE, Limits, NetworkContext, SECURITY_HEADERS};
+use rbitcoin_space::config::{IpNet, TrustedProxy};
+use rbitcoin_space::{App, Config, IMMUTABLE, Limits, NetworkContext, SECURITY_HEADERS};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -30,7 +30,7 @@ const PANIC_MESSAGE: &str = "probe panic with internal detail";
 fn fixture() -> PathBuf {
     static N: AtomicU32 = AtomicU32::new(0);
     let root = std::env::temp_dir().join(format!(
-        "mempool-based-test-{}-{}",
+        "rbitcoin-space-test-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
     ));
@@ -492,7 +492,7 @@ fn trusted(proxies: &str) -> Option<TrustedProxy> {
 
 #[tokio::test]
 async fn static_files_have_their_own_bounded_allowance() {
-    use mempool_based::limits::{STATIC_BURST, STATIC_CONCURRENCY};
+    use rbitcoin_space::limits::{STATIC_BURST, STATIC_CONCURRENCY};
     let app = App::with_routes(&config(Limits::default()), probes());
     let a = "192.0.2.1:1";
     // A burst of static files bigger than the API's whole allowance is served...

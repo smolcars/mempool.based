@@ -14,7 +14,7 @@ export function usePageTitle(title: () => string): void {
   const network = useNetwork();
   createEffect(
     () =>
-      `${network() === "mainnet" ? "" : `${NETWORK_NAMES[network()]}: `}${title()} | mempool.based`,
+      `${network() === "mainnet" ? "" : `${NETWORK_NAMES[network()]}: `}${title()} | rbitcoin.space`,
     (text) => {
       document.title = text;
     },

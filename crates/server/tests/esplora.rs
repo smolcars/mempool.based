@@ -15,8 +15,8 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use mempool_based::esplora::{BROADCAST_BURST, LIVE, MAX_TX_BYTES};
-use mempool_based::{App, Config, IMMUTABLE, Limits};
+use rbitcoin_space::esplora::{BROADCAST_BURST, LIVE, MAX_TX_BYTES};
+use rbitcoin_space::{App, Config, IMMUTABLE, Limits};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -148,7 +148,7 @@ fn config(esplora: &str, broadcast: bool) -> Config {
         if broadcast { "true" } else { "false" }.into(),
     );
     let mut c = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
-    c.web_dir = std::env::temp_dir().join("mempool-based-no-web-dir");
+    c.web_dir = std::env::temp_dir().join("rbitcoin-space-no-web-dir");
     c.limits = Limits {
         client_burst: 10_000,
         client_rate_per_sec: 10_000,
@@ -548,7 +548,7 @@ async fn cors_preflight_and_scope() {
 #[tokio::test]
 async fn responses_carry_an_outcome_for_the_request_log() {
     use axum::extract::ConnectInfo;
-    use mempool_based::esplora::{ApiOutcome, Source};
+    use rbitcoin_space::esplora::{ApiOutcome, Source};
     use tower::ServiceExt;
 
     let (url, _) = mock(Duration::ZERO).await;
@@ -588,8 +588,8 @@ async fn responses_carry_an_outcome_for_the_request_log() {
 
 #[tokio::test]
 async fn heavy_routes_have_a_cost_limit_that_outlives_the_request() {
-    use mempool_based::config::{IpNet, TrustedProxy};
-    use mempool_based::esplora::{HEAVY_PENDING, HEAVY_RUNNING, HeavyShare};
+    use rbitcoin_space::config::{IpNet, TrustedProxy};
+    use rbitcoin_space::esplora::{HEAVY_PENDING, HEAVY_RUNNING, HeavyShare};
     assert_eq!((HEAVY_RUNNING, HEAVY_PENDING), (4, 12));
     // The node takes 3 s per answer; our requests give up after 1 s.
     let (url, seen) = mock(Duration::from_secs(3)).await;
@@ -673,7 +673,7 @@ async fn heavy_routes_have_a_cost_limit_that_outlives_the_request() {
 
 #[tokio::test]
 async fn a_heavy_call_outlives_its_first_request_without_being_repeated() {
-    use mempool_based::config::{IpNet, TrustedProxy};
+    use rbitcoin_space::config::{IpNet, TrustedProxy};
     // The node takes 3 s per answer; our requests give up after 1 s.
     let (url, seen) = mock(Duration::from_secs(3)).await;
     let mut c = config(&url, false);

@@ -37,7 +37,7 @@ impl Drop for Temp {
 fn temp() -> Temp {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "mempool-based-history-{}-{}",
+        "rbitcoin-space-history-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::SeqCst)
     ));
@@ -443,7 +443,8 @@ async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_a
     assert_eq!(version(&fresh.store).await, (newest, 4));
 
     // A file as the build before this one left it: the first three migrations, version 3.
-    let dir = std::env::temp_dir().join(format!("mempool-based-history-v3-{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("rbitcoin-space-history-v3-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     {

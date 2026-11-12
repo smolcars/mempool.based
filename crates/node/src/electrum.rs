@@ -36,7 +36,7 @@ use tokio::time::{sleep, timeout};
 
 use types::{parse, parse_header, parse_headers, parse_tip, parse_version, protocol};
 
-const CLIENT_NAME: &str = "mempool.based";
+const CLIENT_NAME: &str = "rbitcoin.space";
 /// Lines waiting for the socket. Requests are also capped by `max_in_flight`.
 const WRITE_QUEUE: usize = 4096;
 const FIRST_RETRY: Duration = Duration::from_millis(100);

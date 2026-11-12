@@ -1,6 +1,6 @@
 # Rules for contributors
 
-mempool.based is a block explorer built for rbitcoin v0.9.2. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code, and the doc for the area you touch (see the table in [`README.md`](README.md)).
+rbitcoin.space is a block explorer built for rbitcoin v0.9.2. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing code, and the doc for the area you touch (see the table in [`README.md`](README.md)).
 
 ## Never
 
