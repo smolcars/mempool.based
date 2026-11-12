@@ -141,6 +141,9 @@ pub struct Limits {
     pub trusted_proxy: Option<TrustedProxy>,
     /// Memory budget of each network's block summary cache (`BLOCK_SUMMARY_CACHE_MB`).
     pub summary_cache_bytes: usize,
+    /// How long a page of address history may take the node before the client is told it timed
+    /// out (docs/API.md, "Very large addresses"). Fixed; a field so tests can shorten it.
+    pub history_timeout: Duration,
 }
 
 impl Default for Limits {
@@ -158,6 +161,8 @@ impl Default for Limits {
             max_tracked_clients: 65_536,
             trusted_proxy: None,
             summary_cache_bytes: 32 << 20,
+            // Ordinary pages take 0.3 to 0.5 s on mainnet; every slower one measured took over 10 s.
+            history_timeout: Duration::from_secs(5),
         }
     }
 }
@@ -419,6 +424,7 @@ impl Config {
             .checked_mul(1 << 20)
             .filter(|b| *b <= 1 << 40)
             .ok_or("BLOCK_SUMMARY_CACHE_MB must be at most 1048576")?,
+            history_timeout: d.history_timeout,
         };
         // Semaphore permits are u32 and tokio caps them lower still; keep well inside both.
         if limits.max_connections > 1 << 20 || limits.max_requests > 1 << 20 {

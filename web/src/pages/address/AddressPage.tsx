@@ -25,6 +25,12 @@ const PREFIXES: Record<Network, string> = {
   regtest: "bcrt1, m, n or 2",
 };
 
+/**
+ * The first history page waits this long for the totals: the node refuses them for size within tens
+ * of milliseconds, and then the history is not asked for at all (docs/API.md, "Very large addresses").
+ */
+const HISTORY_WAITS_MS = 1000;
+
 /** A history change the address index has not shown yet is asked again after 1, 2 and 4 s. */
 const CATCH_UP_MS = 1000;
 const CATCH_UP_TRIES = 3;
@@ -87,7 +93,18 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const address = untrack(() => props.address);
   const path = `/address/${encodeURIComponent(address)}`;
   const [stats, { refetch: refetchStats }] = createApi<AddressStats>(() => path);
-  const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(() => `${path}/txs`);
+  const [waited, setWaited] = createSignal(false);
+  const wait = setTimeout(() => setWaited(true), HISTORY_WAITS_MS);
+  onCleanup(() => clearTimeout(wait));
+  // Once true, stays true: a later refetch of the totals does not take the history away.
+  const statsAnswered = createMemo(
+    (was?: boolean) =>
+      was === true || waited() || (stats.state !== "unresolved" && stats.state !== "pending"),
+  );
+  const tooLarge = () => stats.state === "errored" && refusal(stats.error) === "too-large";
+  const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(
+    () => statsAnswered() && !tooLarge() && `${path}/txs`,
+  );
   let refreshHistory = () => {
     // Replaced by History once it mounts.
   };

@@ -27,6 +27,7 @@ use tokio::sync::{OnceCell, Semaphore, watch};
 
 use crate::config::{Limits, Network};
 use crate::limits::{Client, Clients, Held, Refused};
+use crate::verdicts::{self, Verdict, Verdicts};
 use crate::{ApiError, IMMUTABLE, NetworkContext};
 
 /// How long the hot tip-scoped answers ([`is_hot`]) are reused.
@@ -84,6 +85,8 @@ pub struct Api {
     /// `None` when broadcast is switched off (`BROADCAST_ENABLED=false`).
     broadcast: Option<Arc<Clients>>,
     heavy: Heavy,
+    /// Address histories the node will not finish, learned from its answers.
+    pub verdicts: Arc<Verdicts>,
 }
 
 /// The cost limit of heavy calls (SECURITY.md rules 8 and 11).
@@ -98,6 +101,8 @@ struct Heavy {
     /// Its own client, whose timeout is [`HEAVY_CEILING`], so a call is not abandoned (and its
     /// slot freed) while the node may still be working on it.
     esplora: Esplora,
+    /// How long a page of address history may take before its requests are answered `504`.
+    history_timeout: Duration,
 }
 
 impl std::fmt::Debug for Heavy {
@@ -125,7 +130,9 @@ impl Api {
                 clients: Clients::with_rate(share.per_sec, share.burst, max_tracked_clients),
                 share,
                 esplora: Esplora::with_limits(url, HEAVY_CEILING, Esplora::DEFAULT_MAX_RESPONSE)?,
+                history_timeout: limits.history_timeout,
             },
+            verdicts: Arc::default(),
         })
     }
 }
@@ -274,6 +281,11 @@ async fn read(ctx: &NetworkContext, client: &Client, route: Route) -> Response {
         key.push_str(&String::from_utf8_lossy(&body));
     }
     if is_heavy(&route) {
+        if let Some((script, page)) = verdicts::history_page(&route)
+            && let Some(verdict) = ctx.api.verdicts.check(script, page, Instant::now())
+        {
+            return refused_early(verdict);
+        }
         return heavy(ctx, client, route, key).await;
     }
     let ttl = if is_hot(&route) {
@@ -358,25 +370,95 @@ fn finish(calls: &HeavyCalls, key: &str, call: &HeavyCall, abandon: bool) -> boo
 /// is a task of its own: it waits for one of the [`HEAVY_RUNNING`] slots, giving its places back
 /// if every request for it has gone meanwhile, then asks the node and keeps its places until the
 /// node answers or [`HEAVY_CEILING`] passes, even after every request waiting for it is gone.
+///
+/// A page of address history whose node call runs past the history timeout is answered `504` at
+/// that moment and remembered, so it is refused at once for a while; its call keeps its places
+/// until the node has finished. A totals or unspent answer the node refuses for size is
+/// remembered too: that script's history is refused at once for the same while.
 async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String) -> Response {
     let call = route.clone();
-    match heavy_call(ctx, client, key, move |esplora| async move {
-        esplora.raw(&call).await
+    let deadline = verdicts::history_page(&route).map(|(script, page)| {
+        let verdicts = Arc::clone(&ctx.api.verdicts);
+        Deadline {
+            after: ctx.api.heavy.history_timeout,
+            then: Box::new(move || verdicts.learn(script, page, Verdict::Slow, Instant::now())),
+        }
+    });
+    // Learned in the call's own task, so a client that hangs up first does not lose it.
+    let size = verdicts::unpaged_script(&route).map(|s| (s, Arc::clone(&ctx.api.verdicts)));
+    let known = verdicts::history_page(&route).map(|p| (p, Arc::clone(&ctx.api.verdicts)));
+    match heavy_call(ctx, client, key, deadline, move |esplora| async move {
+        // A verdict learned while this call waited for its slot still spares the node.
+        if let Some(((script, page), verdicts)) = known
+            && let Some(verdict) = verdicts.check(script, page, Instant::now())
+        {
+            return Err(match verdict {
+                Verdict::TooLarge => Error::TooLarge,
+                Verdict::Slow => Error::Timeout,
+            });
+        }
+        let answer = esplora.raw(&call).await;
+        if let Some((script, verdicts)) = size
+            && matches!(&answer, Ok(raw) if Error::from_status(raw.status, &raw.body) == Error::TooLarge)
+        {
+            verdicts.learn(script, None, Verdict::TooLarge, Instant::now());
+        }
+        answer
     })
     .await
     {
+        // Refused by a verdict learned while it waited: counted as a refusal, like one refused on
+        // arrival. The node never refuses a page for size, and a page it timed out on took the
+        // whole history timeout, so neither answer is taken for the other.
+        Ok((Err(Error::TooLarge), _)) if verdicts::history_page(&route).is_some() => {
+            refused_early(Verdict::TooLarge)
+        }
+        Ok((Err(Error::Timeout), Source::Upstream(took)))
+            if took < ctx.api.heavy.history_timeout && verdicts::history_page(&route).is_some() =>
+        {
+            refused_early(Verdict::Slow)
+        }
         Ok((result, source)) => respond(&route, result, source),
         Err(refused) => *refused,
     }
 }
 
+/// A history request refused from what the node said moments ago: no node call.
+fn refused_early(verdict: Verdict) -> Response {
+    match verdict {
+        Verdict::TooLarge => Refused {
+            error: TOO_LARGE,
+            reason: "history_too_large",
+        },
+        Verdict::Slow => Refused {
+            error: ApiError::TIMEOUT,
+            reason: "history_slow",
+        },
+    }
+    .into_response()
+}
+
+/// The node refuses this address's totals for size, and the server its history with them.
+const TOO_LARGE: ApiError = ApiError::new(
+    StatusCode::SERVICE_UNAVAILABLE,
+    "address history too large for this server",
+);
+
+/// When a call's requests stop waiting for the node, and what to do then. The call itself goes on.
+pub(crate) struct Deadline {
+    pub after: Duration,
+    pub then: Box<dyn FnOnce() + Send>,
+}
+
 /// [`heavy`] for any work on the node that one request causes: `fetch` is run with the heavy
 /// calls' own client, under the same places and slot, by the same rules. Requests with the same
-/// `key` share one run. A refusal is the response to send.
+/// `key` share one run. Past a `deadline` after the node call starts, its requests get a timeout
+/// while the call keeps its places until the node answers. A refusal is the response to send.
 pub(crate) async fn heavy_call<F, Fut>(
     ctx: &NetworkContext,
     client: &Client,
     key: String,
+    deadline: Option<Deadline>,
     fetch: F,
 ) -> Result<(Answer, Source), Box<Response>>
 where
@@ -435,11 +517,28 @@ where
                     return;
                 };
                 let called = Instant::now();
-                let answer = fetch(esplora).await;
+                let fetch = fetch(esplora);
+                let answer = match deadline {
+                    None => Some(fetch.await),
+                    Some(Deadline { after, then }) => {
+                        tokio::pin!(fetch);
+                        if let Ok(answer) = tokio::time::timeout(after, &mut fetch).await {
+                            Some(answer)
+                        } else {
+                            then();
+                            tx.send_replace(Some((Err(Error::Timeout), after)));
+                            // The node is still working: hold the places until it answers.
+                            drop(fetch.await);
+                            None
+                        }
+                    }
+                };
                 let node_time = called.elapsed();
                 drop((slot, pending, hold));
                 finish(&all, &key, &tx, false);
-                tx.send_replace(Some((answer, node_time)));
+                if let Some(answer) = answer {
+                    tx.send_replace(Some((answer, node_time)));
+                }
             });
             (rx, true)
         }
@@ -556,10 +655,7 @@ fn upstream_error(e: &Error, route: &Route) -> ApiError {
             StatusCode::SERVICE_UNAVAILABLE,
             "address index is disabled on this server",
         ),
-        Error::TooLarge => status(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "address history too large for this route; use the paged /txs routes",
-        ),
+        Error::TooLarge => TOO_LARGE,
         Error::ChainViewMoved => status(
             StatusCode::SERVICE_UNAVAILABLE,
             "chain tip moved during the request; retry",

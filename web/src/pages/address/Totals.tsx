@@ -62,7 +62,7 @@ export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => v
         <Match when={failure() === "too-large"}>
           <Notice title="Totals are not available for this address">
             It has more history than this server's node will add up, which is common for exchange
-            and mining pool addresses. Its transactions are listed below, newest first.
+            and mining pool addresses.
           </Notice>
         </Match>
         <Match when={failure()}>
