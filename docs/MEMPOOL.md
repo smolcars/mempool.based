@@ -43,7 +43,7 @@ Input fingerprints are 64-bit SipHash values of each spent outpoint under a rand
 
 Everything else is fetched on demand from the node: ancestors, descendants and cluster chunks (`getmempoolcluster`), scripts and addresses (Esplora).
 
-**Cost.** The hash-map slot is 80 bytes. At 300,000 transactions the table has 524,288 slots (one control byte each), about 42 MB, plus the inputs on the heap: about 50 MB in all, or roughly 165 bytes a transaction. On mainnet at 55,000 transactions the whole process, runtime and HTTP clients included, measured RSS_PLACEHOLDER.
+**Cost.** The hash-map slot is 80 bytes. At 300,000 transactions the table has 524,288 slots (one control byte each), about 42 MB, plus the inputs on the heap: about 50 MB in all, or roughly 165 bytes a transaction. On mainnet at 55,000 transactions the whole process, runtime and HTTP clients included, measured 32–48 MB RSS over a 15-minute run.
 
 ## Initial sync
 
@@ -63,7 +63,7 @@ One transaction at a time would take 55,000 × 10 ms: nine minutes on one connec
 
 The tracker sends, per batch of 500 txids, a `getmempoolentry` array and a `getrawtransaction` array in parallel, with two batches in flight: four requests, a quarter of the node's 16 work-queue slots, and the RPC client's own default limit. A batch over the client's 64 MB response cap is halved until it fits; a single transaction that still does not fit (none can: the largest is 8 MB of hex) would be skipped like a vanished one.
 
-**Measured:** SYNC_PLACEHOLDER
+**Measured:** 54,509 transactions in 10.4 s: 229 calls (220 of them detail arrays, plus the probe, the listing, the tip and six blocks) and 252 MB read, about 4.6 KB a transaction, almost all of it raw transaction hex. No call failed and none answered `Busy`.
 
 ### Over a unix socket
 
@@ -91,7 +91,19 @@ Each cycle:
 
 The probe saves the 3.6 MB listing whenever the mempool did not move. On mainnet it almost always has, so the listing runs about once a second. A change the probe cannot see (an eviction and an arrival with identical size and fee) is caught by the 10 s heartbeat.
 
-**Measured:** STEADY_PLACEHOLDER
+**Measured** over 15 minutes on mainnet, 54,000–55,000 transactions, one block, and a node restart that nobody planned:
+
+| | |
+|---|---|
+| Cycles | 610 in 900 s, one every 1.5 s on average |
+| A typical cycle | 5 calls (probe, listing, tip, entry array, raw array), 3.6–3.7 MB, 170–440 ms |
+| The block cycle | 4 calls plus one block, 5.0 MB, 284 ms: 3,502 confirmed, 3 replaced, 0 evicted |
+| Total read | 2.48 GB, the initial sync included: about 2.5 MB/s, nearly all of it the listing |
+| Our count against `getmempoolinfo` | equal at 23 of 28 checks, 1–4 short at the others: transactions that arrived between our cycle and the check. Summed vsize and fees matched to the satoshi whenever the counts did |
+| Removals | 3,502 confirmed, 45 replaced, 163 evicted |
+| Node restart | 3 failed cycles (connection refused, retried after 2, 4 and 8 s), then `SequenceRegressed` from 110,704 to 54,650 and exact agreement on the next check |
+
+The listing is the price of having no event stream: at one a second it is the whole steady-state cost.
 
 ## Why a transaction left
 

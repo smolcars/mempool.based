@@ -69,8 +69,10 @@ async fn main() {
             d = deltas.recv() => {
                 let Ok(d) = d else { continue };
                 for (txid, r) in &d.removed {
-                    if let Removal::Replaced { by } = r {
-                        println!("replaced {txid} by {by}");
+                    match r {
+                        Removal::Replaced { by } => println!("replaced {txid} by {by}"),
+                        Removal::Evicted => println!("evicted {txid}"),
+                        Removal::Confirmed { .. } => {}
                     }
                 }
                 if d.removed.len() > 100 || (!d.added.is_empty() && d.added.len() <= 3 && net == "REGTEST") {
