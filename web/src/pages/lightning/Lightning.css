@@ -1,0 +1,420 @@
+@layer pages {
+  .ln {
+    display: grid;
+    gap: var(--space-7);
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+  .ln > *,
+  .ln-busy > * {
+    min-width: 0;
+  }
+  .ln-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3) var(--space-5);
+  }
+  .ln-head h1 {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .ln-back {
+    margin-bottom: calc(var(--space-6) * -1);
+    font-size: var(--text-sm);
+  }
+  .ln-lead,
+  .ln-aside {
+    max-width: 72ch;
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .ln-aside {
+    margin-top: var(--space-3);
+  }
+  .ln-busy[aria-busy="true"] {
+    opacity: 0.55;
+    transition: opacity var(--dur-quick) var(--ease-out);
+  }
+
+  /* Figures: a label over a large number, as on the mining page. */
+  .ln-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: var(--space-4) var(--space-5);
+    margin: 0;
+  }
+  .ln-stats--small {
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    margin-top: var(--space-4);
+  }
+  .ln-stat__label {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .ln-stat__value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-bold);
+    line-height: 1.3;
+    letter-spacing: var(--tracking-tight);
+  }
+  .ln-stat__value .amount {
+    font-size: var(--text-lg);
+  }
+  .ln-stat__sub,
+  .ln-stat__of {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: 0;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  /* The peer starting or syncing: a quiet panel, not an error. */
+  .ln-syncing {
+    max-width: 72ch;
+    padding: var(--space-5);
+    border: 1px dashed var(--color-line-strong);
+    border-radius: var(--radius-l);
+  }
+  .ln-syncing__title {
+    margin: 0 0 var(--space-2);
+    font-weight: var(--weight-bold);
+  }
+  .ln-syncing__text {
+    margin: 0;
+  }
+
+  /* The section's search: the header's field, with a button. */
+  .ln-search {
+    display: grid;
+    gap: var(--space-2);
+    width: min(100%, 32rem);
+  }
+  .ln-search__label {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .ln-search__row {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .ln-search__input {
+    flex: 1;
+    min-width: 0;
+    min-height: 36px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    font-size: var(--text-sm);
+  }
+  .ln-search__input::placeholder {
+    color: var(--color-text-muted);
+    opacity: 1;
+  }
+  .ln-search__problem {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-negative);
+  }
+
+  /* Names from gossip: text, cut short, isolated, never wider than their cell. */
+  .ln-alias {
+    overflow-wrap: anywhere;
+  }
+  .ln-alias--none {
+    color: var(--color-text-muted);
+    font-style: italic;
+  }
+  .ln-node {
+    display: inline-flex;
+    flex-direction: column;
+    max-width: 16rem;
+    min-width: 0;
+    white-space: normal;
+  }
+  .ln-node__name {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .ln-key,
+  .ln-id {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+  .ln-key {
+    color: var(--color-text-muted);
+  }
+  .ln-id {
+    font-size: var(--text-sm);
+  }
+  .ln-ends {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  /* Choices that are links (the chart's interval, the ranking): a row, the current one pressed. */
+  .ln-picker ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin: 0;
+    padding: 2px;
+    list-style: none;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+  .ln-picker__item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.75rem;
+    min-height: 36px;
+    padding: 0 var(--space-3);
+    border-radius: calc(var(--radius-m) - 2px);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .ln-picker__item:hover {
+    color: var(--color-text);
+  }
+  .ln-picker__item[aria-current="page"],
+  .ln-picker__item[aria-pressed="true"] {
+    color: var(--color-text);
+    background: var(--color-surface);
+    box-shadow:
+      0 0 0 1px var(--color-line-strong),
+      inset 0 -2px 0 var(--color-accent);
+  }
+  button.ln-picker__item {
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  /* The chart's space is held while its code loads. */
+  .ln-chart {
+    min-height: calc(240px + 5.75rem);
+  }
+  .ln-coverage {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    max-width: 72ch;
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-sm);
+  }
+  .ln-coverage__swatch {
+    flex: none;
+    width: 18px;
+    height: 12px;
+    margin-top: 0.2em;
+    border-radius: var(--radius-s);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+    background: repeating-linear-gradient(
+      -45deg,
+      var(--color-line) 0 1.5px,
+      transparent 1.5px 4.25px
+    );
+  }
+  .ln-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+
+  /* Two tables side by side on wide screens. */
+  .ln-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-6);
+  }
+  .ln-pair > * {
+    min-width: 0;
+  }
+  .ln-more {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+  }
+
+  /* A node's or channel's facts: label and value pairs. */
+  .ln-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: var(--space-4) var(--space-5);
+    margin: 0;
+  }
+  .ln-stats + .ln-facts {
+    margin-top: var(--space-5);
+  }
+  .ln-fact {
+    min-width: 0;
+  }
+  .ln-fact dt {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .ln-fact dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .ln-fact__sub {
+    display: block;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  /* A node's whole name, when it is too long for the title. */
+  .ln-name-more {
+    font-size: var(--text-sm);
+  }
+  .ln-name-full {
+    max-height: 12rem;
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3);
+    overflow: auto;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    overflow-wrap: anywhere;
+  }
+  .ln-identity {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .ln-identity p {
+    max-width: 72ch;
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  /* Announced addresses and features: text in small chips, never links. */
+  .ln-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ln-chips li {
+    max-width: 100%;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
+  .ln-chips--mono li {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+  }
+  .ln-chips__req {
+    color: var(--color-text-muted);
+  }
+
+  /* A channel's two ends, side by side. */
+  .ln-sides {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-6);
+  }
+  .ln-side h3 {
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-md);
+  }
+  .ln-side .ln-node {
+    max-width: 100%;
+  }
+
+  /* The close: a bordered strip, as the transaction page's notices. */
+  .ln-close {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--color-line);
+    border-left: 3px solid var(--color-text);
+    border-radius: var(--radius-m);
+    background: var(--color-surface);
+  }
+  .ln-close p {
+    max-width: 72ch;
+    margin: 0;
+  }
+  .ln-close__title {
+    font-weight: var(--weight-bold);
+  }
+  .ln-sure {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+
+  .ln-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    vertical-align: middle;
+  }
+  .ln-badge--closed {
+    border-style: dashed;
+  }
+  .ln-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  /* On the transaction page, after everything else, so its arrival moves nothing. */
+  .ln-tx {
+    display: grid;
+    gap: var(--space-3);
+    margin-top: var(--space-7);
+  }
+
+  @media (max-width: 1040px) {
+    .ln-pair,
+    .ln-sides {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 640px) {
+    .ln {
+      gap: var(--space-6);
+    }
+    .ln-head {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .ln-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .ln-node {
+      max-width: 10rem;
+    }
+  }
+}

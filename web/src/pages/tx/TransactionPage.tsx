@@ -25,6 +25,7 @@ import { NETWORK_NAMES, paths } from "../../lib/network";
 import { useLiveStatus } from "../../lib/live";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { type ReplacementLink, type TxMessage, txTopic } from "../../lib/track-topics";
+import { TxLightning } from "../lightning/TxLightning";
 import { Code } from "./Code";
 import { Flow, type Selection } from "./Flow";
 import { Inspector } from "./Inspector";
@@ -991,6 +992,7 @@ function Body(props: {
           </dl>
         </section>
       </div>
+      <TxLightning txid={props.tx.txid} confirmed={confirmed()} />
     </>
   );
 }
