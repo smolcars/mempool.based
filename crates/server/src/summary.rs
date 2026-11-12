@@ -1,8 +1,10 @@
 //! Block summaries in the private `/app` API (`docs/FRONTEND.md`): one block's fee facts, its
 //! transactions as fixed-width records, and the facts of up to [`MAX_BATCH`] blocks at once.
 //!
-//! One summary costs the node a `getblock` at verbosity 2: about 10 MB and most of a second for a
-//! full mainnet block. So (SECURITY.md rules 6–8):
+//! One summary costs the node a block listing ([`Lister`]): on a node with
+//! `/block/:hash/txs/summary`, about 0.2 MB and a few tens of milliseconds for a full mainnet
+//! block, three small Esplora calls; without it, a `getblock` at verbosity 2, about 10 MB and
+//! most of a second. So (SECURITY.md rules 6–8):
 //! - a computation runs in its own task, and every request for that block meanwhile joins it;
 //! - results are kept in a cache bounded in bytes (`BLOCK_SUMMARY_CACHE_MB`), least recently
 //!   used out first, and the newest [`WARM_BLOCKS`] are computed as blocks arrive;
@@ -29,21 +31,27 @@ use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use bitcoin::{BlockHash, Txid};
 use engine::audit::Totals;
+use engine::blocks::Lister;
+use engine::blocks::listing::Event as Listed;
 use logging::events::{
     BlockSummariesRecovered, BlockSummariesRefused, BlockSummaryComputed, BlockSummaryFailed,
+    BlockTxsFellBack, BlockTxsSource,
 };
+use node::electrum::Event as ElectrumEvent;
 use node::rpc::Error as RpcError;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
 use crate::esplora::{ApiOutcome, Source};
 use crate::limits::{Client, Clients, Refused};
 use crate::ws::{Snapshot, Topic};
-use crate::{ApiError, IMMUTABLE, NetworkContext};
+use crate::{ApiError, IMMUTABLE, Network, NetworkContext};
 use stats::Facts;
 
-/// Computations running at once per network: one `getblock` of the RPC client's four slots.
+/// Computations running at once per network: at most one `getblock` of the RPC client's four
+/// slots where the node has no listing route.
 pub const MAX_RUNNING: usize = 1;
 /// Client-started computations running or waiting per network. At about 0.9 s each on mainnet,
 /// the last one in the queue still answers well inside the 10 s request timeout.
@@ -342,12 +350,12 @@ async fn compute(
     let ctx = &landing.ctx;
     let s = &ctx.summaries;
     let started = Instant::now();
-    let (block, node_ms) = {
+    let (block, via, node_ms) = {
         // Never closed, so this cannot fail.
         let _running = s.running.acquire().await;
         let called = Instant::now();
-        let block = ctx.rpc.block(landing.hash).await;
-        (block, called.elapsed().as_secs_f64() * 1000.0)
+        let (block, via) = ctx.lister.block(&ctx.rpc, &ctx.esplora, landing.hash).await;
+        (block, via, called.elapsed().as_secs_f64() * 1000.0)
     };
     drop(pending);
     let network = ctx.config.network.name();
@@ -368,6 +376,7 @@ async fn compute(
                     Cause::Request(_) => "request",
                     Cause::NewBlock => "new_block",
                 },
+                source: via.label(),
             });
             // Before the summary is published, so its facts carry the audit from the start.
             let audit = crate::audits::for_block(ctx, &b).await;
@@ -403,6 +412,51 @@ async fn compute(
     }
     drop(landing);
     tx.send_replace(Some(outcome));
+}
+
+/// The network's [`Lister`], reporting as log events.
+pub fn lister(network: Network) -> Lister {
+    let network = network.name();
+    let fell_back = AtomicU64::new(0);
+    Lister::new(move |e| match e {
+        Listed::Source { via, why } => logging::emit(&BlockTxsSource {
+            network,
+            source: via.label(),
+            reason: why.label(),
+        }),
+        Listed::FellBack { reason } => {
+            let total = fell_back.fetch_add(1, Ordering::Relaxed) + 1;
+            if total.is_power_of_two() {
+                logging::emit(&BlockTxsFellBack {
+                    network,
+                    reason,
+                    total,
+                });
+            }
+        }
+    })
+}
+
+/// Asks the node which source lists its blocks when the Electrum connection is first ready, then
+/// after every reconnect, since the node may have been upgraded meanwhile. A reconnect is the
+/// client's `Resynced` event, which unlike the health watch is never merged with the next one.
+pub async fn detect_listing(ctx: Arc<NetworkContext>) {
+    // Subscribed before the first probe, so a reconnect during it is still heard.
+    let mut events = ctx.electrum.events();
+    if ctx.electrum.health().wait_for(|h| h.ready).await.is_err() {
+        return;
+    }
+    ctx.lister.detect(&ctx.esplora).await;
+    loop {
+        match events.recv().await {
+            // A lagged receiver may have missed a reconnect.
+            Ok(ElectrumEvent::Resynced) | Err(RecvError::Lagged(_)) => {
+                ctx.lister.detect(&ctx.esplora).await;
+            }
+            Ok(_) => {}
+            Err(RecvError::Closed) => return,
+        }
+    }
 }
 
 async fn wait(mut flight: Flight) -> Outcome {

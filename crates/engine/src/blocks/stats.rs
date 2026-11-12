@@ -1,4 +1,4 @@
-//! Fee facts and the per-transaction records of one block, from `getblock` verbosity 2. Pure.
+//! Fee facts and the per-transaction records of one block, as [`super::Lister`] lists it. Pure.
 
 use bitcoin::BlockHash;
 use node::rpc::model::{Block, BlockTx};
@@ -183,7 +183,6 @@ mod tests {
             fee: fee.map(Amount::from_sat),
             vsize,
             weight: vsize * 4,
-            size: vsize,
             value: Amount::from_sat(u64::from(vsize) * 1000),
         }
     }
@@ -193,12 +192,10 @@ mod tests {
         tx_list.extend(paying.iter().map(|&(f, v)| tx(Some(f), v)));
         Block {
             hash: BlockHash::all_zeros(),
-            confirmations: 1,
             height: 7,
             time: 0,
             mediantime: 0,
             size: 0,
-            strippedsize: 0,
             weight: 0,
             previousblockhash: None,
             tx: tx_list,

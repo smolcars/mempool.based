@@ -128,15 +128,15 @@ Two tiers, one step of each in turn:
 | Tier | Step | Node calls per step |
 |---|---|---|
 | Totals | one run of up to 50 consecutive missing heights, highest first, so the row checked below it is the only one beneath it | Esplora `/blocks/:height` (ten blocks each), one batched `getblockstats` asking only `totalfee`, `subsidy` and `total_weight`, Esplora `/block/:hash/txid/0` per block, one batched `getrawtransaction` for the coinbases |
-| Rates | the highest unrated row within `BACKFILL_FEE_RATE_DEPTH` of the tip | One `getblock` at verbosity 2, through the same statistics code as the block facts route |
+| Rates | the highest unrated row within `BACKFILL_FEE_RATE_DEPTH` of the tip | One block listing ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)), through the same statistics code as the block facts route: Esplora's `/block/:hash/txs/summary`, `/block/:hash` and the coinbase's `/tx/:txid/raw` on a node with the route, one `getblock` at verbosity 2 on one without |
 
-**Gentle by construction.** The backfill and `follow` share their own RPC client with one slot, so they never hold one of the four slots the mempool tracker and the summary routes share, and the node sees at most one RPC call from them at a time. Their Esplora requests are small (ten headers, one txid) and each task makes one at a time, so at most two are in flight. After each step the backfill waits so that it keeps that call busy for at most `BACKFILL_BUSY_PERCENT` of the time (50 by default). A failure of any kind, the node's 503 (`busy`) included, pauses it for 5 s, doubling up to 5 minutes, and is logged at the 1st, 2nd, 4th, 8th… in a row.
+**Gentle by construction.** The backfill and `follow` share their own RPC client with one slot, so they never hold one of the four slots the mempool tracker and the summary routes share, and the node sees at most one RPC call from them at a time. Their Esplora requests are small (ten headers, one txid, a block listing of about 0.3 MB) and each task makes one at a time, so at most two are in flight. After each step the backfill waits so that it keeps that call busy for at most `BACKFILL_BUSY_PERCENT` of the time (50 by default). A failure of any kind, the node's 503 (`busy`) included, pauses it for 5 s, doubling up to 5 minutes, and is logged at the 1st, 2nd, 4th, 8th… in a row.
 
 **Resumable.** The table is the progress. Each pass starts at the tip and reads the table 10,000 heights at a time looking for missing rows (about 100 reads, well under a second, for a full table), so a restart or a pause (`BACKFILL_ENABLED=false`, then `true`) costs those reads and nothing else. The tip is checked every minute, and a new one restarts the pass from the top, so new blocks below the zone are filled first.
 
 **Observable.** `block_backfill_progress` every minute ([`LOGGING.md`](LOGGING.md)), and the same numbers in `BlockTable::progress` for a status page.
 
-**Cost on mainnet,** measured with `cargo run --release -p engine --example blocks_probe` against a synced rbitcoin v0.9.2 over a private network, paced at 50%, on bounded ranges of each era. Time per block is the node calls' wall time including the round trips; at 50% busy, wall time is twice that.
+**Cost on mainnet,** measured with `cargo run --release -p engine --example blocks_probe` over a private network, paced at 50%, on bounded ranges of each era. Time per block is the node calls' wall time including the round trips; at 50% busy, wall time is twice that. The totals and the `getblock` rows were measured against a synced rbitcoin v0.9.2; the listing route's rows on 2026-11-12 against a build of rbitcoin's `master` with it, while the node also served another server's full backfill (1,000 consecutive blocks below the tip, 100 in each older era). In the same hour, 50 consecutive recent blocks through `getblock` (`LISTING=getblock`) took 1.3 s and 10.3 MB each.
 
 | Tier | Blocks around | Node time a block | Read a block |
 |---|---|---|---|
@@ -150,19 +150,31 @@ Two tiers, one step of each in turn:
 | Rates | 525,000 | 1 s | 4.7 MB |
 | Rates | 675,000 | 1.6 s | 9.2 MB |
 | Rates | 862,000 to the tip | 0.8 to 2.2 s | 10.5 MB |
+| Rates, listing route | 75,000 | 27 ms | 1 KB |
+| Rates, listing route | 225,000 to 525,000 | 36 to 97 ms | 40 to 99 KB |
+| Rates, listing route | 675,000 | 53 ms | 198 KB |
+| Rates, listing route | 862,000 | 90 ms | 327 KB |
+| Rates, listing route | the newest 1,000 below the tip | 61 ms | 322 KB |
 
 For all of mainnet (975,000 blocks), extrapolated era by era:
 
 | Work | Node time | Read | At the default 50% |
 |---|---|---|---|
 | Totals for every block | 5.7 h | 1.2 GB | 11.4 h alone |
-| Fee rates for a year (52,560 blocks, the default) | 13.4 h | 550 GB | 27 h alone |
-| Both, interleaved as the backfill runs them | 19 h | 550 GB | totals complete after about 21 h, everything after about 38 h |
-| Fee rates for all of history | about 9.7 days | | why the default is a year |
+| Fee rates for a year (52,560 blocks, the default), listing route | 53 min | 17 GB | 1.8 h alone |
+| Fee rates for a year, `getblock` | 13.4 h | 550 GB | 27 h alone |
+| Both, interleaved, listing route | 6.6 h | 18 GB | everything after about 13 h |
+| Both, interleaved, `getblock` | 19 h | 550 GB | totals complete after about 21 h, everything after about 38 h |
+| Fee rates for all of history, listing route | 15.5 h | 134 GB | 31 h alone; with the totals interleaved, 21 h of node time and everything after about 42 h |
+| Fee rates for all of history, `getblock` | about 9.7 days | | why the default is a year |
 
 **Observed** on a full mainnet run started on 2026-11-12 at the default 50%: about 430 blocks a minute at its start, slower than the estimate above. If that pace held, every block's totals would take about a day and a half, not 21 hours.
 
-**What it costs the node per hour** at 50%: one call from the backfill for half the hour, so 30 minutes of one of the node's 16 RPC work slots, and nothing while the other four shared slots are busy, since it never uses them. While it rates recent blocks it reads about 7 GB an hour (one 10 MB `getblock` every 5 s), most of it the node's JSON encoding; once the year is rated, about 80 MB an hour, and when caught up, one `getblockstats` and a coinbase lookup per new block. Old blocks' totals are mostly round trips: `/block/:hash/txid/0` is one request per block, about 8 ms over the network measured and far less on the node's own host.
+**The defaults on a node with the listing route.** `BACKFILL_FEE_RATE_DEPTH` at a year and `BACKFILL_BUSY_PERCENT` at 50 now rate the year in under an hour of node time, inside the time the totals take anyway. A depth covering every block would cost 15.5 h of node time and 134 GB read, and finish everything in about 42 h at 50%, about what a year cost through `getblock`. Through `getblock` the same depth would still cost about 9.7 days. The defaults are unchanged; which to pick is the operator's, and a later change.
+
+**A real run.** The server, release build, a fresh `DATA_DIR`, mainnet with the mempool engine off and the backfill at its defaults, for ten minutes on 2026-11-12 against the node with the route (and another server's full backfill): it found the route by its probe, kept its call busy 31 s of each minute, and wrote about 620 rows of totals and 12.4 fee rates a minute, reading 4.5 MB a minute. The rates tier runs one step per totals step, and a totals step of 50 blocks took about 2.5 s of node time under that load, so while totals are still missing the rates go at the totals' pace; alone, at 61 ms a block, they would go at about 490 a minute. Interleaved the same way through `getblock` at 1.3 s a block, it would rate about 8 a minute.
+
+**What it costs the node per hour** at 50%: one call from the backfill for half the hour, so 30 minutes of one of the node's 16 RPC work slots, and nothing while the other four shared slots are busy, since it never uses them. While it rates recent blocks alone it reads about 9.5 GB an hour through the listing route (322 KB every 0.12 s), or about 7 GB an hour through `getblock` (one 10 MB `getblock` every 5 s, most of it the node's JSON encoding); interleaved with totals, measured, 270 MB an hour through the route; once the year is rated, about 80 MB an hour, and when caught up, one `getblockstats` and a coinbase lookup per new block. Old blocks' totals are mostly round trips: `/block/:hash/txid/0` is one request per block, about 8 ms over the network measured and far less on the node's own host.
 
 Unfiltered `getblockstats` took about 1 s per recent block (its UTXO statistics), forty times the filtered call; the backfill never asks for them ([`RBITCOIN.md`](RBITCOIN.md)).
 

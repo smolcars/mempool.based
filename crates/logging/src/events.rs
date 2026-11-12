@@ -375,14 +375,39 @@ pub struct BlockSummaryComputed {
     pub block_bytes: u64,
     /// Size of the per-transaction records kept in the cache.
     pub bytes: usize,
-    /// The `getblock` call alone.
+    /// The node calls alone.
     pub node_ms: f64,
     /// From the start, the wait for a computation slot included.
     pub duration_ms: f64,
     /// `request` (a client asked) or `new_block` (computed ahead of demand).
     pub cause: &'static str,
+    /// What listed the transactions: `summary_route` or `getblock`.
+    pub source: &'static str,
 }
 event!(BlockSummaryComputed, "block_summary_computed", Debug);
+
+/// Which source lists a network's blocks for the summaries, the audit and the backfill: at
+/// startup and on every reconnect, and when a block's answer changes it.
+#[derive(Debug, Serialize)]
+pub struct BlockTxsSource {
+    pub network: &'static str,
+    /// `summary_route` or `getblock`.
+    pub source: &'static str,
+    /// `probe`, `answered` or `refused`.
+    pub reason: &'static str,
+}
+event!(BlockTxsSource, "block_txs_source", Info);
+
+/// The summary route failed for a block, which `getblock` listed instead. At a total of 1, 2, 4,
+/// 8… per network.
+#[derive(Debug, Serialize)]
+pub struct BlockTxsFellBack {
+    pub network: &'static str,
+    /// `not_found`, `unavailable`, `too_big`, `malformed` or `mismatch`; the latest.
+    pub reason: &'static str,
+    pub total: u64,
+}
+event!(BlockTxsFellBack, "block_txs_fell_back", Warn);
 
 /// A block we watched arrive was compared with the block we expected on its parent
 /// (`docs/MEMPOOL.md`, "Block audits"). Once per block.
@@ -1396,6 +1421,17 @@ mod tests {
                 node_ms: 640.5,
                 duration_ms: 650.1,
                 cause: "request",
+                source: "getblock",
+            }),
+            both(&BlockTxsSource {
+                network: n,
+                source: "summary_route",
+                reason: "probe",
+            }),
+            both(&BlockTxsFellBack {
+                network: n,
+                reason: "not_found",
+                total: 1,
             }),
             both(&BlockAudited {
                 network: n,

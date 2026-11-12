@@ -226,7 +226,7 @@ Blocks with the reference's `extras`, and every transaction of a block, for tool
 | `GET /api/v1/block/:hash/tx/:txid/summary` | That transaction's row | immutable |
 | `GET /api/v1/blocks/tip/height` | `/api/blocks/tip/height`'s answer, sharing its calls and its one-second cache | as that route |
 
-**Where each part comes from.** The header fields are the node's Esplora block JSON. `extras` come from the block table's row ([`STORE.md`](STORE.md#blocks)) and the block's audit ([Block audits](#block-audits)); they never cost a node call. The summaries come from the same cached `getblock` as `/app/block/:hash/txs` ([`FRONTEND.md`](FRONTEND.md#block-summaries)).
+**Where each part comes from.** The header fields are the node's Esplora block JSON. `extras` come from the block table's row ([`STORE.md`](STORE.md#blocks)) and the block's audit ([Block audits](#block-audits)); they never cost a node call. The summaries come from the same cached block listing as `/app/block/:hash/txs` ([`FRONTEND.md`](FRONTEND.md#block-summaries)): `/block/:hash/txs/summary` where the node serves it, else `getblock` at verbosity 2 ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)).
 
 `extras`, in the reference's order:
 
@@ -278,7 +278,7 @@ An answer is read fresh from the table on each request, so a list never holds a 
 
 Side by side on mainnet (2026-11-12, tip 975,545; the tip list, the list from 974,000, block 975,541's summary and one recent full block, compared field by field): every header field, `reward`, `totalFees`, `avgFee`, the coinbase fields, `header` and `virtualSize` were identical in every block; the differences are the rows above. The summary had the same 2,077 transactions in the same order with the same `fee`, `vsize` and `value`; `rate` differed only for the 145 transactions the reference rated as packages.
 | Summary `time` | Absent | The reference adds when it first saw a transaction, for some; we keep accept times only for an audit's listed transactions |
-| Summary `flags` | Absent | The reference's bit field of transaction features (script types, RBF and the like) needs every input's previous output, which `getblock` at verbosity 2 does not give. A `0` would claim none |
+| Summary `flags` | Absent | The reference's bit field of transaction features (script types, RBF and the like) needs every input's previous output, which neither block listing gives (`getblock` at verbosity 2 or the summary route). A `0` would claim none |
 | Summary `rate` | The transaction's own rate | The reference gives a transaction mined with its ancestors or descendants their package's rate (three transactions at 16.861 where their own were 5.34, 6.00 and 33.10). In one mainnet block, 1,931 of 2,076 rates were equal and the other 145 were such packages |
 | `tx/:txid/summary` of a txid not in the block | `404 {"error": "transaction not found in this block"}` | The reference answers `404` too |
 
@@ -294,13 +294,14 @@ Measured on mainnet through a synced node over a private network (release build,
 | `blocks` (tip) | | 0.35 ms | one `/blocks/:height` per new block |
 | `block/:hash` | 16.7 ms | 0.19 ms | one `/block/:hash` |
 | `block/:hash/summary` (2,300 transactions, 370 KB) | 2.28 s | 0.64 ms | one `getblock` |
+| `block/:hash/summary` (1,796 to 3,806 transactions, 245 to 522 KB), measured later on a node with the listing route | 39 to 64 ms; through `getblock` on the same node, 653 to 851 ms | 0.8 to 1.5 ms | the listing: three Esplora calls, or one `getblock` |
 | `block/:hash/summary` (4,000 transactions, 636 KB) | | 1.15 ms | |
 | `block/:hash/tx/:txid/summary` | as the summary | 0.02 ms | none once the summary is cached |
 | `blocks/tip/height` | 12.7 ms | 0.02 ms | one `/blocks/tip/height` a second at most |
 
 The table's part is a `top`, a `page` of 15 or a `by_hash`, and one audit read: on a 975,000-row table (`read_benchmark`, [`STORE.md`](STORE.md#reading)), 0.11 to 0.17 ms for the newest page of 15, 0.09 to 0.24 ms for one deep in history and 0.03 to 0.09 ms by hash, so a full table adds about 0.1 ms to the times above.
 
-The summaries share the block summary cache and its limits ([`FRONTEND.md`](FRONTEND.md#block-summaries)): a block in the cache costs nothing, and one that is not costs one `getblock` at verbosity 2, counted under the same per-network and per-client limits as `/app/block/:hash/txs`. Asking for a block's summary, any of its transactions' rows and its records costs one `getblock` in all. A cache entry now also holds each transaction's txid and weight, 36 bytes more per transaction.
+The summaries share the block summary cache and its limits ([`FRONTEND.md`](FRONTEND.md#block-summaries)): a block in the cache costs nothing, and one that is not costs one block listing (the summary route and two small Esplora calls, or a `getblock` at verbosity 2 on a node without the route), counted under the same per-network and per-client limits as `/app/block/:hash/txs`. Asking for a block's summary, any of its transactions' rows and its records costs one listing in all. A cache entry now also holds each transaction's txid and weight, 36 bytes more per transaction.
 
 ### Mining
 

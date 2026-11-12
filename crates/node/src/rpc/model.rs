@@ -56,17 +56,16 @@ pub struct BlockHeader {
 
 /// `getblock` with verbosity 2, reduced to what fee and size views need. Inputs, outputs
 /// and scripts are skipped while decoding, except the first transaction's ([`Block::coinbase`]).
+/// The engine builds the same value from Esplora's block summary route where the node has it,
+/// so every field here must be one that route and its companions can give.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "RawBlock")]
 pub struct Block {
     pub hash: BlockHash,
-    /// `-1` when the block is not on the active chain.
-    pub confirmations: i64,
     pub height: u32,
     pub time: u32,
     pub mediantime: u32,
     pub size: u64,
-    pub strippedsize: u64,
     pub weight: u64,
     /// Absent on genesis.
     pub previousblockhash: Option<BlockHash>,
@@ -89,12 +88,10 @@ pub struct Coinbase {
 #[derive(Deserialize)]
 struct RawBlock {
     hash: BlockHash,
-    confirmations: i64,
     height: u32,
     time: u32,
     mediantime: u32,
     size: u64,
-    strippedsize: u64,
     weight: u64,
     previousblockhash: Option<BlockHash>,
     tx: Txs,
@@ -104,12 +101,10 @@ impl From<RawBlock> for Block {
     fn from(b: RawBlock) -> Self {
         Self {
             hash: b.hash,
-            confirmations: b.confirmations,
             height: b.height,
             time: b.time,
             mediantime: b.mediantime,
             size: b.size,
-            strippedsize: b.strippedsize,
             weight: b.weight,
             previousblockhash: b.previousblockhash,
             tx: b.tx.0,
@@ -129,7 +124,6 @@ struct FirstTx {
     fee: Option<Amount>,
     vsize: u32,
     weight: u32,
-    size: u32,
     #[serde(default)]
     vin: Vec<FirstIn>,
     vout: Vec<FirstOut>,
@@ -178,7 +172,6 @@ impl<'de> Deserialize<'de> for Txs {
                         fee: first.fee,
                         vsize: first.vsize,
                         weight: first.weight,
-                        size: first.size,
                         value,
                     });
                     coinbase = Coinbase {
@@ -218,8 +211,6 @@ pub struct BlockTx {
     /// `ceil(weight / 4)`, not sigop-adjusted.
     pub vsize: u32,
     pub weight: u32,
-    /// Serialized size with witness.
-    pub size: u32,
     /// Sum of the output values, from `vout`.
     #[serde(rename = "vout", deserialize_with = "output_total")]
     pub value: Amount,

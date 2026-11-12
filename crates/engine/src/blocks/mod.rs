@@ -4,7 +4,8 @@
 //! - [`follow`] keeps the newest [`ZONE`] rows in line with the node on every new tip, replacing
 //!   rows a reorg made stale, and takes the newest blocks' fee rates from the summary cache.
 //! - [`backfill`] fills every older row, newest first, in two tiers: totals and coinbase for
-//!   every block (cheap, batched), then fee rates for the recent ones (one `getblock` each).
+//!   every block (cheap, batched), then fee rates for the recent ones (one block listing each,
+//!   through [`Lister`]).
 //! - [`by_hash`], [`by_height`], [`page`], [`periods`] and [`heights_between`] read it; the
 //!   mining routes read it through [`span`], [`pool_counts`], [`pool_page`] and the rest of
 //!   `mining.rs`, and [`reattribute`] redoes its pool column when the pool list changes.
@@ -15,6 +16,7 @@
 mod backfill;
 mod db;
 mod follow;
+pub mod listing;
 mod mining;
 mod source;
 pub mod stats;
@@ -32,6 +34,7 @@ pub use db::{
     pool_page,
 };
 pub use follow::{Followed, Reorgs, follow};
+pub use listing::Lister;
 pub use mining::{
     PoolCount, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before, first_since,
     pool_counts, pool_weeks, reattribute, retargets, row_counts, span, top, work,

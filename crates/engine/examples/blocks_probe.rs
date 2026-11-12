@@ -5,7 +5,8 @@
 //! `NET=MAINNET cargo run --release -p engine --example blocks_probe`
 //! reads `{NET}_RPC_HOST`, `_RPC_PORT`, `_RPC_USER`, `_RPC_PASSWORD` and `_ESPLORA_URL`.
 //! `TOTALS="top:count,…"` and `RATES="top:count,…"` choose the ranges (`tip` for the zone's
-//! edge); `BUSY_PERCENT` (default 50) paces it as the backfill would.
+//! edge); `BUSY_PERCENT` (default 50) paces it as the backfill would. `LISTING=getblock` rates
+//! through `getblock` verbosity 2 even where the node serves `/block/:hash/txs/summary`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -18,7 +19,10 @@
 use std::time::{Duration, Instant};
 
 use bitcoin::hashes::Hash;
-use engine::blocks::{Header, NodeSource, RATED_BY_FOLLOW, Row, Source, ZONE};
+use std::sync::Arc;
+
+use engine::blocks::listing::Via;
+use engine::blocks::{Header, Lister, NodeSource, RATED_BY_FOLLOW, Row, Source, ZONE};
 use node::esplora::Esplora;
 use node::rpc::{BlockRef, Rpc};
 
@@ -72,12 +76,25 @@ async fn main() {
     )
     .unwrap();
     let esplora = Esplora::new(&var(&net, "ESPLORA_URL")).unwrap();
+    let lister = match std::env::var("LISTING").as_deref() {
+        Ok("getblock") => Lister::fixed(Via::GetBlock),
+        _ => {
+            let l = Lister::default();
+            l.detect(&esplora).await;
+            l
+        }
+    };
+    let via = lister.via();
     let source = NodeSource {
         rpc: rpc.clone(),
         esplora: esplora.clone(),
+        lister: Arc::new(lister),
     };
     let tip = source.headers(None).await.unwrap()[0].height;
-    println!("tip {tip}, paced at {}% busy", pace.busy);
+    println!(
+        "tip {tip}, paced at {}% busy, listing by {via:?}",
+        pace.busy
+    );
 
     // Tier 1: totals and coinbase, in steps of 50 as the backfill takes them.
     let mut samples: Vec<Row> = Vec::new();
@@ -115,7 +132,7 @@ async fn main() {
         );
     }
 
-    // Tier 2: fee rates, one getblock each.
+    // Tier 2: fee rates, one block listing each.
     let mut rated: Vec<(Row, engine::blocks::Facts)> = Vec::new();
     let rates = ranges(
         "RATES",

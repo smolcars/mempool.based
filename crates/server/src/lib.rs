@@ -88,6 +88,8 @@ pub struct NetworkContext {
     pub electrum: node::electrum::Client,
     /// Read-only JSON-RPC, shared by every caller: at most four calls in flight.
     pub rpc: node::rpc::Rpc,
+    /// Which source lists a block's transactions; shared with the block table's backfill.
+    pub lister: Arc<engine::blocks::Lister>,
     /// State of the block summary routes.
     pub summaries: summary::Summaries,
     pub hub: Arc<ws::Hub>,
@@ -140,12 +142,14 @@ impl NetworkContext {
             config.mempool,
             &all.ws,
         ));
+        let lister = Arc::new(summary::lister(config.network));
         let table = all
             .data_dir
             .as_deref()
-            .and_then(|dir| blocks::BlockTable::open(dir, config, &url));
+            .and_then(|dir| blocks::BlockTable::open(dir, config, &url, &lister));
         Some(Self {
             blocks: table,
+            lister,
             rpc: node::rpc::Rpc::new(&rpc.host, rpc.port, &rpc.user, rpc.password.expose()).ok()?,
             summaries: summary::Summaries::new(
                 all.limits.summary_cache_bytes,
@@ -246,6 +250,7 @@ impl App {
                     report::report_electrum(network, &ctx.electrum);
                     lightning::spawn(&ctx);
                     peers.extend(ctx.lightning.clone());
+                    tokio::spawn(summary::detect_listing(Arc::clone(&ctx)));
                     routes
                         .clone()
                         .route("/api/{*rest}", any(esplora::handle))

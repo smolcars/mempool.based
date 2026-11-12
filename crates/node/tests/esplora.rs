@@ -15,8 +15,8 @@ use std::time::Duration;
 use bitcoin::{Address, BlockHash, Network, Txid};
 use node::esplora::model::ScriptType;
 use node::esplora::{
-    BlockTxsStart, ChainTip, Error, Esplora, OutPosition, OutPositions, Route, ScriptRef, TipCheck,
-    consistent,
+    BlockTxsStart, ChainTip, Error, Esplora, MAX_BLOCK_TXS, MAX_SUMMARY_BYTES, OutPosition,
+    OutPositions, Route, ScriptRef, TipCheck, consistent,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UnixListener};
@@ -489,6 +489,122 @@ async fn maps_upstream_errors() {
     assert!(matches!(
         c.tip_height().await.unwrap_err(),
         Error::Unavailable(_)
+    ));
+}
+
+/// `/block/:hash/txs/summary`: what rbitcoin after v0.9.2 answers, what v0.9.2 answers, and
+/// every malformed or oversized answer as an error, never a panic.
+#[tokio::test]
+async fn decodes_block_txs_summaries_defensively() {
+    const ROW: &str =
+        r#"["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",0,816,5000000000]"#;
+    let huge = format!("[{}]", vec![ROW; MAX_BLOCK_TXS + 1].join(","));
+    let (url, _) = tcp_mock(move |r| {
+        let Some(rest) = r.path.strip_prefix("/api/block/") else {
+            return Reply::new(404, "Not Found");
+        };
+        let (hash, _) = rest.split_once('/').unwrap();
+        let body = match &hash[..4] {
+            "0000" => fixture("testnet4/block-160394-txs-summary.json"),
+            "0001" => format!("[{ROW}]").into_bytes(),
+            "0002" => b"[]".to_vec(),
+            "0010" => {
+                r#"[["4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",0,816]]"#
+                    .into()
+            }
+            "0011" => format!("[{}]", ROW.replace("]", ",1]")).into_bytes(),
+            "0012" => ROW.replace(",0,", ",-1,").into_bytes(),
+            "0013" => format!("[{}]", ROW.replace(",816,", ",4294967296,")).into_bytes(),
+            "0014" => format!("[{}]", ROW.replace(",0,", ",\"0\",")).into_bytes(),
+            "0015" => format!("[{}]", ROW.replace("4a5e", "zz")).into_bytes(),
+            "0016" => br#"{"txid":"x"}"#.to_vec(),
+            "0020" => huge.clone().into_bytes(),
+            "0021" => vec![b' '; MAX_SUMMARY_BYTES + 1],
+            // The same, streamed without a length: refused while reading, not after.
+            "0022" => {
+                return Reply {
+                    close_delimited: true,
+                    ..Reply::new(200, vec![b' '; MAX_SUMMARY_BYTES + 1])
+                };
+            }
+            "0030" => return Reply::new(404, "Not Found"),
+            "0031" => return Reply::new(404, "pruned"),
+            // What rbitcoin v0.9.2 answers: the path falls through to `/txs/:start_index`.
+            _ => {
+                return Reply::new(
+                    400,
+                    "Invalid URL: Cannot parse value at index 1 with value `summary` to a `u32`",
+                );
+            }
+        };
+        Reply::new(200, body).stamped(TIP_A, 975_509)
+    })
+    .await;
+    let c = Esplora::new(&url).unwrap();
+    let hash =
+        |prefix: &str| -> BlockHash { format!("{prefix}{}", "0".repeat(60)).parse().unwrap() };
+
+    let rows = c.block_txs_summary(hash("0000")).await.unwrap();
+    assert_eq!(rows.tip.unwrap().height, 975_509);
+    let rows = rows.value;
+    assert_eq!(rows.len(), 6);
+    assert_eq!(
+        (rows[0].fee.to_sat(), rows[0].weight, rows[0].value.to_sat()),
+        (0, 1276, 5_000_000_981)
+    );
+    assert_eq!(
+        rows[5].txid.to_string(),
+        "a744298636e7c96603212df56831a0378d194703745ea2049e238d76600a3a58"
+    );
+    assert_eq!(
+        (rows[5].fee.to_sat(), rows[5].weight, rows[5].value.to_sat()),
+        (166, 661, 837_077)
+    );
+    // A block holding only its coinbase; an empty list decodes too, for the caller to judge.
+    assert_eq!(
+        c.block_txs_summary(hash("0001")).await.unwrap().value.len(),
+        1
+    );
+    assert!(
+        c.block_txs_summary(hash("0002"))
+            .await
+            .unwrap()
+            .value
+            .is_empty()
+    );
+
+    // Rows of three or five, a negative fee, a weight past u32, a fee as text, a bad txid, an
+    // object: each a decode error.
+    for p in ["0010", "0011", "0012", "0013", "0014", "0015", "0016"] {
+        assert!(
+            matches!(c.block_txs_summary(hash(p)).await, Err(Error::Decode(_))),
+            "{p}"
+        );
+    }
+    // More rows than a block can hold, and more bytes than such rows take.
+    assert!(matches!(
+        c.block_txs_summary(hash("0020")).await,
+        Err(Error::Decode(_))
+    ));
+    for p in ["0021", "0022"] {
+        assert_eq!(
+            c.block_txs_summary(hash(p)).await.unwrap_err(),
+            Error::ResponseTooBig,
+            "{p}"
+        );
+    }
+
+    // Unknown, off the best chain or pruned: 404, whatever the text.
+    for p in ["0030", "0031"] {
+        assert_eq!(
+            c.block_txs_summary(hash(p)).await.unwrap_err(),
+            Error::NotFound
+        );
+    }
+    // A node without the route.
+    assert!(matches!(
+        c.block_txs_summary(hash("ffff")).await.unwrap_err(),
+        Error::Rejected { status, .. } if status.as_u16() == 400
     ));
 }
 

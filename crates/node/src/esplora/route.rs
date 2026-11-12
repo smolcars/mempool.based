@@ -126,6 +126,8 @@ pub enum Route {
         start: BlockTxsStart,
     },
     BlockRaw(BlockHash),
+    /// `[txid, fee, weight, value]` per transaction. Not in rbitcoin v0.9.2, which answers 400.
+    BlockTxsSummary(BlockHash),
     /// The txid at `index` in the block.
     BlockTxid {
         hash: BlockHash,
@@ -280,6 +282,7 @@ impl Route {
             Self::BlockTxids(h) => write!(o, "/block/{h}/txids")?,
             Self::BlockTxs { hash, start } => write!(o, "/block/{hash}/txs/{}", start.0)?,
             Self::BlockRaw(h) => write!(o, "/block/{h}/raw")?,
+            Self::BlockTxsSummary(h) => write!(o, "/block/{h}/txs/summary")?,
             Self::BlockTxid { hash, index } => write!(o, "/block/{hash}/txid/{index}")?,
 
             Self::Tx(t) => write!(o, "/tx/{t}")?,
@@ -566,6 +569,10 @@ mod tests {
         assert_eq!(
             path(&Route::BlockTxid { hash: h, index: 3 }),
             format!("/block/{H}/txid/3")
+        );
+        assert_eq!(
+            path(&Route::BlockTxsSummary(h)),
+            format!("/block/{H}/txs/summary")
         );
         assert_eq!(batch.method(), Method::POST);
     }
