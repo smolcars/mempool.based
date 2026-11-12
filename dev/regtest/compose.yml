@@ -1,11 +1,11 @@
-# rbitcoin v0.9.1 on regtest. Run it through regtest.py, which picks a project
+# rbitcoin v0.9.2 on regtest. Run it through regtest.py, which picks a project
 # name per checkout so parallel instances never collide.
 name: ${REGTEST_PROJECT:?run dev/regtest/regtest.py, or set REGTEST_PROJECT}
 
 services:
   node:
     # Multi-arch (linux/amd64, linux/arm64) release image, pinned by digest.
-    image: ${REGTEST_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.1@sha256:07ba41581f0c8f4c98a4b35c1106c61fe1b7c6c2c36cbd8321e7919efaae5207}
+    image: ${REGTEST_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.2@sha256:aeaaf8bf0f5b048c3645a3bc7e8c06d5de32ffeef0ff67f02ddcf8607bfaed42}
     command:
       - --network=regtest
       - --no-seeds

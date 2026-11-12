@@ -1,4 +1,4 @@
-//! Decoded Esplora responses, shaped as rbitcoin v0.9.1 serves them.
+//! Decoded Esplora responses, shaped as rbitcoin v0.9.2 serves them.
 //!
 //! Strings here (scripts, asm, addresses, witness items) are chain data: untrusted text.
 //! Fields rbitcoin may leave out (pruned transactions, mempool-only rows) are optional.

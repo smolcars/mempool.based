@@ -91,7 +91,7 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 - Reading a resource inside the shell's `<Suspense>` holds the whole page until it loads. To show the page frame first and fill sections as they arrive, give each section its own `<Suspense>` or test `resource.loading`.
 - An error thrown while rendering reaches the shell's error boundary, which shows "This page could not be shown". Catch expected failures (not found, node unavailable) in the page with `<ErrorState>` instead.
 
-`lib/esplora.ts` has hand-written types for the replies pages use, from rbitcoin v0.9.1's `docs/esplora-openapi.yaml`. Add a type when you use a new route; keep the field names exactly as the API sends them. Amounts are integer sats and times are unix seconds throughout.
+`lib/esplora.ts` has hand-written types for the replies pages use, from rbitcoin v0.9.2's `docs/esplora-openapi.yaml`. Add a type when you use a new route; keep the field names exactly as the API sends them. Amounts are integer sats and times are unix seconds throughout.
 
 During development, `bun run dev` proxies `/api`, `/app` and `/healthz` to the Rust server at `LISTEN_ADDR`.
 
