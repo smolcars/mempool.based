@@ -38,8 +38,8 @@ One table per group, each on its own page:
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
 | mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 51 | 5 | 3 | 14 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 19 | 3 | 4 | 22 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 50 | 25 | 16 | 3 | 6 | 29 |
-| **Total** | | **227** | **139** | **26** | **10** | **52** | **192** |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 25 | 19 | 5 | 6 | 31 |
+| **Total** | | **232** | **139** | **29** | **12** | **52** | **194** |
 
 Every row's status was checked against `master` on 2026-11-12 (task C1): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
@@ -69,7 +69,8 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 | Mining dashboard: past adjustments | A table of recent retargets on `/mining` | Nothing: `/api/v1/mining/difficulty-adjustments` | An hour | Build |
 | Block health graph | Match rate per block over time | Nothing: `/api/v1/mining/blocks/predictions/:interval` | A few hours | Build |
 | Lightning node: fee histogram and history | A node's fee rates, and its capacity and channels over time | Nothing: both routes are served | Half a day | Build |
-| RBF `/rbf` | Recent replacement trees, with a full-RBF filter | Nothing: `/api/v1/replacements` and `/fullrbf/replacements` | A day | Build |
+| RBF `/rbf`, and the home page's recent replacements | Recent replacement trees, with a full-RBF filter, and the newest few on the home page | Nothing: `/api/v1/replacements` and `/fullrbf/replacements` | A day | Build |
+| Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Nothing: the stored snapshots and `/api/v1/lightning/statistics/:interval` have them | A few hours | Build later |
 | Address: balance chart | Balance over time | Nothing: Esplora `/txs/summary` pages through it | A day | Build; say where a large address's history is cut short |
 | Link previews (Q1) | Cards for block, transaction and address links | Server-side titles and descriptions in the shell for those paths | A day or two | Build (already Q1). Images would cost more; start without |
 | Units | BTC or sats | Nothing: one setting read by the amount component | A day | Build later |
@@ -96,7 +97,7 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 
 | Item | Rows | Decision |
 |---|---|---|
-| Fiat prices | `/v1/prices`, `/v1/historical-price`, `conversions`, fiat currency choice, the calculator, fiat in the block-fee graph | Parked: a price feed is a new outside source with its own trust and off switch |
+| Fiat prices | `/v1/prices`, `/v1/historical-price`, `conversions`, fiat currency choice, the calculator, block fees in fiat | Parked: a price feed is a new outside source with its own trust and off switch |
 | Broadcast page `/tx/push` | Pages: broadcast | `POST /api/tx` is served under its rules ([`SECURITY.md`](SECURITY.md) rule 5); a page for it is a product decision. Recommend building it once decided: a day |
 | Package submission | `POST /api/txs/package`, `POST /api/v1/txs/package`, packages on `/tx/push` | A second write path, with its own caps. Recommend skipping until a wallet needs it |
 | Test-accept | `POST /api/txs/test`, `/tx/test` | Not a broadcast, but every call makes the node validate up to 25 transactions. Recommend skipping: `/tx/preview` covers looking at a transaction |

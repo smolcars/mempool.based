@@ -2,7 +2,7 @@
 
 Part of the parity inventory in [`../COMPAT.md`](../COMPAT.md), which defines the columns, status values and the `Live` legend.
 
-rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../RBITCOIN.md)). "Engine" means our in-memory mempool tracker and projected blocks; "store" means our SQLite file. A route marked `planned` is served at `/api/v1/…` in the shape observed on the reference backend. Our own frontend may read the same data through `/app` in another shape.
+rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../RBITCOIN.md)). "Engine" means our in-memory mempool tracker and projected blocks; "store" means our SQLite file. A route marked `served` is served at `/api/v1/…` in the shape observed on the reference backend. Our own frontend may read the same data through `/app` in another shape.
 
 ## General
 

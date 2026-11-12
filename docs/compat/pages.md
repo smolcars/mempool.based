@@ -8,14 +8,17 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 
 | Page or feature | Shows | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| Home `/` | Projected and recent blocks, fees, mempool size and inflow, difficulty progress, latest transactions and replacements | Engine, Esplora, store | served | M1 | ref | Projected and mined blocks, the mempool's size and fee bands, fees to pay now, latest transactions, the difficulty adjustment. Its inflow is on `/mempool` (Flow), not here; recent replacements are the `/rbf` row |
-| Block strip | Projected blocks to the left of mined blocks, on most pages | Engine, Esplora | served | M2 | ref | On the home page only; the block and projected-block pages link to their neighbours instead |
+| Home `/` | Projected and recent blocks, fees, mempool size, difficulty progress, latest transactions | Engine, Esplora, store | served | M1 | ref | Also the mempool's fee bands |
+| Home: mempool inflow | Incoming vB/s beside the mempool's size | Store | different | M3 | — | On `/mempool` (Flow), not the home page |
+| Home: recent replacements | The newest replacements | Engine | planned | M2 | — | Not built; comes with the `/rbf` page |
+| Block strip | Projected blocks to the left of mined blocks | Engine, Esplora | served | M2 | ref | |
+| Block strip on other pages | The strip above most pages, not only the home page | Engine, Esplora | different | M2 | ref | On the home page only; the block and projected-block pages link to their neighbours instead |
 | Projected block `/mempool-block/:index` | One projected block's fee range, size, and its transactions drawn | Engine | served | M2 | ref | At `/block/next` and `/block/next/:n`. With the mempool engine off it says so |
 | Block `/block/:hash` or `/block/:height` | Header, pool, reward, fee range, transactions drawn, paged list, expected-versus-mined view | Esplora; RPC `getblock`; store for audit | served | M1 | ref | `/block/:id`. The audit shows for blocks this server watched arrive |
-| Blocks `/blocks` | Paged block list with pool, fees, size, health | Esplora; store | served | M1 | ref | Median fee rate, total fees, size, weight and match rate; no pool column (next row) |
+| Blocks `/blocks` | Paged block list with fees, size, health | Esplora; store | served | M1 | ref | Median fee rate, total fees, size, weight and match rate |
 | Blocks list: pool column | Who mined each block in the list | Store | planned | M3 | — | Not built. The mining page's recent blocks and every block page name the pool |
 | Transaction `/tx/:txid` | Inputs and outputs, flow diagram, fee and fee rate, status, ETA, live confirmation, RBF history, CPFP, Lightning channel links | Esplora; engine; Lightning store | served | M1 | — | Every part named, ETA as a projected block and a time. Did not finish rendering headlessly on the reference. With the mempool engine off it checks every 10 s instead of live, and shows no position, CPFP or replacements |
-| Address `/address/:address` | Balance, totals, balance chart, paged history, live updates | Esplora; Electrum push | served | M1 | ref | Everything but the balance chart (next row). Large addresses hit the node's 503 cap on totals; the page shows history anyway and says why totals are missing |
+| Address `/address/:address` | Balance, totals, paged history, live updates | Esplora; Electrum push | served | M1 | ref | Large addresses hit the node's 503 cap on totals; the page shows history anyway and says why totals are missing |
 | Address: balance chart | Balance over time | Esplora `/txs/summary` | planned | M1 | — | Not built; the page leaves a place for it |
 | Search | Exact txid, block hash, height, address; Lightning node and channel | Esplora; Lightning store | served | M1 | — | The header finds transactions, blocks, heights and addresses on every network. Lightning nodes and channels are found on `/lightning` and `/lightning/search`, by design ([`FRONTEND.md`](../FRONTEND.md#lightning-pages)). Prefix autocomplete is out of scope |
 | RBF `/rbf` | Recent replacement trees, with a full-RBF filter | Engine | planned | M2 | ref | Not built. Its data is served: `GET /api/v1/replacements` and `/fullrbf/replacements` |
@@ -33,7 +36,7 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 
 | Page | Shows | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| Mining dashboard `/mining` | Reward stats, pool share, hashrate, difficulty, recent blocks and adjustments | Store | served | M3 | ref | `/mining`. Of past adjustments it shows the previous change only (next row) |
+| Mining dashboard `/mining` | Reward stats, pool share, hashrate, difficulty, recent blocks, the next and the previous adjustment | Store | served | M3 | ref | `/mining` |
 | Mining dashboard: past adjustments | A table of recent retargets | Store | planned | M3 | — | Not built. Served as `GET /api/v1/mining/difficulty-adjustments` |
 | Pool `/mining/pool/:slug` | One pool's share, hashrate chart, blocks | Store | served | M3 | — | Did not finish rendering headlessly on the reference; its API took 58 s for it |
 | Pool ranking (`/graphs/mining/pools`) | Pools by blocks over a period | Store | served | M3 | ref | On `/mining`, with its period |
@@ -47,19 +50,21 @@ mempool.space puts these under `/graphs`. Ours are hand-drawn SVG (W10) on `/min
 | Mempool `/graphs/mempool` | Mempool vsize by fee band, and inflow, over time | Store (MI5) | served | M3 | ref | `/mempool`: vsize by fee band and the flow in and out |
 | Hashrate and difficulty | Network hashrate and difficulty over time | Store | served | M3 | ref | On `/mining` |
 | Pool dominance | Pool shares over time | Store | served | M3 | ref | On `/mining`, week by week |
-| Block fees | Average fees per block over time, BTC and fiat | Store | served | M3 | ref | On `/mining`, in BTC only: fiat waits on prices |
+| Block fees | Average fees per block over time, in BTC | Store | served | M3 | ref | On `/mining` |
+| Block fees in fiat | The same, converted | Store (prices) | planned | M3 | ref | Not built; waits on prices |
 | Block rewards | Average reward per block over time | Store | served | M3 | ref | On `/mining` |
 | Block fee rates | Fee-rate percentiles per block over time | Store | served | M3 | ref | On `/mining`, sub-sat percentiles |
 | Block sizes and weights | Size and weight over time | Store | served | M3 | ref | On `/mining` |
 | Block health | Audit match rate per block over time | Store (audits) | planned | M3 | ref | Not built. Served as `GET /api/v1/mining/blocks/predictions/:interval`; `/blocks` lists each block's match rate |
-| Lightning graphs | Nodes, channels and capacity over time, by network type | Lightning store | served | M4 | — | On `/lightning`: channels and capacity drawn, nodes in the readout; the split by network type is in the current totals, not over time |
+| Lightning graphs | Nodes, channels and capacity over time | Lightning store | served | M4 | — | On `/lightning`: channels and capacity drawn, nodes in the readout |
+| Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Lightning store | planned | M4 | — | Not built; the split shows in the current totals only. The stored snapshots have it |
 
 ## Lightning
 
 | Page | Shows | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
 | Lightning dashboard `/lightning` | Network totals, top nodes, recent channels, charts | Lightning store | served | M4 | ref | Also the newest closes. The reference runs with Lightning off, so only its page shell was checked |
-| Node `/lightning/node/:pubkey` | Alias, sockets, features, capacity, channels, fee histogram, history | Lightning store | served | M4 | — | Everything but the fee histogram and the history chart (next row). No location data |
+| Node `/lightning/node/:pubkey` | Alias, sockets, features, capacity, channels | Lightning store | served | M4 | — | No location data |
 | Node: fee histogram and history | A node's fee rates and its capacity and channels over time | Lightning store | planned | M4 | — | Not built. Served as `GET /api/v1/lightning/nodes/:pubkey/fees/histogram` and `/statistics` |
 | Channel `/lightning/channel/:id` | Both policies, capacity, funding and closing transactions | Lightning store; Esplora | served | M4 | — | The funding transaction appears once the server has looked it up ([`LIGHTNING.md`](../LIGHTNING.md#funding-transactions)) |
 | Rankings `/lightning/nodes/rankings` | Top nodes by liquidity and connectivity, oldest nodes | Lightning store | served | M4 | ref | `/lightning/rankings?by=capacity\|channels\|age` |
