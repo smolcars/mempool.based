@@ -34,6 +34,7 @@ cargo run -p mempool-based          # LISTEN_ADDR and WEB_DIR are read from the 
 # Test and lint: what CI runs
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 (cd web && bun run typecheck && bun run lint && bun run test && bun run build && bun run size)
+(cd web && bun run e2e)               # browser tests; needs Docker
 ```
 
 ## Documentation

@@ -9,6 +9,8 @@ web/
   index.html            The shell document: preloads the font, runs public/boot.js, loads src/index.tsx
   public/boot.js        Runs before first paint: applies a stored theme and the network (see "Theme")
   scripts/check-size.js First-load budget check (`bun run size`)
+  scripts/e2e.sh        Browser tests in one command (`bun run e2e`)
+  e2e/                  Browser tests (Playwright) and their fixtures
   src/
     index.tsx           Waits briefly for the font, then mounts the router
     routes.ts           The route table: every page, on every network
@@ -158,4 +160,30 @@ The font is preloaded, and `index.tsx` waits up to 1 s for it before the first r
 
 ## Testing
 
-`bun run test` runs Vitest in a happy-dom document, so logic and components are tested the same way. `bun run size` checks the first-load budget after `bun run build`: the scripts `index.html` loads, the home page's chunk, and everything they import statically. CI runs typecheck, lint, test, build and size ([`CI.md`](CI.md)).
+`bun run test` runs Vitest in a happy-dom document, so logic and components are tested the same way. `bun run size` checks the first-load budget after `bun run build`: the scripts `index.html` loads, the home page's chunk, and everything they import statically. CI runs typecheck, lint, test, build and size, and the browser tests below ([`CI.md`](CI.md)).
+
+## Browser tests
+
+`bun run e2e` runs the Playwright tests in `web/e2e/` in headless Chromium against the real server and a private rbitcoin node on regtest ([`REGTEST.md`](REGTEST.md)). It needs Docker, `python3`, Rust and bun, and does everything else itself: starts the node and builds the known chain, builds the frontend and the server from your checkout, starts the server on a free port with only regtest enabled, runs the tests and removes all of it. A second run takes about 10 seconds. Every run uses its own node, port and output directory, so any number can run at once. On a failure it keeps the server log and Playwright's traces and prints where.
+
+Arguments go to Playwright: `bun run e2e tx.e2e.ts`, `bun run e2e -g "deep link"`, `bun run e2e --headed`.
+
+### Adding a test
+
+Put it beside the others as `web/e2e/<page>.e2e.ts` (the `.e2e.ts` suffix keeps Vitest away from it), and import from `./fixtures`, never from `@playwright/test`:
+
+```ts
+import { chain, expect, test } from "./fixtures";
+
+test("a block page shows its height", async ({ page }) => {
+  await page.goto(`/regtest/block/${chain.blocks[106]}`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("106");
+});
+```
+
+- **Pages are under `/regtest/`.** Only regtest is enabled, so the root is a 404.
+- **`chain`** in `e2e/fixtures.ts` is the scenario's manifest: tip, block hashes, txids and addresses of every script type. They are the same on every run.
+- **Every test fails on a console error, an uncaught exception or a Content-Security-Policy violation** on any page it opens. The fixture does this by itself. If your test causes an error on purpose, such as a request that is meant to 404, name it: `test.use({ consoleErrorsAllowed: [/status of 404/] })`. A CSP violation cannot be allowed.
+- **Find elements by role and text,** as a reader would (`getByRole`, `getByText`), not by class names.
+- **Tests share one node and run in parallel, so never mine.** A new block changes the tip every other test reads. The broadcast test in `api.e2e.ts` adds one transaction to the mempool, so do not assert the mempool's exact size. A test that needs a different chain needs its own node; raise it in your PR rather than mining in the shared one.
+- **Keep the suite fast.** Browser tests cover what only a browser can show: that the page renders real data, links work and nothing errors. Logic belongs in unit tests.
