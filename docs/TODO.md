@@ -103,7 +103,7 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 | LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | done ([#37](https://github.com/smolcars/mempool.based/pull/37)); the graph is unverified until LN2 |
 | LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | done ([#48](https://github.com/smolcars/mempool.based/pull/48)) |
 | LN3 | Channel opens and closes from blocks, with close classification | LN2 | done ([#61](https://github.com/smolcars/mempool.based/pull/61)) |
-| LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | doing |
+| LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | built, waiting for review (rounds 1 and 2 resolved, round 3 never started); branch `t3/lightning-server-store`, not pushed |
 | LN4b | The Lightning node, channel, search and ranking routes, in `/app` and in the `/api/v1/lightning` shapes | LN4a | todo |
 | W11 | Lightning pages: network statistics, node, channel, search | LN4b, W1 | todo |
 
@@ -126,5 +126,6 @@ Refined when M4 lands.
 | PF3 | Hold immutable node answers in memory: `/api/block/:hash` misses the 10 ms budget because it is passed through uncached | Q3 | todo |
 | PF4 | Shorten the page's request chain on slow networks: `/app/config` waits behind 15 small chunks on six connections, about 1 to 1.5 s | Q3 | todo |
 | PF5 | Document host limits for many sockets in the operator guide: delivery stalled at 10,000 sockets when the host ran short of network buffers | Q3, Q4 | todo |
-| Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | doing |
+| Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | built, waiting for review ([#63](https://github.com/smolcars/rbitcoin-space/pull/63)); drop its temporary workflow-trigger commit before merge |
+| OP1 | Operator-facing gaps the guide's author found: say at startup when the node's address index is off; make store trouble visible in `/readyz` and name a full disk in the log; report the build's revision beside the version in `/healthz`; correct the 21-hour backfill estimate in `docs/CONFIG.md`; stop the Dockerfile's shared build cache producing a stale local image | Q4 | todo |
 | Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | doing |
