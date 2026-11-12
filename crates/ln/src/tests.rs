@@ -1710,9 +1710,11 @@ async fn a_burst_becomes_a_few_batches_within_the_rate_limit() {
     assert_eq!(sizes.iter().sum::<usize>(), 1000);
     assert!(sizes.iter().all(|n| *n <= chain::LOOKUP_BATCH));
     assert!(batches.len() <= 12, "{sizes:?}");
+    // The fake stamps each request a little after the gate lets it start, by an amount that
+    // varies under load: allow for that.
     for w in batches.windows(2) {
         assert!(
-            w[1].0 - w[0].0 >= interval,
+            w[1].0 - w[0].0 >= interval - Duration::from_millis(10),
             "requests closer than the limit"
         );
     }

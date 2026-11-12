@@ -1235,3 +1235,60 @@ async fn regtest_chain_tricks() {
     );
     peer.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_full_queue_cannot_starve_the_replay() {
+    let id = scid(100, 1, 0);
+    let node = FakeChain::at(1000);
+    node.add(id, &funding(1, 2), 5_000_000, false);
+    let config = quick(|c| c.max_pending = 10);
+    let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
+    // A peer's invented channels fill the queue to its hard limit, and stay while the node is
+    // down: as a flood keeps it full.
+    node.0.down.store(true, Ordering::Relaxed);
+    for i in 0..100 {
+        let _ = g.handle_channel_announcement(None, &channel(scid(100, 10 + i, 0), 3, 4));
+    }
+    assert_eq!(g.lookup.waiting(), 10 + 64);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), pace(&config)));
+    // The stored channel is sent all the same: the replay has a share of its own.
+    g.replay_tick(config.max_pending);
+    assert_eq!(g.replay_left(), 0);
+    node.0.down.store(false, Ordering::Relaxed);
+    wait_for("the stored channel", || {
+        g.graph().read_only().channel(id).is_some()
+    })
+    .await;
+    g.replay_tick(config.max_pending);
+    assert!(!g.replaying());
+}
+
+#[test]
+fn a_peer_list_counts_its_batch_in_flight_against_the_cap() {
+    let h = handler(5);
+    let peer = key(7).public_key(&Secp256k1::new());
+    let mut features = InitFeatures::empty();
+    features.set_gossip_queries_optional();
+    let init = Init {
+        features,
+        networks: None,
+        remote_network_address: None,
+    };
+    h.gossip.peer_connected(peer, &init, false).unwrap();
+    // Pieces of a list that stays open: the first five ids go out as a batch at once.
+    let part = |ids: Vec<u64>| ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: 100,
+        sync_complete: false,
+        short_channel_ids: ids,
+    };
+    h.gossip
+        .handle_reply_channel_range(peer, part((10..15).collect()))
+        .unwrap();
+    h.gossip
+        .handle_reply_channel_range(peer, part((20..25).collect()))
+        .unwrap();
+    // Five ids and the open list, not ten.
+    assert_eq!(h.gossip.range_pending(), 5 + 1);
+}

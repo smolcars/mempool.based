@@ -345,18 +345,20 @@ impl Gossip {
         self.replay.lock().is_ok_and(|r| r.active)
     }
 
-    /// Sends stored channels for checking while the lookup queue is under half full, so live
-    /// gossip keeps room, then applies stored node announcements of nodes now in the graph. Once
-    /// every stored channel was sent and checked, the node announcements left (nodes with no
-    /// verified channel) are dropped.
+    /// Sends stored channels for checking while fewer than half of `max_pending` of them wait,
+    /// whatever live gossip holds: live gossip pauses at `max_pending` in all, so each gets half
+    /// under load, and a peer keeping the queue full cannot starve the replay. Then applies stored
+    /// node announcements of nodes now in the graph. Once every stored channel was sent and
+    /// checked, the node announcements left (nodes with no verified channel) are dropped.
     pub(crate) fn replay_tick(&self, max_pending: usize) {
-        let room = (max_pending / 2)
-            .saturating_sub(self.lookup.waiting())
-            .min(REPLAY_PER_TICK);
         let (batch, saved): (Vec<(u64, ChannelAnnouncement)>, usize) = {
             let Ok(mut r) = self.replay.lock() else {
                 return;
             };
+            r.sent.retain(|id| self.lookup.holds(*id));
+            let room = (max_pending / 2)
+                .saturating_sub(r.sent.len())
+                .min(REPLAY_PER_TICK);
             // Saved ones first, without counting the queue's room: they never enter it.
             let saved = r.saved.len().min(REPLAY_PER_TICK);
             let at = r.saved.len() - saved;
@@ -476,9 +478,9 @@ impl Gossip {
             .ok()
             .zip(c.bitcoin_key_2.as_pubkey().ok())
             .map(|(a, b)| make_funding_redeemscript(&a, &b).to_p2wsh());
-        self.lookup.expect(scid, script);
+        self.lookup.expect(scid, script, stored);
         let r = self.sync.handle_channel_announcement(their_node_id, msg);
-        self.lookup.expect(scid, None);
+        self.lookup.expect(scid, None, false);
         // Answered from the cache: LDK added it at once.
         let found = self.lookup.take_found(scid);
         if r.is_ok() && !known && found.is_some() {
@@ -937,7 +939,9 @@ impl RoutingMessageHandler for Gossip {
         for scid in msg.short_channel_ids {
             // Each peer's list is capped on its own, so one listing invented ids cannot crowd
             // out the others'.
-            if p.wanted.len() >= self.max_channels {
+            // The batch in flight counts too: what one peer holds stays under the ceiling.
+            let held = p.wanted.len() + p.in_flight.as_ref().map_or(0, |(b, _)| b.len());
+            if held >= self.max_channels {
                 break;
             }
             let want = match graph.channel(scid) {
