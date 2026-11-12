@@ -63,3 +63,43 @@ test("regtest says it never adjusts its difficulty", async ({ page }) => {
     page.getByRole("region", { name: "Difficulty adjustment" }).getByText(/never adjusts/),
   ).toBeVisible();
 });
+
+test("the unconfirmed scenario transactions wait in the projected next block", async ({ page }) => {
+  await page.goto("/regtest/");
+  const projected = page.getByRole("list", { name: "Projected blocks, next first" });
+  const next = projected.getByRole("link").first();
+  // Four from the scenario, and maybe the broadcast test's.
+  await expect(next).toHaveAccessibleName(/^Next block, projected: \d+ transactions, median fee/);
+  const label = (await next.getAttribute("aria-label")) ?? "";
+  expect(Number(/projected: (\d+)/.exec(label)?.[1])).toBeGreaterThanOrEqual(4);
+  await expect(page.getByText("Everything waiting fits in the next block.")).toBeVisible();
+  // It opens that block's page.
+  await next.click();
+  await expect(page).toHaveURL(/\/regtest\/block\/next$/);
+});
+
+test("a cold load asks for each thing once, and nothing the mempool topics send", async ({
+  page,
+}) => {
+  const asked: string[] = [];
+  page.on("request", (r) => {
+    const path = new URL(r.url()).pathname;
+    if (path.includes("/api/") || path.includes("/app/")) asked.push(path.replace("/regtest", ""));
+  });
+  await page.goto("/regtest/");
+  await expect(page.getByRole("list", { name: "Projected blocks, next first" })).toBeVisible();
+  await expect(page.locator(".home-stats")).not.toHaveAttribute("aria-busy", "true");
+  // Long enough for a second round of requests, as a new tip would cause. (The panels' fallback
+  // polling, after the topics stay silent for 5 s, is covered by the unit tests.)
+  await page.waitForTimeout(1_500);
+  const counts = new Map<string, number>();
+  for (const p of asked) counts.set(p, (counts.get(p) ?? 0) + 1);
+  expect(
+    [...counts.values()].every((n) => n === 1),
+    JSON.stringify([...counts]),
+  ).toBe(true);
+  expect(counts.get("/api/blocks")).toBe(1);
+  expect(counts.get("/api/fee-estimates")).toBe(1);
+  expect(counts.has("/api/mempool")).toBe(false);
+  expect(counts.has("/api/mempool/recent")).toBe(false);
+});

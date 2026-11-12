@@ -79,6 +79,16 @@
     text-align: right;
     text-wrap: balance;
   }
+  .home-strip__pending:empty {
+    display: none;
+  }
+  /* Next first in the document, so a screen reader starts at the line; drawn from the line out. */
+  .home-strip__projected {
+    position: relative;
+    display: flex;
+    flex-direction: row-reverse;
+    gap: var(--tile-gap);
+  }
   .home-strip__now {
     flex: none;
     align-self: stretch;
@@ -250,6 +260,33 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Projected tiles hold layers on the sunken band, seamed in its color. */
+  .home-tile--projected .home-tile__body {
+    --strata-seam: var(--color-surface-sunken);
+  }
+  /* An empty block: a dashed floor, so the empty tile reads as measured, not as missing. */
+  .home-tile__fill--floor {
+    align-self: flex-end;
+    height: 0;
+    min-height: 0;
+    border-top: 2px dashed var(--color-line-strong);
+    background: none;
+    transform: none;
+  }
+  /* "Nothing waiting" takes the two lines the median and the range would. */
+  .home-tile--empty .home-tile__fee {
+    min-height: calc(2em * var(--leading-body));
+    font-size: var(--text-xs);
+    white-space: normal;
+    color: var(--color-text-muted);
+  }
+  /* A crossing block's projected layers, clearing as its real ones grow out of them. */
+  .home-tile__guess {
+    transition: opacity var(--dur-slow) var(--ease-out);
+  }
+  .home-tile__guess--gone {
+    opacity: 0;
+  }
   .home-tile--leaving {
     position: absolute;
     top: 0;
@@ -265,7 +302,7 @@
   }
   .home-tile--crossing .home-tile__body {
     border-style: dashed;
-    background: transparent;
+    background: var(--color-surface-sunken);
     box-shadow: none;
   }
   .home-tile--skeleton .home-tile__body {
@@ -535,6 +572,8 @@
   /* A zero-size pin on the scale's centre line; only transform moves it. */
   .home-ladder__pin {
     --row: 0;
+    /* Lower rows on top: a label then hides any stem that has to rise behind it. */
+    z-index: calc(10 - var(--row));
     position: absolute;
     top: 7px;
     left: 0;
@@ -570,6 +609,8 @@
   }
   .home-ladder__pin-label {
     position: absolute;
+    padding: 0 2px;
+    background: var(--color-bg);
     left: 6px;
     bottom: calc(0.7rem + var(--row) * 2.2rem);
     display: flex;
@@ -666,6 +707,12 @@
     }
     .home-strip__legend,
     .home-strip__pending {
+      display: none;
+    }
+    /* With its "~", a projected median and its unit overrun a phone's tile (also on a block still
+       crossing); the mined tiles beside it carry the unit. */
+    .home-tile--projected .home-tile__fee .unit,
+    .home-tile--guessing .home-tile__fee .unit {
       display: none;
     }
     .home-live {

@@ -1,5 +1,6 @@
 import {
   type Accessor,
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -14,7 +15,7 @@ import {
 } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
-import { Strata, strataLayers } from "../../components/Strata";
+import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { useNow } from "../../lib/clock";
 import type { Block } from "../../lib/esplora";
@@ -28,15 +29,26 @@ import {
   vsizeFromWeight,
 } from "../../lib/format";
 import type { LiveStatus } from "../../lib/live";
-import { paths } from "../../lib/network";
+import type { ProjectedBlock } from "../../lib/projected-topic";
+import { type Network, paths } from "../../lib/network";
 import { STRIP_MAX } from "./feeds";
 import { LiveIndicator } from "./LiveIndicator";
 import { type Motion, motion } from "./motion";
+import {
+  EMPTY_MODEL,
+  type ProjectedView,
+  type ProjectionModel,
+  projectedView,
+  provisionalFor,
+  releaseIn,
+  sameTiles,
+} from "./projection";
+import { ProjectedTile, projectedLayers, sameLayers, TILE_LAYER_MIN } from "./ProjectedTile";
 import type { TileFacts } from "./summaries";
 
 const MAX_WEIGHT = 4_000_000;
-/** The thinnest layer, as a share of a tile's strata box (about 45 px): 2 px, so one transaction shows. */
-const TILE_LAYER_MIN = 0.045;
+/** Projected tiles on screen, not the ones fading out. */
+const PROJECTED = ".home-tile--projected[data-key]:not(.home-tile--leaving)";
 
 /** How full a block is, as tile text: `99.9% full`, `under 1% full`. */
 export function fullness(weight: number): string {
@@ -54,9 +66,11 @@ export function tileAge(time: number, now: number): string {
 }
 
 /**
- * The block strip: the next block on the left of the "now" line, mined blocks on the right. When
- * the list changes it plays the new-block sequence (docs/DESIGN.md "Motion"): every tile is
- * measured, the list is swapped, then each tile glides from where it was (FLIP).
+ * The block strip: projected blocks left of the "now" line, mined blocks right of it. Whenever the
+ * tiles change places (a block is mined, a burst, a reorg, the projection catching up) it plays
+ * the new-block sequence (docs/DESIGN.md "Motion"): every tile is measured, both lanes are
+ * swapped in one go, then each tile glides from where it was (FLIP), and a mined block that was
+ * projected crosses the line from its projected tile. A change of figures alone moves nothing.
  */
 export function BlockStrip(props: {
   blocks: Accessor<Block[] | undefined>;
@@ -67,12 +81,28 @@ export function BlockStrip(props: {
   stale: Accessor<boolean>;
   /** A mined block's fee facts, by hash. */
   facts: (id: string) => TileFacts;
+  projection: Accessor<ProjectionModel>;
+  network: Network;
 }) {
   const now = useNow();
   const [shown, setShown] = createSignal<Block[]>();
+  const [view, setView] = createSignal<ProjectedView>(projectedView(EMPTY_MODEL, undefined, 0));
   const [announcement, setAnnouncement] = createSignal("");
+  // A held projection is released by time, not by a message: this ticks when it is due.
+  const [tick, setTick] = createSignal(0);
+  /** Blocks crossing the line: what each was projected to be, until it lands. */
+  const crossings = new Map<string, Crossing>();
+  /** Lands each crossing still in the air; the sequence calls one as its tile touches down. */
+  const landers = new Map<string, () => void>();
+  const landAll = () => {
+    for (const land of landers.values()) land();
+    landers.clear();
+  };
+  /** Whether projected tiles drawn now settle their layers in by themselves (see `sequence`). */
+  let settleNew = false;
   let scroller: HTMLDivElement | undefined;
   let lane: HTMLOListElement | undefined;
+  let upcoming: HTMLDivElement | undefined;
   let next: HTMLDivElement | undefined;
   let flash: HTMLSpanElement | undefined;
   let nowLine: HTMLDivElement | undefined;
@@ -89,103 +119,174 @@ export function BlockStrip(props: {
     );
     return a;
   };
+  const later = (ms: number, f: () => void) => {
+    const t = setTimeout(() => {
+      timers.delete(t);
+      f();
+    }, ms);
+    timers.add(t);
+  };
 
   /** Ends the sequence in progress where it stands, so a new one starts from what is on screen. */
   const interrupt = () => {
+    // Whatever was in the air lands where the next sequence starts it from: settled.
+    landAll();
     for (const a of running) a.cancel();
     running.clear();
     for (const g of ghosts) g.remove();
     ghosts.clear();
     for (const t of timers) clearTimeout(t);
     timers.clear();
-    for (const el of lane?.querySelectorAll(".home-tile--landing") ?? [])
+    for (const el of lane?.querySelectorAll<HTMLElement>(".home-tile--landing") ?? []) {
       el.classList.remove("home-tile--landing", "home-tile--crossing");
+    }
   };
 
+  const target = createMemo(() => {
+    tick();
+    const blocks = props.blocks();
+    return { blocks, view: projectedView(props.projection(), blocks, Date.now()) };
+  });
+  createEffect(() => {
+    const wait = releaseIn(props.projection(), props.blocks(), Date.now());
+    if (wait === undefined) return;
+    const t = setTimeout(() => setTick((n) => n + 1), wait + 50);
+    onCleanup(() => clearTimeout(t));
+  });
+
   createEffect(
-    on(props.blocks, (list) => {
+    on(target, ({ blocks: list, view: nextView }) => {
       const before = untrack(shown);
+      const beforeView = untrack(view);
+      const minedSame = sameIds(before, list);
+      // The same tiles in the same places: the figures change where they stand.
+      if (minedSame && sameTiles(beforeView, nextView)) {
+        setView(nextView);
+        return;
+      }
       const tip = list?.[0];
-      if (before && tip && tip.height > (before[0]?.height ?? -1)) {
+      const oldTip = before?.[0]?.height ?? Number.POSITIVE_INFINITY;
+      if (before && list && tip && tip.height > oldTip) {
         const txs = `${groupDigits(tip.tx_count)} ${tip.tx_count === 1 ? "transaction" : "transactions"}`;
         setAnnouncement(`Block ${groupDigits(tip.height)} mined: ${txs}.`);
       }
-      // Nothing to animate from, or nobody to see it: just show the new list.
-      if (!list || !before || !lane || !next || document.hidden || !("animate" in lane)) {
+      // What the new blocks were projected to be, shown until each lands.
+      const fresh: [string, ProjectedBlock][] = [];
+      if (before && list && !document.hidden) {
+        const model = untrack(props.projection);
+        for (const b of list) {
+          if (b.height <= oldTip) break;
+          const p = provisionalFor(model, list, b);
+          if (p) fresh.push([b.id, p]);
+        }
+      }
+      const fly = () => {
+        for (const [id, guess] of fresh) {
+          const [landed, setLanded] = createSignal(false);
+          crossings.set(id, { guess, landed });
+          landers.set(id, () => setLanded(true));
+        }
+      };
+      const show = () =>
+        batch(() => {
+          setShown(list);
+          setView(nextView);
+        });
+      // Nothing to animate from, or nobody to see it: just show the new state.
+      if (!list || !before || !lane || !upcoming || document.hidden || !("animate" in lane)) {
         interrupt();
-        setShown(list);
+        settleNew = !document.hidden;
+        show();
         return;
       }
       // First: where everything is now, mid-animation included.
       const first = new Map<string, DOMRect>();
-      for (const el of lane.children) {
-        const id = (el as HTMLElement).dataset["id"];
+      const tiles = [...lane.children, ...upcoming.querySelectorAll(PROJECTED)].filter(
+        (el) => !el.classList.contains("home-tile--leaving"),
+      );
+      for (const el of tiles as HTMLElement[]) {
+        const id = el.dataset["id"] ?? (el.dataset["key"] ? `p${el.dataset["key"]}` : undefined);
         if (id) first.set(id, el.getBoundingClientRect());
       }
-      const from = next.getBoundingClientRect();
-      const laneBox = lane.getBoundingClientRect();
-      const keep = new Set(list.map((b) => b.id));
-      const leaving = [...lane.children].filter((el) => {
-        const id = (el as HTMLElement).dataset["id"];
-        return id ? !keep.has(id) : false;
-      });
-      const ghostsOut = leaving.map((el) => {
-        const g = el.cloneNode(true) as HTMLElement;
-        const r = first.get(g.dataset["id"] ?? "");
-        return { g, left: r ? r.left - laneBox.left : 0 };
-      });
-      const oldTip = before[0]?.height ?? Number.POSITIVE_INFINITY;
+      // Where a crossing block leaves from when it had no tile of its own: the next block's place.
+      const from = (
+        upcoming.querySelector(".home-tile--projected") ?? upcoming
+      ).getBoundingClientRect();
+      const keep = new Set([
+        ...list.map((b) => b.id),
+        ...nextView.tiles.map((t) => `p${t.key}`),
+        // A projected tile that becomes a mined block leaves as that block, not as a ghost.
+        ...list.map((b) => `p${b.height}`),
+      ]);
+      const out = (tiles as HTMLElement[])
+        .filter((el) => {
+          const id = el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
+          return !keep.has(id);
+        })
+        .map((el) => {
+          const parent = el.parentElement;
+          const g = el.cloneNode(true) as HTMLElement;
+          const r = el.getBoundingClientRect();
+          const box = parent?.getBoundingClientRect();
+          return { g, parent, left: box ? r.left - box.left : 0 };
+        });
       interrupt();
-      setShown(list);
+      fly();
+      // A tile that forms behind a crossing block settles in time with the crossing, below.
+      const crossingNow = !!tip && tip.height > oldTip;
+      settleNew = !crossingNow;
+      show();
       // Solid has updated the DOM by the time this runs, and the browser has not painted yet.
-      queueMicrotask(() => sequence(first, from, ghostsOut, oldTip));
+      queueMicrotask(() => sequence(first, from, out, oldTip));
     }),
   );
 
   function sequence(
     first: Map<string, DOMRect>,
     from: DOMRect,
-    out: { g: HTMLElement; left: number }[],
+    out: { g: HTMLElement; parent: HTMLElement | null; left: number }[],
     oldTip: number,
   ) {
-    if (!lane || !next) return;
-    const m: Motion = motion();
-    const tiles = [...lane.children] as HTMLElement[];
-    const arriving = tiles.filter((el) => !first.has(el.dataset["id"] ?? ""));
-    const crossing = arriving.filter((el) => Number(el.dataset["height"]) > oldTip);
-
-    // Mined tiles shift along, the farthest first so none catches the one ahead.
-    if (!m.reduced) {
-      tiles.forEach((el, i) => {
-        const was = first.get(el.dataset["id"] ?? "");
-        if (!was) return;
-        const dx = was.left - el.getBoundingClientRect().left;
-        if (Math.abs(dx) < 1) return;
-        play(el, [{ transform: `translateX(${dx}px)` }, { transform: "none" }], {
-          duration: m.slow,
-          easing: m.easeOut,
-          delay: (tiles.length - 1 - i) * m.stagger,
-          fill: "backwards",
-        });
-      });
+    if (!lane || !upcoming) {
+      landAll();
+      return;
     }
+    const m: Motion = motion();
+    const mined = [...lane.children] as HTMLElement[];
+    const projected = [...upcoming.querySelectorAll<HTMLElement>(PROJECTED)];
+    const idOf = (el: HTMLElement) => el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
+    const arriving = mined.filter((el) => !first.has(idOf(el)));
+    const crossing = arriving.filter((el) => Number(el.dataset["height"]) > oldTip);
+    const glide = (el: HTMLElement, order: number) => {
+      const was = first.get(idOf(el));
+      if (!was || m.reduced) return;
+      const dx = was.left - el.getBoundingClientRect().left;
+      if (Math.abs(dx) < 1) return;
+      play(el, [{ transform: `translateX(${dx}px)` }, { transform: "none" }], {
+        duration: m.slow,
+        easing: m.easeOut,
+        delay: order * m.stagger,
+        fill: "backwards",
+      });
+    };
 
-    // The tile that leaves fades where it stood.
-    for (const { g, left } of out) {
+    // Leaders move first: mined tiles from the farthest, projected tiles from the nearest.
+    mined.forEach((el, i) => glide(el, mined.length - 1 - i));
+    projected.forEach((el, i) => glide(el, 2 + i));
+
+    // Tiles that leave fade where they stood.
+    for (const { g, parent, left } of out) {
+      if (!parent) continue;
       g.classList.add("home-tile--leaving");
       g.setAttribute("aria-hidden", "true");
       g.inert = true;
       g.style.setProperty("left", `${left}px`);
-      lane.append(g);
+      parent.append(g);
       ghosts.add(g);
       const a = play(
         g,
         [{ opacity: 1 }, { opacity: 0, transform: m.reduced ? "none" : "translateX(24px)" }],
-        {
-          duration: m.slow || m.fade,
-          easing: "ease-out",
-          fill: "forwards",
-        },
+        { duration: m.slow || m.fade, easing: "ease-out", fill: "forwards" },
       );
       void a.finished.then(
         () => {
@@ -194,6 +295,42 @@ export function BlockStrip(props: {
         },
         () => {
           // Cancelled: whoever cancelled it cleans up.
+        },
+      );
+    }
+
+    // New projected tiles form at the far end once the crossing is under way, their layers
+    // dropping in one at a time, cheapest first, like sediment.
+    for (const el of projected) {
+      if (first.has(idOf(el))) continue;
+      if (crossing.length > 0 && !m.reduced) {
+        el.querySelectorAll(".strata__layer").forEach((layer, i) =>
+          play(
+            layer,
+            [
+              { opacity: 0, transform: "translateY(-18px)" },
+              { opacity: 1, transform: "none" },
+            ],
+            {
+              duration: m.slow,
+              easing: m.easeSettle,
+              delay: m.block * 0.4 + i * m.stagger,
+              fill: "backwards",
+            },
+          ),
+        );
+      }
+      play(
+        el,
+        [
+          { opacity: 0, transform: m.reduced ? "none" : "translateX(-28px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        {
+          duration: m.slow || m.fade,
+          easing: m.easeOut,
+          delay: crossing.length > 0 ? m.block * 0.35 : 0,
+          fill: "backwards",
         },
       );
     }
@@ -207,27 +344,33 @@ export function BlockStrip(props: {
         fill: "backwards",
       });
     }
-    if (crossing.length === 0) return;
+    if (crossing.length === 0) {
+      landAll();
+      return;
+    }
 
-    // The next block crosses the line on a shallow arc and lands with a small squash. Several at
-    // once leave one after another, the one going farthest first.
+    // Each new block crosses the line from its projected tile on a shallow arc and lands with a
+    // small squash. Several at once leave one after another, the one going farthest first.
     crossing.forEach((el, k) => {
       const delay = (crossing.length - 1 - k) * m.stagger * 3;
+      const id = el.dataset["id"] ?? "";
+      const land = () => {
+        landers.get(id)?.();
+        landers.delete(id);
+      };
+      el.classList.add("home-tile--landing");
       if (m.reduced) {
         play(el, [{ opacity: 0 }, { opacity: 1 }], { duration: m.fade, delay, fill: "backwards" });
+        later(delay + m.fade, land);
+        // Nothing travels, but the accent still marks the new block for about as long.
+        later(delay + m.fade * 6, () => el.classList.remove("home-tile--landing"));
         return;
       }
       // Provisional while it travels; it sets, solid, at the top of its arc.
-      el.classList.add("home-tile--landing", "home-tile--crossing");
-      const set = setTimeout(
-        () => {
-          timers.delete(set);
-          el.classList.remove("home-tile--crossing");
-        },
-        delay + m.block * 0.45,
-      );
-      timers.add(set);
-      const dx = from.left - el.getBoundingClientRect().left;
+      el.classList.add("home-tile--crossing");
+      later(delay + m.block * 0.45, () => el.classList.remove("home-tile--crossing"));
+      const start = first.get(`p${el.dataset["height"] ?? ""}`) ?? from;
+      const dx = start.left - el.getBoundingClientRect().left;
       const arc = play(
         el,
         [
@@ -250,6 +393,8 @@ export function BlockStrip(props: {
           { duration: m.block, easing: m.easeSettle, delay },
         );
       }
+      // Its projected figures and layers give way to its own as it touches down.
+      later(delay + m.block * 0.82, land);
       void arc.finished.then(
         () => el.classList.remove("home-tile--landing"),
         () => {
@@ -258,24 +403,26 @@ export function BlockStrip(props: {
       );
     });
 
-    // The line flashes, and a new next block forms where the old one left.
+    // The line flashes, and the placeholder for the next block, if that is what shows, re-forms.
     if (flash)
       play(flash, [{ opacity: 0 }, { opacity: 0.85, offset: 0.2 }, { opacity: 0 }], {
         duration: m.block || m.fade * 3,
       });
-    play(
-      next,
-      [
-        { opacity: 0, transform: m.reduced ? "none" : "translateX(-28px)" },
-        { opacity: 1, transform: "none" },
-      ],
-      {
-        duration: m.slow || m.fade,
-        easing: m.easeOut,
-        delay: m.block * 0.35,
-        fill: "backwards",
-      },
-    );
+    if (next?.isConnected) {
+      play(
+        next,
+        [
+          { opacity: 0, transform: m.reduced ? "none" : "translateX(-28px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        {
+          duration: m.slow || m.fade,
+          easing: m.easeOut,
+          delay: m.block * 0.35,
+          fill: "backwards",
+        },
+      );
+    }
   }
 
   // Phones scroll the strip; it starts with the "now" line in the middle.
@@ -301,6 +448,23 @@ export function BlockStrip(props: {
     const tip = shown()?.[0];
     return tip ? formatRelative(tip.timestamp, now(), { suffix: false }) : undefined;
   };
+  const keys = createMemo(() => view().tiles.map((t) => t.key));
+  /** A crossing is for the tile drawn for it, once: a refetch redraws it settled. */
+  const take = (id: string) => {
+    const c = crossings.get(id);
+    crossings.delete(id);
+    return c;
+  };
+  const tileAt = (key: number) => () => view().tiles.find((t) => t.key === key);
+  const note = () => {
+    const v = view();
+    if (v.mode === "off") return "This server does not track the mempool on this network.";
+    if (v.stale) return "The last projection before the server lost touch with its node.";
+    const [first, second] = v.tiles;
+    if (!first) return "";
+    if (first.txs === 0) return "Nothing is waiting. The next block would hold only its coinbase.";
+    return second ? "" : "Everything waiting fits in the next block.";
+  };
 
   return (
     <section class="home-strip" aria-labelledby="strip-title">
@@ -309,25 +473,42 @@ export function BlockStrip(props: {
           Blocks
         </h1>
         <p class="home-strip__legend">
-          <span class="home-strip__key">Next block</span>
+          <span class="home-strip__key">
+            {view().mode === "off" ? "Next block" : "Projected from the mempool"}
+          </span>
           <span class="home-strip__key home-strip__key--mined">Mined</span>
         </p>
         <LiveIndicator status={props.status} stale={props.stale} />
       </div>
       <div class="home-strip__scroller" ref={scroller}>
         <div class="home-strip__track">
-          <div class="home-strip__upcoming">
-            <p class="home-strip__pending">Blocks projected from the mempool will line up here.</p>
-            <div class="home-tile home-tile--projected" ref={next}>
-              <div class="home-tile__body">
-                <span class="home-tile__title">Next block</span>
-                <span class="home-tile__waiting">
-                  <span class="home-tile__since num">{sinceTip() ?? ""}</span>
-                  <span class="home-tile__since-label">{sinceTip() ? "since last block" : ""}</span>
-                </span>
-              </div>
-              <span class="home-tile__pool" />
-            </div>
+          <div class="home-strip__upcoming" ref={upcoming}>
+            <p class="home-strip__pending">{note()}</p>
+            <Show
+              when={keys().length > 0}
+              fallback={
+                <div class="home-tile home-tile--projected" ref={next}>
+                  <div class="home-tile__body">
+                    <span class="home-tile__title">Next block</span>
+                    <span class="home-tile__waiting">
+                      <span class="home-tile__since num">{sinceTip() ?? ""}</span>
+                      <span class="home-tile__since-label">
+                        {sinceTip() ? "since last block" : ""}
+                      </span>
+                    </span>
+                  </div>
+                  <span class="home-tile__pool" />
+                </div>
+              }
+            >
+              <ol class="home-strip__projected" aria-label="Projected blocks, next first">
+                <For each={keys()}>
+                  {(key) => (
+                    <ProjectedTile tile={tileAt(key)} network={props.network} settle={settleNew} />
+                  )}
+                </For>
+              </ol>
+            </Show>
           </div>
           <div class="home-strip__now" ref={nowLine} aria-hidden="true">
             <span class="home-strip__flash" ref={flash} />
@@ -359,7 +540,14 @@ export function BlockStrip(props: {
                   }
                 >
                   <For each={shown()}>
-                    {(b) => <MinedTile block={b} now={now} facts={props.facts(b.id)} />}
+                    {(b) => (
+                      <MinedTile
+                        block={b}
+                        now={now}
+                        facts={props.facts(b.id)}
+                        crossing={take(b.id)}
+                      />
+                    )}
                   </For>
                 </Show>
               </ol>
@@ -374,6 +562,11 @@ export function BlockStrip(props: {
   );
 }
 
+function sameIds(a: readonly Block[] | undefined, b: readonly Block[] | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.length === b.length && a.every((x, i) => x.id === b[i]?.id);
+}
+
 /** A tile's two fee lines as words, for its label: median, then range. */
 export function tileFeeText(facts: TileFacts): string | undefined {
   if (typeof facts !== "object") return undefined;
@@ -382,36 +575,74 @@ export function tileFeeText(facts: TileFacts): string | undefined {
   return `median fee ${formatFeeRate(r.median)} sat/vB, fee range ${formatFeeRate(r.min)} to ${formatFeeRate(r.max)} sat/vB`;
 }
 
-function MinedTile(props: { block: Block; now: Accessor<number>; facts: TileFacts }) {
+/** A block crossing the line: what it was projected to be, and whether it has landed. */
+interface Crossing {
+  guess: ProjectedBlock;
+  landed: Accessor<boolean>;
+}
+
+function MinedTile(props: {
+  block: Block;
+  now: Accessor<number>;
+  facts: TileFacts;
+  /** When it is crossing the line: what it was projected to be, and whether it has landed. */
+  crossing: Crossing | undefined;
+}) {
   const b = () => props.block;
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
-  const summary = () => (typeof props.facts === "object" ? props.facts : undefined);
+  const crossing = untrack(() => props.crossing);
+  const projected = crossing?.guess;
+  const guess = projected ? projectedLayers(projected) : undefined;
+  // A block crossing the line shows what it was projected to be until it lands, however soon its
+  // own facts arrive; then its layers grow out of the projected ones.
+  const facts = () => (!crossing || crossing.landed() ? props.facts : undefined);
+  const summary = () => {
+    const f = facts();
+    return typeof f === "object" ? f : undefined;
+  };
+  /** Still showing what it was projected to be. */
+  const guessing = () => !!projected && facts() === undefined;
+  // Facts that arrive after the tile is drawn settle in, or grow out of the projected layers;
+  // facts it was drawn with are simply there.
+  const settle = untrack(() => props.facts === undefined) && !guess;
   const rates = () => summary()?.fee_rate ?? undefined;
-  const layers = createMemo(() => {
-    const s = summary();
-    return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
-  });
-  // Facts that arrive after the tile is drawn settle in; facts it was drawn with are simply there.
-  const settle = untrack(() => props.facts === undefined);
+  // Any summary arriving re-reads every tile's facts; unchanged layers keep their elements, so a
+  // tile that settled in once does not settle again.
+  const layers = createMemo<Layer[]>(
+    () => {
+      const s = summary();
+      return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
+    },
+    [],
+    { equals: sameLayers },
+  );
   const label = () =>
     [
       `Block ${groupDigits(b().height)}`,
       formatRelative(b().timestamp, props.now()),
-      `${groupDigits(b().tx_count)} transactions`,
-      tileFeeText(props.facts),
+      `${groupDigits(b().tx_count)} ${b().tx_count === 1 ? "transaction" : "transactions"}`,
+      tileFeeText(facts()),
       fullness(b().weight),
     ]
       .filter(Boolean)
       .join(", ");
   return (
-    <li class="home-tile home-tile--mined" data-id={b().id} data-height={b().height}>
+    <li
+      class="home-tile home-tile--mined"
+      classList={{ "home-tile--guessing": guessing() }}
+      data-id={b().id}
+      data-height={b().height}
+    >
       <Link class="home-tile__body" href={paths.block(b().id)} aria-label={label()}>
         <span class="home-tile__title num">{groupDigits(b().height)}</span>
         <span class="home-tile__fee num">
           <Switch fallback={<span class="home-tile__bone home-tile__bone--line" />}>
             <Match when={rates()}>{(r) => <FeeRate rate={r().median} />}</Match>
+            <Match when={guessing() && projected}>
+              {(p) => <FeeRate rate={p().medianRate} approx />}
+            </Match>
             <Match when={summary()}>No fees</Match>
-            <Match when={props.facts === "failed"}>{formatSize(vsizeFromWeight(b().weight))}</Match>
+            <Match when={facts() === "failed"}>{formatSize(vsizeFromWeight(b().weight))}</Match>
           </Switch>
         </span>
         <span class="home-tile__range num">
@@ -421,27 +652,45 @@ function MinedTile(props: { block: Block; now: Accessor<number>; facts: TileFact
             <Match when={rates()}>
               {(r) => `${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}
             </Match>
+            <Match when={guessing() && projected}>
+              {(p) => `${formatFeeRate(p().minRate)} – ${formatFeeRate(p().maxRate)}`}
+            </Match>
             <Match when={summary()}>Coinbase only</Match>
-            <Match when={props.facts === "failed"}>{fullness(b().weight)}</Match>
+            <Match when={facts() === "failed"}>{fullness(b().weight)}</Match>
           </Switch>
         </span>
         <span class="home-tile__strata" aria-hidden="true">
           {/* The neutral gauge: how full the block is, until its layers arrive and settle over it. */}
-          <Show when={layers().length === 0 || settle}>
+          <Show when={(layers().length === 0 && !guessing()) || settle}>
             <span
               class="home-tile__fill"
               classList={{ "home-tile__fill--gone": layers().length > 0 }}
               style={{ "--fill": String(full()) }}
             />
           </Show>
+          {/* What it was projected to be, fading as the real layers grow out of it. */}
+          <Show when={guess}>
+            {(g) => (
+              <span
+                class="home-tile__layers home-tile__guess"
+                classList={{ "home-tile__guess--gone": !guessing() }}
+              >
+                <Strata layers={g()} />
+              </span>
+            )}
+          </Show>
           <Show when={layers().length > 0}>
             <span class="home-tile__layers">
-              <Strata layers={layers()} settle={settle} />
+              <Strata layers={layers()} settle={settle} from={guess} />
             </span>
           </Show>
         </span>
         <span class="home-tile__foot">
-          <span class="num">{groupDigits(b().tx_count)} tx</span>
+          <span class="num">
+            {guessing() && projected
+              ? `~${groupDigits(projected.txs)} tx`
+              : `${groupDigits(b().tx_count)} tx`}
+          </span>
           <time class="num" datetime={isoTime(b().timestamp)} title={formatUtc(b().timestamp)}>
             {tileAge(b().timestamp, props.now())}
           </time>

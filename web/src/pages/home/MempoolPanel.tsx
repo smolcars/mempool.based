@@ -3,10 +3,9 @@ import { Amount } from "../../components/Amount";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
-import type { MempoolSummary } from "../../lib/esplora";
 import { formatFeeRate, formatSize, groupDigits } from "../../lib/format";
 import type { Feed } from "./feeds";
-import { bandShares, type FeeBandShare, lowestRate } from "./mempool";
+import { type FeeBandShare, type MempoolFigures, sharesOf } from "./mempool";
 
 const BLOCK_VSIZE = 1_000_000;
 
@@ -27,9 +26,9 @@ const percent = (share: number) =>
   share > 0 && share < 0.01 ? "under 1%" : `${Math.round(share * 100)}%`;
 
 /** Mempool: four figures and the bar of waiting transactions by fee band. */
-export function MempoolPanel(props: { feed: Feed<MempoolSummary> }) {
+export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
   const m = () => props.feed.data();
-  const bands = createMemo(() => bandShares(m()?.fee_histogram ?? []));
+  const bands = createMemo(() => m()?.bands ?? sharesOf([]));
   // Index, not object: bands are recomputed on every poll, and the open detail follows its band.
   const [tipAt, setTipAt] = createSignal<number>();
   const [focused, setFocused] = createSignal(false);
@@ -66,16 +65,16 @@ export function MempoolPanel(props: { feed: Feed<MempoolSummary> }) {
             </Show>
           </Stat>
           <Stat label="Fees waiting">
-            <Show when={m()}>{(s) => <Amount sats={s().total_fee} />}</Show>
+            <Show when={m()}>{(s) => <Amount sats={s().fees} />}</Show>
           </Stat>
           <Stat label="Lowest accepted">
             <Show when={m()}>
               {(s) => (
-                <Show when={lowestRate(s().fee_histogram)} fallback={<span class="muted">–</span>}>
+                <Show when={s().lowest} fallback={<span class="muted">–</span>}>
                   {(r) => (
                     <>
                       <FeeRate rate={r()} />
-                      <span class="home-stat__sub">cheapest waiting</span>
+                      <span class="home-stat__sub">{s().lowestNote}</span>
                     </>
                   )}
                 </Show>

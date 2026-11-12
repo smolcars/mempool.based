@@ -23,6 +23,17 @@
     animation: strata-settle var(--dur-slow) var(--ease-settle) backwards;
     animation-delay: calc(var(--i) * var(--stagger));
   }
+  /* From the other set's geometry: moved to its floor and scaled to its thickness. */
+  .strata--morph .strata__layer {
+    transform-origin: bottom;
+    animation: strata-morph var(--dur-slow) var(--ease-out) backwards;
+  }
+  @keyframes strata-morph {
+    from {
+      transform: translateY(calc((var(--y) - var(--y0)) / var(--h) * 100%))
+        scaleY(calc(var(--h0) / var(--h)));
+    }
+  }
   @keyframes strata-settle {
     from {
       opacity: 0;
@@ -34,7 +45,8 @@
     .strata__layer--thin {
       border-top-width: 0;
     }
-    .strata--settle .strata__layer {
+    .strata--settle .strata__layer,
+    .strata--morph .strata__layer {
       animation-name: strata-fade;
       animation-duration: var(--dur-fade);
       animation-timing-function: ease-out;

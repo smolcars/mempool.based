@@ -122,6 +122,40 @@ describe("stackLabels", () => {
     }
     expect(out[3]?.flip).toBe(true);
   });
+
+  it("keeps labels apart and within four rows for any spacing, identical values included", () => {
+    // Pins in rate order, as the four estimates are, on tracks down to a 320 px phone's.
+    let seed = 7;
+    const random = () => (seed = (seed * 16_807) % 2_147_483_647) / 2_147_483_647;
+    for (let n = 0; n < 5_000; n++) {
+      const track = 280 + random() * 400;
+      const xs = Array.from({ length: 4 }, () =>
+        Math.round(random() * track * (random() < 0.5 ? 0.3 : 1)),
+      );
+      if (random() < 0.3) xs[2] = xs[1] ?? 0;
+      const pins = xs
+        // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
+        .sort((a, b) => a - b)
+        .map((x) => ({ x, width: 30 + Math.round(random() * 30) }));
+      const out = stackLabels(pins, track);
+      const spans = pins.map((p, i) => {
+        const flip = out[i]?.flip;
+        return {
+          row: out[i]?.row ?? 0,
+          from: flip ? p.x - p.width - 12 : p.x,
+          to: flip ? p.x : p.x + p.width + 12,
+        };
+      });
+      for (const [i, a] of spans.entries()) {
+        expect(a.row).toBeLessThan(4);
+        expect(a.from).toBeGreaterThanOrEqual(-12);
+        expect(a.to).toBeLessThanOrEqual(track + 12);
+        for (const b of spans.slice(i + 1)) {
+          expect(a.row === b.row && a.from < b.to && b.from < a.to).toBe(false);
+        }
+      }
+    }
+  });
 });
 
 describe("reply checks", () => {

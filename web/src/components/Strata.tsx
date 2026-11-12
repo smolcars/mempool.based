@@ -81,12 +81,23 @@ export function describeBands(bands: readonly number[]): string[] {
 
 /**
  * Fee layers drawn into the box that holds them (give it a height). `settle` drops them in one at
- * a time, cheapest first, like sediment; with reduced motion they fade in. Decorative: put the
- * figures, or {@link describeBands}, beside it as text.
+ * a time, cheapest first, like sediment; with reduced motion they fade in. `from` grows each layer
+ * out of the same band's layer in another set (a projected block resolving into the mined one);
+ * a band it lacks grows from nothing.
+ * Decorative: put the figures, or {@link describeBands}, beside it as text.
  */
-export function Strata(props: { layers: readonly Layer[]; settle?: boolean }) {
+export function Strata(props: {
+  layers: readonly Layer[];
+  settle?: boolean;
+  from?: readonly Layer[] | undefined;
+}) {
+  const was = (layer: Layer) => props.from?.find((l) => l.band === layer.band);
   return (
-    <span class="strata" classList={{ "strata--settle": props.settle === true }} aria-hidden="true">
+    <span
+      class="strata"
+      classList={{ "strata--settle": props.settle === true, "strata--morph": !!props.from }}
+      aria-hidden="true"
+    >
       <For each={props.layers}>
         {(layer, i) => (
           <span
@@ -97,6 +108,8 @@ export function Strata(props: { layers: readonly Layer[]; settle?: boolean }) {
               "--h": String(layer.h),
               "--c": `var(--fee-${layer.band})`,
               "--i": String(i()),
+              "--y0": String(was(layer)?.y ?? layer.y),
+              "--h0": String(was(layer)?.h ?? 0),
             }}
           />
         )}
