@@ -43,6 +43,7 @@ fn capture() -> &'static Capture {
         let settings = Settings {
             format: Format::Json,
             level: Level::Debug,
+            max_bytes_per_sec: logging::DEFAULT_MAX_BYTES_PER_SEC,
         };
         assert!(logging::init(settings, c.clone()));
         c
@@ -88,7 +89,11 @@ fn config(vars: &[(&str, &str)], limits: Limits) -> Config {
     }
     let mut c = Config::from_vars(|k| map.get(k).cloned()).unwrap();
     c.web_dir = std::env::temp_dir().join("rbitcoin-space-no-web-dir");
-    c.limits = limits;
+    // The proxy settings come from the variables; everything else from `limits`.
+    c.limits = Limits {
+        trusted_proxy: c.limits.trusted_proxy.take(),
+        ..limits
+    };
     c
 }
 
@@ -319,4 +324,180 @@ async fn electrum_reporter_sees_a_client_that_is_already_up() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// Serves `config` until the returned sender fires; the handle ends when the server has.
+async fn start_stoppable(
+    config: Config,
+) -> (
+    String,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    capture();
+    let app = App::new(&config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(app.serve(listener, async {
+        let _ = stopped.await;
+    }));
+    (addr, stop, served)
+}
+
+/// Sends `count` GETs of `/app/config` down one connection, each naming `client(i)` as the
+/// client, and returns how many were answered 200 and 429.
+async fn pipeline(addr: &str, count: usize, client: impl Fn(usize) -> String) -> (usize, usize) {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut reqs = String::new();
+    for i in 0..count {
+        let close = if i + 1 == count {
+            "close"
+        } else {
+            "keep-alive"
+        };
+        reqs.push_str(&format!(
+            "GET /app/config HTTP/1.1\r\nHost: t\r\nX-Forwarded-For: {}\r\nConnection: {close}\r\n\r\n",
+            client(i)
+        ));
+    }
+    let (mut rd, mut wr) = stream.split();
+    let (_, raw) = tokio::join!(wr.write_all(reqs.as_bytes()), async {
+        let mut raw = Vec::new();
+        rd.read_to_end(&mut raw).await.unwrap();
+        raw
+    });
+    let raw = String::from_utf8_lossy(&raw);
+    (
+        raw.matches("HTTP/1.1 200").count(),
+        raw.matches("HTTP/1.1 429").count(),
+    )
+}
+
+fn proxied(limits: Limits) -> Config {
+    config(
+        &[
+            ("LOG_CLIENT_ADDR", "true"),
+            ("TRUSTED_PROXY_HEADER", "X-Forwarded-For"),
+            ("TRUSTED_PROXIES", "127.0.0.1"),
+        ],
+        limits,
+    )
+}
+
+#[tokio::test]
+async fn a_flood_of_refusals_writes_the_same_few_lines_whatever_its_size() {
+    let limits = Limits {
+        client_burst: 5,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    let mut written = Vec::new();
+    for (n, burst) in [(1, 100), (2, 3000)] {
+        let ip = format!("198.51.100.{n}");
+        let (addr, stop, served) = start_stoppable(proxied(limits.clone())).await;
+        let (ok, refused) = pipeline(&addr, burst, |_| ip.clone()).await;
+        assert_eq!(ok + refused, burst);
+        assert!(refused >= burst - 10, "{ok} served");
+        stop.send(()).unwrap();
+        served.await.unwrap();
+
+        let lines: Vec<Value> = logged()
+            .1
+            .into_iter()
+            .filter(|v| v["client"] == ip.as_str() || v["top_client"] == ip.as_str())
+            .collect();
+        let requests: Vec<&Value> = lines
+            .iter()
+            .filter(|v| v["event"] == "http_request")
+            .collect();
+        // Every served request has its line; of the refused, only the first.
+        assert_eq!(
+            requests.iter().filter(|v| v["status"] == 200).count(),
+            ok,
+            "one event per request served"
+        );
+        let first: Vec<_> = requests.iter().filter(|v| v["status"] == 429).collect();
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0]["refused"], "client_rate");
+        let summaries: Vec<_> = lines
+            .iter()
+            .filter(|v| v["event"] == "requests_refused")
+            .collect();
+        assert_eq!(summaries.len(), 1, "{summaries:?}");
+        let s = summaries[0];
+        assert_eq!(s["level"], "warn");
+        assert_eq!(s["total"], refused);
+        assert_eq!(s["logged"], 1);
+        assert_eq!(s["reasons"]["client_rate"], refused);
+        assert_eq!(s["routes"]["app"], refused);
+        assert_eq!(s["clients"], 1);
+        assert_eq!(s["top_client_refused"], refused);
+        assert_eq!(s["untrusted_forwarded"], 0);
+        written.push(lines.len() - ok);
+    }
+    assert_eq!(written, [2, 2], "lines beyond the served ones: {written:?}");
+}
+
+#[tokio::test]
+async fn many_clients_each_over_its_limit_share_one_summary() {
+    const CLIENTS: usize = 300;
+    let limits = Limits {
+        client_burst: 1,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    let (addr, stop, served) = start_stoppable(proxied(limits)).await;
+    let client = |i: usize| format!("10.9.{}.{}", i / 3 / 256, i / 3 % 256);
+    // Three requests each, back to back: the first served, the next two refused.
+    let (ok, refused) = pipeline(&addr, CLIENTS * 3, client).await;
+    assert_eq!((ok, refused), (CLIENTS, 2 * CLIENTS));
+    stop.send(()).unwrap();
+    served.await.unwrap();
+
+    let lines = logged().1;
+    let ours = |v: &&Value| v["client"].as_str().is_some_and(|c| c.starts_with("10.9."));
+    let requests = lines
+        .iter()
+        .filter(|v| v["event"] == "http_request")
+        .filter(ours);
+    assert_eq!(requests.filter(|v| v["status"] == 429).count(), 1);
+    let s = lines
+        .iter()
+        .find(|v| v["event"] == "requests_refused" && v["total"] == refused)
+        .expect("one summary for every client");
+    assert!(s["top_client"].as_str().unwrap().starts_with("10.9."));
+    assert!(s["top_client_refused"].as_u64() <= Some(2), "{s}");
+    assert_eq!(s["proxy_keyed"], 0);
+    let clients = s["clients"].as_u64().unwrap();
+    assert!((290..=310).contains(&clients), "{clients}");
+}
+
+#[tokio::test]
+async fn a_proxy_missing_from_trusted_proxies_is_told_apart() {
+    let limits = Limits {
+        client_burst: 1,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    // The header is configured but the peer is not a trusted proxy: every request is the peer's.
+    let config = config(
+        &[
+            ("TRUSTED_PROXY_HEADER", "X-Forwarded-For"),
+            ("TRUSTED_PROXIES", "192.0.2.1"),
+        ],
+        limits,
+    );
+    let (addr, stop, served) = start_stoppable(config).await;
+    let (ok, refused) = pipeline(&addr, 50, |i| format!("198.51.100.{i}")).await;
+    assert_eq!((ok, refused), (1, 49));
+    stop.send(()).unwrap();
+    served.await.unwrap();
+    let lines = logged().1;
+    let s = lines
+        .iter()
+        .find(|v| v["event"] == "requests_refused" && v["untrusted_forwarded"] == 49)
+        .expect("the summary says the forwarding header was ignored");
+    assert_eq!(s["clients"], 1);
+    assert_eq!(s["top_client_refused"], 49);
 }

@@ -42,6 +42,7 @@ pub struct ServerStarting<'a> {
     pub log_level: &'a str,
     pub log_requests: &'a str,
     pub log_client_addr: bool,
+    pub log_max_bytes_per_sec: u64,
     pub broadcast_enabled: bool,
     pub max_body_bytes: usize,
     pub request_timeout_secs: u64,
@@ -236,7 +237,9 @@ pub struct RequestsRefused<'a> {
     /// Distinct client addresses, estimated in fixed memory: exact to a few percent up to tens
     /// of thousands.
     pub clients: u64,
-    /// Refusals of the most refused client, counted in fixed memory (an upper bound).
+    /// Refusals of the most refused client, counted in fixed memory: a lower bound, exact for a
+    /// client that stands out. Near `total`: one address is refused (an attacker, or every user
+    /// seen as one); small: many are.
     pub top_client_refused: u64,
     /// That client's address, only with `LOG_CLIENT_ADDR=true`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -504,7 +507,12 @@ pub struct BlockSummariesRecovered {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(BlockSummariesRecovered, "block_summaries_recovered", Info, keep);
+event!(
+    BlockSummariesRecovered,
+    "block_summaries_recovered",
+    Info,
+    keep
+);
 
 /// Requests for uncached summaries were refused. Written when the count for that reason on that
 /// network reaches 1, 2, 4, 8…
@@ -576,7 +584,12 @@ pub struct StoreMigrationApplied<'a> {
     pub migration: &'a str,
     pub duration_ms: f64,
 }
-event!(StoreMigrationApplied<'a>, "store_migration_applied", Info, keep);
+event!(
+    StoreMigrationApplied<'a>,
+    "store_migration_applied",
+    Info,
+    keep
+);
 
 /// One write held the writer for a second or more.
 #[derive(Debug, Serialize)]
@@ -894,7 +907,12 @@ pub struct MempoolHistoryRolledUp {
     /// The whole write: the minute's sample and the roll-up.
     pub duration_ms: f64,
 }
-event!(MempoolHistoryRolledUp, "mempool_history_rolled_up", Info, keep);
+event!(
+    MempoolHistoryRolledUp,
+    "mempool_history_rolled_up",
+    Info,
+    keep
+);
 
 /// Minutes left out of the mempool history, at the 1st, 2nd, 4th, 8th… in a row: `syncing`,
 /// `stale`, `lagged`, `late`, `store_busy` or `store_failed`, for the latest.
@@ -1043,7 +1061,12 @@ pub struct LightningPeerConnected {
     pub network: &'static str,
     pub peer: String,
 }
-event!(LightningPeerConnected, "lightning_peer_connected", Info, keep);
+event!(
+    LightningPeerConnected,
+    "lightning_peer_connected",
+    Info,
+    keep
+);
 
 /// A connected Lightning peer went away; it is dialled again after a backoff.
 #[derive(Debug, Serialize)]
@@ -1206,7 +1229,12 @@ pub struct LightningChannelClosed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee: Option<u64>,
 }
-event!(LightningChannelClosed, "lightning_channel_closed", Info, keep);
+event!(
+    LightningChannelClosed,
+    "lightning_channel_closed",
+    Info,
+    keep
+);
 
 /// The history store fell further behind than the peer keeps: `missed` records were never seen.
 /// The open channels were stored again from the peer's current set; closes among the missed
@@ -1237,7 +1265,12 @@ pub struct LightningHistoryResumed {
     pub network: &'static str,
     pub failures: u32,
 }
-event!(LightningHistoryResumed, "lightning_history_resumed", Info, keep);
+event!(
+    LightningHistoryResumed,
+    "lightning_history_resumed",
+    Info,
+    keep
+);
 
 /// A ten-minute statistics snapshot was stored, with `skipped` slots missed before it.
 #[derive(Debug, Serialize)]
@@ -1309,6 +1342,7 @@ mod tests {
                 log_level: "info",
                 log_requests: "all",
                 log_client_addr: false,
+                log_max_bytes_per_sec: 262_144,
                 broadcast_enabled: true,
                 max_body_bytes: 1,
                 request_timeout_secs: 1,

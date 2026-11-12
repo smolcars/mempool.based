@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderName};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::{Limits, TrustedProxy};
 use crate::error::ApiError;
+use crate::refusals::Refusal;
 
 /// A limit said no: the error the client gets, and a fixed reason for the request log. Its
 /// response carries it as an extension.
@@ -309,7 +310,8 @@ pub struct Limiter {
     pub clients: Arc<Clients>,
     /// Static files' own table, so pages and assets never use up a client's API allowance.
     statics: Arc<Clients>,
-    pub limits: Limits,
+    /// Shared, so the per-request clone of the middleware's state copies a pointer.
+    pub limits: Arc<Limits>,
     in_flight: Arc<Semaphore>,
 }
 
@@ -322,7 +324,7 @@ impl Limiter {
                 STATIC_BURST,
                 limits.max_tracked_clients,
             ),
-            limits: limits.clone(),
+            limits: Arc::new(limits.clone()),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
         }
     }
@@ -357,16 +359,40 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Headers a proxy names the client in. Sent by a peer we do not trust, they hint that a proxy in
+/// front is missing from `TRUSTED_PROXIES`.
+const FORWARDING: [HeaderName; 3] = [
+    HeaderName::from_static("x-forwarded-for"),
+    HeaderName::from_static("x-real-ip"),
+    HeaderName::from_static("forwarded"),
+];
+
 /// Middleware applying, in order: the per-client rate and concurrency limits (static files'
 /// own, or the API's), the global
-/// concurrency limit (shedding load instead of queueing), then the request timeout.
-pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next) -> Response {
+/// concurrency limit (shedding load instead of queueing), then the request timeout. A refused
+/// response, from here or from a handler, leaves with a [`Refusal`] saying who was refused.
+pub async fn limit(State(limiter): State<Limiter>, req: Request, next: Next) -> Response {
     let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() else {
         // Only reachable if the router is served without `serve`; refuse rather than share one bucket.
         return ApiError::INTERNAL.into_response();
     };
+    let trust = limiter.limits.trusted_proxy.as_ref();
+    let addr = client_addr(req.headers(), peer.ip(), trust);
+    let untrusted_forwarded = !trust.is_some_and(|t| t.trusts(peer.ip().to_canonical()))
+        && FORWARDING.iter().any(|h| req.headers().contains_key(h));
+    let mut res = admit(&limiter, addr, req, next).await;
+    if res.extensions().get::<Refused>().is_some() {
+        res.extensions_mut().insert(Refusal {
+            client: addr,
+            untrusted_forwarded,
+            proxy_keyed: trust.is_some_and(|t| t.trusts(addr)),
+        });
+    }
+    res
+}
+
+async fn admit(limiter: &Limiter, addr: IpAddr, mut req: Request, next: Next) -> Response {
     let limits = &limiter.limits;
-    let addr = client_addr(req.headers(), peer.ip(), limits.trusted_proxy.as_ref());
     let (table, max) = if is_static(req.uri().path()) {
         (&limiter.statics, STATIC_CONCURRENCY)
     } else {

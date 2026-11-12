@@ -15,8 +15,8 @@ mod format;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
@@ -125,7 +125,9 @@ impl Settings {
             None => default.max_bytes_per_sec,
             Some(v) => match v.parse::<u64>() {
                 Ok(n) if n >= 1024 => n,
-                _ => return Err("LOG_MAX_BYTES_PER_SEC must be a whole number, 1024 or more".into()),
+                _ => {
+                    return Err("LOG_MAX_BYTES_PER_SEC must be a whole number, 1024 or more".into());
+                }
             },
         };
         Ok(Settings {
@@ -180,7 +182,8 @@ impl Logger {
             self.budget.charge(now, line.len());
         }
         self.pending.fetch_add(1, Ordering::Relaxed);
-        if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = self.lines.try_send(line)
+        if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) =
+            self.lines.try_send(line)
         {
             self.pending.fetch_sub(1, Ordering::Relaxed);
             self.dropped(E::NAME, Cause::QueueFull);
@@ -356,7 +359,11 @@ fn write_lines(logger: &Logger, rx: Receiver<Vec<u8>>, out: impl Write) {
                 over_budget: d.over_budget,
                 events: &d.events,
             };
-            let _ = out.write_all(&format::line(&event, logger.settings.format, SystemTime::now()));
+            let _ = out.write_all(&format::line(
+                &event,
+                logger.settings.format,
+                SystemTime::now(),
+            ));
         }
         let _ = out.flush();
         // Only now, so `flush` waits for the line, and drops counted meanwhile stay outstanding.

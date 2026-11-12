@@ -292,6 +292,7 @@ fn capture() -> &'static Capture {
         let settings = Settings {
             format: Format::Json,
             level: Level::Debug,
+            max_bytes_per_sec: logging::DEFAULT_MAX_BYTES_PER_SEC,
         };
         assert!(logging::init(settings, c.clone()));
         c
@@ -1365,4 +1366,71 @@ async fn v1_a_slow_reader_is_dropped_while_others_keep_receiving() {
     }
     logged(|v| v["event"] == "ws_closed" && v["api"] == "v1" && v["code"] == 4003).await;
     drop(slow);
+}
+
+/// Every line logged so far.
+fn all_logged() -> Vec<Value> {
+    logging::flush(Duration::from_secs(1));
+    let raw = String::from_utf8(capture().0.lock().unwrap().clone()).unwrap();
+    raw.lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn refused_upgrades_and_oversized_messages_write_a_bounded_log() {
+    const UPGRADES: usize = 200;
+    const MESSAGES: usize = 40;
+    let mut s = Harness::start(WsLimits {
+        client_max_sockets: 1,
+        max_message_bytes: 64,
+        ..limits()
+    })
+    .await;
+    let _held = s.connect().await;
+    for _ in 0..UPGRADES {
+        let stream = TcpStream::connect(&s.addr).await.unwrap();
+        assert!(Ws::connect_stream(stream, "/regtest/app/ws").await.is_err());
+    }
+    drop(_held);
+    for _ in 0..MESSAGES {
+        let deadline = Instant::now() + WAIT;
+        let mut ws = loop {
+            let stream = TcpStream::connect(&s.addr).await.unwrap();
+            if let Ok(ws) = Ws::connect_stream(stream, "/regtest/app/ws").await {
+                break ws;
+            }
+            assert!(Instant::now() < deadline, "the slot was never freed");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        ws.json().await;
+        ws.send_frame(0x81, &[b' '; 65]).await;
+        assert_eq!(ws.close_code().await.0, 1009);
+    }
+    s.stop.take().unwrap().send(()).unwrap();
+    timeout(WAIT, &mut s.served).await.unwrap().unwrap();
+
+    // Counted in one summary, written at shutdown; at most one refusal line per server.
+    let lines = all_logged();
+    let summary = lines
+        .iter()
+        .find(|v| {
+            v["event"] == "requests_refused"
+                && v["reasons"]["client_sockets"].as_u64() >= Some(UPGRADES as u64)
+        })
+        .expect("a summary of the refused upgrades");
+    assert_eq!(summary["routes"]["ws"], summary["total"]);
+    assert_eq!(summary["clients"], 1);
+    // Other tests in this binary refuse sockets too, each on its own server: one line each.
+    let refused = lines
+        .iter()
+        .filter(|v| v["event"] == "http_request" && v["refused"] == "client_sockets")
+        .count();
+    assert!(refused <= 3, "{refused} refused upgrades written");
+    // Oversized messages: a line at the 1st, 2nd, 4th… drop, never one each.
+    let dropped = lines
+        .iter()
+        .filter(|v| v["event"] == "ws_clients_dropped" && v["reason"] == "too_big")
+        .count();
+    assert!(dropped <= 6 + 3, "{dropped} lines for {MESSAGES} drops");
 }

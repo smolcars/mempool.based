@@ -16,6 +16,7 @@ pub mod health;
 pub mod lightning;
 pub mod limits;
 pub mod mining;
+mod refusals;
 pub mod relatives;
 pub mod replacements;
 pub mod report;
@@ -205,6 +206,9 @@ pub struct App {
     sockets: Arc<ws::Sockets>,
     /// Stopped after the last request, so each peer writes its graph.
     lightning: Vec<Arc<lightning::Lightning>>,
+    /// Summarised once more at shutdown, so the last window's refusals are not lost.
+    refusals: Arc<refusals::Refusals>,
+    log_client_addr: bool,
 }
 
 impl App {
@@ -313,6 +317,13 @@ impl App {
             |v| SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static(v));
 
         let limiter = Limiter::new(&config.limits);
+        let refusals = refusals::Refusals::new(std::time::Instant::now());
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(refusals::report(
+                Arc::clone(&refusals),
+                config.log_client_addr,
+            ));
+        }
         let router = app
             .nest_service("/assets", cache(IMMUTABLE).layer(assets))
             // The shell and unhashed files are revalidated on every load, so a deploy shows at once.
@@ -325,7 +336,7 @@ impl App {
             .layer(middleware::map_response(finish))
             .layer(middleware::from_fn(cors))
             .layer(middleware::from_fn_with_state(
-                request_log::RequestLogger::new(config),
+                request_log::RequestLogger::new(config, Arc::clone(&refusals)),
                 request_log::log_request,
             ));
         Self {
@@ -333,6 +344,8 @@ impl App {
             limiter,
             sockets,
             lightning: peers,
+            refusals,
+            log_client_addr: config.log_client_addr,
         }
     }
 
@@ -357,6 +370,9 @@ impl App {
         };
         serve::serve(listener, self.router, self.limiter, signal).await;
         sockets.drain().await;
+        if let Some(summary) = self.refusals.roll(std::time::Instant::now()) {
+            summary.emit(self.log_client_addr);
+        }
         for l in &self.lightning {
             l.stop().await;
         }
