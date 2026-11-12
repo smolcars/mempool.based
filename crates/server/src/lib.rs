@@ -49,13 +49,19 @@ pub const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
 pub fn router(web_dir: &Path) -> Router {
     // ServeDir rejects `..` and absolute components, so nothing outside web_dir is reachable.
     let frontend = ServeDir::new(web_dir).fallback(ServeFile::new(web_dir.join("index.html")));
-    Router::new()
-        .route("/healthz", get(healthz))
-        .route("/api", any(api_not_found))
-        .route("/api/{*rest}", any(api_not_found))
-        .route("/app", any(api_not_found))
-        .route("/app/{*rest}", any(api_not_found))
-        .fallback_service(frontend)
+    let mut app = Router::new().route("/healthz", get(healthz));
+    // A wildcard needs a non-empty remainder, so the bare and trailing-slash roots are listed too.
+    for path in [
+        "/api",
+        "/api/",
+        "/api/{*rest}",
+        "/app",
+        "/app/",
+        "/app/{*rest}",
+    ] {
+        app = app.route(path, any(api_not_found));
+    }
+    app.fallback_service(frontend)
         .layer(middleware::map_response(security_headers))
 }
 

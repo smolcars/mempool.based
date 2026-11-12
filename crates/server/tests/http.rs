@@ -88,7 +88,14 @@ async fn serves_assets_and_falls_back_to_the_app_shell() {
 #[tokio::test]
 async fn api_paths_do_not_fall_back_to_the_app_shell() {
     let addr = start().await;
-    for path in ["/api", "/api/blocks/tip/height", "/app/anything"] {
+    for path in [
+        "/api",
+        "/api/",
+        "/api/blocks/tip/height",
+        "/app",
+        "/app/",
+        "/app/anything",
+    ] {
         let r = get(&addr, path).await;
         assert_eq!(r.status, 404, "{path}");
         assert!(!r.body.contains("app-shell"), "{path}");
