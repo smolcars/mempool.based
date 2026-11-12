@@ -178,6 +178,28 @@ describe("address page", () => {
     expect([...el.querySelectorAll("button")].some((b) => text(b) === "Show 25 more")).toBe(false);
   });
 
+  it("refreshes the first page when the tab regains focus and flashes what is new", async () => {
+    let page = [tx(1, [[OTHER, 2000]], [[ME, 1000]])];
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats()),
+      [`/address/${ME}/txs`]: () => Response.json(page),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
+    page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
+    // Focus within the gap is ignored; after it, the page asks again.
+    window.dispatchEvent(new Event("focus"));
+    expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(1);
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 10_000);
+    window.dispatchEvent(new Event("focus"));
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2));
+    const rows = el.querySelectorAll("tbody tr");
+    expect(rows[0]?.classList.contains("address-row--new")).toBe(true);
+    expect(rows[1]?.classList.contains("address-row--new")).toBe(false);
+    vi.restoreAllMocks();
+  });
+
   it("says plainly when an address has never been used", async () => {
     serve({ [`/address/${ME}`]: stats(part(0, 0, 0)), [`/address/${ME}/txs`]: [] });
     const el = open(`/address/${ME}`);

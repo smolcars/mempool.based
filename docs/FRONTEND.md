@@ -119,7 +119,7 @@ Import from `components/`. All of them render chain data as text only.
 | `CopyButton value label?` | The copy button on its own |
 | `TimeAgo time suffix?` | Relative time that keeps itself current, UTC in the title |
 | `TimeUtc time` | Absolute UTC time |
-| `DataTable caption columns rows empty?` | Table with units in headers. Columns: `header`, `cell(row, i)`, `numeric`, `optional` (dropped on phones) |
+| `DataTable caption columns rows empty? rowClass?` | Table with units in headers. Columns: `header`, `cell(row, i)`, `numeric`, `optional` (dropped on phones). `rowClass(row)` classes one row, such as a highlight for a new one |
 | `SectionHeader title id? children?` | A section's `h2` over the 2 px rule; `children` sit at the right |
 | `Loading label?` | Waiting. Fades in only after 300 ms, so fast loads show nothing |
 | `Empty title children?` | Nothing to show, and what to do about it |
