@@ -129,6 +129,9 @@ def idle(dirs):
                   f"RSS {rng([r['server']['rss_mb_max'] for r in runs])} MB")
 
 
+NA = {"median": None}
+
+
 def pages(path):
     with open(path) as f:
         d = json.load(f)
@@ -137,14 +140,14 @@ def pages(path):
     print(f"{d['site']}, {d['runs']} cold loads each, Chromium {d['chromium']}, {d['renderer']}\n")
     for prof in ["none", "mobile"]:
         print(f"**{prof}**\n")
-        print("| Page | First paint ms | First contentful paint ms | Data shown ms | Largest contentful paint ms | KB transferred (JS) | Requests | JS run ms |")
-        print("|---|---|---|---|---|---|---|---|")
+        print("| Page | First paint ms | First contentful paint ms | Data shown ms | Largest contentful paint ms | KB transferred (JS) | Requests | Longest chain | Config answered ms | JS run ms |")
+        print("|---|---|---|---|---|---|---|---|---|---|")
         for name, p in d["pages"].items():
             x = p.get(prof)
             if not x:
                 continue
             print(f"| {name} | {cell(x['fp'])} | {cell(x['fcp'])} | {cell(x['data'])} | {cell(x['lcp'])} "
-                  f"| {kb(x['bytes'])} ({kb(x['js_bytes'])}) | {cell(x['requests'])} | {cell(x['script_ms'])} |")
+                  f"| {kb(x['bytes'])} ({kb(x['js_bytes'])}) | {cell(x['requests'])} | {cell(x.get('chain', NA))} | {cell(x.get('config_ms', NA))} | {cell(x['script_ms'])} |")
         print()
     for prof, f in (d.get("frames") or {}).items():
         for what, runs in f.items():
