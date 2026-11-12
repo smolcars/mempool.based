@@ -544,9 +544,21 @@
   .home-fees__item--row {
     grid-column: span 2;
   }
+  /* One answer for every wait fills the panel's two rows: centred and larger, it reads as the
+     answer rather than as a well left empty. */
   .home-fees__item--all {
     grid-column: span 2;
     grid-row: span 2;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-3);
+    text-align: center;
+  }
+  .home-fees__item--all dt {
+    align-items: center;
+  }
+  .home-fees__item--all .home-fees__rate {
+    font-size: var(--text-2xl);
   }
   .home-fees__item dt {
     display: flex;
