@@ -228,6 +228,33 @@ describe("a node", () => {
     expect(requests).toContain(`/app/lightning/nodes/${ACINQ}/channels?status=closed&page=0`);
   });
 
+  it("says a later page failed, rather than keep the last one under its number", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq());
+    replies[`/app/lightning/nodes/${ACINQ}/channels?status=open&page=1`] = json({
+      ...acinq().open_channels,
+      page: 1,
+      channels: [{ ...acinq().open_channels.channels[0], id: "900000x1x1" }],
+    });
+    replies[`/app/lightning/nodes/${ACINQ}/channels?status=open&page=2`] = json(
+      { error: "the node is not answering" },
+      502,
+    );
+    const el = open(`/lightning/node/${ACINQ}`);
+    const next = async () => {
+      [...el.querySelectorAll("button")].find((b) => b.textContent === "Next")?.click();
+      flush();
+    };
+    await shows(el, "Page 1 of 73");
+    await next();
+    await shows(el, "900000x1x1");
+    await next();
+    await shows(el, "Could not load these channels");
+    expect(text(el)).not.toContain("900000x1x1");
+    expect([...el.querySelectorAll("button")].some((b) => b.textContent === "Try again")).toBe(
+      true,
+    );
+  });
+
   it("says when this server knows no such node, or the key is not one", async () => {
     const el = open(`/lightning/node/${"02".padEnd(66, "0")}`);
     await shows(el, "This server knows no such node");
@@ -307,6 +334,25 @@ describe("search and rankings", () => {
     const short = mount(() => <SearchPage />, "/lightning/search?q=ab");
     await shows(short, "Type at least 3 characters");
     expect(requests.filter((r) => r.includes("q=ab"))).toStrictEqual([]);
+  });
+
+  it("keeps the ranked figure on a phone when the ranking changes", async () => {
+    replies["/app/lightning/rankings/capacity?limit=100"] = json({ by: "capacity", nodes: top });
+    replies["/app/lightning/rankings/channels?limit=100"] = json({ by: "channels", nodes: top });
+    const el = mount(() => <RankingsPage />, "/lightning/rankings");
+    await shows(el, "Binance");
+    const optional = (header: string) =>
+      [...el.querySelectorAll("th")]
+        .find((th) => th.textContent === header)
+        ?.classList.contains("table__optional");
+    expect(optional("Channels")).toBe(true);
+    expect(optional("Capacity, BTC")).toBe(false);
+    el.querySelector<HTMLAnchorElement>("a[href='/lightning/rankings?by=channels']")?.click();
+    await vi.waitFor(() =>
+      expect(requests).toContain("/app/lightning/rankings/channels?limit=100"),
+    );
+    await vi.waitFor(() => expect(optional("Channels")).toBe(false));
+    expect(optional("Capacity, BTC")).toBe(true);
   });
 
   it("ranks the top nodes by what the address asks", async () => {

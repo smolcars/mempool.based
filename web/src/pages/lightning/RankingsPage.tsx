@@ -59,7 +59,8 @@ function Ranked(props: { network: Network; by: string }) {
     () => props.by,
     (by, signal) => ask(props.network, `/rankings/${by}?limit=100`, isRankings, signal),
   );
-  const columns: Column<RankedNode>[] = [
+  // A function, so switching the ranking re-picks which columns a phone keeps.
+  const columns = (): Column<RankedNode>[] => [
     { header: "Rank", numeric: true, optional: true, cell: (_, i) => groupDigits(i + 1) },
     ...nodeColumns(props.by === "channels" ? "channels" : "capacity"),
     {
@@ -75,13 +76,16 @@ function Ranked(props: { network: Network; by: string }) {
   ];
   return (
     <Switch>
+      <Match when={ranked.state === "errored"}>
+        <ErrorState title="Could not load the ranking" error={ranked.error} retry={refetch} />
+      </Match>
       <Match when={ranked.latest}>
         {(r) => (
           <section>
             <div class="ln-busy" aria-busy={r().by === props.by ? "false" : "true"}>
               <DataTable
                 caption={`The 100 nodes ${parseRanking(r().by).words}`}
-                columns={columns}
+                columns={columns()}
                 rows={r().nodes}
               />
             </div>
@@ -91,9 +95,6 @@ function Ranked(props: { network: Network; by: string }) {
             </p>
           </section>
         )}
-      </Match>
-      <Match when={ranked.state === "errored"}>
-        <ErrorState title="Could not load the ranking" error={ranked.error} retry={refetch} />
       </Match>
       <Match when={true}>
         <Loading label="Loading the ranking" />

@@ -255,7 +255,8 @@ function Channels(props: { node: NodeDetail; network: Network }) {
         </button>
       </div>
       <Switch>
-        <Match when={list.state === "errored" && shown() === undefined}>
+        {/* A failed page says so, never the last page under the new one's number. */}
+        <Match when={list.state === "errored"}>
           <ErrorState title="Could not load these channels" error={list.error} retry={refetch} />
         </Match>
         <Match when={shown()}>
