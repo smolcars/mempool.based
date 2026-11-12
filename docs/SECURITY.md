@@ -32,6 +32,10 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 10. **Client subscriptions never map one-to-one onto node resources.** Tracked scripts are multiplexed onto shared Electrum subscriptions with a global cap and reference counts.
 11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated. Requests whose cost grows with the data behind them (address histories, batches) have a cost limit of their own, globally and per client, that counts a call until the node has really finished it, not until we stop waiting ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)).
 
+<!-- Numbered 22, after the last rule, so the rules below keep the numbers the code cites. -->
+
+22. **Clients cannot drive unbounded writes to disk or unbounded logging.** A refusal is counted, not logged one by one; every event a client can cause at will is one per request served or a summary; and the log has a ceiling past which events that may be dropped are dropped and counted ([`LOGGING.md`](LOGGING.md#what-a-client-can-make-us-write)). No client, and no number of clients, makes the server write in proportion to how hard it pushes.
+
 ### Handling data
 
 12. **SQL is always parameterized.** Request handlers get read-only connections.

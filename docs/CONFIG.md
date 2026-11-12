@@ -62,8 +62,9 @@ What each setting changes, and the event catalogue, are in [`LOGGING.md`](LOGGIN
 |---|---|---|
 | `LOG_FORMAT` | `json`, or `text` when stdout is a terminal | `json` or `text` |
 | `LOG_LEVEL` | `info` | Lowest level written: `debug`, `info`, `warn` or `error`. Events below it are not formatted at all |
-| `LOG_REQUESTS` | `all` | Which requests get an `http_request` event: `all`, `failures` (status 400 and above, which includes every refusal) or `off`. A passing `/healthz` or `/readyz` is never logged |
+| `LOG_REQUESTS` | `all` | Which requests get an `http_request` event: `all`, `failures` (status 400 and above) or `off`. A passing `/healthz` or `/readyz` is never logged. Refused requests are counted in `requests_refused` whatever this says, and only the first of each reason after a quiet minute gets its own line ([`LOGGING.md`](LOGGING.md#refusals)) |
 | `LOG_CLIENT_ADDR` | `false` | `true` adds the client address, as the rate limiter keys it (IPv4, or an IPv6 /64), to `http_request`. Off by default for privacy; the trade-off is in [`LOGGING.md`](LOGGING.md#why-client-addresses-are-off-by-default) |
+| `LOG_MAX_BYTES_PER_SEC` | `262144` (256 KiB) | The log's ceiling: past it, after a burst of ten seconds' worth, request lines and debug events are dropped and counted, while warnings, errors and summaries are always written ([`LOGGING.md`](LOGGING.md#the-ceiling)). At least 1024. Lower it for a small disk: the log grows by at most this times 86,400 a day (22.6 GB at the default). Raise it only if `log_events_dropped` shows `over_budget` for traffic you want every line of |
 
 
 ## Limits
