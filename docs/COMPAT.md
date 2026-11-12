@@ -36,10 +36,10 @@ One table per group, each on its own page:
 | Group | Page | Rows | served | planned | different | skipped | Confirmed live |
 |---|---|---|---|---|---|---|---|
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 0 | 50 | 0 | 6 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 40 | 16 | 4 | 13 | 72 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 51 | 4 | 4 | 14 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 19 | 3 | 4 | 22 | 43 |
 | Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 0 | 38 | 2 | 6 | 29 |
-| **Total** | | **223** | **59** | **107** | **10** | **47** | **192** |
+| **Total** | | **223** | **70** | **95** | **10** | **48** | **192** |
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -91,7 +91,7 @@ Proposals for [`PLAN.md`](PLAN.md) and [`TODO.md`](TODO.md); this task does not 
 ### Cannot be supported, or not worth it
 
 10. **UTXO set size** (`utxoSetSize` in block extras): rbitcoin has no `gettxoutsetinfo`.
-11. **Lightning location features** (countries, ISPs, world and channel maps, node groups): nine rows skipped for GeoIP, ASN or curation. Lightning node responses will lack location fields.
+11. **Lightning location features** (countries, ISPs, world and channel maps, node groups): nine rows skipped for GeoIP, ASN or curation. Lightning node responses carry their location fields as `null`. `penalties` is skipped too: its rows are the reference's own records of closed channels, which we do not keep.
 12. **`blocks-bulk`** is disabled on both the reference and mempool.space; skip until someone asks.
 
 ### Third-party dependence

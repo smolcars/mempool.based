@@ -624,7 +624,7 @@ Every route but `prevouts` asks the node nothing: a request is a parse and a few
 - **First-seen.** Equal to the node's `getmempoolentry` time; 1 to 2 s before the reference's, as above. Transactions that left the mempool as replaced: ours from the record, `0` on the reference.
 ### Lightning
 
-What the Lightning peer knows ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)), from the store or the peer's memory, never from the node. With `{NET}_LIGHTNING_ENABLED` off every route here answers `503` `lightning is off on this network`, except the status, which answers `{"state": "off"}`. Code: `crates/server/src/lightning.rs`. The other `/api/v1/lightning` routes of the inventory are not served yet ([`compat/api-v1.md`](compat/api-v1.md#lightning)).
+What the Lightning peer knows ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)), from the store or the peer's memory, never from the node. With `{NET}_LIGHTNING_ENABLED` off every route here answers `503` `lightning is off on this network`, except the status, which answers `{"state": "off"}`. Code: `crates/server/src/lightning.rs`, and `lightning/nodes.rs` for [nodes, channels, search and rankings](#nodes-channels-search-and-rankings). Which `/api/v1/lightning` routes of the inventory are served, and why the rest are not: [`compat/api-v1.md`](compat/api-v1.md#lightning).
 
 | Route | Answer |
 |---|---|
@@ -640,7 +640,119 @@ What the Lightning peer knows ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)), fr
 
 **Intervals** are those of [Mempool statistics](#mempool-statistics), with no step finer than ten minutes (`2h` has 12 points, `24h` 144). A point is the mean of the snapshots in its step; a step with none has no point. `X-Data-From-Time` and `X-Data-Complete` say what the answer covers, counted in ten-minute slots. `avg_*` are exact over the step's snapshots (sums divided); `med_*` are **the mean of the snapshots' medians**, since medians cannot be added up. The fee averages leave out policies above 1,000,000 ppm or 1,000,000 msat, which refuse to route; the medians count every policy ([`STORE.md`](STORE.md#ln_statistics)).
 
-**Freshness and cost.** Series are computed from the store on the first request after a new snapshot or a new ten minutes, one computation at a time per network, both shapes at once; until then from memory (`Cache-Control: public, max-age=10`). The status and lists are read per request: the status from memory, a list in one indexed read of at most 100 rows (the aliases from the graph under its lock, microseconds). `no-cache`. CORS as for `/api` on the `/api/v1` routes.
+**Freshness and cost.** Series are computed from the store on the first request after a new snapshot or a new ten minutes, one computation at a time per network, both shapes at once; until then from memory (`Cache-Control: public, max-age=10`). The status and lists are read per request: the status from memory, a list in one indexed read of at most 100 rows (the aliases from the [index](#nodes-channels-search-and-rankings), `null` before its first build). `no-cache`. CORS as for `/api` on the `/api/v1` routes.
+
+#### Nodes, channels, search and rankings
+
+Answered from an index of the verified graph that the server rebuilds every 30 s while the graph is synced, and from indexed reads of the store; never from the node, and never under the graph's lock ([`LIGHTNING.md`](LIGHTNING.md#routes)). An answer lags the graph by at most 30 s plus a build (24 to 40 ms on mainnet); a close shows on the channel's own routes at once, since they read its row. `Cache-Control: public, max-age=10`; CORS as for `/api` on the `/api/v1` routes.
+
+**Before the first index**, while the graph has never been synced (about four minutes on a first start, one after a restart), every route here answers `503` `lightning graph is still syncing; retry` with `Retry-After: 1`: an answer from a half-loaded graph would be wrong, not partial. With Lightning off, `503` `lightning is off on this network`, as above.
+
+**Parameters** are parsed before anything is read, and an error names what was wrong with the request and nothing about the server:
+
+| Parameter | Accepted | Otherwise |
+|---|---|---|
+| `:key`, `public_key` | Exactly 66 hex digits, any case | `400 invalid public key: 66 hex digits` |
+| `:id` (a channel) | The 64-bit id in decimal (`892785849701564416`, the only form the reference takes) or `<height>x<index>x<output>` (`811984x2037x0`), each part decimal without a leading zero and within its 24, 24 and 16 bits | `400 invalid channel id: …` |
+| `:txid`, `txId[]` | 64 hex digits; `txId[]` at most 100 times | `400 invalid txid` / `invalid txId` |
+| `q`, `searchText` | 3 to 66 characters once percent-decoded and trimmed, valid UTF-8, no control character | `400 search text is 3 to 66 characters, without control characters` |
+| `status` | `open` (the default) or `closed` | `400` |
+| `page` (ours) | 0 to 4,000, 25 channels a page | `400` |
+| `index` (reference) | An offset, 0 to 100,000, 10 channels a page | `400` |
+| `limit` (rankings) | 1 to 100, default 25, as for the channel lists above | `400` |
+
+A parameter given twice is `400`. `/app` routes refuse unknown parameters; `/api/v1` routes ignore them, like every `/api/v1` query, so cache-busting works. A node or channel we do not hold is `404` (`node not found`, `channel not found`); a page past the end is an empty list. A node is held while it has an open channel in the graph.
+
+**Search** matches public keys by prefix (hex, any case) in key order, then aliases by substring (Unicode lowercase on both sides), most capacity first: at most 10 nodes. A query that parses as a channel id also returns that channel, open or closed. Its cost is a binary search and one pass over at most 13,600 aliases of at most 32 bytes, whatever the query: 0.5 ms on mainnet.
+
+**An alias is a claim.** Any node can announce any 32 bytes, another node's name included: search returns the impostor too, after the larger node, and a page must show the public key beside the alias. Aliases are LDK's reading of the 32 bytes (up to the first NUL; control characters become U+FFFD) and are served as JSON strings, never markup ([`SECURITY.md`](SECURITY.md) rule 14).
+
+##### `/app/lightning/…`
+
+What the Lightning pages read; one request for each page's main content. Real mainnet answers, 2026-11-12, trimmed where `…`.
+
+| Route | Answer |
+|---|---|
+| `GET /overview` | `{statistics, top_capacity, top_channels, opened, closed}`: the newest snapshot as `statistics/latest` gives it (`null` before the first), the top 10 nodes by capacity and by open channels (`{id, alias, capacity, channels}`), and the 10 newest opens and closes as in the channel lists above |
+| `GET /search?q=` | `{nodes: [{id, alias, capacity, channels}], channels: [{id, scid, capacity, state}]}` |
+| `GET /rankings/:by` | `by` is `capacity`, `channels` or `age` (oldest first funding first); `{by, nodes: [{id, alias, capacity, channels, first_seen, last_update}]}`, `?limit=` up to 100 |
+| `GET /nodes/:key` | The node page: below |
+| `GET /nodes/:key/channels?status=&page=` | `{status, page, per_page, total, channels}`: open channels largest first, from the index; closed ones newest close first, from the store |
+| `GET /nodes/:key/history` | `{from, points: [{time, channels, capacity}]}`: the node's open channels and capacity at each UTC midnight since `from` (when our history starts: the first statistics snapshot; `null` before it), then now, oldest first |
+| `GET /channels/:id` | The channel page: below. Open or closed |
+| `GET /tx/:txid` | `{opened, closed}`: the channels this transaction funded and closed, each as in the channel lists above. For the transaction page |
+
+`state` is `active` (some direction has an enabled policy), `inactive` (none: disabled, or no policy received within LDK's two weeks) or `closed`. `fee_rate` in a node's channel list is that node's own policy on the channel, ppm. Times are Unix seconds; `first_seen` is the oldest funding block time among the node's channels we hold, open or closed.
+
+```json
+GET /app/lightning/nodes/03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f
+{"id": "03864ef0…3f8f", "alias": "ACINQ", "color": "#49daaa",
+ "addresses": ["3.33.236.230:9735", "of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735"],
+ "features": [{"bit": 0, "name": "data-loss-protect", "required": true}, {"bit": 7, "name": "gossip-queries", "required": false}, …],
+ "features_hex": "a00098a82a8a6981", "last_update": 1794051404, "first_seen": 1551152144,
+ "capacity": 27383219285,
+ "channels": {"open": 1807, "active": 1729, "closed": 0, "cooperative": 0, "force": 0, "penalty": 0, "other": 0},
+ "fees": {"incoming": [{"bucket": null, "count": 77, "capacity": 156929566}, {"bucket": 0, "count": 60, "capacity": 1146048852}, …],
+          "outgoing": [{"bucket": null, "count": 60, "capacity": 91707732}, {"bucket": 400, "count": 1481, "capacity": 6377292455}, …]},
+ "open_channels": {"status": "open", "page": 0, "per_page": 25, "total": 1807, "channels": [
+   {"id": "811984x2037x0", "scid": "892785849701564416", "capacity": 500000000, "state": "active",
+    "peer": {"id": "033d8656…e025", "alias": "bfx-lnd0"}, "fee_rate": 2499, "closed": null}, …]}}
+```
+
+`features` names a bit by BOLT 9 (`null` when it names none); `fees` buckets the fee rates others charge into the node (`incoming`) and the node charges (`outgoing`) over its open channels: exact under 10 ppm, then rounded down to tens, hundreds and, from 1,000, thousands; `null` counts channels with no policy that way. A closed channel in a list has `"fee_rate": null` and `closed` as below.
+
+```json
+GET /app/lightning/channels/811984x2037x0
+{"id": "811984x2037x0", "scid": "892785849701564416", "capacity": 500000000, "state": "active", "last_update": 1794496008,
+ "node_one": {"id": "033d8656…e025", "alias": "bfx-lnd0", "color": "#16b157",
+              "policy": {"fee_rate": 1, "base_fee_msat": 1000, "cltv_delta": 80, "min_htlc_msat": 1000, "max_htlc_msat": 20000000000, "enabled": true, "last_update": 1794456478}},
+ "node_two": {"id": "03864ef0…3f8f", "alias": "ACINQ", "color": "#49daaa", "policy": {"fee_rate": 2499, …}},
+ "funding": {"txid": "a7f10c25…d4f5", "vout": 0, "block": {"height": 811984, "hash": "000000000000000000019545…fb7e", "time": 1697189564}},
+ "closed": null, "penalty": null}
+```
+
+`policy` is what that node charges to forward over the channel, `null` until it sent one and for a closed channel. `funding.txid` is `null` until the server has asked the node for it ([`LIGHTNING.md`](LIGHTNING.md#funding-transactions)); `funding.block` is `null` only for a channel the store has not recorded yet. A closed channel has `closed: {block, txid, kind, fee}` and, after a breach, `penalty: {block, txid}`.
+
+```json
+GET /app/lightning/search?q=acinq
+{"nodes": [{"id": "03864ef0…3f8f", "alias": "ACINQ", "capacity": 27383219285, "channels": 1807}], "channels": []}
+GET /app/lightning/rankings/capacity?limit=2
+{"by": "capacity", "nodes": [{"id": "033d8656…e025", "alias": "bfx-lnd0", "capacity": 32461828251, "channels": 544, "first_seen": 1574813156, "last_update": 1794504476},
+                             {"id": "03a1f3af…a72f", "alias": "Binance", "capacity": 32315912432, "channels": 130, "first_seen": 1705383088, "last_update": 1794504053}]}
+GET /app/lightning/nodes/03864ef0…3f8f/history   (before the first statistics snapshot)
+{"from": null, "points": [{"time": 1794505190, "channels": 1807, "capacity": 27383219285}]}
+```
+
+##### `/api/v1/lightning/…`
+
+In the reference's shapes: field names, order and JSON types as recorded from mempool.space's public API ([`fixtures/api-v1/lightning.json`](../fixtures/api-v1/lightning.json)), our values.
+
+| Route | Answer and differences |
+|---|---|
+| `GET /search?searchText=` | `{nodes: [{public_key, alias, capacity, channels, status}], channels: [{id, short_id, capacity, status}]}`. At most 10 nodes. A node's `status` is 1 when one of its channels is active |
+| `GET /nodes/rankings` | `{topByCapacity: [{publicKey, alias, capacity}], topByChannels: [{publicKey, alias, channels, city, country, iso_code, subdivision}]}`, 6 each |
+| `GET /nodes/rankings/liquidity`, `/connectivity`, `/age` | 100 nodes: `{publicKey, alias, capacity, channels, firstSeen, updatedAt, city, country, iso_code, subdivision}` (capacity after channels for the last two) |
+| `GET /nodes/:key` | `{public_key, alias, first_seen, updated_at, color, sockets, as_number, city_id, country_id, subdivision_id, longitude, latitude, iso_code, as_organization, city, country, subdivision, features, featuresBits, active_channel_count, capacity, opened_channel_count, closed_channel_count, custom_records}`. `capacity` is a string, as there |
+| `GET /nodes/:key/statistics` | `[{added, capacity, channels}]`, newest first: the points of `/app/lightning/nodes/:key/history` |
+| `GET /nodes/:key/fees/histogram` | `{incoming: [{bucket, count, capacity}], outgoing: […]}`; `bucket` a string such as `"400.0"` or `null`, `capacity` a string |
+| `GET /channels?public_key=&status=&index=` | 10 channels from offset `index`: `[{status, closing_reason, closing_date, capacity, short_id, id, fee_rate, node: {alias, public_key, channels, capacity}}]`, open ones largest first, closed ones newest close first; `X-Total-Count` the node's total |
+| `GET /channels/:id` | `{id, short_id, capacity, transaction_id, transaction_vout, closing_transaction_id, closing_fee, closing_reason, closing_date, updated_at, created, status, funding_ratio, closed_by, node_left, node_right}`, each end `{alias, public_key, channels, capacity, base_fee_mtokens, cltv_delta, fee_rate, is_disabled, max_htlc_mtokens, min_htlc_mtokens, updated_at, longitude, latitude}` |
+| `GET /channels/txids?txId[]=` | One `{inputs, outputs}` per txid asked, in order: `outputs` maps the output index to the channel it funded, `inputs` maps `"0"` to the channel it closed; each channel as above without the ends' `channels`, `capacity`, `longitude` and `latitude`, as there |
+
+Values and their differences from the reference:
+
+- **Only chain-verified channels.** We list a channel only once we found its funding output unspent, six deep and paying the announced keys; the reference lists what gossip claims ([`LIGHTNING.md`](LIGHTNING.md#validation)). A node is held while it has such a channel.
+- **History starts when our peer started.** `closed_channel_count`, the closed lists, `first_seen` (the oldest funding among channels we hold: for ACINQ 2019-02-26, against the reference's 2019-01-02) and `/statistics` count only what we saw. `/statistics` starts at our first statistics snapshot and adds a point for now; its points are the node's channels at each UTC midnight rebuilt from our record of opens and closes, where the reference stores a snapshot a day.
+- **Location** (`as_number`, `city_id`, `country_id`, `subdivision_id`, `longitude`, `latitude`, `iso_code`, `as_organization`, `city`, `country`, `subdivision`) is always `null`: we have no GeoIP data. `custom_records` is always `{}`.
+- **Left out, because we cannot know them:** `single_funded` and each end's `funding_balance` and `closing_balance`. `funding_ratio` and `closed_by` are `null`, as the reference writes them when it does not know.
+- **`node_left` is the channel's node one** (the lower key, BOLT 7's order); the reference's left end is not always that one (for `811984x2037x0` it is ACINQ, the higher). Each end carries its own policy either way.
+- **Status:** 1 when some direction has an enabled policy, 0 otherwise, which includes channels whose policies LDK dropped after two weeks of silence (CoinGate: 468 of its 1,301 open channels active here, all 1,294 on the reference's August data); 2 closed. `closing_reason` is 1 cooperative, 2 force, 3 a breach, and `null` for a close that is neither (most likely a splice); `closing_date` is the closing block's time. `created` is the funding block's time; `updated_at` the newer policy's.
+- **Unknown values are `null`:** `transaction_id` until the server has asked the node for the funding transaction, `closing_fee` when the node did not say, a closed channel's policies (gossip forgets them), a closed channel's `fee_rate` in the lists, `color`, `updated_at` and `featuresBits` (`""`) of a node that announced nothing. Such a node's `alias` is its key's first 20 hex digits, as the reference writes it.
+- **`channels/txids` inputs:** a cooperative or force close spends the funding output alone, so it is input `"0"`; an `other` close spends more inputs and we do not keep which was the funding output, so it is left out of `inputs` (it is in our `/app/lightning/tx/:txid`).
+- **Feature names** follow BOLT 9 (`gossip-queries-ex`, `route-blinding`, `dual-fund`, `quiesce`, `onion-messages` where the reference says `unknown`); implementation-specific bits the reference names (31 `amp`, 2023 `script-enforced-lease`) are `unknown` here.
+- **Errors** are our `{"error": …}` model; the reference answers some with plain text (`Channel not found`).
+
+**Cost.** Measured on mainnet (36,223 channels, 13,639 nodes), release build, a client on the same machine, three requests each: every route answered in 0.3 to 0.9 ms, first and repeated alike, except the three that read a node's rows from the store (its closed channels, `/history` and `/statistics`, 1.5 to 2.6 ms for ACINQ's 1,807 channels). The largest answers are the 100-node rankings (25 KB) and the overview (7 KB). A test builds a graph of mainnet's size and holds every route under 250 ms in a debug build on a CI runner (`crates/server/tests/lightning.rs`).
 
 ## Using it from the frontend
 

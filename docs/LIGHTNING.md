@@ -317,12 +317,36 @@ Both are written with `try_write`: when the store's queue is full the Lightning 
 
 ### What is served
 
-The peer's status, the latest statistics and the series over an interval, and the newest opens and closes, under `/app/lightning/…`; and `/api/v1/lightning/statistics/latest` and `/:interval` in the reference's shapes ([`API.md`](API.md#lightning)). Every answer comes from the store or the peer's memory; none asks the node.
+The peer's status, the latest statistics and the series over an interval, the newest opens and closes, and nodes, channels, search and rankings ([Routes](#routes)), under `/app/lightning/…` and in the reference's shapes under `/api/v1/lightning/…` ([`API.md`](API.md#lightning)). Every answer comes from the store or the server's memory; none asks the node, and none takes the graph's lock.
+
+### Routes
+
+The node, channel, search and ranking routes read an **index** of the verified graph (`engine::lightning::Index`, built by `crates/server/src/lightning/index.rs`), never the graph itself, so a request costs a lookup whatever the graph's size and gossip never waits for one.
+
+**Built every 30 s while the graph is synced.** The task copies the graph out of LDK in chunks of 2,000 entries, taking and releasing the graph's lock for each (25 holds on mainnet, the longest 1.05 ms), then indexes the copy on a blocking thread with no lock at all and swaps the new index in behind an `Arc`. A request clones the `Arc` and lets go; nothing it does can make the peer or the store's writer wait. Gossip that lands between two chunks is in the copy or not; a channel or node gone by its chunk is skipped, and the next build has it right. A graph that has never been synced is not indexed: until then the routes answer that they are syncing, rather than from a half-loaded graph.
+
+| Held per build | From |
+|---|---|
+| Every channel by short channel id, with both ends, capacity and both policies | The graph |
+| Every node with a channel, by public key, with its announcement, capacity, open and active channel counts, and its channels ordered largest first | The graph |
+| Each node's lowercased alias, for search | The graph |
+| The top 100 nodes by capacity, by open channels and by age | Both |
+| Each node's oldest funding block time and its closed channels by kind, and when our history starts (the oldest statistics row) | The store, in one grouped read of `ln_channels`, done again only after new history or statistics rows were stored |
+
+**Stale by at most 30 s plus a build.** A channel's own routes also read its row from the store, so a close shows there at once. Measured on mainnet (36,223 channels, 13,639 nodes, release build): the copy 10.8 ms, a whole build 24 to 41 ms, so about 0.1 % of one core. **Memory**, estimated from the structures' sizes: about 185 bytes a channel and 320 a node, and 80 a node for the store's part: about 12 MB at mainnet's size, twice that while a new index is built beside the old, and at most about 85 MB at the 100,000-channel ceiling (200,000 nodes). It is not measured apart: the process's footprint after the first build, 249 MB, is within the variation of the figures [measured](#measured-in-the-server) before the index existed.
+
+**Search** is bounded whatever the query: 3 to 66 characters, a binary search over the public keys for a prefix and one pass over at most 2 × the ceiling aliases of at most 32 bytes, 10 results. Aliases are kept as LDK prints them (up to the first NUL, control characters as U+FFFD, so at most 96 bytes), matched lowercased, served as JSON strings and never interpreted; an alias proves nothing, so the impostor of a well-known name is found too, ranked by capacity ([`API.md`](API.md#nodes-channels-search-and-rankings)).
+
+**A node's past** (`/app/lightning/nodes/:key/history`, `/api/v1/lightning/nodes/:key/statistics`) is rebuilt from `ln_channels`, which already holds every channel's funding and closing block times: the node's channels open at each UTC midnight are a sweep over its rows (one indexed read, 1.6 ms for ACINQ's 1,807). Nothing new is stored. Snapshotting every node's totals instead would add 13,600 rows every period (150 MB a year at one a day) for the same numbers. Before our history starts the table does not know the channels that had already closed, so the series begins at the first statistics snapshot. A channel LDK pruned keeps its row as open ([Still missing](#still-missing)) and is counted open.
+
+### Funding transactions
+
+The peer never learns a channel's funding txid ([Why the script and not the outpoint](#how-closes-are-found)), but the transaction page needs to find the channels a transaction opened. So a background task asks the node once per stored channel, `/block/:hash/txid/:index` with the funding block's hash the table already holds, and stores the answer in `ln_channels.open_txid`, indexed. One small request at a time, at least 50 ms apart: on mainnet about 13 a second at the node's latency, so the first start fills 36,000 channels in about 45 minutes, and after that a few hundred new channels a day. A failure is retried after 1 s, doubling to 64 s (`lightning_funding_failed`); a block that left the chain is skipped until the history moves the row. A txid is stored only while the row names the block it was read from, and an open that moves the channel to another block clears it. Requests never wait for this: until a channel's txid is known, its routes say `null` and a lookup by that txid does not find it. Closing txids come with the close and are indexed the same way.
 
 ### Still missing
 
-- Node, channel, search and ranking routes (LN4b), and the Lightning pages (W11). They can read the live graph through `Lightning::read_graph` (a closure over LDK's `ReadOnlyNetworkGraph`, under the peer's lock) and closed channels from `ln_channels`.
-- Per-node history over time (`/lightning/nodes/:pubkey/statistics`): only network totals are snapshotted.
+- The Lightning pages (W11), which read the [routes](#routes).
+- `/api/v1/lightning/penalties`: its rows are the reference's database records of a closed channel (each end's last policy, balances, outputs, resolution state), which we do not keep ([`compat/api-v1.md`](compat/api-v1.md#lightning)). Breaches show in our closed-channel lists.
 - A channel's close is lost when the history store falls past the peer's memory ([`STORE.md`](STORE.md#ln_channels)), and channels the peer stops watching (pruned) keep their row as open.
 
 ### Measured in the server
