@@ -86,3 +86,4 @@ The part people watch.
 - An orchestrator assigns tasks from [`TODO.md`](TODO.md) to builder agents, at most five at a time.
 - Each builder takes one task to a merged pull request: build, prove, review, rebase, merge.
 - Later milestones are listed coarsely on purpose. Their tasks are refined when the milestone before them lands, using what was learned.
+
