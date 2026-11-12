@@ -124,7 +124,7 @@ Opening a block's audit list adds two files and one API request. An open home pa
 | `CLIENT_BURST` | `120` | A restored session of eight tabs loading one after another: 8 × 13 = 104 |
 | `CLIENT_RATE_PER_SEC` | `20` | Unchanged: sixty open home pages polling, or a full burst refilled in 6 seconds |
 | `WS_CLIENT_MAX_SOCKETS` | `16` | One socket per open tab; sixteen tabs |
-| Static files, fixed | 400 at once, 100 a second, 96 in flight | Set when the heaviest page needed 25 files: sixteen cold loads of it at once, and three of them with every file in flight together (75). The heaviest now needs 15 (mining), which the same derivation would put at 240 and 45; the limits are unchanged, which leaves that much more room for a NAT or a page that grows |
+| Static files, fixed | 400 at once, 100 a second, 96 in flight | Set when the heaviest page needed 25 files: sixteen cold loads of it at once, and three of them with every file in flight together (75). The heaviest now needs 16 (the address page), which the same derivation would put at 256 and 48; the limits are unchanged, which leaves that much more room for a NAT or a page that grows |
 
 `crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
 
