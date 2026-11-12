@@ -99,8 +99,10 @@ pub(crate) fn write_atomic(
     result
 }
 
-/// Bytes of graph file allowed per channel of the ceiling; a mainnet graph uses about 900.
-const MAX_FILE_BYTES_PER_CHANNEL: u64 = 4096;
+/// Bytes of graph file allowed per channel of the ceiling. A mainnet graph uses about 900; the
+/// most a channel can bring is its announcement, two updates and two node announcements of
+/// 1 KB each (`MAX_GOSSIP_BYTES`), plus LDK's own fields.
+pub(crate) const MAX_FILE_BYTES_PER_CHANNEL: u64 = 8192;
 
 pub(crate) fn load_graph(
     dir: &Path,

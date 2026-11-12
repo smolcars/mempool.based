@@ -372,6 +372,7 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
     let mut both = vec![a, b];
     both.sort();
     assert_eq!(asked, both, "every peer is asked for its channel list");
+    assert_eq!(h.gossip.range_pending(), 2, "two channel lists outstanding");
 
     let reply = |scids: Vec<u64>| ReplyChannelRange {
         chain_hash: chain(),
@@ -403,6 +404,11 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
             .is_err(),
         "unsolicited"
     );
+    // A first fragment that stops short of the queried range leaves a's list outstanding.
+    let mut part = reply(vec![]);
+    part.number_of_blocks = 100;
+    h.gossip.handle_reply_channel_range(a, part).unwrap();
+    assert_eq!(h.gossip.range_pending(), 2);
     // Channel 1 is known.
     h.gossip
         .handle_reply_channel_range(a, reply(vec![1, 2, 3, 4]))
@@ -570,6 +576,52 @@ fn a_saved_graph_reloads_equal() {
         store::load_graph(&dir.0, NET, 10, &sink()).1,
         GraphLoad::Fresh
     ));
+}
+
+#[test]
+fn a_graph_of_the_largest_accepted_gossip_reloads() {
+    let dir = TempDir::new();
+    let h = handler(1);
+    // Pad each message to the size limit with extra data, which LDK keeps, and sign it.
+    let fill = |len: usize| MAX_GOSSIP_BYTES - len;
+    let mut ann = channel(1, 1, 2);
+    ann.contents.excess_data = vec![0; fill(ann.serialized_length())];
+    let (k1, k2) = if id(&key(1)) == ann.contents.node_id_1 {
+        (1, 2)
+    } else {
+        (2, 1)
+    };
+    ann.node_signature_1 = sign(&ann.contents, &key(k1));
+    ann.node_signature_2 = sign(&ann.contents, &key(k2));
+    // `channel` keeps the funding keys in argument order.
+    ann.bitcoin_signature_1 = sign(&ann.contents, &key(101));
+    ann.bitcoin_signature_2 = sign(&ann.contents, &key(102));
+    assert_eq!(ann.serialized_length(), MAX_GOSSIP_BYTES);
+    h.gossip.handle_channel_announcement(None, &ann).unwrap();
+    for (signer, direction) in [(k1, 0), (k2, 1)] {
+        let mut u = update(1, signer, direction);
+        u.contents.excess_data = vec![0; fill(u.serialized_length())];
+        u.signature = sign(&u.contents, &key(signer));
+        h.gossip.handle_channel_update(None, &u).unwrap();
+        let mut n = node(signer, "n", 0);
+        n.contents.excess_data = vec![0; fill(n.serialized_length())];
+        n.signature = sign(&n.contents, &key(signer));
+        assert_eq!(n.serialized_length(), MAX_GOSSIP_BYTES);
+        h.gossip.handle_node_announcement(None, &n).unwrap();
+    }
+    let bytes = h.gossip.graph().encode();
+    assert!(
+        bytes.len() as u64 <= store::MAX_FILE_BYTES_PER_CHANNEL,
+        "{}",
+        bytes.len()
+    );
+    let path = dir.0.join(store::GRAPH_FILE);
+    store::write_atomic(&path, |f| std::io::Write::write_all(f, &bytes)).unwrap();
+    let (_, load) = store::load_graph(&dir.0, NET, 1, &sink());
+    assert!(
+        matches!(load, GraphLoad::Loaded { channels: 1, .. }),
+        "{load:?}"
+    );
 }
 
 #[test]

@@ -36,11 +36,11 @@ Our routing handler wraps `P2PGossipSync`. It passes gossip through to LDK and c
 
 ### Sync
 
-LDK asks each peer for gossip with a `gossip_timestamp_filter` set two weeks back, which Core Lightning and most LND nodes answer with their whole graph. On mainnet the default peers did not: eclair (ACINQ) and the Bitfinex LND nodes sent only new gossip. So the peer also asks every peer that supports gossip queries for every channel id it knows (`query_channel_range`), and requests the channels it lacks (`query_short_channel_ids`), 2,000 ids per batch, one batch at a time per peer and never the same channel from two peers at once. A batch that gets no answer within 2 minutes is dropped; its channels come back at the next range sync, which happens on every connection.
+LDK asks each peer for gossip with a `gossip_timestamp_filter` set two weeks back, which Core Lightning and most LND nodes answer with their whole graph. On mainnet the default peers did not: eclair (ACINQ) and the Bitfinex LND nodes sent only new gossip. So the peer also asks every peer that supports gossip queries for every channel id it knows (`query_channel_range`), and requests the channels it lacks (`query_short_channel_ids`), 2,000 ids per batch, one batch at a time per peer and never the same channel from two peers at once. A peer's channel list is complete when a reply reaches the end of the queried range (the `sync_complete` flag is not an end marker), or when its replies stop for a minute. A batch that gets no answer within 2 minutes is dropped; its channels come back at the next range sync, which happens on every connection.
 
 Peers' graphs differ: alone, ACINQ listed 21,600 channels and Bitfinex 30,250. Asking every peer gives the union.
 
-**"Synced"** (`Status::synced`, `Event::Synced`) means the graph is complete enough to show: every channel a peer listed has been requested and no new channel has arrived for 30 seconds, or the graph was loaded from a file caught up within the last 13 days.
+**"Synced"** (`Status::synced`, `Event::Synced`) means the graph is complete enough to show: every connected peer's channel list has arrived, every channel on them has been received or given up on, and no new channel has arrived for 30 seconds, or the graph was loaded from a file caught up within the last 13 days.
 
 The graph file's modification time is set to the last moment the peer was **caught up**: connected, with every listed channel requested and no new channel for 30 seconds. It is not the time of writing, so a graph saved after a week offline does not pass for fresh. After a restart the timestamp filter starts one day before that moment instead of two weeks back, so peers that honour it resend only what is new.
 
@@ -71,7 +71,7 @@ Both live in `Config::data_dir`, which the server will put beside each network's
 | `node_key` | The 32-byte identity seed. Created on first run from `/dev/urandom` with mode `0600`; a seed readable by group or others is refused at start | 32 bytes |
 | `graph` | LDK's own serialization of the network graph | about 31 MB at 30,000 channels |
 
-The graph is written every 10 minutes when it changed (a failed write is retried at the next period), and at shutdown, through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, one that does not decode, one larger than 4 KB per channel of the ceiling, or one holding more channels than the ceiling (saved under a higher one), is reported (`GraphLoad::Unreadable`) and replaced at the next save.
+The graph is written every 10 minutes when it changed (a failed write is retried at the next period), and at shutdown, through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, one that does not decode, one larger than 8 KB per channel of the ceiling (the most one channel's gossip can occupy, with its nodes), or one holding more channels than the ceiling (saved under a higher one), is reported (`GraphLoad::Unreadable`) and replaced at the next save.
 
 ### Interface
 

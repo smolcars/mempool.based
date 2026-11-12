@@ -47,6 +47,8 @@ pub(crate) const MAX_NODE_ADDRESSES: usize = 8;
 const SCID_BATCH: usize = 2000;
 /// A batch with no answer for this long is given up; its channels return at the next range sync.
 const BATCH_TIMEOUT: Duration = Duration::from_secs(120);
+/// A channel list whose replies stop for this long, short of the queried range, counts as done.
+const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The channel-range sync with every connected peer.
 #[derive(Default)]
@@ -58,6 +60,8 @@ struct RangeSync {
 
 #[derive(Default)]
 struct PeerRange {
+    /// While the peer's channel list is still arriving: when its last reply (or the query) came.
+    listing: Option<Instant>,
     /// Channel ids this peer has and we lack, not yet requested.
     wanted: VecDeque<u64>,
     /// The batch requested and not yet answered, and when it was sent.
@@ -236,13 +240,21 @@ impl Gossip {
     }
 
     /// Channels listed by peers and not yet received, requested or not.
+    /// Peers whose channel list is still arriving count as one each.
     pub(crate) fn range_pending(&self) -> usize {
-        self.range.lock().map_or(0, |r| r.queued.len())
+        self.range.lock().map_or(0, |r| {
+            r.queued.len() + r.peers.values().filter(|p| p.listing.is_some()).count()
+        })
     }
 
     /// Moves on from batches that fully arrived without their end marker, or timed out.
     pub(crate) fn range_tick(&self) {
         let Ok(mut r) = self.range.lock() else { return };
+        for p in r.peers.values_mut() {
+            if p.listing.is_some_and(|t| t.elapsed() >= LISTING_TIMEOUT) {
+                p.listing = None;
+            }
+        }
         let graph = self.graph().read_only();
         let done: Vec<PublicKey> = r
             .peers
@@ -368,7 +380,13 @@ impl BaseMessageHandler for Gossip {
         if msg.features.supports_gossip_queries()
             && let Ok(mut r) = self.range.lock()
         {
-            r.peers.insert(their_node_id, PeerRange::default());
+            r.peers.insert(
+                their_node_id,
+                PeerRange {
+                    listing: Some(Instant::now()),
+                    ..PeerRange::default()
+                },
+            );
             self.send(MessageSendEvent::SendChannelRangeQuery {
                 node_id: their_node_id,
                 msg: QueryChannelRange {
@@ -483,6 +501,10 @@ impl RoutingMessageHandler for Gossip {
         if msg.chain_hash != self.chain {
             return Err(ignore("reply_channel_range for another chain"));
         }
+        // `sync_complete` is not an end marker: the last reply is the one reaching the end of
+        // the queried range, which was every block.
+        let end = u64::from(msg.first_blocknum) + u64::from(msg.number_of_blocks);
+        p.listing = (end < u64::from(u32::MAX)).then(Instant::now);
         let graph = self.graph().read_only();
         for scid in msg.short_channel_ids {
             if queued.len() >= self.max_channels {
