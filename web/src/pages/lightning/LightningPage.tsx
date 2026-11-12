@@ -205,10 +205,13 @@ function Now(props: { stats: Stats | null }) {
 const nodeKinds = (s: Stats): string =>
   `${groupDigits(s.clearnet_nodes)} clearnet, ${groupDigits(s.tor_nodes)} Tor, ${groupDigits(s.clearnet_tor_nodes)} both, ${groupDigits(s.unannounced_nodes)} with no address`;
 
-/** Whole BTC on an axis; three significant digits below 100. */
+/**
+ * Whole BTC on the right axis, three significant digits below 100. No unit: the axis has 58 px,
+ * which "3 600 BTC" overruns; the readout and the figures say BTC.
+ */
 const btcAxis = (sats: number): string => {
   const btc = sats / 1e8;
-  return `${btc >= 100 ? groupDigits(btc) : formatSi(btc, "")} BTC`;
+  return btc >= 100 ? groupDigits(btc) : formatSi(btc, "");
 };
 
 function History(props: { network: Network }) {
