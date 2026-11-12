@@ -21,8 +21,13 @@ test("a block the server watched arrive shows its audit, and its match rate in t
 
   await page.goto("/regtest/blocks");
   const table = page.getByRole("table", { name: "Recent blocks, newest first" });
-  await expect(table.getByRole("columnheader", { name: "Match rate, %" })).toBeVisible();
   const first = table.getByRole("row").nth(1);
   await expect(first.getByRole("link").first()).toHaveAttribute("href", `/regtest/block/${hash}`);
-  await expect(first.getByRole("cell", { name: /^\d+(\.\d\d)? %$/ })).toBeVisible();
+  // A phone keeps the miner and the transaction count; the match rate is on wider screens.
+  if ((page.viewportSize()?.width ?? 0) > 640) {
+    await expect(table.getByRole("columnheader", { name: "Match rate, %" })).toBeVisible();
+    await expect(first.getByRole("cell", { name: /^\d+(\.\d\d)? %$/ })).toBeVisible();
+  } else {
+    await expect(table.getByRole("columnheader", { name: "Miner" })).toBeVisible();
+  }
 });
