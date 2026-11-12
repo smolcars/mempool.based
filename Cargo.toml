@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 engine = { path = "crates/engine" }
+ln = { path = "crates/ln" }
 logging = { path = "crates/logging" }
 node = { path = "crates/node" }
 
@@ -20,6 +21,11 @@ bytes = "1.12.1"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+# LDK, for the gossip-only Lightning peer (docs/LIGHTNING.md). No default features: drops
+# grind_signatures, which only matters when signing channel transactions. 0.2.8 is the newest
+# release; lightning-net-tokio's newest 0.2 release is 0.2.0.
+lightning = { version = "0.2.8", default-features = false, features = ["std"] }
+lightning-net-tokio = "0.2.0"
 # Bundled: a pinned SQLite compiled in, so neither CI nor the distroless image needs libsqlite3.
 # hooks: the progress handler that enforces the read time limit. Adds no crates.
 rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "hooks"] }

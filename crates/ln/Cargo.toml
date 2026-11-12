@@ -1,0 +1,16 @@
+[package]
+name = "ln"
+description = "A gossip-only Lightning peer: listens to the public channel graph, opens no channels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+lightning.workspace = true
+lightning-net-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[lints]
+workspace = true
