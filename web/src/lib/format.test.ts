@@ -8,6 +8,7 @@ import {
   formatBtc,
   formatFeeRate,
   formatFeeRatePrecise,
+  formatPowerOfTen,
   formatRelative,
   formatSats,
   formatSize,
@@ -41,6 +42,22 @@ describe("groupDigits", () => {
   it("never prints NaN or Infinity", () => {
     expect(groupDigits(Number.NaN)).toBe(MISSING);
     expect(groupDigits(Number.POSITIVE_INFINITY)).toBe(MISSING);
+  });
+});
+
+describe("formatPowerOfTen", () => {
+  it("writes a number by its power of ten, joined so it never wraps", () => {
+    expect(formatPowerOfTen(4.6565423739069247e-10, 5)).toBe(s("4.6565_×_10⁻¹⁰"));
+    expect(formatPowerOfTen(4.6565423739069247e-10)).toBe(s("4.66_×_10⁻¹⁰"));
+    expect(formatPowerOfTen(1e30)).toBe(s("1_×_10³⁰"));
+    expect(formatPowerOfTen(-2.5e-7, 2)).toBe(s("−2.5_×_10⁻⁷"));
+    expect(formatPowerOfTen(123_456)).toBe(s("1.23_×_10⁵"));
+  });
+
+  it("never prints NaN, Infinity or a power of zero", () => {
+    expect(formatPowerOfTen(Number.NaN)).toBe(MISSING);
+    expect(formatPowerOfTen(Number.NEGATIVE_INFINITY)).toBe(MISSING);
+    expect(formatPowerOfTen(0)).toBe(MISSING);
   });
 });
 

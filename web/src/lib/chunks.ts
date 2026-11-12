@@ -3,31 +3,36 @@
 
 /** Stylesheets whose download failed. Vite never asks for one again by itself. */
 const failedStyles = new Set<HTMLLinkElement>();
+/** Scripts whose `<link rel="modulepreload">` failed: Vite preloads a page's code and its imports. */
+const failedScripts = new Set<string>();
 
-/** Notes every stylesheet that fails to load from now on. Call once, before the first page loads. */
-export function watchStyles(): void {
+/** Notes every stylesheet and script preload that fails from now on. Call once, before the first page loads. */
+export function watchFiles(): void {
   // Capture: a load error does not bubble.
   document.addEventListener(
     "error",
     (e) => {
-      if (e.target instanceof HTMLLinkElement && e.target.rel === "stylesheet") {
-        failedStyles.add(e.target);
-      }
+      if (!(e.target instanceof HTMLLinkElement)) return;
+      if (e.target.rel === "stylesheet") failedStyles.add(e.target);
+      else if (e.target.rel === "modulepreload") failedScripts.add(e.target.href);
     },
     true,
   );
 }
 
 /**
- * Asks again for every stylesheet that failed, each through a fresh `<link>` in place of the old.
- * Waits for every one to settle, so none is still loading when it answers. Resolves when all have
- * loaded; rejects when any failed again (each such one is noted again).
+ * Asks again for every file that failed: each stylesheet through a fresh `<link>` in place of the
+ * old, each script with a request that skips the cache, which only proves it downloads now (the
+ * page's `import()` loads it). Waits for every one to settle. Resolves when all have loaded, with
+ * whether any of them was a script; rejects when any failed again (each such one is noted again).
  */
-export async function retryStyles(): Promise<void> {
+export async function retryFiles(): Promise<{ scripts: boolean }> {
   const links = [...failedStyles];
+  const scripts = [...failedScripts];
   failedStyles.clear();
-  const settled = await Promise.allSettled(
-    links.map(
+  failedScripts.clear();
+  const settled = await Promise.allSettled([
+    ...links.map(
       (old) =>
         new Promise<void>((resolve, reject) => {
           const link = old.cloneNode() as HTMLLinkElement;
@@ -38,9 +43,20 @@ export async function retryStyles(): Promise<void> {
           old.replaceWith(link);
         }),
     ),
-  );
+    ...scripts.map(async (href) => {
+      const ok = await fetch(href, { cache: "reload" }).then(
+        (res) => res.ok,
+        () => false,
+      );
+      if (!ok) {
+        failedScripts.add(href);
+        throw new Error(`Could not load ${href}`);
+      }
+    }),
+  ]);
   const failed = settled.find((r) => r.status === "rejected");
   if (failed) throw failed.reason;
+  return { scripts: scripts.length > 0 };
 }
 
 /** Whether an error is a page's code or styles failing to download, as each browser words it. */
@@ -56,3 +72,24 @@ export function isChunkError(e: unknown): boolean {
 /** Automatic attempts before the reader is asked, and the wait before each: 1, 2 and 4 s. */
 export const CHUNK_ATTEMPTS = 3;
 export const chunkDelay = (attempt: number): number => 1000 * 2 ** attempt;
+
+/** The shortest time between two reloads `reloadOnce` makes, so a file that never loads cannot loop. */
+export const RELOAD_GAP_MS = 60_000;
+
+/**
+ * Reloads the page, unless this tab already did so in the last `RELOAD_GAP_MS`. WebKit keeps a
+ * script that failed to download as failed for the life of the document, even once it downloads
+ * again, so a fresh document is its only way to the page. Answers whether it reloaded; without
+ * session storage it never does, since it could not tell a loop.
+ */
+export function reloadOnce(now = Date.now(), reload = () => window.location.reload()): boolean {
+  try {
+    const last = Number(sessionStorage.getItem("chunk-reload"));
+    if (now - last < RELOAD_GAP_MS) return false;
+    sessionStorage.setItem("chunk-reload", String(now));
+  } catch {
+    return false;
+  }
+  reload();
+  return true;
+}

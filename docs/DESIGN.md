@@ -111,15 +111,16 @@ Mainnet shows its name in the network switch and nothing else. Test networks add
 
 **One family: [Recursive](https://github.com/arrowtype/recursive)** (SIL Open Font License 1.1, license in `design/fonts/OFL.txt`). It has a monospace axis, so hashes and addresses come from the same file as the interface text and sit in the same rhythm.
 
-- **One file, 38 KB:** `design/fonts/recursive.woff2`, a variable font with `wght` 300–800 and `MONO` 0–1. Casual, slant and cursive axes are pinned off, and the character set is Basic Latin plus the punctuation we use (–, —, …, ≈, ≥, arrows, ₿, thin and narrow no-break spaces).
+- **One file, 38 KB:** `design/fonts/recursive.woff2`, a variable font with `wght` 300–800 and `MONO` 0–1. Casual, slant and cursive axes are pinned off, and the character set is Basic Latin plus the punctuation we use (–, —, …, ≈, ≥, ×, arrows, ₿, superscript digits and minus, thin and narrow no-break spaces). Recursive has no narrow no-break space of its own, so the build adds one, 0.15 em wide at every weight: without it each browser drew another font's space between digit groups, and WebKit's was too thin to see.
 - If the font fails, the stack falls back to the system UI font and system monospace.
 - **Turn on monospace** with `font-family: var(--font-mono); font-variation-settings: var(--mono-on);`. Use it for hashes, txids, addresses and scripts only. Numbers stay proportional with tabular digits.
-- Rebuild the subset from the upstream release with fontTools:
+- Rebuild the subset from the upstream release (`Recursive_VF_1.085.ttf` in `ArrowType-Recursive-1.085.zip`) with fontTools 4.68 and `brotli`, from `design/fonts/`. With the same versions this reproduces the file except its timestamp:
 
 ```sh
 fonttools varLib.instancer Recursive_VF_1.085.ttf CASL=0 slnt=0 CRSV=0 wght=300:800 -o rec.ttf
+python3 add-nnbsp.py rec.ttf
 pyftsubset rec.ttf --flavor=woff2 --output-file=recursive.woff2 \
-  --unicodes="U+0020-007E,U+00A0,U+00B0,U+00B7,U+00D7,U+2009,U+2013,U+2014,U+2018,U+2019,U+201C,U+201D,U+2026,U+2190-2193,U+2197,U+2212,U+2248,U+2264,U+2265,U+202F,U+20BF" \
+  --unicodes="U+0020-007E,U+00A0,U+00B0,U+00B2,U+00B3,U+00B7,U+00B9,U+00D7,U+2009,U+2013,U+2014,U+2018,U+2019,U+201C,U+201D,U+2026,U+2070,U+2074-2079,U+207B,U+2190-2193,U+2197,U+2212,U+2248,U+2264,U+2265,U+202F,U+20BF" \
   --layout-features='kern,liga,calt,tnum,pnum,zero,case,frac,ss01,ss02,ss03,ss04,ss05,ss06,ss07,ss08,ss09,ss10,ss11,ss12'
 ```
 

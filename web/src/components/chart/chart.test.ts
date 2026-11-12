@@ -236,5 +236,12 @@ describe("small figures", () => {
   it("keep their significant digits", () => {
     expect(formatSi(0.0481, "")).toBe("0.0481");
     expect(formatSi(0.04805, "", 4)).toBe("0.04805");
+    // Regtest's difficulty, and beyond the last prefix: a power of ten, short at any size.
+    expect(formatSi(4.6565423739069247e-10, "", 5)).toBe("4.6565\u202F×\u202F10⁻¹⁰");
+    expect(formatSi(4.6565423739069247e-10, "")).toBe("4.66\u202F×\u202F10⁻¹⁰");
+    expect(formatSi(2 ** 224, "")).toBe("2.7\u202F×\u202F10⁶⁷");
+    expect(formatSi(-0.0002, "H/s")).toBe("−2\u202F×\u202F10⁻⁴\u202FH/s");
+    expect(formatSi(999e24, "H/s")).toBe("999\u202FYH/s");
+    expect(formatSi(0.001, "")).toBe("0.001");
   });
 });

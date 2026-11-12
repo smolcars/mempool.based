@@ -604,9 +604,10 @@ const columns = [
     cell: (tx: ProjectedTx) => formatSats(tx.fee),
   },
   {
-    header: "Size, vB",
+    // Sizes keep their unit in the cell, as one column can span vB to kvB (docs/DESIGN.md).
+    header: "Virtual size",
     numeric: true,
-    cell: (tx: ProjectedTx) => groupDigits(tx.vsize),
+    cell: (tx: ProjectedTx) => formatSize(tx.vsize),
   },
 ];
 

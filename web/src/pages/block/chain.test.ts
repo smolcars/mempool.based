@@ -181,6 +181,13 @@ describe("header fields", () => {
     expect(formatDifficulty(148_364_561_003_867.4).short).toBe("148.36 T");
     expect(formatDifficulty(1).short).toBe("1");
     expect(formatDifficulty(0.00123).short).toBe("0.00123");
+    // Regtest's, and the largest a 256-bit target allows: a power of ten, never a long figure.
+    expect(formatDifficulty(4.6565423739069247e-10)).toStrictEqual({
+      short: "4.66\u202F×\u202F10⁻¹⁰",
+      full: "4.65654\u202F×\u202F10⁻¹⁰",
+    });
+    expect(formatDifficulty(2 ** 224).short).toBe("2.7\u202F×\u202F10⁶⁷");
+    expect(formatDifficulty(1.5e18).short).toBe("1.50 E");
     expect(hex32(386_000_300)).toBe("0x1701e5ac");
     expect(hex32(-1)).toBe("0xffffffff");
   });

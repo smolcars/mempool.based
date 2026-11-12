@@ -28,6 +28,20 @@ test("regtest's mining page says what is and is not meaningful there", async ({ 
   await expect(unknown).toContainText("100.0%");
 });
 
+test("regtest's mining page fits a phone without scrolling sideways", async ({ page }) => {
+  // Regtest's difficulty, 0.00000000046565 written out, ran 10 to 19 px past a phone's width.
+  for (const width of [320, 360]) {
+    await page.setViewportSize({ width, height: 700 });
+    await page.goto("/regtest/mining");
+    await expect(page.getByText(/^4\.6565\s×\s10⁻¹⁰$/).first()).toBeVisible();
+    await expect(page.getByRole("slider", { name: /Hashrate and difficulty/ })).toBeVisible({
+      timeout: 30_000,
+    });
+    const scrolled = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrolled, `page width at ${width} px`).toBeLessThanOrEqual(width);
+  }
+});
+
 test("a chart draws and its readout shows the route's figure", async ({ page }) => {
   const route = "/regtest/api/v1/mining/blocks/rewards/all";
   const chart = page.getByRole("slider", { name: /Average reward per block/ });

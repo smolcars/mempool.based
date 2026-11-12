@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { isChunkError, retryStyles, watchStyles } from "./chunks";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isChunkError, RELOAD_GAP_MS, reloadOnce, retryFiles, watchFiles } from "./chunks";
 
-watchStyles();
+watchFiles();
 
 /** A stylesheet link that has failed to load, as the browser reports it. */
 function failedLink(name: string): HTMLLinkElement {
@@ -15,12 +15,12 @@ function failedLink(name: string): HTMLLinkElement {
 const current = (name: string) =>
   document.head.querySelector<HTMLLinkElement>(`link[data-name="${name}"]`);
 
-describe("retryStyles", () => {
+describe("retryFiles", () => {
   it("asks again for each failed stylesheet and waits for all of them", async () => {
     failedLink("a");
     failedLink("b");
     let done = false;
-    const retried = retryStyles().then(() => {
+    const retried = retryFiles().then(() => {
       done = true;
     });
     current("a")?.dispatchEvent(new Event("load"));
@@ -35,7 +35,7 @@ describe("retryStyles", () => {
     failedLink("c");
     failedLink("d");
     let settled = false;
-    const retried = retryStyles().then(
+    const retried = retryFiles().then(
       () => {
         settled = true;
       },
@@ -51,10 +51,80 @@ describe("retryStyles", () => {
     current("d")?.dispatchEvent(new Event("error"));
     await retried;
     // Both are noted again, so the next attempt asks for both.
-    const again = retryStyles();
+    const again = retryFiles();
     current("c")?.dispatchEvent(new Event("load"));
     current("d")?.dispatchEvent(new Event("load"));
-    await expect(again).resolves.toBeUndefined();
+    await expect(again).resolves.toStrictEqual({ scripts: false });
+  });
+});
+
+/** A script preload that has failed, as Vite adds one for a page's code. */
+function failedPreload(href: string): void {
+  const link = document.createElement("link");
+  link.rel = "modulepreload";
+  link.href = href;
+  document.head.append(link);
+  link.dispatchEvent(new Event("error"));
+}
+
+describe("retryFiles and scripts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("proves a failed script downloads now, bypassing the cache, and says one was checked", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response("", { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetch);
+    failedPreload("/assets/Page-a.js");
+    await expect(retryFiles()).resolves.toStrictEqual({ scripts: true });
+    expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/assets\/Page-a\.js$/), {
+      cache: "reload",
+    });
+    // Nothing is left to ask for.
+    await expect(retryFiles()).resolves.toStrictEqual({ scripts: false });
+  });
+
+  it("keeps a script that still fails, by status or by network, for the next attempt", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockRejectedValueOnce(new TypeError("Load failed"))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    failedPreload("/assets/Page-b.js");
+    await expect(retryFiles()).rejects.toThrow("Could not load");
+    await expect(retryFiles()).rejects.toThrow("Could not load");
+    await expect(retryFiles()).resolves.toStrictEqual({ scripts: true });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("reloadOnce", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  it("reloads, then not again until the gap has passed", () => {
+    const reload = vi.fn<() => void>();
+    expect(reloadOnce(1_000_000, reload)).toBe(true);
+    expect(reloadOnce(1_000_000 + RELOAD_GAP_MS - 1, reload)).toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(reloadOnce(1_000_000 + RELOAD_GAP_MS, reload)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reloads without session storage, since it could not stop a loop", () => {
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => {
+        throw new DOMException("denied", "SecurityError");
+      },
+    });
+    const reload = vi.fn<() => void>();
+    expect(reloadOnce(1_000_000, reload)).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,5 @@
 // Scales, ticks and value formats for the charts (docs/FRONTEND.md "Charts"). Pure.
-import { MISSING } from "../../lib/format";
+import { formatPowerOfTen, MISSING, NNBSP } from "../../lib/format";
 
 /** Maps a value in `domain` to a pixel in `range`, linearly or by its logarithm. */
 export interface Scale {
@@ -185,6 +185,11 @@ export function formatSi(v: number, unit: string, digits = 3): string {
   if (!Number.isFinite(v)) return MISSING;
   const sign = v < 0 ? "−" : "";
   let a = Math.abs(v);
+  // So small that its zeros would run wider than a phone (regtest's difficulty, 0.00000000046565),
+  // or past the last prefix: the power of ten keeps it short.
+  if (a > 0 && (a < 0.001 || a >= 999.5e24)) {
+    return `${sign}${formatPowerOfTen(a, digits)}${unit ? `${NNBSP}${unit}` : ""}`;
+  }
   let i = 0;
   while (a >= 999.5 && i < PREFIXES.length - 1) {
     a /= 1000;
