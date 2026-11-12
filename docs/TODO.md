@@ -53,11 +53,11 @@ Refined when M1 lands.
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | done ([#28](https://github.com/smolcars/mempool.based/pull/28)) |
 | MP3 | Run the mempool tracker and projected blocks inside the server, and serve them over the WebSocket: mempool totals, projected-block totals, binary per-transaction deltas, the latest transactions | MP2, S3 | done ([#35](https://github.com/smolcars/mempool.based/pull/35)) |
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
-| MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | todo |
-| MP6 | RBF history and CPFP or cluster view | MP1 | todo |
+| MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | doing |
+| MP6 | RBF history and CPFP or cluster view | MP1 | doing (with MP5) |
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | done ([#27](https://github.com/smolcars/mempool.based/pull/27)) |
 | FE3 | Show block summaries and the difficulty adjustment in the frontend: median fee rate and fee range on the block page, fee layers and fee figures in the home page's tiles (batch route on load, the WebSocket's `summary` message for new blocks, retry on 503) | BS1, LX1 | done ([#33](https://github.com/smolcars/mempool.based/pull/33)) |
-| W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | doing |
+| W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | done ([#36](https://github.com/smolcars/mempool.based/pull/36)) |
 | FE5 | The live mempool on the home page: projected-block tiles with their fee layers, the mempool panel and the latest transactions from the WebSocket topics; the projected tile becomes the mined one when a block arrives | MP3, FE3 | doing |
 | W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | todo |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | todo |
