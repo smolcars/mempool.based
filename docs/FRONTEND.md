@@ -240,7 +240,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 <div class="my-frame">{/* position: relative, with a size: the grid fills it */}
   <Suspense>
     <TxGrid
-      txs={txs()}                       // GridTx[]: { id, vsize, fee, value, coinbase? }
+      txs={txs()}                       // GridTx[]: { id, vsize, fee, value?, rate?, coinbase? }
       capacity={1_000_000}              // vB the frame stands for; more than that shrinks to fit
       label="Map of the block's 4 198 transactions, …"   // the canvas's text alternative
       txid={(tx) => fetchApi(network(), `/block/${hash}/txid/${tx.id}`, { as: "text" })}
@@ -251,7 +251,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 </div>
 ```
 
-**A whole block** is one array. **Changes** are a new array: the grid matches it to the last by `id`, so keep ids stable (the block index for a mined block, the txid for a projected one) and keep each unchanged transaction the same object (the grid caches its band per object). Squares that stay travel to their new places, new ones drop in, gone ones fade out where they stood, and a change that arrives mid-animation starts from where each square is. For a projected block, keep a `Map<txid, GridTx>`, apply the snapshot and each delta to it, and pass `[...map.values()]`; order does not matter, because the layout sorts. A transaction whose fee rate changed is a new object with the same id: it moves. Changes that arrive while the tab is hidden are applied without animation.
+**A whole block** is one array. **Changes** are a new array: the grid matches it to the last by `id`, so keep ids stable (the block index for a mined block, the txid for a projected one) and keep each unchanged transaction the same object (the grid caches its band per object). Squares that stay travel to their new places, new ones drop in, gone ones fade out where they stood, and a change that arrives mid-animation starts from where each square is. For a projected block (`projected-txs:N`, [`WS.md`](WS.md#binary-frames)), make each record `{ id: txid, vsize, fee, rate: effectiveRate / 1000 }`: `rate`, in sat/vB, orders and colors the square by the chunk it is mined in rather than by its own fee, and `value` is left out because the record does not carry it. Keep a `Map<txid, GridTx>`, apply the snapshot and each delta to it, and pass `[...map.values()]`; order does not matter, because the layout sorts. A transaction whose fee rate changed is a new object with the same id: it moves. Changes that arrive while the tab is hidden are applied without animation.
 
 - **Layout.** Every square's side is its exact side (√(vsize ÷ vB per cell)) rounded to whole cells, at least 2; squares are placed first fit, row by row from the top left in fee order, then every square drops until it rests on the floor or another. The grid has about 160 000 cells, shaped to the frame in 4% steps, so a frame that changes size by a pixel keeps its picture and is only rescaled. If the squares overflow, they all shrink a little and are packed again. A full mainnet block (4 198 transactions) lays out in 5 to 8 ms in Chrome on an Apple M4, on the main thread.
 - **Hit testing** is a lookup in the cell map, exact to the cell. It answers for where squares are going, not where an animation has them.

@@ -212,6 +212,14 @@ describe("gridSize", () => {
 });
 
 describe("rank and colors", () => {
+  it("orders and colors by a given rate over fee / vsize, as a projected block's records need", () => {
+    // A child paying little itself, mined in a chunk at 5 sat/vB with its parent.
+    const child = { id: "child", vsize: 100, fee: 10, rate: 5 };
+    const other = { id: "other", vsize: 100, fee: 300 };
+    expect([...rank([other, child])]).toStrictEqual([1, 0]);
+    expect(colorOf(child)).toBe(feeBand(5) - 1);
+  });
+
   it("treats an omitted coinbase flag as false", () => {
     const txs: GridTx[] = [
       { id: 0, vsize: 100, fee: 1, value: 0 },

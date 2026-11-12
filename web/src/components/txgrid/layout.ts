@@ -9,8 +9,13 @@ export interface GridTx {
   vsize: number;
   /** sats; 0 for the coinbase. */
   fee: number;
-  /** Total output value, sats. */
-  value: number;
+  /** Total output value, sats, when known (a projected block's records do not carry it). */
+  value?: number;
+  /**
+   * The fee rate to order and color by, sat/vB, when it is not fee over vsize: a projected
+   * transaction's effective rate, the rate of the chunk it is mined in.
+   */
+  rate?: number;
   /** The coinbase pays no fee rate: it is drawn first, in a neutral color. */
   coinbase?: boolean;
 }
@@ -47,7 +52,12 @@ const GROW = 1.02;
 const MAX_PASSES = 40;
 
 /** A fee rate in sat/vB, 0 when the size is not positive. */
-export const rateOf = (tx: GridTx): number => (tx.vsize > 0 ? tx.fee / tx.vsize : 0);
+export const rateOf = (tx: GridTx): number =>
+  tx.rate !== undefined && Number.isFinite(tx.rate)
+    ? tx.rate
+    : tx.vsize > 0
+      ? tx.fee / tx.vsize
+      : 0;
 
 const compareIds = (a: number | string, b: number | string): number => {
   if (typeof a === "number" && typeof b === "number") return a - b;

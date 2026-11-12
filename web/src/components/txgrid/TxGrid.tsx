@@ -415,10 +415,12 @@ export default function TxGrid(props: TxGridProps) {
               <span>
                 Size <span class="num">{formatSize(tx().vsize)}</span>
               </span>
-              <span>
-                {tx().coinbase ? "Pays " : "Sends "}
-                <Amount sats={tx().value} />
-              </span>
+              <Show when={tx().value !== undefined}>
+                <span>
+                  {tx().coinbase ? "Pays " : "Sends "}
+                  <Amount sats={tx().value ?? 0} />
+                </span>
+              </Show>
               <span class="txgrid__hint">{touch() ? "Tap again to open" : "Click to open"}</span>
             </>
           )}
