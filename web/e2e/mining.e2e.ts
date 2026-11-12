@@ -34,7 +34,7 @@ test("regtest's mining page fits a phone without scrolling sideways", async ({ p
     await page.setViewportSize({ width, height: 700 });
     // All of history, so every section holds figures.
     await page.goto("/regtest/mining?period=all");
-    await expect(page.getByText(/^4\.66\s×\s10⁻¹⁰$/)).toBeVisible();
+    await expect(page.getByText(/^4\.66\s×\s10⁻¹⁰$/).first()).toBeVisible();
     await expect(page.getByRole("table", { name: /Pools ranked by blocks found/ })).toBeVisible({
       timeout: 30_000,
     });
