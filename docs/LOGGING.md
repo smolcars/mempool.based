@@ -95,3 +95,16 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `chain_reorg` | warn | `network`, `fork_height` | Blocks above `fork_height` left the best chain |
 
 `crates/server/src/report.rs` produces these from the client's `health()` watch and event stream; call `report_electrum` once where each network's Electrum client is created. The Esplora and RPC clients return their failures as error values (`rpc::Error::Busy` is the node's back-pressure); the code that calls them owns the event, summarised by rule 3.
+
+### WebSocket hub
+
+The protocol and its close codes are in [`WS.md`](WS.md).
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `ws_fanout` | info | `network`, `topic`, `kind`, `subscribers`, `open`, `bytes`, `dropped_slow`, `duration_ms`, `fanout_ms` | One message went to every subscriber of a topic: once per new block, reorg or resync per network, whatever the client count. `duration_ms` runs from the node's notification to the last subscriber's queue (the block fetch included); `fanout_ms` is the queueing part. `open` counts sockets on every network |
+| `ws_clients_dropped` | warn | `network`, `reason`, `total` | The server closed clients for breaking a limit: `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`, `protocol_error`, `binary` or `invalid_utf8`. At a total of 1, 2, 4, 8… per reason and network |
+| `ws_closed` | debug | `network`, `code`, `reason`, `duration_ms`, `open` | Every socket close: its close code (1006 when the connection dropped without one), the reason label (those above, or `client_closed`, `shutdown`, `connection_lost`), how long it was open, and the sockets still open |
+| `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
+
+Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503`.

@@ -86,6 +86,13 @@ fn started(config: &Config, log: logging::Settings) {
         client_burst: l.client_burst,
         max_tracked_clients: l.max_tracked_clients,
         trusted_proxy_header: l.trusted_proxy_header.as_ref().map(|h| h.as_str()),
+        ws_max_sockets: config.ws.max_sockets,
+        ws_client_max_sockets: config.ws.client_max_sockets,
+        ws_max_message_bytes: config.ws.max_message_bytes,
+        ws_messages_per_sec: config.ws.messages_per_sec,
+        ws_max_subscriptions: config.ws.max_subscriptions,
+        ws_send_queue: config.ws.send_queue,
+        ws_idle_timeout_secs: config.ws.idle_timeout.as_secs(),
     });
     for n in &config.networks {
         logging::emit(&NetworkEnabled {
@@ -162,8 +169,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use mempool_based::Limits;
     use mempool_based::config::RequestLog;
+    use mempool_based::{Limits, WsLimits};
 
     #[tokio::test]
     async fn healthcheck_needs_a_server() {
@@ -174,6 +181,7 @@ mod tests {
             web_dir: "missing".into(),
             networks: Vec::new(),
             limits: Limits::default(),
+            ws: WsLimits::default(),
             broadcast: false,
             log_requests: RequestLog::All,
             log_client_addr: false,

@@ -62,3 +62,17 @@ Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md)
 Fixed limits: a request head (request line and headers) may be at most 16 KiB. A malformed or oversized request head is refused by the HTTP parser itself with an empty `400` or `431` and the connection is closed; those responses carry no body and so no error JSON or security headers.
 
 Clients are counted by IPv4 address or by IPv6 /64, since one host routinely holds a whole /64. Many users behind one NAT share a single client's limits; raise `CLIENT_RATE_PER_SEC`, `CLIENT_BURST` and `CLIENT_MAX_CONCURRENT_REQUESTS` if that is your audience.
+
+### WebSocket
+
+Bounds on `/app/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its close codes are in [`WS.md`](WS.md)). Each must be a positive integer. An upgraded socket gives up its slot under `MAX_CONNECTIONS` and `CLIENT_MAX_CONNECTIONS` and counts under these instead, so keep `MAX_CONNECTIONS` plus `WS_MAX_SOCKETS` below the process's open-file limit. A socket that stops reading is dropped after `REQUEST_TIMEOUT_SECS` without write progress, as for HTTP.
+
+| Variable | Default | Protects against |
+|---|---|---|
+| `WS_MAX_SOCKETS` | `1024` | Memory and file descriptors held by open sockets, every network together. Past it an upgrade gets `503`. At most 1,048,576 |
+| `WS_CLIENT_MAX_SOCKETS` | `8` | One address holding many sockets. Past it an upgrade gets `429`. Applies behind a trusted proxy too, keyed on the proxy header's address |
+| `WS_MAX_MESSAGE_BYTES` | `1024` | Large messages from a client. Checked against the frame header before the payload is read, and against a fragmented message's total. Over it: close `1009`. At most 1,048,576 |
+| `WS_MESSAGES_PER_SEC` | `10` | A client flooding the server with frames, pings and pongs included. The same number is the burst allowed. Over it: close `4002` |
+| `WS_MAX_SUBSCRIPTIONS` | `8` | One socket subscribing to many topics. Over it: close `4001` |
+| `WS_SEND_QUEUE` | `64` | Memory held for a client that does not read. Messages waiting for it are shared, not copied. When full: close `4003`. At most 65,536 |
+| `WS_IDLE_TIMEOUT_SECS` | `60` | Sockets whose client vanished without closing. A socket silent for half of it is pinged, and one silent for all of it is closed with `4004` |

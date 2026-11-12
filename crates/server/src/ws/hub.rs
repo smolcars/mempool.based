@@ -1,0 +1,253 @@
+//! Topics, their subscribers and snapshots, and the `blocks` feed from Electrum.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use bitcoin::BlockHash;
+use node::electrum::{self, Tip};
+use node::esplora::{Esplora, Route};
+use serde_json::{Value, json};
+use tokio::sync::broadcast::error::RecvError;
+
+use logging::events::{BlockUnavailable, WsClientsDropped, WsFanout};
+
+use super::{Close, Conn, Frame, Sockets, Topic};
+use crate::NetworkContext;
+use crate::config::Network;
+
+/// Attempts to fetch a new block's JSON before telling clients to resync instead.
+const BLOCK_ATTEMPTS: u32 = 3;
+
+/// What a new subscriber to a topic is sent first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Snapshot {
+    /// This message is the topic's current state.
+    Replace,
+    /// The current state is unknown until the next `Replace`.
+    Clear,
+    /// This message changes nothing a new subscriber needs.
+    Keep,
+}
+
+/// The result of one [`Hub::publish`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fanout {
+    pub subscribers: usize,
+    pub dropped_slow: usize,
+    pub elapsed: Duration,
+}
+
+/// One network's topics.
+#[derive(Debug)]
+pub struct Hub {
+    network: Network,
+    sockets: Arc<Sockets>,
+    topics: Mutex<HashMap<Topic, TopicState>>,
+    /// Clients dropped for each limit, by close code, for [`WsClientsDropped`].
+    dropped: Mutex<HashMap<u16, u64>>,
+}
+
+#[derive(Debug, Default)]
+struct TopicState {
+    subscribers: HashMap<u64, Arc<Conn>>,
+    snapshot: Option<Frame>,
+}
+
+impl Hub {
+    pub fn new(network: Network, sockets: Arc<Sockets>) -> Self {
+        Self {
+            network,
+            sockets,
+            topics: Mutex::default(),
+            dropped: Mutex::default(),
+        }
+    }
+
+    fn topics(&self) -> std::sync::MutexGuard<'_, HashMap<Topic, TopicState>> {
+        self.topics.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Adds `conn` and queues the topic's snapshot to it. Under the same lock as [`Hub::publish`],
+    /// so the snapshot always comes before the changes that follow it.
+    pub(super) fn subscribe(&self, topic: Topic, conn: &Arc<Conn>) {
+        let mut topics = self.topics();
+        let state = topics.entry(topic).or_default();
+        state.subscribers.insert(conn.id, Arc::clone(conn));
+        if let Some(snapshot) = &state.snapshot {
+            conn.send(snapshot.clone());
+        }
+    }
+
+    pub(super) fn unsubscribe(&self, topic: Topic, id: u64) {
+        if let Some(state) = self.topics().get_mut(&topic) {
+            state.subscribers.remove(&id);
+        }
+    }
+
+    /// Queues `frame` to every subscriber of `topic`: one reference-count increment and one
+    /// non-blocking queue push each. A subscriber whose queue is full is closed as too slow.
+    pub fn publish(&self, topic: Topic, frame: &Frame, snapshot: Snapshot) -> Fanout {
+        let started = Instant::now();
+        let mut topics = self.topics();
+        let state = topics.entry(topic).or_default();
+        match snapshot {
+            Snapshot::Replace => state.snapshot = Some(frame.clone()),
+            Snapshot::Clear => state.snapshot = None,
+            Snapshot::Keep => {}
+        }
+        let dropped_slow = state
+            .subscribers
+            .values()
+            .filter(|conn| !conn.send(frame.clone()))
+            .count();
+        Fanout {
+            subscribers: state.subscribers.len(),
+            dropped_slow,
+            elapsed: started.elapsed(),
+        }
+    }
+
+    /// Counts a client dropped for `reason`; logged when the count reaches a power of two.
+    pub(super) fn dropped(&self, reason: Close) {
+        let total = {
+            let mut dropped = self.dropped.lock().unwrap_or_else(PoisonError::into_inner);
+            let n = dropped.entry(reason.code).or_default();
+            *n += 1;
+            *n
+        };
+        if total.is_power_of_two() {
+            logging::emit(&WsClientsDropped {
+                network: self.network.name(),
+                reason: reason.label,
+                total,
+            });
+        }
+    }
+
+    /// [`Hub::publish`] for a message caused by a node notification received at `since`.
+    fn announce(
+        &self,
+        topic: Topic,
+        kind: &'static str,
+        msg: &Value,
+        snapshot: Snapshot,
+        since: Instant,
+    ) {
+        let frame = Frame::text(msg.to_string().as_bytes());
+        let fanout = self.publish(topic, &frame, snapshot);
+        logging::emit(&WsFanout {
+            network: self.network.name(),
+            topic: topic.name(),
+            kind,
+            subscribers: fanout.subscribers,
+            open: self.sockets.open(),
+            bytes: frame.len(),
+            dropped_slow: fanout.dropped_slow,
+            duration_ms: since.elapsed().as_secs_f64() * 1000.0,
+            fanout_ms: fanout.elapsed.as_secs_f64() * 1000.0,
+        });
+    }
+}
+
+/// Feeds the `blocks` topic from the network's Electrum events until they end. One task per
+/// network; the only upstream work is one Esplora fetch per new block, whatever the client count.
+pub async fn feed(
+    ctx: Arc<NetworkContext>,
+    mut events: tokio::sync::broadcast::Receiver<electrum::Event>,
+) {
+    let hub = &ctx.hub;
+    let mut last = Last::default();
+    // The first tip may have been announced before `events` was taken.
+    if let Some(tip) = ctx.electrum.tip() {
+        block(&ctx, &tip, Instant::now(), &mut last).await;
+    }
+    loop {
+        let event = events.recv().await;
+        let since = Instant::now();
+        match event {
+            Ok(electrum::Event::Block(tip)) => block(&ctx, &tip, since, &mut last).await,
+            Ok(electrum::Event::Reorg { fork_height }) => {
+                last.hash = None;
+                let msg = json!({ "topic": "blocks", "type": "reorg", "fork_height": fork_height });
+                hub.announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
+            }
+            Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
+                // The last block is still a fair snapshot; a newer tip arrives as a `block`.
+                resync(&ctx, since, Snapshot::Keep);
+            }
+            Ok(electrum::Event::Status { .. }) => {}
+            Err(RecvError::Closed) => return,
+        }
+    }
+}
+
+/// What the feed remembers between events.
+#[derive(Default)]
+struct Last {
+    /// The block last announced, so a repeated tip is not sent twice.
+    hash: Option<BlockHash>,
+    /// Blocks in a row whose JSON could not be fetched.
+    failures: u32,
+}
+
+async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last) {
+    if last.hash == Some(tip.hash) {
+        return;
+    }
+    last.hash = Some(tip.hash);
+    match fetch_block(&ctx.esplora, tip.hash).await {
+        Some(block) => {
+            last.failures = 0;
+            let msg = json!({ "topic": "blocks", "type": "block", "block": block });
+            ctx.hub
+                .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+        }
+        None => {
+            last.failures = last.failures.saturating_add(1);
+            if last.failures.is_power_of_two() {
+                logging::emit(&BlockUnavailable {
+                    network: ctx.config.network.name(),
+                    height: tip.height,
+                    hash: tip.hash.to_string(),
+                    failures: last.failures,
+                });
+            }
+            // A later subscriber must learn it missed this block, not get the one before.
+            resync(ctx, since, Snapshot::Replace);
+        }
+    }
+}
+
+fn resync(ctx: &NetworkContext, since: Instant, snapshot: Snapshot) {
+    let tip = ctx
+        .electrum
+        .tip()
+        .map(|t| json!({ "height": t.height, "hash": t.hash }));
+    let msg = json!({ "topic": "blocks", "type": "resync", "tip": tip });
+    ctx.hub
+        .announce(Topic::Blocks, "resync", &msg, snapshot, since);
+}
+
+/// The block's Esplora JSON, checked to be the block we asked for.
+async fn fetch_block(esplora: &Esplora, hash: BlockHash) -> Option<Value> {
+    let id = hash.to_string();
+    for attempt in 0..BLOCK_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(100) * attempt).await;
+        }
+        let Ok(raw) = esplora.raw(&Route::Block(hash)).await else {
+            continue;
+        };
+        if !raw.status.is_success() {
+            continue;
+        }
+        let Ok(block) = serde_json::from_slice::<Value>(&raw.body) else {
+            continue;
+        };
+        if block.get("id").and_then(Value::as_str) == Some(id.as_str()) {
+            return Some(block);
+        }
+    }
+    None
+}

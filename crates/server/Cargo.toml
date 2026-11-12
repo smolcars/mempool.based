@@ -16,6 +16,7 @@ bitcoin.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util.workspace = true
 logging.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tower.workspace = true

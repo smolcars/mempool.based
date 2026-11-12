@@ -43,6 +43,13 @@ pub struct ServerStarting<'a> {
     pub max_tracked_clients: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_proxy_header: Option<&'a str>,
+    pub ws_max_sockets: usize,
+    pub ws_client_max_sockets: u32,
+    pub ws_max_message_bytes: usize,
+    pub ws_messages_per_sec: u32,
+    pub ws_max_subscriptions: usize,
+    pub ws_send_queue: usize,
+    pub ws_idle_timeout_secs: u64,
 }
 event!(ServerStarting<'a>, "server_starting", Info);
 
@@ -215,6 +222,68 @@ pub struct ChainReorg {
 }
 event!(ChainReorg, "chain_reorg", Warn);
 
+// WebSocket hub.
+
+/// A socket closed. Debug level: one per socket. Clients dropped for a limit are also summarised
+/// by [`WsClientsDropped`] at the default level.
+#[derive(Debug, Serialize)]
+pub struct WsClosed {
+    pub network: &'static str,
+    /// The close code sent, or 1006 when the connection dropped without a close frame.
+    pub code: u16,
+    /// Why, as a fixed label: `client_closed`, `shutdown`, `too_slow`, `idle`, …
+    pub reason: &'static str,
+    /// How long the socket was open.
+    pub duration_ms: f64,
+    /// Sockets still open, on every network.
+    pub open: usize,
+}
+event!(WsClosed, "ws_closed", Debug);
+
+/// Clients disconnected for breaking one limit. Written when the count for that reason on that
+/// network reaches 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct WsClientsDropped {
+    pub network: &'static str,
+    /// `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`,
+    /// `protocol_error`, `binary` or `invalid_utf8`.
+    pub reason: &'static str,
+    pub total: u64,
+}
+event!(WsClientsDropped, "ws_clients_dropped", Warn);
+
+/// One message sent to every subscriber of a topic.
+#[derive(Debug, Serialize)]
+pub struct WsFanout {
+    pub network: &'static str,
+    pub topic: &'static str,
+    /// The message's `type`: `block`, `reorg`, `resync`.
+    pub kind: &'static str,
+    pub subscribers: usize,
+    /// Sockets open on every network.
+    pub open: usize,
+    /// Frame size; every subscriber shares these bytes.
+    pub bytes: usize,
+    /// Subscribers whose send queue was full, now being disconnected.
+    pub dropped_slow: usize,
+    /// From the node's notification to the last subscriber's queue, upstream fetch included.
+    pub duration_ms: f64,
+    /// The queueing part of `duration_ms`.
+    pub fanout_ms: f64,
+}
+event!(WsFanout, "ws_fanout", Info);
+
+/// A new block's JSON could not be fetched from Esplora, so subscribers were told to resync.
+/// Written at the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct BlockUnavailable {
+    pub network: &'static str,
+    pub height: u32,
+    pub hash: String,
+    pub failures: u32,
+}
+event!(BlockUnavailable, "block_unavailable", Warn);
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -257,6 +326,13 @@ mod tests {
                 client_burst: 1,
                 max_tracked_clients: 1,
                 trusted_proxy_header: Some("x-real-ip"),
+                ws_max_sockets: 1,
+                ws_client_max_sockets: 1,
+                ws_max_message_bytes: 1,
+                ws_messages_per_sec: 1,
+                ws_max_subscriptions: 1,
+                ws_send_queue: 1,
+                ws_idle_timeout_secs: 1,
             }),
             both(&NetworkEnabled {
                 network: n,
@@ -317,6 +393,35 @@ mod tests {
             both(&ChainReorg {
                 network: n,
                 fork_height: 9,
+            }),
+            both(&WsClosed {
+                network: n,
+                code: 4003,
+                reason: "too_slow",
+                duration_ms: 1500.0,
+                open: 7,
+            }),
+            both(&WsClientsDropped {
+                network: n,
+                reason: "rate",
+                total: 4,
+            }),
+            both(&WsFanout {
+                network: n,
+                topic: "blocks",
+                kind: "block",
+                subscribers: 2,
+                open: 3,
+                bytes: 1200,
+                dropped_slow: 0,
+                duration_ms: 4.2,
+                fanout_ms: 0.05,
+            }),
+            both(&BlockUnavailable {
+                network: n,
+                height: 9,
+                hash: "00".repeat(32),
+                failures: 1,
             }),
         ]
     }

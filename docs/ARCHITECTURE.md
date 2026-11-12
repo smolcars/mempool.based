@@ -67,7 +67,7 @@ One WebSocket per browser tab.
 - The server computes each update once and fans the same bytes out to every subscriber.
 - Every connection has a bounded send queue. A client that cannot keep up is dropped, never buffered without limit.
 
-The message catalogue lives in `docs/WS.md`, written with the hub.
+The protocol, its topics and its limits are in [`WS.md`](WS.md).
 
 ## Mempool tracking
 
