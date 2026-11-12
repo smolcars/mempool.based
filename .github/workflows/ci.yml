@@ -21,25 +21,49 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # PRs run only the jobs their paths need. A master push runs every job when it touches code,
+    # which verifies the merge and refreshes the caches, and nothing when it touches only docs.
     outputs:
-      # PRs run only what changed; master runs everything to verify and refresh caches.
-      rust: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rust == 'true' }}
-      web: ${{ github.event_name != 'pull_request' || steps.filter.outputs.web == 'true' }}
+      rust: ${{ steps.filter.outputs.rust == 'true' || (github.event_name == 'push' && steps.filter.outputs.code == 'true') }}
+      web: ${{ steps.filter.outputs.web == 'true' || (github.event_name == 'push' && steps.filter.outputs.code == 'true') }}
+      e2e: ${{ steps.filter.outputs.e2e == 'true' || (github.event_name == 'push' && steps.filter.outputs.code == 'true') }}
+      # The post-merge Image workflow builds the whole image, so master skips this.
+      image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.image == 'true' }}
     steps:
+      # A push is compared with the commit before it, which needs the repository; a PR uses the API.
+      - if: github.event_name == 'push'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: filter
-        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
-            rust:
+            rust: &rust
               - Cargo.toml
               - Cargo.lock
               - rust-toolchain.toml
               - crates/**
               - .github/workflows/ci.yml
-            web:
+            web: &web
               - web/**
+              # What the frontend imports from design/; the prototype is not built.
+              - design/tokens.css
+              - design/logo.svg
+              - design/fonts/**
               - .github/workflows/ci.yml
+            e2e: &e2e
+              - *rust
+              - *web
+              - dev/regtest/**
+            image:
+              - *web
+              - Dockerfile
+              - .dockerignore
+            code:
+              - *e2e
+              - Dockerfile
+              - .dockerignore
 
   rust:
     needs: changes
@@ -86,11 +110,52 @@ jobs:
       - run: bun run build
       - run: bun run size
 
-  # e2e (task E1): browser tests against the built server. Add it to ci-ok's needs.
+  # The server and frontend built from the PR, against rbitcoin on regtest, in headless Chromium.
+  # scripts/e2e.sh starts the node and the browser download first and builds meanwhile, so neither
+  # is on the critical path. The browser is not cached: restoring it took longer than downloading.
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # Only the server binary's build, so this cache is smaller than the rust job's.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+          no-cache: true
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - run: bun run e2e
+        working-directory: web
+
+  # The image's frontend stage alone: it catches a Dockerfile that no longer builds the frontend,
+  # without the Rust stage, which the post-merge Image workflow builds.
+  image:
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --target web .
 
   ci-ok:
     if: always()
-    needs: [changes, rust, web]
+    needs: [changes, rust, web, e2e, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
