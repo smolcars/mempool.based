@@ -31,7 +31,7 @@ RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `
 | Any mempool push (no ZMQ, WebSocket or SSE) | We poll the mempool |
 | `/internal/*` bulk routes over TCP | They exist only on a unix-socket listener, so bulk fetches need the server on the node's host |
 | Address-prefix search | Search is exact match only |
-| A large recent-transactions feed | `/mempool/recent` holds 32 entries; it cannot serve as a change feed |
+| A large recent-transactions feed | `/mempool/recent` returns 10 entries; it cannot serve as a change feed |
 | The mempool.space `/api/v1` and WebSocket surface | A permanent non-goal upstream. This project is that surface |
 
 ## Measurements
