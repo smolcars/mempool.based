@@ -48,8 +48,9 @@ wait "$browser_pid"
 eval "$(python3 "$regtest" env | sed 's/^/export /')"
 
 # Only the regtest network, whatever the caller's environment holds: tests never reach a shared
-# node. One client runs every test, so the per-client limits are raised.
-env -i PATH="$PATH" LISTEN_ADDR=127.0.0.1:0 WEB_DIR="$run/dist" LOG_FORMAT=json \
+# node. One client runs every test, so the per-client limits are raised. The block table lives in
+# the run's directory, so the mining pages have data and nothing outlives the run.
+env -i PATH="$PATH" LISTEN_ADDR=127.0.0.1:0 WEB_DIR="$run/dist" DATA_DIR="$run/data" LOG_FORMAT=json \
   CLIENT_RATE_PER_SEC=1000 CLIENT_BURST=1000 CLIENT_MAX_CONCURRENT_REQUESTS=256 \
   REGTEST_RPC_HOST="$REGTEST_RPC_HOST" REGTEST_RPC_PORT="$REGTEST_RPC_PORT" \
   REGTEST_RPC_USER="$REGTEST_RPC_USER" REGTEST_RPC_PASSWORD="$REGTEST_RPC_PASSWORD" \

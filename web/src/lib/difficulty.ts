@@ -1,6 +1,6 @@
 // The difficulty adjustment (docs/API.md "Difficulty adjustment"): its reply and how it reads.
-import { formatUtc, groupDigits } from "../../lib/format";
-import type { Network } from "../../lib/network";
+import { formatUtc, groupDigits } from "./format";
+import type { Network } from "./network";
 
 /** `/api/v1/difficulty-adjustment`, the fields this page reads. */
 export interface DifficultyAdjustment {

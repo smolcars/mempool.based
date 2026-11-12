@@ -79,6 +79,33 @@ export function clearApiCache(): void {
 export interface Stamped<T> {
   value: T;
   tip: ChainTip | undefined;
+  /** How far back a history answer reaches (the mining routes); absent when not said. */
+  coverage?: Coverage;
+}
+
+/**
+ * The `X-Data-*` headers of a history answer (docs/API.md "Coverage"): the earliest block it
+ * includes (unix seconds), and whether it covers the whole period asked for.
+ */
+export interface Coverage {
+  fromHeight: number | undefined;
+  fromTime: number | undefined;
+  complete: boolean;
+}
+
+/** A reply's coverage, when it states one. */
+export function readCoverage(headers: Headers): Coverage | undefined {
+  const complete = headers.get("x-data-complete");
+  if (complete === null) return undefined;
+  const num = (name: string) => {
+    const n = Number(headers.get(name) ?? Number.NaN);
+    return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+  };
+  return {
+    fromHeight: num("x-data-from-height"),
+    fromTime: num("x-data-from-time"),
+    complete: complete === "true",
+  };
 }
 
 /** The tip a reply's headers name, if they name a whole one. */
@@ -149,7 +176,8 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   }
   if (isImmutable(res.headers.get("cache-control"))) remember(url, value);
   // The API's shapes are hand-written in esplora.ts; values are rendered as text, never as markup.
-  return { value: value as T, tip: chainTip(res.headers) };
+  const coverage = readCoverage(res.headers);
+  return { value: value as T, tip: chainTip(res.headers), ...(coverage ? { coverage } : {}) };
 }
 
 /** Every request is a GET, safe to repeat, so a busy refusal is retried as it says ({@link withRetry}). */
@@ -211,9 +239,9 @@ export function retryDelay(
     !(error instanceof ApiError) ||
     (error.status !== 503 && error.status !== 429) ||
     exhausted.has(error) ||
-    // Every 503 carries Retry-After, but these two refusals are about the address and the server's
-    // setup, which a retry cannot change (docs/API.md, "Error bodies").
-    /too large|index is disabled/i.test(error.message)
+    // Every 503 carries Retry-After, but these refusals are about the address and the server's
+    // setup, which a retry cannot change (docs/API.md, "Error bodies" and "Mining").
+    /too large|index is disabled|needs a block table/i.test(error.message)
   ) {
     return undefined;
   }

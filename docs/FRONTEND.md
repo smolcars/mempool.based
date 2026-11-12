@@ -33,11 +33,13 @@ web/
       esplora.ts        Types for the Esplora replies pages use
       page.ts           `useNetwork`, `usePageTitle`
       clock.ts          Shared ticking clock for relative times
+      difficulty.ts     The difficulty-adjustment reply and how it reads (the home and mining pages)
       config.ts         Reads `/app/config`
       chunks.ts         A page's code and styles that failed to download, and asking for them again
       theme.ts          Theme toggle state
     components/         Shared components, one CSS file each
       txgrid/           The transaction grid: decoder, layout, animation, WebGL2 renderer (see "Transaction grid")
+      chart/            Time-series charts in SVG: scales, ticks, paths, the component (see "Charts")
     shell/              Header, network switch, theme toggle, band, footer, the frame around pages
     search/             What a query is (query.ts) and where it leads (search.ts); loaded on first use
     pages/<page>/       One directory per page: its routes, component, CSS and tests
@@ -57,7 +59,8 @@ The network comes from the path. `useNetwork()` returns it; never keep it anywhe
 | Projected block | `/block/next`, `/block/next/:n` (2 to 8 places from now; 8 is the rest of the mempool) | `pages/projected` | W8 |
 | Transaction | `/tx/:txid` | `pages/tx` | W4 |
 | Address | `/address/:address` | `pages/address` | W5 |
-| Mining | `/mining` | `pages/mining` | W9 |
+| Mining | `/mining`, `/mining?period=24h\|1w\|1m\|1y\|all` | `pages/mining` | W9 |
+| Mining pool | `/mining/pool/:slug` | `pages/mining` | W9 |
 | Lightning | `/lightning` | `pages/lightning` | W11 |
 | Not found | anything else | `pages/not-found` | shell |
 
@@ -103,7 +106,8 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 - `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, answers at once from the cache, and stays loading while a busy refusal waits to be retried. Return a falsy path to wait for something else first.
 - `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops. `fetchApp<T>` is the same for the app's own API under the network's `/app`.
 - **Chain-tip stamps.** `createApi<T>(path, { stamped: true })` and `fetchStamped<T>(network, path)` give `{ value, tip }`, where `tip` is the `X-Bitcoin-Chain-Tip` and its height that the reply is as of (undefined for an unstamped or cached reply). Take every figure that depends on the tip from one stamped reply, or compare the stamps of two: the block page counts confirmations from its status reply's stamp, and the home page's difficulty panel asks again while its answer's stamp trails the strip's tip.
-- **Busy servers.** Every call above retries a 503 or 429 by itself, no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. They are all GETs, safe to repeat. Two 503s are not retried, because a retry cannot change them: an address too large to total and an address index that is off ([`API.md`](API.md#error-bodies-are-ours)). Show a loading state, not an error, while a call is pending. `withRetry(call, signal)` is the loop itself, for a call that does not go through `api.ts`; only wrap a call that is safe to repeat. A refusal it already gave up on is never retried by a loop around it. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
+- **Busy servers.** Every call above retries a 503 or 429 by itself, no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. They are all GETs, safe to repeat. Three 503s are not retried, because a retry cannot change them: an address too large to total, an address index that is off ([`API.md`](API.md#error-bodies-are-ours)), and mining history on a server without a block table ([`API.md`](API.md#mining)). Show a loading state, not an error, while a call is pending. `withRetry(call, signal)` is the loop itself, for a call that does not go through `api.ts`; only wrap a call that is safe to repeat. A refusal it already gave up on is never retried by a loop around it. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
+- **Coverage.** A history answer (the mining routes) says how far back its data reaches in `X-Data-From-Height`, `X-Data-From-Time` and `X-Data-Complete` ([`API.md`](API.md#coverage)). A stamped reply carries them as `coverage: { fromHeight, fromTime, complete }` when sent (`readCoverage` reads them). Say "data from … onward" where `complete` is false; never draw the missing stretch as zero.
 - `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`), and `as: "bytes"` binary ones as an `ArrayBuffer` (`fetchApp(n, "/block/<hash>/txs", { as: "bytes" })`). The default is JSON.
 - Failures are `ApiError` with `status` (0 when the server cannot be reached, with a message that says so when the browser is offline) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
 - Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
@@ -214,6 +218,8 @@ Import from `components/`. All of them render chain data as text only.
 | `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~`. `unit` as for `Amount` |
 | `FeeKey` | The ten bands with their lower bounds. Put it next to every fee visual |
 | `Strata layers settle? from?` | A block's fee bands as stacked layers, cheapest at the bottom, filling the box it is put in. Compute `layers` with `strataLayers(fee_bands, fill, min)`: `fill` is how full the block is, `min` the thinnest layer as a share of the box (about 2 px). `settle` drops the layers in, cheapest first; `from` grows each layer out of the same band's layer in another set (a projected block becoming the mined one), a band it lacks from nothing; reduced motion fades either. Decorative: give the figures, or `describeBands(fee_bands)`, as text beside it |
+| `DifficultyAdjustment network tip` | The difficulty period's progress bar and the expected, next and previous change, refetched when `tip` (a block hash) changes. On regtest it says the network never retargets. The home and mining pages put it in their own section |
+| `Chart …` | A time-series chart in SVG, in `components/chart/`. Load it with `lazy()`; see "Charts" |
 | `TxGrid txs capacity label txid highlight? onState?` | Transactions as packed squares in WebGL2, in `components/txgrid/`. Load it with `lazy()`; see "Transaction grid" |
 | `Hash value href? head? tail? copy? copyLabel?` | Hash or address, shortened in the middle, linked when given a `paths` result, with copy |
 | `HashFull value copyLabel?` | A page subject's hash in full, grouped by eight, with copy |
@@ -273,6 +279,46 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 - **Accessibility.** The canvas is `role="img"` with `label` as its name, and is not focusable. Put the same transactions in a list beside it and pass the hovered or focused row's id as `highlight`.
 - **Measures.** It records `txgrid layout` and `txgrid first frame` with `performance.measure`, for profiling and browser tests.
 
+## Charts
+
+`components/chart/` draws the time series the mining, mempool-history and address-balance pages need, in SVG: a line, a filled area or a step on one value axis or two; percentile bands; and stacked shares. It is written here rather than taken from a library (the comparison with uPlot is in the PR that added it): about 4 KB gzipped, colors straight from the tokens, so a theme switch needs no repaint code.
+
+| File | Holds |
+|---|---|
+| `Chart.tsx` | The component (default export, so `lazy()` can load it) |
+| `scale.ts` | Linear and log scales, round value ticks, time ticks from hours to decades, `formatSi`, `formatHashrate`, `formatShare`, `formatDay`, `describeSeries`. Pure |
+| `geometry.ts` | Paths broken at gaps, `stackLayout`, `nearestIndex` and `layerAt` for hit testing, `extent`, `sorted`. Pure |
+
+**Load it lazily,** as the grid: `const Chart = lazy(() => import("../../components/chart/Chart"))`, call `Chart.preload()` when the page mounts, and hold its height while it loads (`pages/mining/parts.tsx`, `ChartSlot`, holds `height` + 5.75rem: readout, plot and caption). Import types and the pure modules statically; they cost nothing until used.
+
+```tsx
+<Chart
+  label="Hashrate and difficulty, the last year"   // its accessible name
+  x={times}                                        // unix seconds, ascending
+  domain={[yearAgo, now]}                          // optional: the time range drawn
+  dataFrom={answer.coverage?.fromTime}             // optional: hatches what is not stored
+  height={260}
+  left={{ format: (v) => formatHashrate(v), log: "auto" }}
+  right={{ format: (v) => formatSi(v, "") }}        // optional second scale
+  series={[
+    { name: "Hashrate", values: hashrates, draw: "area", format: (v) => formatHashrate(v, 4) },
+    { name: "Difficulty", values: difficulty, draw: "step", axis: "right", tone: 2, format },
+  ]}
+  bands={[{ name: "10th to 90th percentile", lo, hi, tone: 1, format }]}   // optional
+  layers={[{ name: "Foundry USA", values: shares }, …]}                     // optional, 0–1
+  layerFormat={formatShare}
+  time={(t) => `Week of ${formatDay(t)}`}           // optional: how a point's time reads
+  summary="…"                                       // optional: replaces the written summary
+/>
+```
+
+- **Values** are numbers or `null`. A `null`, or two points more than three times the median step apart, breaks the line: missing data is a gap, never a dip to zero. Points before `dataFrom` do not exist; the part of `domain` before it is hatched and labelled "No data stored".
+- **Axes.** `log: "auto"` turns a log scale on when the data spans more than three decades (hashrate over all of history). `zero` keeps 0 in view; `domain` fixes the range (`[0, 1]` for shares). `fee: true` runs the fee colors along a fee-rate axis, as its key. Ticks are round numbers; time ticks step by hours, days, Mondays, months or years, at most one per 84 px.
+- **Tones,** never fee colors: tone 1 is the text color (the main series, solid), tone 2 the strong line color, dashed. Bands are the text color at 14% and 30%; stacked layers are shades of it with a seam of the page between them, the first at the bottom. The layer under the pointer turns the accent (interaction).
+- **The readout** sits above the plot at a fixed height and shows the latest point, or the one under the pointer or finger (a tap keeps it). The plot is a `slider`: it takes focus, the arrow keys, Page Up and Down, Home and End move through the points, Escape returns to the latest, and `aria-valuetext` reads the point's time and every figure.
+- **Text alternative.** A summary written from the series (where each went, its lowest and highest) describes the slider, and "Show the figures" opens every point as a table. Pass `summary` when the series alone would not say it (stacked shares).
+- **Cost.** It draws the paths again only when the data or its width changes, never on hover: 1.5 ms for a year of daily points and 5 ms for ten years, with a line, an area and eight stacked layers. Hovering a 967-point chart holds 60 fps.
+
 ## CSS
 
 - Plain CSS with the tokens in `design/tokens.css`, imported once in `index.tsx`. Never copy a token value; use the custom property.
@@ -297,7 +343,7 @@ The font is preloaded, and `index.tsx` waits up to 1 s for it before the first r
 4. **No style attributes.** Custom properties through the `style` object with dynamic values only (see "CSS").
 5. **Numbers through `lib/format.ts`.** Never `toFixed` a BTC amount or a fee rate in a page. Every amount, rate and size reaches a screen reader with its unit: in a table cell whose unit is in the header, use the components' `unit={false}`, or a `visually-hidden` unit after a number you format yourself.
 6. **No layout shift.** Reserve space for what loads later.
-7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy library (WebGL, uPlot) loads only on the page that uses it.
+7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy component (the WebGL grid, the charts) loads only on the page that uses it.
 8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router at a given URL.
 
 ## Checks
@@ -320,7 +366,7 @@ Lint, format and type checks are strict, and CI fails on any finding. OXC is the
 
 ## Browser tests
 
-`bun run e2e` runs the Playwright tests in `web/e2e/` in headless Chromium against the real server and a private rbitcoin node on regtest ([`REGTEST.md`](REGTEST.md)). It needs Docker, `python3`, Rust and bun, and does everything else itself: starts the node and builds the known chain, builds the frontend and the server from your checkout, starts the server on a free port with only regtest enabled, runs the tests and removes all of it. A second run takes about 10 seconds. Every run uses its own node, port and output directory, so any number can run at once. On a failure it keeps the server log and Playwright's traces and prints where.
+`bun run e2e` runs the Playwright tests in `web/e2e/` in headless Chromium against the real server and a private rbitcoin node on regtest ([`REGTEST.md`](REGTEST.md)). It needs Docker, `python3`, Rust and bun, and does everything else itself: starts the node and builds the known chain, builds the frontend and the server from your checkout, starts the server on a free port with only regtest enabled and its block table in the run's directory, runs the tests and removes all of it. A second run takes about 10 seconds. Every run uses its own node, port and output directory, so any number can run at once. On a failure it keeps the server log and Playwright's traces and prints where.
 
 Arguments go to Playwright: `bun run e2e tx.e2e.ts`, `bun run e2e -g "deep link"`, `bun run e2e --headed`.
 

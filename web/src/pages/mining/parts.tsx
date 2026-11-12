@@ -1,0 +1,133 @@
+// Pieces the mining page and a pool's page share.
+import { type JSX, lazy, Show, Suspense } from "solid-js";
+import type { ChartProps } from "../../components/chart/Chart";
+import { formatSi } from "../../components/chart/scale";
+import { Link } from "../../components/Link";
+import { Empty, ErrorState, Loading } from "../../components/States";
+import type { Coverage } from "../../lib/api";
+import { formatFeeRate, formatSize } from "../../lib/format";
+import { paths } from "../../lib/network";
+import { NoHistoryError } from "./data";
+import { coverageNote, type Period } from "./mining";
+
+/** The chart loads only on pages that draw one. */
+export const Chart = lazy(() => import("../../components/chart/Chart"));
+
+/** A chart's whole height, `h` px of plot: what a section holding one reserves. */
+export const chartHeight = (h: number): string => `calc(${h}px + 5.75rem)`;
+
+/** A chart, its space held while its code loads, so nothing below moves. */
+export function ChartSlot(props: ChartProps) {
+  return (
+    <div class="mining-chart" style={{ "--h": `${props.height ?? 240}px` }}>
+      <Suspense>
+        <Chart {...props} />
+      </Suspense>
+    </div>
+  );
+}
+
+/** Where a section's data stops short of the period asked for, said beside it. */
+export function CoverageNote(props: { coverage: Coverage | undefined; period: Period }) {
+  return (
+    <Show when={coverageNote(props.coverage, props.period)}>
+      {(text) => (
+        <p class="mining-coverage">
+          <span class="mining-coverage__swatch" aria-hidden="true" />
+          {text()}
+        </p>
+      )}
+    </Show>
+  );
+}
+
+/** A section's data failed: why, and a retry; or the server keeps no history at all. */
+export function Failure(props: { what: string; error: unknown; retry: () => void }) {
+  return (
+    <Show
+      when={!(props.error instanceof NoHistoryError)}
+      fallback={
+        <Empty title="This server keeps no mining history">
+          Mining figures come from a table of every block, which this server was started without.
+        </Empty>
+      }
+    >
+      <ErrorState title={`Could not load ${props.what}`} error={props.error} retry={props.retry} />
+    </Show>
+  );
+}
+
+/**
+ * A section's state while its data is not here: loading, failed, or here. Children render once
+ * there is an answer, and keep the last one while the next loads.
+ */
+export function Section(props: {
+  what: string;
+  ready: boolean;
+  error: unknown;
+  retry: () => void;
+  busy: boolean;
+  /** The height the content will take (a CSS length), held while it loads so nothing moves. */
+  reserve: string;
+  /** Keep that height once loaded too, as for a chart, whose height is known. Default true. */
+  hold?: boolean;
+  children: JSX.Element;
+}) {
+  return (
+    <div
+      class="mining-slot"
+      classList={{ "mining-slot--loose": props.hold === false && props.ready }}
+      style={{ "--reserve": props.reserve }}
+    >
+      <Show
+        when={props.error === undefined}
+        fallback={<Failure what={props.what} error={props.error} retry={props.retry} />}
+      >
+        <Show when={props.ready} fallback={<Loading label={`Loading ${props.what}`} />}>
+          <div class="mining-busy" aria-busy={props.busy}>
+            {props.children}
+          </div>
+        </Show>
+      </Show>
+    </div>
+  );
+}
+
+/** Nothing stored for the period: say so, and offer all of what is stored. */
+export function NothingStored(props: { what: string; period: Period }) {
+  return (
+    <Empty title={`No ${props.what} stored for ${props.period.words}`}>
+      <Show when={props.period.id !== "all"}>
+        <Link href={paths.mining("all")}>See all stored history</Link>
+      </Show>
+    </Empty>
+  );
+}
+
+/** A label over a large figure, and a muted line under it. */
+export function Stat(props: { label: string; children: JSX.Element; sub?: JSX.Element }) {
+  return (
+    <div class="mining-stat">
+      <dt class="mining-stat__label">{props.label}</dt>
+      <dd class="mining-stat__value">
+        {props.children}
+        <Show when={props.sub}>
+          <span class="mining-stat__sub">{props.sub}</span>
+        </Show>
+      </dd>
+    </div>
+  );
+}
+
+// Formats for chart axes and readouts.
+
+/** BTC without trailing zeros, for axis ticks, which are round: `0.025 BTC`, `3 BTC`. */
+export const btcShort = (sats: number): string =>
+  `${(sats / 1e8).toFixed(8).replace(/\.?0+$/, "")} BTC`;
+/** BTC with all eight decimals, for readouts. */
+export const btcFull = (sats: number): string => `${(sats / 1e8).toFixed(8)} BTC`;
+export const difficultyShort = (d: number): string => formatSi(d, "");
+export const difficultyFull = (d: number): string => formatSi(d, "", 5);
+export const feeRateText = (r: number): string => `${formatFeeRate(r)} sat/vB`;
+export const bytesText = (b: number): string => formatSize(b, "B");
+export const percent = (share: number): string => `${Math.round(share * 1000) / 10}%`;
