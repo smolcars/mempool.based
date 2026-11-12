@@ -1,6 +1,6 @@
 # Public API
 
-The server serves rbitcoin's Esplora REST API under `/api`: the same routes, status codes, body bytes and content types as the node, behind an allow-list of parsed routes ([`SECURITY.md`](SECURITY.md) rules 1–3). Wallets and tools that speak Esplora can point at it unchanged. This page lists the routes and every way we differ from the node. The code is `crates/server/src/esplora.rs`.
+The server serves rbitcoin's Esplora REST API under `/api`: the same routes, status codes, body bytes and content types as the node, behind an allow-list of parsed routes ([`SECURITY.md`](SECURITY.md) rules 1–3). Wallets and tools that speak Esplora can point at it unchanged. This page lists the routes and every way we differ from the node. The code is `crates/server/src/esplora.rs`. The mempool.space-shaped routes under `/api/v1` are [their own section](#mempoolspace-shaped-routes-apiv1).
 
 | Network | Base URL |
 |---|---|
@@ -116,10 +116,56 @@ Block JSON has no confirmation status (the node drops a block that leaves the be
 - **Rejects** are `400` with a fixed reason: rbitcoin's own reason when it is on our list of known policy and consensus reasons (`min relay fee`, `dust`, `mempool double-spend`, `bad-txns-inputs-duplicate`, …), otherwise `transaction already in the mempool or chain`, `missing or spent inputs`, `script verification failed` or `transaction rejected`.
 - **Off switch:** `BROADCAST_ENABLED=false` turns it off for every network; it then answers `403 broadcast is disabled on this server`.
 
+## mempool.space-shaped routes (`/api/v1`)
+
+A subset of mempool.space's own API, for wallets and tools written against it, under each network's `/api/v1` (`/api/v1`, `/signet/api/v1`, …). Which routes exist is the `served` rows of [`compat/api-v1.md`](compat/api-v1.md). Any other path under `/api/v1` is a `404`.
+
+### How every route here works
+
+New routes follow this pattern; the code is `crates/server/src/api_v1.rs`.
+
+- **Same shape, our numbers.** Field names, their order and their JSON types match the reference backend ([`COMPAT.md`](COMPAT.md)). The values are computed by us, from the node; where they differ from the reference's, the route's section says how and why. Clean room: shapes are observed from responses, never read from mempool.space's code or docs.
+- **Answered from memory.** A task per network keeps the answer current, woken by the Electrum events the WebSocket hub follows, and does the node fetches. A request never causes a node call (rule 8). Pure logic lives in `engine`, the task in its own server module.
+- **Before the first answer:** `503` `{"error": "not ready yet; retry"}` with `Retry-After: 1`.
+- **Headers:** `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height` name the tip the answer is as of. When the node cannot confirm the answer is current (Electrum is disconnected, or a newer tip could not be computed yet), `Age` gives the seconds since it was computed; the last answer is still served. `Cache-Control: public, max-age=1`. CORS is that of `/api`.
+- **Requests:** `GET` and `HEAD`. Query strings are ignored, so cache-busting parameters work. Errors use the model above.
+
+### Difficulty adjustment
+
+`GET /api/v1/difficulty-adjustment`: where the chain is in its 2016-block difficulty period and what the next retarget is expected to do. Code: `crates/engine/src/difficulty.rs` for the arithmetic, `crates/server/src/difficulty.rs` for the task.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `progressPercent` | number | Blocks mined after the period's first block, out of 2016 |
+| `difficultyChange` | number | Expected change at the next retarget, in percent, if the rest of the period is mined at its average pace so far. Exact once the tip is the period's last block |
+| `estimatedRetargetDate` | integer | When the next period's first block is expected, Unix milliseconds: now plus `remainingTime` |
+| `remainingBlocks` | integer | Blocks still to mine, up to and including the next period's first block |
+| `remainingTime` | integer | `remainingBlocks` × `timeAvg`, milliseconds |
+| `previousRetarget` | number | The change at the adjustment that started this period, in percent. `0` in the first period |
+| `previousTime` | integer | Timestamp of this period's first block, Unix seconds |
+| `nextRetargetHeight` | integer | Height of the next period's first block |
+| `timeAvg` | integer | Average time between this period's blocks so far, from their timestamps, in milliseconds. The target spacing (600,000) while the tip is the period's first block |
+| `adjustedTimeAvg` | integer | Always equal to `timeAvg` |
+| `timeOffset` | integer | Always `0` |
+| `expectedBlocks` | number | Blocks the period would have by now at one per 10 minutes |
+
+The projection follows consensus exactly: the retarget measures the time from the period's first block to its last (2015 intervals, so a period at exactly 10 minutes a block still raises difficulty by 0.05%), clamps it to between a quarter and four times two weeks, scales the target and stops at the network's minimum difficulty. Replaying 6 recent retargets on each of mainnet, signet and testnet4 from a synced node gave the bits the next period actually carried, every time; fixtures in `fixtures/difficulty/` keep 10 of them as tests.
+
+The remaining blocks are projected from now, or from the tip's timestamp if that is later, because the retarget measures block timestamps rather than our clock. It is recomputed once per new tip (two small Esplora reads: this period's first block and the previous period's) and on a reorg. A read stamped with a different tip than the one being computed is discarded and retried, so blocks from two branches are never combined.
+
+| Network | What the answer means |
+|---|---|
+| Mainnet, signet | As above. Signet has its own, lower minimum difficulty |
+| Testnet4 | BIP94: a retarget scales the bits of the period's *first* block, because its last is usually a minimum-difficulty block mined after a 20-minute gap. `difficultyChange` and `previousRetarget` describe that real difficulty; minimum-difficulty blocks count toward the period and the average like any other. Miners often stamp blocks up to two hours ahead of the clock, which is why the projection starts from the tip's timestamp |
+| Regtest | Never retargets. `difficultyChange` and `previousRetarget` are always `0`; the period fields still count toward height multiples of 2016, where nothing happens. Blocks mined in bulk make `timeAvg` near zero, and the first period's average starts at the 2011 genesis block |
+
+How we differ from the reference backend, measured side by side: progress, heights, block counts and `previousTime` match exactly and `previousRetarget` up to floating-point rounding. The reference's `timeAvg` divides the time from the period's first block to *now* by the blocks mined, so it grows between blocks and is wrong when the tip is ahead of the clock; ours uses the tip's timestamp. Its `difficultyChange` follows from that average: within 0.01 percentage points of ours on mainnet and signet, but about two points off on testnet4, where tips run hours ahead. `estimatedRetargetDate` and `remainingTime` differ accordingly.
+
 ## Using it from the frontend
 
 - Call `/api/...` (mainnet) or `/<network>/api/...` with `fetch`. Same origin, so CORS does not apply.
 - Treat any non-2xx as `{"error": string}` JSON. The message is safe to show; the status says what to do: `404` not found, `400` bad input, `503` retry later (or, for address pages, the index is off).
 - Tip and mempool answers are at most a second old by design; poll no faster than that. For live data use the WebSocket when it exists.
+- Difficulty progress is `/api/v1/difficulty-adjustment` ([above](#difficulty-adjustment)). It changes once a block; its time fields can be counted down locally between fetches.
 - Read `X-Bitcoin-Chain-Tip` to detect a tip change between two fetches of one page, and refetch the page.
 - Response bodies are chain data: render them as text, never as HTML (rule 14).

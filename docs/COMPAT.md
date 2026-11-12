@@ -33,15 +33,15 @@ This page tracks every mempool.space feature: whether we serve it, how, and if n
 
 One table per group, each on its own page:
 
-| Group | Page | Rows | planned | different | skipped | Confirmed live |
-|---|---|---|---|---|---|---|
-| Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 50 | 0 | 6 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 56 | 4 | 13 | 72 |
-| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 47 | 40 | 2 | 5 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 38 | 2 | 6 | 29 |
-| **Total** | | **222** | **184** | **8** | **30** | **192** |
+| Group | Page | Rows | served | planned | different | skipped | Confirmed live |
+|---|---|---|---|---|---|---|---|
+| Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 0 | 50 | 0 | 6 | 48 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 1 | 55 | 4 | 13 | 72 |
+| WebSocket | [`compat/websocket.md`](compat/websocket.md) | 47 | 0 | 40 | 2 | 5 | 43 |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 0 | 38 | 2 | 6 | 29 |
+| **Total** | | **222** | **1** | **183** | **8** | **30** | **192** |
 
-Nothing is `served` yet. Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
+Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
 ### The `Live` column
 
