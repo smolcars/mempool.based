@@ -438,6 +438,17 @@ The node's work does not change with the sockets: the RPC calls are the mempool 
 | `stats` | one per 2.0 s | one per 1.1 s |
 | Traffic for these parts | 1.7 KB/s | 3.5 KB/s |
 
+**`vBytesPerSecond` and `live-2h-chart` against the reference,** mainnet, 2026-11-12, 19:55 to 20:10 UTC (two blocks): the release build read-only with the mempool engine on and no backfill, one client to it and one to mempool.space's socket, each wanting `stats` and `live-2h-chart`.
+
+| | Here | Reference |
+|---|---|---|
+| First `vBytesPerSecond` | 2 min 6 s after start: the engine synced in 16 s, the first two minutes were not sampled; the 63 `stats` messages before it left the key out | At once |
+| `vBytesPerSecond`, the same 13 minutes | 812 to 4,814 minute by minute, mean 2,257 | 1,667 to 2,852 as a mean per minute, moving by a median 7 vB/s a frame; mean 2,316 |
+| `live-2h-chart` | 13, each 1 to 15 ms after its minute | 19: one a minute at :35, and two more within seconds of each block, before and after it |
+| `count` in the samples | 54,755 to 58,617 | 65,381 to 70,533 |
+
+The rates agree over the window (3 %) and disagree minute by minute because ours is one minute's arrivals and theirs a moving window; both rose in the minute after each block (ours to 4,814 and 4,433). The counts differ because the mempools do: mempool.space runs its own Bitcoin Core node, ours is the rbitcoin node. Its sample's `vbytes_per_second` equalled the `vBytesPerSecond` sent beside it every time.
+
 Shapes matched as the conformance test says, and only where the table of differences says. The `mempool-blocks` on a new block waits for the fee task's next projection read and then this socket's own, each once per `WS_MEMPOOL_INTERVAL_MS`; `/app/ws` sends its projection about 2 s after the block. The whole server, engines included, used 3.3% of one core and 83 MB.
 
 ## How it works
