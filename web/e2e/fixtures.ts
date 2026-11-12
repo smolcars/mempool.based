@@ -1,5 +1,5 @@
 // Every browser test imports `test` and `expect` from here, never from @playwright/test.
-import { test as base, expect } from "@playwright/test";
+import { type Browser, test as base, expect } from "@playwright/test";
 
 export { expect } from "@playwright/test";
 
@@ -43,20 +43,27 @@ export const test = base.extend<{
     await use({ ...extraHTTPHeaders, "x-forwarded-for": client });
   },
   // Mines blocks on the run's node and returns their hashes. Only `*.mine.e2e.ts` files may: they
-  // run after every other test, so no test ever sees the chain change under it.
-  mine: async ({ request, regtestRpc }, use) => {
-    await use(async (blocks) => {
+  // run after every other test, so no test ever sees the chain change under it. Before such a test
+  // starts, the server must have caught up with the blocks earlier ones mined.
+  mine: async ({ browser, baseURL, extraHTTPHeaders, request, regtestRpc }, use, testInfo) => {
+    const rpc = async <T>(method: string, params: unknown[] = []): Promise<T> => {
       if (!regtestRpc) {
         throw new Error('only *.mine.e2e.ts tests may mine (docs/FRONTEND.md "Browser tests")');
       }
       const res = await request.post(regtestRpc.url, {
         headers: { authorization: `Basic ${btoa(`${regtestRpc.user}:${regtestRpc.password}`)}` },
-        data: { jsonrpc: "1.0", id: 1, method: "generatetodescriptor", params: [blocks, MINER] },
+        data: { jsonrpc: "1.0", id: 1, method, params },
       });
-      const body = (await res.json()) as { result: string[] | null; error: unknown };
-      if (!body.result) throw new Error(`mining failed: ${JSON.stringify(body.error)}`);
+      const body = (await res.json()) as { result: T | null; error: unknown };
+      if (body.result === null) throw new Error(`${method} failed: ${JSON.stringify(body.error)}`);
       return body.result;
-    });
+    };
+    if (regtestRpc) {
+      const tip = await rpc<string>("getbestblockhash");
+      const ms = await caughtUp(browser, baseURL ?? "", extraHTTPHeaders ?? {}, tip);
+      testInfo.annotations.push({ type: "server caught up", description: `${ms} ms` });
+    }
+    await use((blocks) => rpc<string[]>("generatetodescriptor", [blocks, MINER]));
   },
   // Console errors a test causes on purpose, such as a fetch that fails. CSP violations never pass.
   consoleErrorsAllowed: [[], { option: true }],
@@ -118,3 +125,64 @@ export const chain = {
     miner: "bcrt1qft5p2uhsdcdc3l2ua4ap5qqfg4pjaqlp250x7us7a8qqhrxrxfsqseac85",
   },
 } as const;
+
+/**
+ * Waits until the server's `blocks` and `projected` topics both sit on the node's tip `tip`, and
+ * returns how long that took. A test that mines while the server still trails the blocks an
+ * earlier one mined sees those land with its own. Read from a page of the server's own origin, as
+ * the WebSocket admits only those; bounded by PROJECTION_LAG_MS.
+ */
+async function caughtUp(
+  browser: Browser,
+  baseURL: string,
+  extraHTTPHeaders: Record<string, string>,
+  tip: string,
+): Promise<number> {
+  const context = await browser.newContext({ baseURL, extraHTTPHeaders });
+  try {
+    const page = await context.newPage();
+    await page.goto("/healthz");
+    const seen = await page.evaluate(
+      async ({ want, timeout }) => {
+        const got = { blocks: "nothing yet", projected: "nothing yet", ms: 0 };
+        const start = performance.now();
+        const ws = new WebSocket(`${location.origin.replace(/^http/, "ws")}/regtest/app/ws`);
+        await new Promise<void>((resolve) => {
+          const stop = setTimeout(resolve, timeout);
+          ws.addEventListener("open", () => {
+            ws.send(JSON.stringify({ op: "subscribe", topics: ["blocks", "projected"] }));
+          });
+          ws.addEventListener("message", (e: MessageEvent<unknown>) => {
+            if (typeof e.data !== "string") return;
+            const m = JSON.parse(e.data) as {
+              topic?: string;
+              type?: string;
+              block?: { id: string };
+              tip?: { hash: string } | null;
+            };
+            if (m.topic === "blocks" && m.type === "block") got.blocks = m.block?.id ?? "";
+            if (m.topic === "blocks" && m.type === "resync") got.blocks = m.tip?.hash ?? "";
+            if (m.topic === "projected" && m.type === "projected") {
+              got.projected = m.tip?.hash ?? "";
+            }
+            if (got.blocks === want && got.projected === want) {
+              clearTimeout(stop);
+              resolve();
+            }
+          });
+        });
+        ws.close();
+        got.ms = Math.round(performance.now() - start);
+        return got;
+      },
+      { want: tip, timeout: PROJECTION_LAG_MS },
+    );
+    expect(
+      { blocks: seen.blocks, projected: seen.projected },
+      `the server's blocks and projected topics caught up with the node's tip ${tip} within ${PROJECTION_LAG_MS} ms`,
+    ).toEqual({ blocks: tip, projected: tip });
+    return seen.ms;
+  } finally {
+    await context.close();
+  }
+}

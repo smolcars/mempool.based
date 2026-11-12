@@ -4,18 +4,13 @@ import { expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 test("the next block's page says when the block is found, offers it, and carries on", async ({
   page,
-  request,
   mine,
 }) => {
-  // Earlier tests in this project mined, and the projection trails the node. Start from a page that
-  // opened on the caught-up projection, so their blocks are not told as news with this one.
-  const before = Number(await (await request.get("/regtest/api/blocks/tip/height")).text()) + 1;
-  const lede = page.getByText(`If it were mined now, block ${before}`);
   await page.goto("/regtest/block/next");
-  await expect(lede).toBeVisible({ timeout: PROJECTION_LAG_MS });
-  await page.reload();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  const lede = page.getByText(/^If it were mined now, block \d+/);
   await expect(lede).toBeVisible();
+  const before = Number(/block (\d+)/.exec((await lede.textContent()) ?? "")?.[1]);
 
   const [hash] = await mine(1);
   // The page hears of the block with the projection, then holds the notice until the block's new
