@@ -11,7 +11,7 @@ use axum::Router;
 use axum::extract::{Path as UrlPath, RawQuery, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{any, get};
 use bitcoin::Txid;
 use engine::lightning::{
     self as store_ln, Bucket, Channel, GraphChannel, Index, Kind, Node, Policy, Rank,
@@ -67,6 +67,11 @@ pub fn routes() -> Router<Arc<NetworkContext>> {
         .route("/api/v1/lightning/nodes/rankings", get(v1_rankings))
         .route("/api/v1/lightning/nodes/rankings/{by}", get(v1_ranking))
         .route("/api/v1/lightning/nodes/{key}", get(v1_node))
+        // The reference's location routes, which we do not serve (no GeoIP): answered as any
+        // route we do not serve, not as a malformed key.
+        .route("/api/v1/lightning/nodes/countries", any(crate::not_found))
+        .route("/api/v1/lightning/nodes/isp-ranking", any(crate::not_found))
+        .route("/api/v1/lightning/nodes/world", any(crate::not_found))
         .route(
             "/api/v1/lightning/nodes/{key}/statistics",
             get(v1_node_statistics),

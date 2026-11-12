@@ -101,11 +101,11 @@ The reference backend runs with Lightning off, so shapes here were observed on m
 | `GET /v1/lightning/channels/:short_id` | One channel: both ends, policies, capacity, funding and closing tx | Lightning store; rbitcoin position routes | served | M4 | pub | Same fields, order and types, except `single_funded` and the ends' balances, which we cannot know. Takes the decimal id, as the reference does, and `<h>x<i>x<o>`. `node_left` is node one ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
 | `GET /v1/lightning/channels/txids?txId[]=` | Channels opened or closed by given transactions | Lightning store | served | M4 | pub | Same fields, order and types. Funding txids are asked of the node once per channel in the background; until then a channel is not found by it. A close that spends more than the funding output (`other`) is left out of `inputs` |
 | `GET /v1/lightning/penalties` | Channels closed by a penalty transaction | Lightning store (LN3 close classification) | skipped | — | pub | Its rows are the reference's database records of a closed channel (each end's last policy, balances, outputs, resolution state), which we do not keep. Our breaches show in `/app/lightning/channels/closed` (`penalty`) |
-| `GET /v1/lightning/nodes/countries` | Node counts and capacity per country | — | skipped | — | pub | Needs GeoIP |
+| `GET /v1/lightning/nodes/countries` | Node counts and capacity per country | — | skipped | — | pub | Needs GeoIP. `404` |
 | `GET /v1/lightning/nodes/country/:code` | Nodes in a country | — | skipped | — | pub | Needs GeoIP |
-| `GET /v1/lightning/nodes/isp-ranking` | Capacity per hosting provider, Tor share | — | skipped | — | pub | Needs an ASN database |
+| `GET /v1/lightning/nodes/isp-ranking` | Capacity per hosting provider, Tor share | — | skipped | — | pub | Needs an ASN database. `404` |
 | `GET /v1/lightning/nodes/isp/:asn` | Nodes at one provider | — | skipped | — | pub | Needs an ASN database |
-| `GET /v1/lightning/nodes/world` | Node coordinates for the world map | — | skipped | — | pub | World map is out of scope |
+| `GET /v1/lightning/nodes/world` | Node coordinates for the world map | — | skipped | — | pub | World map is out of scope. `404` |
 | `GET /v1/lightning/channels-geo[/:pubkey]` | Channel endpoints with coordinates | — | skipped | — | pub | World map is out of scope |
 | `GET /v1/lightning/nodes/group/:name` | A curated group of nodes | — | skipped | — | pub | The groups are mempool.space's own curation |
 
