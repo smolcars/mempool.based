@@ -52,6 +52,7 @@ Refined when M1 lands.
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | todo |
 | MP6 | RBF history and CPFP or cluster view | MP1 | todo |
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | doing |
+| FE3 | Show block summaries in the frontend: median fee rate and fee range on the block page, fee layers and fee figures in the home page's tiles (batch route on load, the WebSocket's `summary` message for new blocks, retry on 503) | BS1, LX1 | todo |
 | W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | todo |
 | W8 | Mempool page: live flow, fee bands | W7 | todo |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | doing |
@@ -64,7 +65,7 @@ Refined when M2 lands.
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | done ([#13](https://github.com/smolcars/mempool.based/pull/13)) |
-| MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | todo |
+| MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | doing |
 | MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | todo |
 | MI3 | Hashrate history | MI1 | todo |
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
@@ -95,5 +96,5 @@ Refined when M4 lands.
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | todo |
-| Q4 | Operator guide and release workflow with multi-architecture images | P1 | todo |
+| Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | todo |
 | Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | todo |
