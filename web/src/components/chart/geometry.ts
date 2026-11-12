@@ -90,6 +90,14 @@ export function areaPath(
     (i) => typeof hi[i] === "number" && typeof low(i) === "number",
     gap,
   )) {
+    // A lone point still shows: a sliver 2 px wide.
+    if (a === b) {
+      const x = sx(xs[a] ?? 0);
+      const t = n(sy(hi[a] ?? 0));
+      const f = n(sy(low(a) ?? 0));
+      d += `M${n(x - 1)} ${t}L${n(x + 1)} ${t}L${n(x + 1)} ${f}L${n(x - 1)} ${f}Z`;
+      continue;
+    }
     let top = "";
     let bottom = "";
     for (let i = a; i <= b; i++) {

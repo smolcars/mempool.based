@@ -60,10 +60,21 @@ export interface ChartBand {
   format: (v: number) => string;
 }
 
-/** One layer of stacked shares (0–1) on the left axis, the first at the bottom. */
+/** One stacked layer on the left axis, the first at the bottom: shares (0–1) or amounts. */
 export interface ChartLayer {
   name: string;
   values: readonly Value[];
+  /** A fee band (1–10): the layer is that band's fee color, for amounts by fee rate. */
+  fee?: number;
+  /** A shorter name for the readout, where the key says the rest; `name` is read aloud. */
+  short?: string;
+}
+
+/** A figure the readout and the table show at each point, without drawing it. */
+export interface ChartNote {
+  name: string;
+  values: readonly Value[];
+  format: (v: number) => string;
 }
 
 export interface ChartProps {
@@ -85,6 +96,13 @@ export interface ChartProps {
   layers?: readonly ChartLayer[];
   /** A layer's value in the readout and the figures. */
   layerFormat?: (v: number) => string;
+  /** Figures read out after the series, not drawn: a count beside a size. */
+  notes?: readonly ChartNote[];
+  /**
+   * The longest step between neighbouring points that is still one line, when the data has a
+   * fixed step: wider is a gap. Three times the median step when not given.
+   */
+  gap?: number | undefined;
   /** How a point's time reads: a day by default. */
   time?: (t: number) => string;
   /** Replaces the summary written from the series. */
@@ -102,6 +120,10 @@ const reading = (v: Value | undefined, format: (v: number) => string) =>
   typeof v === "number" ? format(v) : "no data";
 
 const layerMix = (k: number) => `${LAYER_MIX[k % LAYER_MIX.length] ?? 50}%`;
+
+/** A layer's fill: its fee color, or its shade of the text color (Chart.css). */
+const layerStyle = (l: ChartLayer | undefined, k: number) =>
+  l?.fee === undefined ? { "--mix": layerMix(k) } : { "--fill": `var(--fee-${l.fee})` };
 
 interface AxisFrame {
   scale: Scale;
@@ -144,6 +166,7 @@ export default function Chart(props: ChartProps) {
   const series = () => props.series ?? [];
   const bands = () => props.bands ?? [];
   const layers = () => props.layers ?? [];
+  const notes = () => props.notes ?? [];
 
   const frame = createMemo(() => {
     const w = width();
@@ -174,7 +197,7 @@ export default function Chart(props: ChartProps) {
       count,
     );
     const yr = props.right ? valueAxis(props.right, on("right"), yRange, count) : undefined;
-    const gap = maxGap(xs);
+    const gap = props.gap ?? maxGap(xs);
     const yOf = (s: ChartSeries) => ((s.axis ?? "left") === "right" && yr ? yr : yl).scale;
     const floor = yl.scale(yl.scale.domain[0]);
     const time = timeTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 84)));
@@ -229,9 +252,10 @@ export default function Chart(props: ChartProps) {
   const readings = (i: number) => [
     ...bands().map((b) => ({
       kind: `band-${b.tone ?? 1}`,
-      mix: undefined,
+      style: undefined,
       layer: -1,
       name: b.name,
+      short: undefined,
       value:
         typeof b.lo[i] !== "number" || typeof b.hi[i] !== "number"
           ? "no data"
@@ -239,16 +263,26 @@ export default function Chart(props: ChartProps) {
     })),
     ...series().map((s) => ({
       kind: `line-${s.tone ?? 1}`,
-      mix: undefined,
+      style: undefined,
       layer: -1,
       name: s.name,
+      short: undefined,
+      value: reading(s.values[i], s.format),
+    })),
+    ...notes().map((s) => ({
+      kind: "note",
+      style: undefined,
+      layer: -1,
+      name: s.name,
+      short: undefined,
       value: reading(s.values[i], s.format),
     })),
     ...layers().map((l, k) => ({
-      kind: "layer",
-      mix: layerMix(k),
+      kind: l.fee === undefined ? "layer" : "fee",
+      style: layerStyle(l, k),
       layer: k,
       name: l.name,
+      short: l.short,
       value: reading(l.values[i], layerFormat),
     })),
   ];
@@ -329,11 +363,10 @@ export default function Chart(props: ChartProps) {
                   },
                 ]}
               >
-                <span
-                  class={`chart__key chart__key--${r().kind}`}
-                  style={r().mix === undefined ? undefined : { "--mix": r().mix }}
-                />
-                <span class="chart__name">{r().name}</span>
+                <Show when={r().kind !== "note"}>
+                  <span class={`chart__key chart__key--${r().kind}`} style={r().style} />
+                </Show>
+                <span class="chart__name">{r().short ?? r().name}</span>
                 <span class="chart__figure num">{r().value}</span>
               </li>
             )}
@@ -453,10 +486,15 @@ export default function Chart(props: ChartProps) {
               <For each={f().layers}>
                 {(d, k) => (
                   <path
-                    class={["chart__layer", { "chart__layer--on": hoverLayer() === k() }]}
-
+                    class={[
+                      "chart__layer",
+                      {
+                        "chart__layer--fee": layers()[k()]?.fee !== undefined,
+                        "chart__layer--on": hoverLayer() === k(),
+                      },
+                    ]}
                     d={d}
-                    style={{ "--mix": layerMix(k()) }}
+                    style={layerStyle(layers()[k()], k())}
                   />
                 )}
               </For>

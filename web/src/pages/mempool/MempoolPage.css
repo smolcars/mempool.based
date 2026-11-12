@@ -1,0 +1,132 @@
+@layer pages {
+  .mempool {
+    display: grid;
+    gap: var(--space-6);
+    padding-top: var(--space-6);
+    padding-bottom: var(--space-8);
+  }
+  .mempool > *,
+  .mempool-busy > * {
+    min-width: 0;
+  }
+  .mempool-busy {
+    display: grid;
+    gap: var(--space-7);
+  }
+  .mempool-busy[aria-busy="true"] {
+    opacity: 0.55;
+    transition: opacity var(--dur-quick) var(--ease-out);
+  }
+  .mempool-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3) var(--space-5);
+  }
+  .mempool-head h1 {
+    margin: 0;
+  }
+
+  /* The interval: a row of links, the current one pressed in. */
+  .mempool-intervals ul {
+    display: flex;
+    gap: 2px;
+    margin: 0;
+    padding: 2px;
+    list-style: none;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+  .mempool-intervals__item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.75rem;
+    min-height: 36px;
+    padding: 0 var(--space-2);
+    border-radius: calc(var(--radius-m) - 2px);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .mempool-intervals__item:hover {
+    color: var(--color-text);
+  }
+  .mempool-intervals__item[aria-current="page"] {
+    color: var(--color-text);
+    background: var(--color-surface);
+    box-shadow:
+      0 0 0 1px var(--color-line-strong),
+      inset 0 -2px 0 var(--color-accent);
+  }
+
+  /* Coverage: the same hatch the chart draws before the first record. */
+  .mempool-coverage {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    max-width: 72ch;
+    margin: 0;
+    font-size: var(--text-sm);
+  }
+  .mempool-coverage__swatch {
+    flex: none;
+    width: 18px;
+    height: 12px;
+    margin-top: 0.2em;
+    border-radius: var(--radius-s);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+    background: repeating-linear-gradient(
+      -45deg,
+      var(--color-line) 0 1.5px,
+      transparent 1.5px 4.25px
+    );
+  }
+
+  .mempool-flow {
+    max-width: 72ch;
+    margin: 0 0 var(--space-3);
+  }
+  .mempool-aside {
+    max-width: 72ch;
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  /* A chart's whole height is held while its code loads: readout, plot and caption. */
+  .mempool-chart--size {
+    min-height: calc(300px + 9rem);
+  }
+  .mempool-chart--flow {
+    min-height: calc(200px + 5.75rem);
+  }
+  .mempool-chart + .feekey {
+    margin-top: var(--space-3);
+  }
+  .mempool-slot {
+    min-height: calc(500px + 15rem);
+  }
+
+  @media (max-width: 640px) {
+    .mempool-head {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    /* Eleven intervals do not fit a phone's width: two even rows. */
+    .mempool-intervals ul {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+    }
+    .mempool-intervals__item {
+      width: 100%;
+      min-width: 0;
+    }
+    .mempool-chart--size {
+      min-height: calc(300px + 16rem);
+    }
+  }
+}

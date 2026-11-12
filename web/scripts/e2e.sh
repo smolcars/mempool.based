@@ -78,7 +78,8 @@ kill "$server" 2>/dev/null || true
 wait "$server" 2>/dev/null || true
 server=""
 # No page load may trip a limit at the defaults, even one a test tolerates: name them.
-refused=$(grep -E '"refused":|"event":"connections_refused"' "$run/server.log" || true)
+# A request's limit is a string; `tracking_summary` counts its own refusals as a number, every minute.
+refused=$(grep -E '"refused":"|"event":"connections_refused"' "$run/server.log" || true)
 if [ -n "$refused" ]; then
   echo "e2e: the server's limits refused $(echo "$refused" | wc -l | tr -d ' ') requests (docs/CONFIG.md \"Limits\"); the first:" >&2
   echo "$refused" | head -n 10 >&2

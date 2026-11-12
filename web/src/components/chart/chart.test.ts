@@ -162,6 +162,26 @@ describe("gaps", () => {
       ),
     ).toBe("M0 5L1 6L1 0L0 0Z");
   });
+  it("shows a lone point in an area as a sliver, not nothing", () => {
+    expect(
+      areaPath(
+        [0, 60, 300],
+        [5, 6, 9],
+        0,
+        (x) => x,
+        (y) => y,
+        60,
+      ),
+    ).toBe("M0 5L60 6L60 0L0 0ZM299 9L301 9L301 0L299 0Z");
+  });
+  it("breaks at a fixed step: one missing minute is a gap, which three times the median would bridge", () => {
+    const minutes = [0, 60, 180, 240];
+    expect(maxGap(minutes)).toBe(180);
+    expect(runs(minutes, () => true, 60)).toStrictEqual([
+      [0, 1],
+      [2, 3],
+    ]);
+  });
 });
 
 describe("stacked layout", () => {

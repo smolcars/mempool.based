@@ -60,4 +60,7 @@ export const paths = {
   /** A mining pool by its slug from the pool list. */
   pool: (slug: string) => `/mining/pool/${segment(slug)}`,
   lightning: () => "/lightning",
+  /** The mempool's history, for an interval such as `1w` when given. */
+  mempool: (interval?: string) =>
+    interval === undefined ? "/mempool" : `/mempool?interval=${encodeURIComponent(interval)}`,
 };

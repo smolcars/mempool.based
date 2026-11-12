@@ -5,6 +5,7 @@ import { routes as block } from "./pages/block/routes";
 import { routes as blocks } from "./pages/blocks/routes";
 import { routes as home } from "./pages/home/routes";
 import { routes as lightning } from "./pages/lightning/routes";
+import { routes as mempool } from "./pages/mempool/routes";
 import { routes as mining } from "./pages/mining/routes";
 import { routes as notFound } from "./pages/not-found/routes";
 import { routes as projected } from "./pages/projected/routes";
@@ -23,6 +24,7 @@ export const routes: RouteDefinition[] = [
       ...address,
       ...mining,
       ...lightning,
+      ...mempool,
       ...notFound,
     ],
   },
