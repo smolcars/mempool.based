@@ -186,6 +186,7 @@ fn delta(seq: u64, added: &[(u8, u32)], removed: &[(u8, Removal)]) -> Delta {
             .collect(),
         removed: removed.iter().map(|(n, r)| (id(*n), *r)).collect(),
         replaced: Vec::new(),
+        blocks: Vec::new(),
     }
 }
 

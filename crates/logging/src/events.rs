@@ -1027,6 +1027,20 @@ pub struct ReplacementsRestored {
 }
 event!(ReplacementsRestored, "replacements_restored", Info, keep);
 
+/// The replacement record asked the node where replacements are after a reorg: one line per
+/// batch of reads (docs/MEMPOOL.md, "Following a transaction").
+#[derive(Debug, Serialize)]
+pub struct ReplacementsChecked {
+    pub network: &'static str,
+    /// Reads made, the failed one included.
+    pub reads: usize,
+    /// The node could not answer one; tried again later.
+    pub failed: bool,
+    /// Replacements whose state the answers changed.
+    pub changed: bool,
+}
+event!(ReplacementsChecked, "replacements_checked", Info, keep);
+
 /// The replacement record could not be read from or written to the store. At the 1st, 2nd, 4th,
 /// 8th… failure in a row.
 #[derive(Debug, Serialize)]
@@ -1856,6 +1870,12 @@ mod tests {
                 network: n,
                 links: 9_812,
                 duration_ms: 31,
+            }),
+            both(&ReplacementsChecked {
+                network: n,
+                reads: 2,
+                failed: false,
+                changed: true,
             }),
             both(&ReplacementsStoreFailed {
                 network: n,

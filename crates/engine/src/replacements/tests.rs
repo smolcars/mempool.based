@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitcoin::hashes::Hash;
 
-use super::db::{self, Batch};
+use super::db;
 use super::*;
 use crate::store::{Options, Store};
 
@@ -39,8 +39,16 @@ fn link(a: u8, b: u8) -> Link {
             fee: 300,
             ..facts(b, true)
         }),
-        mined: false,
+        mined: Mined::No,
     }
+}
+
+fn block(n: u8) -> BlockHash {
+    BlockHash::from_byte_array([n; 32])
+}
+
+fn mined(t: &Node) -> bool {
+    matches!(t.mined, Mined::In(_))
 }
 
 fn txids(links: &[Link]) -> Vec<Txid> {
@@ -112,7 +120,7 @@ fn a_replacement_undone_by_a_block_leaves_one_newest_end() {
 fn won_after_all() -> Link {
     Link {
         by_tx: None,
-        mined: true,
+        mined: Mined::In(Some((7, block(7)))),
         ..link(2, 1)
     }
 }
@@ -129,7 +137,7 @@ fn the_original_confirmed_after_all_keeps_its_figures() {
         (tree.txid, tree.tx, tree.time),
         (id(1), Some(a), u64::from(a.time))
     );
-    assert!(tree.mined);
+    assert!(mined(&tree));
     assert_eq!(r.facts(&id(1)), Some(a));
     assert_eq!(r.chain(&id(2)).0[0].json()["by_fee"], a.fee);
     // A replacement that was never replaced itself still has none.
@@ -150,10 +158,7 @@ async fn reopen(store: &Store) -> Replacements {
 #[tokio::test]
 async fn the_figures_kept_survive_a_restart_on_either_side_of_the_block() {
     let t = temp();
-    let write = |l: Link| Batch {
-        links: vec![l],
-        ..Batch::default()
-    };
+    let write = |l: Link| vec![Change::Link(l)];
     // Restarted between the replacement and the block: the record put back holds A's figures.
     let mut r = Replacements::new(10);
     db::write(&t.store, vec![write(r.insert(link(1, 2)))], 10)
@@ -197,7 +202,7 @@ fn a_transaction_back_in_the_mempool_is_no_longer_replaced_or_mined() {
     let mut r = Replacements::new(10);
     r.insert(link(1, 2));
     r.insert(link(3, 4));
-    assert!(r.confirmed(&id(4)));
+    assert!(r.confirmed(&id(4), 7, block(7)));
     // 1 was rebroadcast after 2 left: nothing stands replaced by 2 any more.
     assert!(r.returned(&id(1)));
     assert!(r.get(&id(1)).is_none() && r.tree(&id(2)).is_none());
@@ -205,7 +210,7 @@ fn a_transaction_back_in_the_mempool_is_no_longer_replaced_or_mined() {
     let v = r.version();
     assert!(r.returned(&id(4)));
     assert!(r.version() > v);
-    assert!(!r.tree(&id(3)).unwrap().mined);
+    assert!(!mined(&r.tree(&id(3)).unwrap()));
     assert!(
         !r.returned(&id(9)),
         "an unknown transaction changes nothing"
@@ -273,16 +278,16 @@ fn a_chain_a_then_b_then_c_is_one_tree_from_any_member() {
     assert_eq!(tree.tx.map(|f| f.fee), Some(300));
     assert_eq!(tree.time, u64::from(facts(3, true).time));
     assert_eq!(tree.replaces[0].tx.map(|f| f.fee), Some(100));
-    assert!(!tree.full_rbf() && !tree.mined);
+    assert!(!tree.full_rbf() && !mined(&tree));
     assert_eq!(r.replaced_by(&id(3)), &[id(2)]);
     assert_eq!(r.facts(&id(3)).map(|f| f.fee), Some(300));
     assert_eq!(r.facts(&id(1)).map(|f| f.time), Some(facts(1, true).time));
     // Mined: the tree says so, and only the newest replacement's confirmation counts.
-    assert!(!r.confirmed(&id(1)));
+    assert!(!r.confirmed(&id(1), 7, block(7)));
     let v = r.version();
-    assert!(r.confirmed(&id(3)));
+    assert!(r.confirmed(&id(3), 7, block(7)));
     assert!(r.version() > v);
-    assert!(r.tree(&id(1)).unwrap().mined);
+    assert!(mined(&r.tree(&id(1)).unwrap()));
     assert_eq!(r.recent(25, false).len(), 1);
     assert!(r.recent(25, true).is_empty());
 }
@@ -357,19 +362,14 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     quiet.tx.rbf = false;
     let mut unknown = link(2, 3);
     unknown.by_tx = None;
-    let first = Batch {
-        links: vec![quiet, unknown],
-        mined: Vec::new(),
-        ..Batch::default()
-    };
+    let first = vec![Change::Link(quiet), Change::Link(unknown)];
     db::write(&t.store, vec![first], 3).await.unwrap();
     db::write(
         &t.store,
-        vec![Batch {
-            links: vec![link(4, 5)],
-            mined: vec![id(3)],
-            ..Batch::default()
-        }],
+        vec![vec![
+            Change::Link(link(4, 5)),
+            Change::Mined(id(3), Mined::In(Some((9, block(9))))),
+        ]],
         3,
     )
     .await
@@ -379,7 +379,7 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     let Temp { store, .. } = &t;
     let loaded = db::load(store, 3).await.unwrap();
     let mut want_unknown = unknown;
-    want_unknown.mined = true;
+    want_unknown.mined = Mined::In(Some((9, block(9))));
     assert_eq!(loaded, vec![quiet, want_unknown, link(4, 5)]);
     let again = Store::open(&dir, "regtest", Options::default()).unwrap();
     assert_eq!(db::load(&again, 3).await.unwrap(), loaded);
@@ -388,16 +388,12 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
         r.restore(l);
     }
     assert_eq!(r.take_recorded(), 0, "restored links are not new");
-    assert!(r.tree(&id(1)).unwrap().mined && r.tree(&id(1)).unwrap().full_rbf());
+    assert!(mined(&r.tree(&id(1)).unwrap()) && r.tree(&id(1)).unwrap().full_rbf());
 
     // The bound: only the newest three stay, a rewrite moves a link to the newest.
     db::write(
         &again,
-        vec![Batch {
-            links: vec![link(6, 7), link(1, 9)],
-            mined: Vec::new(),
-            ..Batch::default()
-        }],
+        vec![vec![Change::Link(link(6, 7)), Change::Link(link(1, 9))]],
         3,
     )
     .await
@@ -409,18 +405,9 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     db::write(
         &again,
         vec![
-            Batch {
-                links: vec![link(30, 31)],
-                ..Batch::default()
-            },
-            Batch {
-                returned: vec![id(30), id(6)],
-                ..Batch::default()
-            },
-            Batch {
-                links: vec![link(6, 32)],
-                ..Batch::default()
-            },
+            vec![Change::Link(link(30, 31))],
+            vec![Change::Returned(id(30)), Change::Returned(id(6))],
+            vec![Change::Link(link(6, 32))],
         ],
         3,
     )
@@ -432,29 +419,12 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     // B replaced A, a miner confirmed A (A replaced B), and a reorg returned B: the store, read
     // back, holds what memory holds.
     let mut r = Replacements::new(10);
-    let steps = [
-        Batch {
-            links: vec![link(40, 41)],
-            ..Batch::default()
-        },
-        Batch {
-            links: vec![link(41, 40)],
-            ..Batch::default()
-        },
-        Batch {
-            returned: vec![id(41)],
-            ..Batch::default()
-        },
-    ];
-    for b in &steps {
-        for l in &b.links {
-            r.restore(*l);
-        }
-        for t in &b.returned {
-            r.returned(t);
-        }
-        db::write(&again, vec![b.clone()], 10).await.unwrap();
-    }
+    r.insert(link(40, 41));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
+    r.insert(link(41, 40));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
+    r.returned(&id(41));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
     let stored = db::load(&again, 100).await.unwrap();
     assert!(r.get(&id(40)).is_none() && r.get(&id(41)).is_none());
     assert!(
@@ -462,11 +432,7 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
         "{stored:?}"
     );
     // A write that fails part way leaves nothing behind.
-    let half = Batch {
-        links: vec![link(20, 21)],
-        mined: Vec::new(),
-        ..Batch::default()
-    };
+    let half = vec![Change::Link(link(20, 21))];
     let failed = again
         .write(move |sql| {
             db::insert(sql, &half)?;
@@ -497,20 +463,10 @@ async fn replacements_benchmark() {
                 l.txid = Txid::from_byte_array(a);
                 a[4] = 1;
                 l.by = Txid::from_byte_array(a);
-                l
+                Change::Link(l)
             })
             .collect();
-        db::write(
-            &t.store,
-            vec![Batch {
-                links,
-                mined: Vec::new(),
-                ..Batch::default()
-            }],
-            keep,
-        )
-        .await
-        .unwrap();
+        db::write(&t.store, vec![links], keep).await.unwrap();
     }
     let started = std::time::Instant::now();
     let loaded = db::load(&t.store, keep).await.unwrap();
@@ -543,4 +499,471 @@ async fn replacements_benchmark() {
         bytes / rows.max(1),
         r.len()
     );
+}
+
+// Following the chain.
+
+/// A scripted chain: block `n` at height `h` holding `txs`, on parent `p`.
+fn blk(h: u32, n: u8, p: u8, txs: &[u8]) -> Arc<BlockSpends> {
+    let txs: Vec<Txid> = txs.iter().map(|t| id(*t)).collect();
+    Arc::new(BlockSpends::listed(h, block(n), block(p), &txs))
+}
+
+/// The window, tip first, as a delta carries it.
+fn window(blocks: &[Arc<BlockSpends>]) -> Vec<Arc<BlockSpends>> {
+    let mut w = blocks.to_vec();
+    w.sort_by_key(|b| std::cmp::Reverse(b.height));
+    w.truncate(6);
+    w
+}
+
+/// Answers from a scripted best chain; `down` fails every read. Counts reads.
+#[derive(Default)]
+struct Script {
+    hashes: HashMap<u32, BlockHash>,
+    txs: HashMap<Txid, (u32, BlockHash)>,
+    down: bool,
+    reads: AtomicUsize,
+}
+
+impl Lookup for Script {
+    async fn answer(&self, ask: Ask) -> Option<Answer> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        if self.down {
+            return None;
+        }
+        Some(match ask {
+            Ask::Hash(h) => Answer::Hash(*self.hashes.get(&h)?),
+            Ask::Tx(t) => Answer::Tx(self.txs.get(&t).copied()),
+        })
+    }
+}
+
+/// Runs every check due until none is, or one fails. Returns the reads made.
+async fn check(r: &mut Replacements, node: &Script) -> usize {
+    let before = node.reads.load(Ordering::SeqCst);
+    while let Some((epoch, asks)) = r.asks() {
+        let answers = ask(node, &asks).await;
+        let failed = answers.iter().any(|(_, a)| a.is_none());
+        r.answers(epoch, &answers);
+        if failed {
+            break;
+        }
+    }
+    node.reads.load(Ordering::SeqCst) - before
+}
+
+/// A chain of empty blocks 1..=n (block hash n at height n), and a record that followed it.
+fn chain(n: u8) -> (Vec<Arc<BlockSpends>>, Replacements) {
+    let blocks: Vec<_> = (1..=n).map(|h| blk(u32::from(h), h, h - 1, &[])).collect();
+    let mut r = Replacements::new(1000);
+    r.follow(&window(&blocks));
+    (blocks, r)
+}
+
+/// `a` replaced by `b`, confirmed in a new block `h` at height `h`, through a delta's window.
+fn mine(r: &mut Replacements, blocks: &mut Vec<Arc<BlockSpends>>, a: u8, b: u8, h: u8) {
+    r.insert(link(a, b));
+    blocks.push(blk(u32::from(h), h, h - 1, &[b]));
+    r.follow(&window(blocks));
+}
+
+#[test]
+fn a_replacement_in_a_new_block_is_mined_there_whether_it_left_our_mempool_or_not() {
+    let (mut blocks, mut r) = chain(10);
+    mine(&mut r, &mut blocks, 1, 2, 11);
+    assert_eq!(r.mined(&id(2)), Mined::In(Some((11, block(11)))));
+    assert_eq!(
+        r.take_changes().last(),
+        Some(&Change::Mined(id(2), Mined::In(Some((11, block(11))))))
+    );
+    // The next block changes nothing: a hash compare and a lookup per transaction.
+    let v = r.version();
+    blocks.push(blk(12, 12, 11, &[9]));
+    let new = r.follow(&window(&blocks));
+    assert!(r.originals(&new).is_empty());
+    assert_eq!(r.version(), v);
+    assert_eq!(r.asks(), None, "nothing to ask the node");
+}
+
+#[tokio::test]
+async fn a_replacement_also_in_the_competing_block_stays_mined_at_the_new_block() {
+    let (mut blocks, mut r) = chain(10);
+    mine(&mut r, &mut blocks, 1, 2, 11);
+    // Block 11 is replaced by 111, which also holds 2.
+    blocks.pop();
+    blocks.push(blk(11, 111, 10, &[2]));
+    r.follow(&window(&blocks));
+    assert_eq!(r.mined(&id(2)), Mined::In(Some((11, block(111)))));
+    let node = Script::default();
+    assert_eq!(check(&mut r, &node).await, 0, "settled from memory");
+}
+
+#[tokio::test]
+async fn a_replacement_not_in_the_competing_block_is_not_mined() {
+    let (mut blocks, mut r) = chain(10);
+    mine(&mut r, &mut blocks, 1, 2, 11);
+    mine(&mut r, &mut blocks, 3, 4, 12);
+    blocks.truncate(10);
+    blocks.push(blk(11, 111, 10, &[]));
+    blocks.push(blk(12, 112, 111, &[]));
+    blocks.push(blk(13, 113, 112, &[]));
+    r.follow(&window(&blocks));
+    // Neither is in the new chain's blocks above where the chains part: not mined, and nothing
+    // asked. Whether one returns to the mempool is the tracker's to say (`returned`).
+    assert_eq!((r.mined(&id(2)), r.mined(&id(4))), (Mined::No, Mined::No));
+    assert_eq!(check(&mut r, &Script::default()).await, 0);
+    assert!(r.get(&id(1)).is_some(), "still replaced");
+    // 4 comes back to the mempool, then is mined in a later block.
+    r.returned(&id(4));
+    assert_eq!(r.mined(&id(4)), Mined::No);
+    blocks.push(blk(14, 114, 113, &[4]));
+    r.follow(&window(&blocks));
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((14, block(114)))));
+}
+
+#[test]
+fn the_original_winning_in_the_competing_block_is_confirmed_not_replaced() {
+    let (mut blocks, mut r) = chain(10);
+    mine(&mut r, &mut blocks, 1, 2, 11);
+    blocks.pop();
+    blocks.push(blk(11, 111, 10, &[1]));
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(1), 11, block(111))]);
+    assert!(r.get(&id(1)).is_none(), "1 no longer stands replaced");
+    assert!(r.tree(&id(2)).is_none());
+    assert!(r.take_changes().contains(&Change::Returned(id(1))));
+}
+
+#[tokio::test]
+async fn a_two_block_reorg_and_a_shorter_chain() {
+    let (mut blocks, mut r) = chain(10);
+    mine(&mut r, &mut blocks, 1, 2, 11);
+    mine(&mut r, &mut blocks, 3, 4, 12);
+    // The node invalidates 11: the chain is back at 10.
+    blocks.truncate(10);
+    r.follow(&window(&blocks));
+    assert_eq!((r.mined(&id(2)), r.mined(&id(4))), (Mined::No, Mined::No));
+    // A competing 11 and 12 with 4 in the second.
+    blocks.push(blk(11, 111, 10, &[]));
+    blocks.push(blk(12, 112, 111, &[4]));
+    r.follow(&window(&blocks));
+    assert_eq!(r.mined(&id(2)), Mined::No);
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((12, block(112)))));
+    assert_eq!(check(&mut r, &Script::default()).await, 0);
+}
+
+#[tokio::test]
+async fn a_reorg_deeper_than_the_window_walks_down_and_asks() {
+    let (mut blocks, mut r) = chain(20);
+    // Mined at 12 (below the coming window) and at 18 (inside it).
+    r.insert(link(1, 2));
+    r.confirmed(&id(2), 12, block(12));
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    r.insert(link(5, 6));
+    r.confirmed(&id(6), 5, block(5));
+    // Everything above 10 is replaced; 2 ended up in the new 11, 4 in no block.
+    blocks.truncate(10);
+    blocks.push(blk(11, 211, 10, &[2]));
+    for h in 12..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    // 4's block is in the window's range and gone; the window cannot show where the chains
+    // part, so where 4 is now is unknown until asked. 2 and 6 are below the window: unproven.
+    assert_eq!(r.mined(&id(4)), Mined::Unknown);
+    assert_eq!(r.mined(&id(2)), Mined::In(Some((12, block(12)))));
+    let mut node = Script::default();
+    for b in &blocks {
+        node.hashes.insert(b.height, b.hash);
+    }
+    node.txs.insert(id(2), (11, block(211)));
+    let reads = check(&mut r, &node).await;
+    assert_eq!(r.mined(&id(4)), Mined::No);
+    assert_eq!(r.mined(&id(2)), Mined::In(Some((11, block(211)))));
+    assert_eq!(
+        r.mined(&id(6)),
+        Mined::In(Some((5, block(5)))),
+        "below the fork"
+    );
+    // 4's status, the hash at 12 (gone), 2's status, the hash at 5 (held).
+    assert_eq!(reads, 4);
+    assert_eq!(r.asks(), None);
+}
+
+#[tokio::test]
+async fn the_cap_bounds_the_reads_of_one_reorg_and_leaves_the_rest_unknown() {
+    let (mut blocks, mut r) = chain(10);
+    // More replacements mined in the window than one reorg may read for.
+    let n = u32::try_from(CHECKS).unwrap() + 20;
+    for i in 0..n {
+        r.insert(Link {
+            txid: idn(i),
+            by: idn(100_000 + i),
+            ..link(1, 2)
+        });
+        r.confirmed(&idn(100_000 + i), 9, block(9));
+    }
+    // A reorg from below the window: block 9 is gone, nothing tells where the chains part.
+    blocks.truncate(3);
+    for h in 4..=20u8 {
+        blocks.push(blk(u32::from(h), 100 + h, 99 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let mut node = Script::default();
+    for b in &blocks {
+        node.hashes.insert(b.height, b.hash);
+    }
+    let reads = check(&mut r, &node).await;
+    assert_eq!(reads, CHECKS, "never more than the cap");
+    let unknown = (0..n)
+        .filter(|i| r.mined(&idn(100_000 + i)) == Mined::Unknown)
+        .count();
+    let no = (0..n)
+        .filter(|i| r.mined(&idn(100_000 + i)) == Mined::No)
+        .count();
+    // One read for the hash at 9, which was gone; one each for the first 99 replacements.
+    assert_eq!(
+        (no, unknown),
+        (CHECKS - 1, 21),
+        "past the cap: unknown, not guessed"
+    );
+    assert_eq!(r.asks(), None, "and stays so");
+}
+
+#[tokio::test]
+async fn an_unreachable_node_is_asked_once_and_the_state_stays_unknown_until_it_answers() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let mut node = Script {
+        down: true,
+        ..Script::default()
+    };
+    assert_eq!(check(&mut r, &node).await, 1, "one failed read, then wait");
+    assert_eq!(r.mined(&id(4)), Mined::Unknown);
+    assert_eq!(r.tree(&id(3)).unwrap().mined, Mined::Unknown);
+    assert_eq!(r.chain(&id(3)).0[0].json()["mined"], Value::Null);
+    node.down = false;
+    node.txs.insert(id(4), (13, block(213)));
+    check(&mut r, &node).await;
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((13, block(213)))));
+}
+
+#[tokio::test]
+async fn answers_from_before_another_reorg_are_dropped() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let (epoch, asks) = r.asks().unwrap();
+    assert_eq!(asks, vec![Ask::Tx(id(4))]);
+    // Another reorg puts 4 in the window before the answer lands.
+    blocks.truncate(20);
+    blocks.push(blk(21, 99, 220, &[4]));
+    r.follow(&window(&blocks));
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((21, block(99)))));
+    r.answers(epoch, &[(Ask::Tx(id(4)), Some(Answer::Tx(None)))]);
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((21, block(99)))));
+}
+
+#[tokio::test]
+async fn a_restart_between_the_reorg_and_the_check_checks_after_it() {
+    let t = temp();
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(1, 2));
+    r.confirmed(&id(2), 12, block(12));
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    db::write(&t.store, vec![r.take_changes()], 100)
+        .await
+        .unwrap();
+    // Stopped before any check: 4 is stored unknown, 2 as mined at 12.
+    let mut again = Replacements::new(100);
+    for l in db::load(&t.store, 100).await.unwrap() {
+        again.restore(l);
+    }
+    assert_eq!(again.mined(&id(4)), Mined::Unknown);
+    assert_eq!(
+        again.asks(),
+        None,
+        "nothing is asked before the first window"
+    );
+    // The first window after the start cannot show where it parts from what we knew: the
+    // unknown is asked, and the walk proves or disproves 12.
+    again.follow(&window(&blocks));
+    let mut node = Script::default();
+    for b in &blocks {
+        node.hashes.insert(b.height, b.hash);
+    }
+    check(&mut again, &node).await;
+    assert_eq!(again.mined(&id(4)), Mined::No);
+    assert_eq!(again.mined(&id(2)), Mined::No);
+    db::write(&t.store, vec![again.take_changes()], 100)
+        .await
+        .unwrap();
+    let stored = db::load(&t.store, 100).await.unwrap();
+    assert!(stored.iter().all(|l| l.mined == Mined::No), "{stored:?}");
+}
+
+#[tokio::test]
+async fn a_restart_with_no_reorg_costs_one_read_at_most() {
+    let (blocks, mut r) = chain(20);
+    r.insert(link(1, 2));
+    r.confirmed(&id(2), 3, block(3));
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    let mut again = Replacements::new(100);
+    for (_, l) in r.links.values() {
+        again.restore(*l);
+    }
+    again.follow(&window(&blocks));
+    // 18 is in the window and still there: nothing below it moved, nothing is asked.
+    assert_eq!(check(&mut again, &Script::default()).await, 0);
+    let mut fresh = Replacements::new(100);
+    fresh.restore(r.links.values().find(|(_, l)| l.by == id(2)).unwrap().1);
+    fresh.follow(&window(&blocks));
+    let mut node = Script::default();
+    node.hashes.insert(3, block(3));
+    assert_eq!(check(&mut fresh, &node).await, 1, "one hash, and it held");
+    assert_eq!(fresh.mined(&id(2)), Mined::In(Some((3, block(3)))));
+}
+
+#[tokio::test]
+async fn links_stored_before_blocks_were_recorded_read_mined_and_are_left_as_they_are() {
+    let t = temp();
+    db::write(&t.store, vec![vec![Change::Link(link(1, 2))]], 10)
+        .await
+        .unwrap();
+    t.store
+        .write(|sql| {
+            sql.prepare("UPDATE replacements SET mined = 1, height = NULL, block = NULL")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let mut r = Replacements::new(10);
+    for l in db::load(&t.store, 10).await.unwrap() {
+        r.restore(l);
+    }
+    assert_eq!(r.mined(&id(2)), Mined::In(None));
+    let (blocks, _) = chain(10);
+    r.follow(&window(&blocks));
+    assert_eq!(r.asks(), None);
+    assert_eq!(r.chain(&id(1)).0[0].json()["mined"], true);
+    assert_eq!(r.chain(&id(1)).0[0].json()["block"], Value::Null);
+}
+
+#[test]
+fn an_original_confirmed_while_its_replacement_was_not_is_no_longer_replaced() {
+    // 2 replaced 1 and was itself replaced by 3, unmined; a block then confirms 1.
+    let (mut blocks, mut r) = chain(10);
+    r.insert(link(1, 2));
+    r.insert(link(2, 3));
+    blocks.push(blk(11, 11, 10, &[1]));
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(1), 11, block(11))]);
+    assert!(r.get(&id(1)).is_none());
+    assert!(r.get(&id(2)).is_some(), "what replaced 2 still stands");
+}
+
+#[test]
+fn an_intermediate_replacement_confirmed_by_a_reorg_keeps_what_it_replaced_mined() {
+    // 1 replaced by 2, 2 by 3 (unmined); a reorg's new block holds 2.
+    let (mut blocks, mut r) = chain(10);
+    r.insert(link(1, 2));
+    r.insert(link(2, 3));
+    blocks.pop();
+    blocks.push(blk(10, 110, 9, &[2]));
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(2), 10, block(110))]);
+    assert!(r.get(&id(2)).is_none(), "2 no longer stands replaced");
+    let mined = Mined::In(Some((10, block(110))));
+    assert_eq!(r.mined(&id(2)), mined);
+    // The store, replaying the changes, agrees.
+    let changes = r.take_changes();
+    let last = changes
+        .iter()
+        .rposition(|c| matches!(c, Change::Returned(t) if *t == id(2)));
+    assert!(
+        changes[last.unwrap()..].contains(&Change::Mined(id(2), mined)),
+        "{changes:?}"
+    );
+}
+
+#[tokio::test]
+async fn reads_spent_with_the_node_down_leave_the_unproven_unknown_and_say_so() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(1, 2));
+    r.confirmed(&id(2), 5, block(5));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    r.take_changes();
+    let node = Script {
+        down: true,
+        ..Script::default()
+    };
+    for _ in 0..CHECKS {
+        assert_eq!(check(&mut r, &node).await, 1);
+    }
+    // The last failed read spent the budget: 2's block is unproven, so it is unknown, and the
+    // change is there for the store and the sockets.
+    assert_eq!(r.mined(&id(2)), Mined::Unknown);
+    assert_eq!(r.take_changes(), vec![Change::Mined(id(2), Mined::Unknown)]);
+    assert_eq!(r.asks(), None);
+}
+
+#[tokio::test]
+async fn answers_dropped_after_another_reorg_do_not_spend_its_reads() {
+    let (mut blocks, mut r) = chain(20);
+    r.insert(link(3, 4));
+    r.confirmed(&id(4), 18, block(18));
+    blocks.truncate(10);
+    for h in 11..=21u8 {
+        blocks.push(blk(u32::from(h), 200 + h, 199 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let (epoch, asks) = r.asks().unwrap();
+    // Another reorg deeper than the window before the answers land.
+    blocks.truncate(10);
+    for h in 11..=22u8 {
+        blocks.push(blk(u32::from(h), 150 + h, 149 + h, &[]));
+    }
+    r.follow(&window(&blocks));
+    let stale: Vec<_> = (0..CHECKS)
+        .map(|_| (asks[0], Some(Answer::Tx(None))))
+        .collect();
+    r.answers(epoch, &stale);
+    assert_eq!(
+        r.mined(&id(4)),
+        Mined::Unknown,
+        "the stale answer is dropped"
+    );
+    let mut node = Script::default();
+    node.txs.insert(id(4), (12, block(162)));
+    assert_eq!(
+        check(&mut r, &node).await,
+        1,
+        "this reorg still has its reads"
+    );
+    assert_eq!(r.mined(&id(4)), Mined::In(Some((12, block(162)))));
 }

@@ -207,6 +207,55 @@ async fn a_replacement_that_went_straight_into_a_block_is_mined() {
 }
 
 #[tokio::test]
+async fn a_tree_follows_its_replacement_through_reorgs() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 500, 200);
+    let s = Server::start(&mock, |_| {});
+    s.settle().await;
+    let b = mock.send(&[coin(1)], 1, 1000, 200);
+    s.settle().await;
+    let tree = |body: String| -> Value { serde_json::from_str(&body).unwrap() };
+    let mined = async |s: &Server| tree(rbf_of(s, a).await.1)["replacements"]["mined"].clone();
+    // Mined, then the block replaced by one that also holds it: still mined.
+    mock.mine(&[b]);
+    s.settle().await;
+    assert_eq!(mined(&s).await, json!(true));
+    mock.reorg(1, &[], &[&[b]]);
+    s.settle().await;
+    assert_eq!(mined(&s).await, json!(true));
+    let list = tree(
+        answer(replacements(State(Arc::clone(&s.ctx))).await)
+            .await
+            .1,
+    );
+    assert_eq!(list[0]["mined"], json!(true));
+    // Replaced by one without it: not mined, so absent, as the reference leaves it.
+    mock.reorg(1, &[], &[&[]]);
+    s.settle().await;
+    assert_eq!(mined(&s).await, Value::Null);
+    let body = tree(rbf_of(&s, a).await.1);
+    assert!(body["replacements"].get("mined").is_none(), "{body}");
+    let list = tree(
+        answer(replacements(State(Arc::clone(&s.ctx))).await)
+            .await
+            .1,
+    );
+    assert!(
+        list[0].get("mined").is_none(),
+        "the cached list was rebuilt: {list}"
+    );
+    // The original wins: it stands replaced no more, and the tree is gone.
+    mock.reorg(0, &[], &[&[b]]);
+    s.settle().await;
+    mock.reorg(1, &[], &[&[a]]);
+    s.settle().await;
+    assert_eq!(
+        rbf_of(&s, a).await.1,
+        r#"{"replacements":null,"replaces":null}"#
+    );
+}
+
+#[tokio::test]
 async fn a_prevouts_batch_starts_no_read_past_its_deadline() {
     // Nothing listens there: a read that started would fail as unavailable, not as late.
     let esplora = Esplora::new("http://127.0.0.1:1").unwrap();

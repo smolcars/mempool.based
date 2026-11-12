@@ -348,7 +348,7 @@ struct Poller<S> {
     /// Details fetched for listed txids but not yet published, kept across a failed cycle.
     pending: HashMap<Txid, TxInfo>,
     /// Recent active-chain blocks, tip first.
-    blocks: Vec<BlockSpends>,
+    blocks: Vec<Arc<BlockSpends>>,
     /// `getmempoolinfo` before the last complete cycle.
     probe: Option<MempoolInfo>,
     /// The last block announced through [`Tracker::block_found`]. Until the model's tip is it or
@@ -520,6 +520,7 @@ impl<S: Source> Poller<S> {
                 added: Vec::new(),
                 removed,
                 replaced,
+                blocks: self.blocks.clone(),
             };
             state.apply(&delta);
             stats.seq = Some(delta.seq);
@@ -650,6 +651,7 @@ impl<S: Source> Poller<S> {
                 added,
                 removed,
                 replaced,
+                blocks: self.blocks.clone(),
             };
             state.apply(&delta);
             stats.seq = Some(delta.seq);
@@ -685,7 +687,7 @@ impl<S: Source> Poller<S> {
                 None => {
                     fetched += 1;
                     let b = match self.source.block(hash).await {
-                        Ok(raw) => keys.block(height, &raw),
+                        Ok(raw) => Arc::new(keys.block(height, &raw)),
                         Err(e) => {
                             held.extend(chain);
                             self.blocks = held;
