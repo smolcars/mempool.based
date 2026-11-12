@@ -1105,3 +1105,128 @@ async fn flood_pings_and_queries_at_a_peer_that_never_reads() {
     assert!(up(&peer, other.addr));
     peer.shutdown().await.unwrap();
 }
+
+// Against a real rbitcoin on regtest (`docs/REGTEST.md`): the chain tricks a fake cannot prove.
+// REGTEST_PROJECT=<name> dev/regtest/regtest.py up && dev/regtest/regtest.py mine 110
+// eval "$(dev/regtest/regtest.py env | sed 's/^/export /')"
+// cargo test -p ln -- --ignored --nocapture hostile::regtest
+
+fn regtest(args: &[&str]) -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = std::process::Command::new("python3")
+        .arg(root.join("dev/regtest/regtest.py"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+/// A JSON-RPC call to the regtest node; the answer's `result` as text.
+fn rpc(method: &str, params: &str) -> String {
+    let var = |k: &str| std::env::var(k).unwrap();
+    let url = format!(
+        "http://{}:{}/",
+        var("REGTEST_RPC_HOST"),
+        var("REGTEST_RPC_PORT")
+    );
+    let auth = format!("{}:{}", var("REGTEST_RPC_USER"), var("REGTEST_RPC_PASSWORD"));
+    let body = format!(r#"{{"jsonrpc":"1.0","id":1,"method":"{method}","params":{params}}}"#);
+    let out = std::process::Command::new("curl")
+        .args(["-s", "-u", &auth, "-d", &body, &url])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains(r#""error":null"#), "{method}: {text}");
+    text
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a regtest node: see above"]
+async fn regtest_chain_tricks() {
+    use std::str::FromStr;
+    let esplora =
+        node::esplora::Esplora::new(&std::env::var("REGTEST_ESPLORA_URL").unwrap()).unwrap();
+    let txid = |s: &str| lightning::bitcoin::Txid::from_str(s).unwrap();
+    let place = async |t| {
+        let p = esplora.tx_merkle_proof(t).await.unwrap().value;
+        (p.block_height, p.pos)
+    };
+
+    // A real two-of-two of nodes 1 and 2, two blocks deep.
+    let script = funding(1, 2);
+    let address = lightning::bitcoin::Address::from_script(&script, NET).unwrap();
+    let paid = txid(&regtest(&["send", &address.to_string(), "100000"]));
+    regtest(&["mine", "2"]);
+    let (h, i) = place(paid).await;
+    let tx = esplora.tx_raw(paid).await.unwrap().value;
+    let vout = tx.output.iter().position(|o| o.script_pubkey == script).unwrap() as u32;
+    let real_id = scid(h, i, vout);
+    // The coinbase that payment spent; an old coinbase nobody spent, paying the miner's script.
+    let coin = tx.input[0].previous_output;
+    let (ch, _) = place(coin.txid).await;
+    let spent = scid(ch, 0, coin.vout);
+    let tip = esplora.tip_height().await.unwrap().value;
+    let wrong = scid(tip - 8, 0, 0);
+    // Blocks we have not seen: three past the tip (early), and absurdly far.
+    let future = scid(tip + 3, 1, 0);
+    let absurd = scid(0x00ff_ffff, 0x00ff_ffff, 0xffff);
+
+    let dir = TempDir::new();
+    let h_peer = Hostile::start().await;
+    let mut config = Config::new(NET, dir.0.clone());
+    config.peers = vec![h_peer.addr];
+    config.max_peers = 1;
+    config.tip_every = Duration::from_secs(1);
+    let (peer, _) = Peer::start(config, esplora.clone()).unwrap();
+    wait_for("connected", || up(&peer, h_peer.addr)).await;
+    let mut history = peer.history();
+    h_peer.send(
+        [real_id, spent, wrong, future, absurd]
+            .map(|id| raw(CHANNEL_ANNOUNCEMENT, &channel(id, 1, 2))),
+    );
+    wait_for("the first answers", || {
+        let v = status(&peer).validation;
+        v.early == 2 && v.rejected.spent == 1 && v.rejected.wrong_script == 1
+    })
+    .await;
+    assert_eq!(status(&peer).validation.rejected.missing, 1);
+
+    // Four more blocks: the real channel is six deep and enters the graph with its value.
+    regtest(&["mine", "4"]);
+    wait_for("verified", || {
+        peer.read(|g| g.channel(real_id).and_then(|c| c.capacity_sats)) == Some(100_000)
+    })
+    .await;
+    // Four more: the block three past the old tip is five deep, and has no second transaction.
+    regtest(&["mine", "4"]);
+    wait_for("the future one refused", || {
+        let v = status(&peer).validation;
+        v.early == 0 && v.rejected.missing == 2
+    })
+    .await;
+
+    // The funding block leaves the chain, and empty blocks replace it and the five on top: the
+    // channel's output is gone.
+    let hash = esplora.block_hash(h).await.unwrap().value;
+    rpc("invalidateblock", &format!(r#"["{hash}"]"#));
+    for _ in 0..8 {
+        rpc("generateblock", r#"["raw(51)",[]]"#);
+    }
+    wait_for("the channel removed", || {
+        peer.read(|g| g.channel(real_id).is_none())
+    })
+    .await;
+    let mut undone = false;
+    while let Ok(r) = history.try_recv() {
+        undone |= matches!(r.change, History::OpenUndone { scid } if scid == real_id);
+    }
+    assert!(undone);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let s = status(&peer);
+    println!(
+        "regtest: validation {:?}; close-watcher requests {} reorgs {} undone {}",
+        s.validation, s.closes.requests, s.closes.reorgs, s.closes.undone
+    );
+    peer.shutdown().await.unwrap();
+}
