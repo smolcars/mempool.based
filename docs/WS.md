@@ -394,7 +394,7 @@ Per socket, the parts wanted count inside `WS_MAX_SUBSCRIPTIONS`; the `track-tx`
 |---|---|---|
 | Frames | One part per message | The reference puts several in one frame (a block with `mempool-blocks`, `fees`, `da`, `txConfirmed`, …). Each of ours is encoded once and shared by every subscriber; bundling would mean a frame per combination. A client reads every key of every message |
 | `blocks`, `block` | The node's Esplora JSON: no `extras`, no `stale` | The extras come from our block table after the block arrives; waiting for them would break the block budget ([`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets)). Who mined a block and its fees are in [`API.md`](API.md#mining), its audit in [Block audits](API.md#block-audits). Only best-chain blocks are sent |
-| `vBytesPerSecond` | Absent | Not computed yet |
+| `vBytesPerSecond` | Absent | Not sent yet; the store's once-a-minute samples have the rate ([`API.md`](API.md#mempool-statistics)) |
 | `mempoolInfo` | rbitcoin's `getmempoolinfo`: has `fullrbf`, `limitclustercount`, `limitclustersize`; no `permitbaremultisig`, `maxdatacarriersize` or `optimal` | The node's own answer |
 | `stats` cadence | Every 2 s | The reference sends about once a second; `WS_MEMPOOL_INTERVAL_MS` bounds every mempool topic |
 | `transactions` | `vsize` is the sigop-adjusted integer | The tracker's unit |
