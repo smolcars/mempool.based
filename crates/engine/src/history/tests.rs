@@ -418,6 +418,52 @@ async fn a_minute_whose_hour_or_day_was_rolled_already_is_not_counted_again() {
     assert_eq!(rows(&t.store).await.len(), 3);
 }
 
+#[tokio::test]
+async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_at_four() {
+    let version = async |store: &Store| -> (i64, i64) {
+        store
+            .read(|sql| {
+                let v = sql
+                    .prepare("PRAGMA user_version")?
+                    .query_row([], |r| r.get(0))?;
+                let tables = sql
+                    .prepare(
+                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
+                         AND name IN ('blocks', 'pool_list', 'audits', 'mempool_history')",
+                    )?
+                    .query_row([], |r| r.get(0))?;
+                Ok((v, tables))
+            })
+            .await
+            .unwrap()
+    };
+    let fresh = temp();
+    assert_eq!(version(&fresh.store).await, (4, 4));
+
+    // A file as the build before this one left it: the first three migrations, version 3.
+    let dir = std::env::temp_dir().join(format!("mempool-based-history-v3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let c = rusqlite::Connection::open(dir.join("regtest.sqlite")).unwrap();
+        c.pragma_update(None, "journal_mode", "WAL").unwrap();
+        for m in [
+            include_str!("../store/migrations/0001_blocks.sql"),
+            include_str!("../store/migrations/0002_pools.sql"),
+            include_str!("../store/migrations/0003_audits.sql"),
+        ] {
+            c.execute_batch(m).unwrap();
+        }
+        c.pragma_update(None, "user_version", 3).unwrap();
+    }
+    let store = Store::open(&dir, "regtest", Options::default()).unwrap();
+    assert_eq!(version(&store).await, (4, 4));
+    record(&store, minute(NOW, 1), NOW).await.unwrap();
+    assert_eq!(rows(&store).await.len(), 1);
+    store.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Reading.
 
 #[tokio::test]
