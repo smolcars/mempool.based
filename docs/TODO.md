@@ -33,7 +33,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | done ([#33](https://github.com/smolcars/mempool.based/pull/33)) |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
-| A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
+| A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | doing |
 | CI2 | Get the browser-test job back to 90 s or less: the recorded-minute test waits up to two minutes for a real sample; seed the store instead | FE9 | doing |
 | QA1 | Acceptance check of milestone M1 against its exit criteria: the built server and the Docker image on all three networks in a real browser, numbers cross-checked with the node, hostile input, the performance budgets; findings become tasks | W6 | done: exit criteria met on all three networks; findings became FX3, FE4 and FX5 |
 | FX3 | Server fixes from the M1 acceptance check: the per-client limits must not break an ordinary page load (assets were rate-limited); the proxy header must not be trusted by default or from an untrusted peer; a cost limit on address routes; same-origin WebSocket upgrades on `/app/ws`; a wrong RPC password reported as such; the acceptance check's hostile-request scripts turned into tests | QA1 | done ([#39](https://github.com/smolcars/mempool.based/pull/39)) |
@@ -63,7 +63,7 @@ Refined when M1 lands.
 | FE5 | The live mempool on the home page: projected-block tiles with their fee layers, the mempool panel and the latest transactions from the WebSocket topics; the projected tile becomes the mined one when a block arrives | MP3, FE3 | done ([#41](https://github.com/smolcars/mempool.based/pull/41)) |
 | FE6 | The transaction and address pages, live: a transaction's place in the projected blocks, what replaced it, the group it will be mined with, and its confirmation, from the tracking topics instead of polling; an address page that refreshes when its history changes | MP5, FE4 | done ([#51](https://github.com/smolcars/mempool.based/pull/51)) |
 | FE7 | Home page follow-ups: the fee panel from our own recommendations (MP4); a tile's size in the agreed convention (serialized size in B, kB, MB); tighten the new-block workarounds once the server's order is promised (MP7) | MP4, MP7, FE5 | doing |
-| FE8 | Show a block's audit on the block page and its score in block lists: what we expected against what was mined, by category, from `/app/block/:hash/audit` and the `audit` field | MI4, SJ1 | doing |
+| FE8 | Show a block's audit on the block page and its score in block lists: what we expected against what was mined, by category, from `/app/block/:hash/audit` and the `audit` field | MI4, SJ1 | done ([#55](https://github.com/smolcars/mempool.based/pull/55)); it also fixed the address history not loading more when a payment arrives mid-click |
 | FE9 | Mempool history chart from `/app/mempool/history/:interval`: size by fee band over time with the flow in and out, gaps drawn as gaps | MI5, SJ1 | done ([#57](https://github.com/smolcars/mempool.based/pull/57)); its recorded-minute browser test added about 45 s to CI (CI2) |
 | W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | done ([#40](https://github.com/smolcars/mempool.based/pull/40)) |
 | MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | done ([#49](https://github.com/smolcars/mempool.based/pull/49)) |
@@ -109,7 +109,7 @@ Refined when M4 lands.
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | C1a | The `/api/v1` block routes still planned: `blocks`, `block/:hash`, the block summary routes and the tip-height alias, with their extras from the store | MI1, MI4 | doing |
-| C1b | The `/api/v1` transaction routes still planned: replacements, CPFP, first-seen times, address validation and prevouts | MP1, MP5 | todo |
+| C1b | The `/api/v1` transaction routes still planned: replacements, CPFP, first-seen times, address validation and prevouts. Also correct the comment in `crates/server/src/limits.rs` that says the heaviest page loads 22 files (it is 25 since FE8) | MP1, MP5 | todo |
 | WS2 | Follow-ups on the compatible WebSocket: send the first `mempool-blocks` with the block instead of about 4 s later, and decide on the bounded `track-mempool-txids` its PR proposes | WS1 | todo |
 | C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
