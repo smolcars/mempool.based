@@ -200,6 +200,31 @@ describe("address page", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a transaction a refresh pushes off the first page", async () => {
+    // Confirmed transactions n = 1..50, newest first; a newly confirmed n = 0 arrives later.
+    const conf = (n: number) => tx(n, [[OTHER, 2000]], [[ME, 1000]]);
+    const range = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, i) => conf(from + i));
+    let firstPage = range(1, 25);
+    serve({
+      [`/address/${ME}`]: () => Response.json(stats(part(1, 0, 50))),
+      [`/address/${ME}/txs`]: () => Response.json(firstPage),
+      [`/address/${ME}/txs?after_txid=${txid(25)}`]: range(26, 50),
+      [`/address/${ME}/txs?after_txid=${txid(50)}`]: [],
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
+    firstPage = range(0, 24);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+    window.dispatchEvent(new Event("focus"));
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
+    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    expect(ids).toEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
+    vi.restoreAllMocks();
+  });
+
   it("says plainly when an address has never been used", async () => {
     serve({ [`/address/${ME}`]: stats(part(0, 0, 0)), [`/address/${ME}/txs`]: [] });
     const el = open(`/address/${ME}`);
@@ -326,6 +351,50 @@ describe("address page", () => {
       ["00000000…00000001:1", "0.00001000", "11"],
     ]);
     expect(text(el.querySelector(".section__meta") as Element)).toBe("3 outputs");
+  });
+
+  it("draws at most 100 unspent outputs at once", async () => {
+    const many: Utxo[] = Array.from({ length: 201 }, (_, i) => ({
+      txid: txid(i + 1),
+      vout: 0,
+      value: 1000,
+      status: { confirmed: true, block_height: 1000 - i },
+    }));
+    serve({
+      [`/address/${ME}`]: stats(),
+      [`/address/${ME}/txs`]: [],
+      [`/address/${ME}/utxo`]: many,
+      "/blocks/tip/height": () => new Response("1000"),
+    });
+    const el = open(`/address/${ME}?view=unspent`);
+    await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(100));
+    const next = () => [...el.querySelectorAll("button")].find((b) => text(b) === "Next");
+    next()?.click();
+    await until(() =>
+      expect(text(el.querySelector(".pagination__status") as Element)).toBe("Page 2 of 3"),
+    );
+    expect(el.querySelectorAll("tbody tr")).toHaveLength(100);
+    next()?.click();
+    await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(1));
+    expect(next()?.disabled).toBe(true);
+  });
+
+  it("shows a failed tip height as an error and retries it", async () => {
+    let up = false;
+    serve({
+      [`/address/${ME}`]: stats(),
+      [`/address/${ME}/txs`]: [],
+      [`/address/${ME}/utxo`]: [
+        { txid: txid(1), vout: 0, value: 1000, status: { confirmed: true, block_height: 10 } },
+      ],
+      "/blocks/tip/height": () =>
+        up ? new Response("12") : Response.json({ error: "node unavailable" }, { status: 503 }),
+    });
+    const el = open(`/address/${ME}?view=unspent`);
+    await until(() => expect(text(el)).toContain("Could not load the unspent outputs"));
+    up = true;
+    [...el.querySelectorAll("button")].find((b) => text(b) === "Try again")?.click();
+    await until(() => expect(text(el.querySelectorAll("tbody td")[2] as Element)).toBe("3"));
   });
 
   it("moves between the views with the arrow keys", async () => {

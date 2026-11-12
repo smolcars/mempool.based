@@ -12,12 +12,14 @@ import {
   type Resource,
   Show,
   Switch,
+  untrack,
 } from "solid-js";
 import { Amount } from "../../components/Amount";
 import "../../components/Button.css";
 import { type Column, DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
+import { Pagination } from "../../components/Pagination";
 import "../../components/SectionHeader.css";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -40,7 +42,7 @@ import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
 
 /** Confirmed transactions per page of address history; the first page adds the unconfirmed ones. */
 export const PAGE = 25;
-/** Unspent outputs drawn at a time. The list arrives whole; this bounds the DOM. */
+/** Unspent outputs drawn at once, a page at a time. The list arrives whole; this bounds the DOM. */
 export const UTXO_STEP = 100;
 
 const VIEWS = [
@@ -117,14 +119,25 @@ export function History(props: {
   };
   const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : lastPageFull());
 
-  // A transaction that arrives with a refresh flashes once, so the eye finds it.
-  let known: Set<string> | undefined;
+  // When a refresh brings a new first page, the confirmed transactions the old one held move to
+  // the loaded pages, so one pushed off page one stays on screen. New ones flash once.
+  let previous: Transaction[] | undefined;
+  let known = new Set<string>();
   let fresh = new Set<string>();
   createComputed(
     on(first, (f) => {
       if (!f) return;
-      fresh = new Set(known ? f.map((t) => t.txid).filter((id) => !known?.has(id)) : []);
-      known = new Set([...(known ?? []), ...f.map((t) => t.txid)]);
+      const ids = new Set(f.map((t) => t.txid));
+      const old = previous;
+      if (old) {
+        if (untrack(later).length === 0) setLastPageFull(pageIsFull(old, PAGE));
+        setLater((l) =>
+          [...old.filter((t) => t.status.confirmed), ...l].filter((t) => !ids.has(t.txid)),
+        );
+      }
+      fresh = new Set(old ? [...ids].filter((id) => !known.has(id)) : []);
+      known = new Set([...known, ...ids]);
+      previous = f;
     }),
   );
 
@@ -265,7 +278,14 @@ export function History(props: {
               </Notice>
             </Match>
             <Match when={true}>
-              <Unspent utxos={utxos} tip={tip} retry={() => refetchUtxos()} />
+              <Unspent
+                utxos={utxos}
+                tip={tip}
+                retry={() => {
+                  if (utxos.state === "errored") refetchUtxos();
+                  if (tip.state === "errored") refetchTip();
+                }}
+              />
             </Match>
           </Switch>
         </Show>
@@ -396,7 +416,7 @@ function Confirmations(props: { utxo: Utxo; tip: number | undefined; words?: boo
 }
 
 function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry: () => void }) {
-  const [limit, setLimit] = createSignal(UTXO_STEP);
+  const [page, setPage] = createSignal(1);
   const sorted = createMemo(() => {
     const u = settled(props.utxos);
     return u ? sortUtxos(u) : undefined;
@@ -436,14 +456,22 @@ function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry:
       cell: (u) => (u ? <Confirmations utxo={u} tip={tipHeight()} /> : <Skeleton width="4ch" />),
     },
   ];
-  const rest = () => (sorted()?.length ?? 0) - limit();
+  const pageCount = () => Math.max(1, Math.ceil((sorted()?.length ?? 0) / UTXO_STEP));
+  // A refresh can shorten the list under the page on screen.
+  const current = () => Math.min(page(), pageCount());
+  const failed = () =>
+    props.utxos.state === "errored"
+      ? props.utxos.error
+      : props.tip.state === "errored"
+        ? props.tip.error
+        : undefined;
 
   return (
     <Switch>
-      <Match when={props.utxos.state === "errored"}>
+      <Match when={failed()}>
         <ErrorState
           title="Could not load the unspent outputs"
-          error={props.utxos.error}
+          error={failed()}
           retry={props.retry}
         />
       </Match>
@@ -458,17 +486,20 @@ function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry:
           <DataTable
             caption="Unspent outputs of this address, newest first"
             columns={columns}
-            rows={sorted()?.slice(0, limit()) ?? placeholders(undefined)}
+            rows={
+              sorted()?.slice((current() - 1) * UTXO_STEP, current() * UTXO_STEP) ??
+              placeholders(undefined)
+            }
           />
         </div>
-        <Show when={rest() > 0}>
+        <Show when={pageCount() > 1}>
           <div class="address-more">
-            <button class="btn" type="button" onClick={() => setLimit((n) => n + UTXO_STEP)}>
-              Show {groupDigits(Math.min(rest(), UTXO_STEP))} more
-            </button>
-            <span class="address-more__count address-more__count--always num">
-              {groupDigits(limit())} of {groupDigits(sorted()?.length ?? 0)} shown
-            </span>
+            <Pagination
+              page={current()}
+              pageCount={pageCount()}
+              onPage={setPage}
+              label="Unspent output pages"
+            />
           </div>
         </Show>
       </Match>
