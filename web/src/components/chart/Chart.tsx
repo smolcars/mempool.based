@@ -68,6 +68,8 @@ export interface ChartLayer {
   values: readonly Value[];
   /** A fee band (1–10): the layer is that band's fee color, for amounts by fee rate. */
   fee?: number;
+  /** A mining pool's place (1–6, 0 for the rest): its categorical colour (`--pool-n`). */
+  pool?: number;
   /** A shorter name for the readout, where the key says the rest; `name` is read aloud. */
   short?: string;
 }
@@ -123,9 +125,15 @@ const reading = (v: Value | undefined, format: (v: number) => string) =>
 
 const layerMix = (k: number) => `${LAYER_MIX[k % LAYER_MIX.length] ?? 50}%`;
 
-/** A layer's fill: its fee color, or its shade of the text color (Chart.css). */
-const layerStyle = (l: ChartLayer | undefined, k: number) =>
-  l?.fee === undefined ? { "--mix": layerMix(k) } : { "--fill": `var(--fee-${l.fee})` };
+/** A layer's fill: its fee colour, its pool's colour, or its shade of series 1 (Chart.css). */
+const layerStyle = (l: ChartLayer | undefined, k: number) => {
+  if (l?.fee !== undefined) return { "--fill": `var(--fee-${l.fee})` };
+  if (l?.pool !== undefined)
+    return { "--fill": l.pool > 0 ? `var(--pool-${l.pool})` : "var(--pool-other)" };
+  return { "--mix": layerMix(k) };
+};
+/** A layer with a colour of its own rather than a shade. */
+const filled = (l: ChartLayer | undefined) => l?.fee !== undefined || l?.pool !== undefined;
 
 interface AxisFrame {
   scale: Scale;
@@ -288,7 +296,7 @@ export default function Chart(props: ChartProps) {
       value: reading(s.values[i], s.format),
     })),
     ...layers().map((l, k) => ({
-      kind: l.fee === undefined ? "layer" : "fee",
+      kind: filled(l) ? "fee" : "layer",
       style: layerStyle(l, k),
       layer: k,
       name: l.name,
@@ -499,7 +507,7 @@ export default function Chart(props: ChartProps) {
                     class={[
                       "chart__layer",
                       {
-                        "chart__layer--fee": layers()[k()]?.fee !== undefined,
+                        "chart__layer--fee": filled(layers()[k()]),
                         "chart__layer--on": hoverLayer() === k(),
                       },
                     ]}

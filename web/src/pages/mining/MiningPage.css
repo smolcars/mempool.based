@@ -211,34 +211,29 @@
   .mining-period-shares__bar .mining-period-shares__part {
     flex: var(--p) 0 0;
     min-width: 2px;
-    border-right: 1px solid var(--color-surface);
+    border-right: 2px solid var(--color-surface);
   }
+  /* The pools' own colours, the rest neutral; the key beside it names each. */
   .mining-period-shares__part {
-    background: color-mix(in oklab, var(--series-1) var(--mix), var(--color-surface));
+    background: var(--pool-other);
   }
   .mining-period-shares__part--1 {
-    --mix: 100%;
+    background: var(--pool-1);
   }
   .mining-period-shares__part--2 {
-    --mix: 82%;
+    background: var(--pool-2);
   }
   .mining-period-shares__part--3 {
-    --mix: 66%;
+    background: var(--pool-3);
   }
   .mining-period-shares__part--4 {
-    --mix: 52%;
+    background: var(--pool-4);
   }
   .mining-period-shares__part--5 {
-    --mix: 40%;
+    background: var(--pool-5);
   }
   .mining-period-shares__part--6 {
-    --mix: 30%;
-  }
-  .mining-period-shares__part--7 {
-    --mix: 22%;
-  }
-  .mining-period-shares__part--8 {
-    --mix: 12%;
+    background: var(--pool-6);
   }
   .mining-period-shares__key {
     display: grid;

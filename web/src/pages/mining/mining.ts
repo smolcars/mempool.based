@@ -305,7 +305,7 @@ export function hashrateSeries(h: Hashrates): {
 }
 
 /** The most pools drawn as their own layer; the rest are one. */
-export const TOP_LAYERS = 7;
+export const TOP_LAYERS = 6;
 export const OTHER_POOLS = "Other pools";
 
 /**
@@ -315,14 +315,19 @@ export const OTHER_POOLS = "Other pools";
 export function poolLayers(
   weeks: readonly PoolWeek[],
   top = TOP_LAYERS,
-): { x: number[]; layers: { name: string; values: number[] }[] } {
+): { x: number[]; layers: { name: string; values: number[]; pool: number }[] } {
   const x = sorted(new Set(weeks.map((w) => w.timestamp)), (a, b) => a - b);
   const at = new Map(x.map((t, i) => [t, i]));
   const totals = new Map<string, number>();
   for (const w of weeks) totals.set(w.poolName, (totals.get(w.poolName) ?? 0) + w.share);
   const ranked = sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const named = ranked.slice(0, ranked.length > top + 1 ? top : top + 1).map(([name]) => name);
-  const layers = named.map((name) => ({ name, values: x.map(() => 0) }));
+  // The biggest six take their colours in order; any more, and the rest, share the neutral one.
+  const layers = named.map((name, i) => ({
+    name,
+    values: x.map(() => 0),
+    pool: i < 6 ? i + 1 : 0,
+  }));
   const index = new Map(named.map((n, i) => [n, i]));
   const rest = x.map(() => 0);
   for (const w of weeks) {
@@ -331,7 +336,7 @@ export function poolLayers(
     if (layer) layer.values[i] = (layer.values[i] ?? 0) + w.share;
     else rest[i] = (rest[i] ?? 0) + w.share;
   }
-  if (ranked.length > named.length) layers.push({ name: OTHER_POOLS, values: rest });
+  if (ranked.length > named.length) layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
   return { x, layers };
 }
 

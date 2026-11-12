@@ -404,8 +404,8 @@ function Pools(props: {
   );
 }
 
-/** Layers in the period's share bar: the seven biggest pools, then the rest as one. */
-const SHARE_PARTS = 7;
+/** Layers in the period's share bar: the six biggest pools, then the rest as one. */
+const SHARE_PARTS = 6;
 
 /**
  * The period's share of blocks as one bar, biggest pool first, in the shades the weekly chart's
@@ -425,7 +425,7 @@ function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => n
         <For each={parts()}>
           {(p, i) => (
             <span
-              class={`mining-period-shares__part mining-period-shares__part--${i() + 1}`}
+              class={`mining-period-shares__part mining-period-shares__part--${i() < SHARE_PARTS ? i() + 1 : "other"}`}
               style={{ "--p": String(p.share) }}
             />
           )}
@@ -436,7 +436,7 @@ function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => n
           {(p, i) => (
             <li>
               <span
-                class={`mining-period-shares__swatch mining-period-shares__part mining-period-shares__part--${i() + 1}`}
+                class={`mining-period-shares__swatch mining-period-shares__part mining-period-shares__part--${i() < SHARE_PARTS ? i() + 1 : "other"}`}
                 aria-hidden="true"
               />
               <span class="mining-period-shares__name">{p.name}</span>

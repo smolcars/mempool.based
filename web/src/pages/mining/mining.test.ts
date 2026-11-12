@@ -95,6 +95,8 @@ describe("pool layers", () => {
     expect(layers[0]?.values).toStrictEqual([0.6, 0.5]);
     expect(layers[1]?.values).toStrictEqual([0.4, 0]);
     expect(layers[2]?.values[1]).toBeCloseTo(0.5);
+    // The biggest take their pool colours in order; the rest is the neutral one.
+    expect(layers.map((l) => l.pool)).toStrictEqual([1, 2, 0]);
   });
   it("never makes a layer of others out of one pool", () => {
     const { layers } = poolLayers([week(1, "A", 0.6), week(1, "B", 0.3), week(1, "C", 0.1)], 2);

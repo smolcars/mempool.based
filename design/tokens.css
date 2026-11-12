@@ -67,6 +67,16 @@
   --series-2: #9a6412;
   --series-3: #56616a;
 
+  /* Mining pools, the six biggest, then the rest: the one small set of categories on the site,
+     only in the pool-share charts, always with names beside them. */
+  --pool-1: #2f6f9c;
+  --pool-2: #9a6412;
+  --pool-3: #7d4e8f;
+  --pool-4: #3a7a5a;
+  --pool-5: #a24f2e;
+  --pool-6: #5563a8;
+  --pool-other: #7d868b;
+
   /* Networks */
   --network-mainnet: #161b1e;
   --network-signet: #0b7285;
@@ -168,6 +178,13 @@
     --series-1: #6cb0dc;
     --series-2: #d9a24c;
     --series-3: #9aa4ab;
+    --pool-1: #6cb0dc;
+    --pool-2: #d9a24c;
+    --pool-3: #c193d6;
+    --pool-4: #74bb94;
+    --pool-5: #e0906d;
+    --pool-6: #97a3e6;
+    --pool-other: #6f797f;
     --network-mainnet: #e6eaed;
     --network-signet: #4fc3d9;
     --network-testnet4: #f0b43c;
@@ -199,6 +216,13 @@
   --series-1: #6cb0dc;
   --series-2: #d9a24c;
   --series-3: #9aa4ab;
+  --pool-1: #6cb0dc;
+  --pool-2: #d9a24c;
+  --pool-3: #c193d6;
+  --pool-4: #74bb94;
+  --pool-5: #e0906d;
+  --pool-6: #97a3e6;
+  --pool-other: #6f797f;
   --network-mainnet: #e6eaed;
   --network-signet: #4fc3d9;
   --network-testnet4: #f0b43c;
