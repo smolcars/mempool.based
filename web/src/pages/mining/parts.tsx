@@ -1,5 +1,5 @@
 // Pieces the mining page and a pool's page share.
-import { lazy, Show, Suspense } from "solid-js";
+import { lazy, Loading as Pending, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import type { ChartProps } from "../../components/chart/Chart";
 import { formatSi } from "../../components/chart/scale";
@@ -21,9 +21,9 @@ export const chartHeight = (h: number): string => `calc(${h}px + 5.75rem)`;
 export function ChartSlot(props: ChartProps) {
   return (
     <div class="mining-chart" style={{ "--h": `${props.height ?? 240}px` }}>
-      <Suspense>
+      <Pending>
         <Chart {...props} />
-      </Suspense>
+      </Pending>
     </div>
   );
 }

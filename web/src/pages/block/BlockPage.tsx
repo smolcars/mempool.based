@@ -2,16 +2,14 @@ import { useParams } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   For,
   lazy,
+  Loading,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
-  Suspense,
   Switch,
 } from "solid-js";
 import type { JSX } from "@solidjs/web";
@@ -27,7 +25,7 @@ import { TimeAgo, TimeUtc } from "../../components/Time";
 import type { GridState } from "../../components/txgrid/TxGrid";
 import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
 import type { GridTx } from "../../components/txgrid/layout";
-import { createApi, fetchApi, fetchApp, isNotFound } from "../../lib/api";
+import { createApi, createRequest, fetchApi, fetchApp, isNotFound } from "../../lib/api";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
@@ -98,7 +96,7 @@ export default function BlockPage() {
         {(e) => (
           <Show
             when={isNotFound(e())}
-            fallback={<PageError error={e()} retry={() => void byHeightCtl.refetch()} />}
+            fallback={<PageError error={e()} retry={() => byHeightCtl.refetch()} />}
           >
             <NoBlockAtHeight height={height() ?? 0} />
           </Show>
@@ -218,34 +216,24 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   // never disagree the way a separate tip request could when a block lands between the two.
   const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
-  let summaryController: AbortController | undefined;
-  onCleanup(() => summaryController?.abort());
   // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
-  const [summary, summaryCtl] = createResource(
+  const [summary, summaryCtl] = createRequest(
     () => (props.hash ? { hash: props.hash, network: network() } : undefined),
-    async ({ hash, network: n }): Promise<BlockSummary | null> => {
-      summaryController?.abort();
-      const c = new AbortController();
-      summaryController = c;
-      const found = await fetchSummaries(n, [hash], c.signal);
+    async ({ hash, network: n }, signal): Promise<BlockSummary | null> => {
+      const found = await fetchSummaries(n, [hash], signal);
       return found.get(hash) ?? null;
     },
   );
   // Every transaction's size and fee, for the map. Retried quietly while the server is busy.
-  let gridController: AbortController | undefined;
-  onCleanup(() => gridController?.abort());
-  const [gridTxs, gridTxsCtl] = createResource(
+  const [gridTxs, gridTxsCtl] = createRequest(
     () => (props.hash ? { hash: props.hash, network: network() } : undefined),
-    async ({ hash, network: n }): Promise<GridTx[]> => {
-      gridController?.abort();
-      const c = new AbortController();
-      gridController = c;
+    async ({ hash, network: n }, signal): Promise<GridTx[]> => {
       const path = `/block/${hash}/txs`;
-      return decodeTxs(await fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal: c.signal }));
+      return decodeTxs(await fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal }));
     },
   );
   // The renderer's code downloads while the data does.
-  onMount(() => void TxGrid.preload());
+  onSettled(() => void TxGrid.preload());
   const [highlight, setHighlight] = createSignal<number>();
   const rowAt = (e: Event) => {
     const row = e.target instanceof Element ? e.target.closest("tbody tr") : null;
@@ -281,16 +269,14 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   let controller: AbortController | undefined;
   onCleanup(() => controller?.abort());
   createEffect(
-    on(
-      () => props.hash,
-      () => {
-        controller?.abort();
-        setMore([]);
-        setMoreLoading(false);
-        setMoreError(undefined);
-      },
-      { defer: true },
-    ),
+    () => props.hash,
+    () => {
+      controller?.abort();
+      setMore([]);
+      setMoreLoading(false);
+      setMoreError(undefined);
+    },
+    { defer: true },
   );
   const txs = () => {
     const f = ready(first);
@@ -337,7 +323,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const summaryRetry = () => (
     <span class="block-fact__pending">
       Could not load.{" "}
-      <button type="button" class="block-fact__retry" onClick={() => void summaryCtl.refetch()}>
+      <button type="button" class="block-fact__retry" onClick={() => summaryCtl.refetch()}>
         Try again
       </button>
     </span>
@@ -357,9 +343,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   };
   const pageError = () => failed(block) ?? failed(status);
   const retry = () => {
-    if (failed(block) !== undefined) void blockCtl.refetch();
-    if (failed(status) !== undefined) void statusCtl.refetch();
-    if (failed(first) !== undefined) void firstCtl.refetch();
+    if (failed(block) !== undefined) blockCtl.refetch();
+    if (failed(status) !== undefined) statusCtl.refetch();
+    if (failed(first) !== undefined) firstCtl.refetch();
   };
 
   const rows = (): readonly (Transaction | null)[] => {
@@ -467,7 +453,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
             settle={settle()}
             txs={ready(gridTxs)}
             txsError={failed(gridTxs)}
-            retryTxs={() => void gridTxsCtl.refetch()}
+            retryTxs={() => gridTxsCtl.refetch()}
             txid={txidOf}
             highlight={highlight()}
           />
@@ -713,7 +699,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               <ErrorState
                 title="Could not load the transactions"
                 error={failed(first)}
-                retry={() => void firstCtl.refetch()}
+                retry={() => firstCtl.refetch()}
               />
             }
           >
@@ -911,7 +897,7 @@ function CoreSample(props: {
         </Show>
         <Show when={props.txs && grid() !== "unsupported"}>
           <div class="block-core__grid">
-            <Suspense>
+            <Loading>
               <TxGrid
                 txs={props.txs ?? []}
                 capacity={MAX_BLOCK_WEIGHT / 4}
@@ -920,7 +906,7 @@ function CoreSample(props: {
                 highlight={props.highlight}
                 onState={setGrid}
               />
-            </Suspense>
+            </Loading>
           </div>
         </Show>
       </div>

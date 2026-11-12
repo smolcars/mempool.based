@@ -1,6 +1,6 @@
 // The difficulty adjustment (docs/API.md "Difficulty adjustment"): how far through its period the
 // chain is, and what the next retarget is expected to do. The home and mining pages show it.
-import { type Accessor, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { fetchStamped, withRetry } from "../lib/api";
 import { useNow } from "../lib/clock";
@@ -95,19 +95,18 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
       },
     );
   };
-  load();
+  untrack(load);
   // A new tip changes the answer. The first tip only arrives with the strip, after `load` above.
+  let changes = 0;
   createEffect(
-    on(
-      props.tip,
-      (tip, previous) => {
-        // The strip's first tip: ask again only if the answer already shown is as of another one.
-        if (previous === undefined && (answeredAt === undefined || answeredAt === tip)) return;
-        behindTries = 0;
-        load();
-      },
-      { defer: true },
-    ),
+    () => props.tip(),
+    (tip) => {
+      // The strip's first tip: ask again only if the answer already shown is as of another one.
+      if (changes++ === 0 && (answeredAt === undefined || answeredAt === tip)) return;
+      behindTries = 0;
+      load();
+    },
+    { defer: true },
   );
   onCleanup(() => {
     controller?.abort();
@@ -147,7 +146,7 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
           </span>
         </figcaption>
       </figure>
-      <dl class="difficulty__stats" aria-busy={!d() ? "true" : "false"}>
+      <dl class="difficulty__stats" aria-busy={d() ? "false" : "true"}>
         <Stat label="Expected change">
           <Show when={d()}>
             {(a) => (

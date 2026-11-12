@@ -1,4 +1,4 @@
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
+import { createRouter, memoryHistory } from "@solidjs/router";
 import { render } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "../../components/test-utils";
@@ -208,20 +208,14 @@ let disposers: (() => void)[] = [];
 
 /** The pool page at `url`, under its own route so the slug is a parameter. */
 function openPool(url: string) {
-  const history = createMemoryHistory();
-  history.set({ value: url });
+  const history = memoryHistory(url);
+  const Router = createRouter({
+    routes: [{ path: "/mining/pool/:slug", component: PoolPage }],
+    history,
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  disposers.push(
-    render(
-      () => (
-        <MemoryRouter history={history}>
-          <Route path="/mining/pool/:slug" component={PoolPage} />
-        </MemoryRouter>
-      ),
-      el,
-    ),
-  );
+  disposers.push(render(() => <Router>{(page) => page.children}</Router>, el));
   return el;
 }
 

@@ -1,5 +1,5 @@
 import { useParams } from "@solidjs/router";
-import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
@@ -121,31 +121,6 @@ export default function BlocksPage() {
   // once; busy replies (503, 429) are retried as they say.
   const [facts, setFacts] = createSignal<ReadonlyMap<string, BlockSummary | "failed">>(new Map());
   const put = (id: string, f: BlockSummary | "failed") => setFacts((m) => new Map([...m, [id, f]]));
-  createEffect(
-    on(
-      () => list(),
-      (rows) => {
-        const c = new AbortController();
-        onCleanup(() => c.abort());
-        const n = network();
-        const queue = (rows ?? [])
-          .map((b) => b.id)
-          .filter((id) => !knownSummary(n, id) && !(untrack(facts).get(id) instanceof Object));
-        const worker = async () => {
-          for (let id = queue.shift(); id !== undefined && !c.signal.aborted; id = queue.shift()) {
-            try {
-              // oxlint-disable-next-line no-await-in-loop -- one request at a time per worker
-              const found = await fetchSummaries(n, [id], c.signal);
-              put(id, found.get(id) ?? "failed");
-            } catch {
-              if (!c.signal.aborted) put(id, "failed");
-            }
-          }
-        };
-        for (let i = 0; i < IN_FLIGHT; i++) void worker();
-      },
-    ),
-  );
   const factsOf = (id: string): RowFacts => facts().get(id) ?? knownSummary(network(), id);
   const table = columns(factsOf);
 
@@ -153,6 +128,26 @@ export default function BlocksPage() {
     const l = ready(blocks);
     return Array.isArray(l) ? l : undefined;
   };
+  createEffect(list, (rows) => {
+    const c = new AbortController();
+    const n = network();
+    const queue = (rows ?? [])
+      .map((b) => b.id)
+      .filter((id) => !knownSummary(n, id) && !(facts().get(id) instanceof Object));
+    const worker = async () => {
+      for (let id = queue.shift(); id !== undefined && !c.signal.aborted; id = queue.shift()) {
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- one request at a time per worker
+          const found = await fetchSummaries(n, [id], c.signal);
+          put(id, found.get(id) ?? "failed");
+        } catch {
+          if (!c.signal.aborted) put(id, "failed");
+        }
+      }
+    };
+    for (let i = 0; i < IN_FLIGHT; i++) void worker();
+    return () => c.abort();
+  });
   const tipHeight = () => {
     const t = Number(ready(tip));
     return Number.isSafeInteger(t) ? t : undefined;
@@ -196,7 +191,7 @@ export default function BlocksPage() {
             <ErrorState
               title="Could not load the blocks"
               error={failed(blocks)}
-              retry={() => void blocksCtl.refetch()}
+              retry={() => blocksCtl.refetch()}
             />
           }
         >

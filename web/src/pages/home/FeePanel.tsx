@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
@@ -24,28 +24,29 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
   const [width, setWidth] = createSignal(0);
   const [layout, setLayout] = createSignal<{ row: number; flip: boolean }[]>([]);
 
-  onMount(() => {
+  onSettled(() => {
     const ro = new ResizeObserver(() => setWidth(track?.clientWidth ?? 0));
     if (track) ro.observe(track);
-    onCleanup(() => ro.disconnect());
+    return () => ro.disconnect();
   });
-  createEffect(() => {
-    const r = rates();
-    const w = width();
-    if (!r || w === 0) return;
-    // Label widths are read after the values render, so a new value is measured at its new size.
-    queueMicrotask(() =>
-      setLayout(
-        stackLabels(
-          r.map((rate, i) => ({
-            x: ladderPos(rate ?? 0) * w,
-            width: rate === undefined ? 0 : (labels[i]?.offsetWidth ?? 0),
-          })),
-          w,
+  createEffect(
+    () => ({ r: rates(), w: width() }),
+    ({ r, w }) => {
+      if (!r || w === 0) return;
+      // Label widths are read after the values render, so a new value is measured at its new size.
+      queueMicrotask(() =>
+        setLayout(
+          stackLabels(
+            r.map((rate, i) => ({
+              x: ladderPos(rate ?? 0) * w,
+              width: rate === undefined ? 0 : (labels[i]?.offsetWidth ?? 0),
+            })),
+            w,
+          ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
   return (
     <section class="home-fees" aria-labelledby="fees-title">
@@ -124,7 +125,7 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
             </p>
           }
         >
-          <dl class="home-ladder__list" aria-busy={!props.feed.data() ? "true" : "false"}>
+          <dl class="home-ladder__list" aria-busy={props.feed.data() ? "false" : "true"}>
             <For keyed={false} each={PRIORITIES}>
               {(p, i) => (
                 <div class="home-ladder__item">

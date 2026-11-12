@@ -1,12 +1,12 @@
 // Small pieces the address page's sections share.
-import type { Resource } from "solid-js";
+import type { ApiResource } from "../../lib/api";
 import type { JSX } from "@solidjs/web";
 
 /**
  * A resource's value once it has one, also while it refreshes; undefined while it first loads or
  * after it failed. Never suspends, so the page frame stays up while sections load.
  */
-export function settled<T>(r: Resource<T>): T | undefined {
+export function settled<T>(r: ApiResource<T>): T | undefined {
   return r.state === "ready" || r.state === "refreshing" ? r.latest : undefined;
 }
 

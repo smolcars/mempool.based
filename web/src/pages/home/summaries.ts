@@ -1,6 +1,6 @@
 // The fee facts of the strip's tiles: one batch request on first paint, then the WebSocket's
 // `summary` message for each new block (docs/WS.md), with HTTP as the fallback.
-import { type Accessor, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
 import { blocksTopic } from "../../lib/blocks-topic";
 import type { Block } from "../../lib/esplora";
 import { useTopic } from "../../lib/live";
@@ -64,16 +64,14 @@ export function createSummaries(
   });
 
   let first = true;
-  createEffect(
-    on(blocks, (list) => {
-      if (!list) return;
-      clearTimeout(timer);
-      // First paint asks at once; a new block waits for its push, then asks for what is missing.
-      if (first) fetchMissing();
-      else timer = setTimeout(fetchMissing, PUSH_GRACE_MS);
-      first = false;
-    }),
-  );
+  createEffect(blocks, (list) => {
+    if (!list) return;
+    clearTimeout(timer);
+    // First paint asks at once; a new block waits for its push, then asks for what is missing.
+    if (first) fetchMissing();
+    else timer = setTimeout(fetchMissing, PUSH_GRACE_MS);
+    first = false;
+  });
   onCleanup(() => {
     clearTimeout(timer);
     controller?.abort();

@@ -1,4 +1,4 @@
-import { type Accessor, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { type Accessor, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { formatFeeRate, groupDigits } from "../../lib/format";
@@ -55,10 +55,10 @@ export function ProjectedTile(props: {
       const tile = t();
       return tile ? projectedLayers(tile) : [];
     },
-    [],
     { equals: sameLayers },
   );
-  const [settling, setSettling] = createSignal(props.settle);
+  // Whether this tile formed after the strip was drawn is decided once, when it mounts.
+  const [settling, setSettling] = createSignal(untrack(() => props.settle));
   // Only the first drawing settles: the layers are redrawn when the mempool changes.
   const done = setTimeout(() => setSettling(false), 2_000);
   onCleanup(() => clearTimeout(done));

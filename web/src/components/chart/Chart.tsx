@@ -1,7 +1,7 @@
 // A time-series chart in SVG: lines, areas, steps, percentile bands and stacked shares, with a
 // readout that follows the pointer, the finger or the arrow keys (docs/FRONTEND.md "Charts").
 // The default export so pages load it with lazy().
-import { createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { FEE_KEY_BOUNDS } from "../../lib/format";
 import { DataTable } from "../DataTable";
 import {
@@ -132,12 +132,12 @@ export default function Chart(props: ChartProps) {
   const [figures, setFigures] = createSignal(false);
   let box: HTMLDivElement | undefined;
 
-  onMount(() => {
-    if (!box) return;
+  onSettled(() => {
+    if (!box) return undefined;
     setWidth(box.clientWidth);
     const ro = new ResizeObserver(() => setWidth(box?.clientWidth ?? 0));
     ro.observe(box);
-    onCleanup(() => ro.disconnect());
+    return () => ro.disconnect();
   });
 
   const height = () => props.height ?? 240;

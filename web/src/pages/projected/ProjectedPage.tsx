@@ -4,12 +4,11 @@ import {
   createMemo,
   createSignal,
   lazy,
+  Loading,
   Match,
-  on,
   onCleanup,
-  onMount,
+  onSettled,
   Show,
-  Suspense,
   Switch,
 } from "solid-js";
 import type { JSX } from "@solidjs/web";
@@ -147,7 +146,7 @@ function ProjectedView(props: { index: number }) {
       },
       resync: () => model.expectSnapshot(),
     });
-    onMount(() => void TxGrid.preload());
+    onSettled(() => void TxGrid.preload());
   }
 
   const off = () => state().status === "off" || txsOff();
@@ -165,9 +164,12 @@ function ProjectedView(props: { index: number }) {
   );
   const [page, setPage] = createSignal(1);
   const pageCount = () => Math.max(1, Math.ceil(sorted().length / PAGE));
-  createEffect(() => {
-    if (page() > pageCount()) setPage(pageCount());
-  });
+  createEffect(
+    () => ({ at: page(), last: pageCount() }),
+    ({ at, last }) => {
+      if (at > last) setPage(last);
+    },
+  );
   const rows = () => sorted().slice((page() - 1) * PAGE, page() * PAGE);
   const [highlight, setHighlight] = createSignal<string>();
   const rowAt = (e: Event) => {
@@ -185,16 +187,14 @@ function ProjectedView(props: { index: number }) {
   let wait: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(wait));
   createEffect(
-    on(
-      () => change()?.at,
-      (at) => {
-        clearTimeout(wait);
-        if (at === undefined) return;
-        if (!hasMap || model.txs.size === 0) setShown(at);
-        else wait = setTimeout(() => setShown(at), FOUND_WAIT_MS);
-      },
-      { defer: true },
-    ),
+    () => change()?.at,
+    (at) => {
+      clearTimeout(wait);
+      if (at === undefined) return;
+      if (!hasMap || model.txs.size === 0) setShown(at);
+      else wait = setTimeout(() => setShown(at), FOUND_WAIT_MS);
+    },
+    { defer: true },
   );
   const told = () => {
     const c = change();
@@ -202,14 +202,12 @@ function ProjectedView(props: { index: number }) {
   };
   const [announce, setAnnounce] = createSignal("");
   createEffect(
-    on(
-      shown,
-      () => {
-        const c = told();
-        if (c) setAnnounce(sentence(c.change, index));
-      },
-      { defer: true },
-    ),
+    shown,
+    () => {
+      const c = told();
+      if (c) setAnnounce(sentence(c.change, index));
+    },
+    { defer: true },
   );
 
   const expected = () => {
@@ -641,11 +639,11 @@ function CoreSample(props: {
   // The frame sets once when the chain moves: the moment a guess became, or lost to, a block.
   const [setAt, setSetAt] = createSignal<number>();
   createEffect(
-    on(
-      () => props.found,
-      (at) => setSetAt(at),
-      { defer: true },
-    ),
+    () => props.found,
+    (at) => {
+      setSetAt(at);
+    },
+    { defer: true },
   );
   const where = positionName(props.index, true);
   const label = () => {
@@ -686,7 +684,7 @@ function CoreSample(props: {
           }
         >
           <div class="projected-core__grid">
-            <Suspense>
+            <Loading>
               <TxGrid
                 txs={props.txs ?? []}
                 capacity={MAX_WEIGHT / 4}
@@ -695,7 +693,7 @@ function CoreSample(props: {
                 highlight={props.highlight}
                 onState={setGrid}
               />
-            </Suspense>
+            </Loading>
           </div>
         </Show>
         <Show when={empty()}>

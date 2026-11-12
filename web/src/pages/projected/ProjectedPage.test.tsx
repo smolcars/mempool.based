@@ -1,4 +1,5 @@
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
+import { flush } from "solid-js";
+import { createRouter, memoryHistory } from "@solidjs/router";
 import { render } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deltaFrame, type FakeRecord, FakeSocket, fakeTxid, snapshotFrame } from "../../lib/fakes";
@@ -36,18 +37,14 @@ const rec = (n: number, rate = 2000): FakeRecord => ({
 
 let dispose: (() => void) | undefined;
 function open(url: string) {
-  const history = createMemoryHistory();
-  history.set({ value: url });
+  const history = memoryHistory(url);
+  const Router = createRouter({
+    routes: [{ path: ["/regtest/block/next", "/regtest/block/next/:n"], component: ProjectedPage }],
+    history,
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  dispose = render(
-    () => (
-      <MemoryRouter history={history}>
-        <Route path={["/regtest/block/next", "/regtest/block/next/:n"]} component={ProjectedPage} />
-      </MemoryRouter>
-    ),
-    el,
-  );
+  dispose = render(() => <Router>{(page) => page.children}</Router>, el);
   return el;
 }
 
@@ -147,6 +144,7 @@ describe("projected-block page", () => {
       "Block 101 was found. This page now shows the next block after it.",
     );
     notice?.querySelector("button")?.click();
+    flush();
     expect(el.querySelector(".projected-found")).toBeNull();
   });
 
@@ -173,6 +171,7 @@ describe("projected-block page", () => {
     ws.receive(projected(101));
     expect(el.querySelector(".projected-found")).toBeNull();
     vi.advanceTimersByTime(8000);
+    flush();
     expect(el.querySelector(".projected-found")?.textContent).toContain("Block 101 was found");
   });
 

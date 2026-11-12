@@ -51,7 +51,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
           />
         }
       >
-        <dl class="home-stats" aria-busy={!m() ? "true" : "false"}>
+        <dl class="home-stats" aria-busy={m() ? "false" : "true"}>
           <Stat label="Transactions">
             <Show when={m()}>{(s) => <span class="num">{groupDigits(s().count)}</span>}</Show>
           </Stat>

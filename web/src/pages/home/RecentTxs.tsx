@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
@@ -60,9 +60,10 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
       setList((l) => [next, ...(l ?? []).filter((t) => t.txid !== next.txid)].slice(0, ROWS));
   };
   createEffect(
-    on(props.feed.data, (incoming) => {
+    () => props.feed.data(),
+    (incoming) => {
       if (!incoming) return;
-      const shown = untrack(list);
+      const shown = list();
       // The first list, or one nobody is watching arrive, is shown as it is.
       if (!shown || document.hidden) {
         clearTimeout(timer);
@@ -73,7 +74,7 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
       }
       queue = enqueueTxs(shown, queue, incoming, ROWS);
       if (timer === undefined) step();
-    }),
+    },
   );
   onCleanup(() => clearTimeout(timer));
   let known = new Map<string, RecentTx>();

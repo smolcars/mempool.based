@@ -1,5 +1,5 @@
 // The latest mined blocks as tiles in a wrapping grid, as the home page's strip draws them.
-import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
@@ -27,23 +27,21 @@ export function RecentBlocks() {
   };
   const [facts, setFacts] = createSignal<ReadonlyMap<string, BlockSummary>>(new Map());
   let controller: AbortController | undefined;
-  createEffect(
-    on(list, (shown) => {
-      if (!shown || shown.length === 0) return;
-      controller?.abort();
-      const c = new AbortController();
-      controller = c;
-      // The tiles keep their neutral fill if the facts never come.
-      fetchSummaries(
-        network(),
-        shown.map((b) => b.id),
-        c.signal,
-      ).then(
-        (found) => setFacts(new Map(found)),
-        () => undefined,
-      );
-    }),
-  );
+  createEffect(list, (shown) => {
+    if (!shown || shown.length === 0) return;
+    controller?.abort();
+    const c = new AbortController();
+    controller = c;
+    // The tiles keep their neutral fill if the facts never come.
+    fetchSummaries(
+      network(),
+      shown.map((b) => b.id),
+      c.signal,
+    ).then(
+      (found) => setFacts(new Map(found)),
+      () => undefined,
+    );
+  });
   onCleanup(() => controller?.abort());
 
   return (
@@ -57,14 +55,14 @@ export function RecentBlocks() {
           <ErrorState
             title="Could not load the latest blocks"
             error={blocks.error}
-            retry={() => void refetch()}
+            retry={() => refetch()}
           />
         }
       >
         <ol
           class="mining-tiles"
           aria-label="Latest blocks, newest first"
-          aria-busy={blocks.state !== "ready" ? "true" : "false"}
+          aria-busy={blocks.state === "ready" ? "false" : "true"}
         >
           <Show
             when={list()}

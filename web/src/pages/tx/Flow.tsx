@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
@@ -153,18 +153,22 @@ export function Flow(props: {
     });
   };
 
-  onMount(() => {
+  onSettled(() => {
     const ro = new ResizeObserver(() => draw());
     if (flowEl) ro.observe(flowEl);
-    onCleanup(() => ro.disconnect());
     requestAnimationFrame(() => {
       draw();
       requestAnimationFrame(animate);
     });
+    return () => ro.disconnect();
   });
   // Cards added or relabelled: redraw after they are laid out.
   createEffect(
-    on([inShown, outShown, props.outspends], () => requestAnimationFrame(draw), { defer: true }),
+    () => [inShown(), outShown(), props.outspends()],
+    () => {
+      requestAnimationFrame(draw);
+    },
+    { defer: true },
   );
 
   const isSel = (side: Side, index: number) =>
@@ -256,7 +260,7 @@ export function Flow(props: {
             )}
           </For>
           <Show when={vin().length > inShown()}>
-            {more("in", vin().length - inShown(), hiddenIn(), () => setInPresses(inPresses() + 1))}
+            {more("in", vin().length - inShown(), hiddenIn(), () => setInPresses((n) => n + 1))}
           </Show>
         </Show>
       </ul>
@@ -323,7 +327,7 @@ export function Flow(props: {
         </For>
         <Show when={props.tx.vout.length > outShown()}>
           {more("out", props.tx.vout.length - outShown(), hiddenOut(), () =>
-            setOutPresses(outPresses() + 1),
+            setOutPresses((n) => n + 1),
           )}
         </Show>
         <Show when={fee() > 0}>
