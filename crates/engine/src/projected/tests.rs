@@ -322,6 +322,7 @@ struct Node {
     sequence: u64,
     clusters: HashMap<Txid, Cluster>,
     fail_clusters: bool,
+    cluster_calls: u32,
 }
 
 #[derive(Clone, Default)]
@@ -489,7 +490,8 @@ impl Source for Mock {
 
 impl ClusterSource for Mock {
     async fn clusters(&self, txids: &[Txid]) -> Result<Vec<Option<Cluster>>, SourceError> {
-        let n = self.0.lock().unwrap();
+        let mut n = self.0.lock().unwrap();
+        n.cluster_calls += 1;
         if n.fail_clusters {
             return Err(SourceError::Busy);
         }
@@ -549,7 +551,7 @@ async fn follows_the_tracker_with_exact_deltas_an_archive_and_staleness() {
     };
     let (tracker, tracker_task) = Tracker::start(mock.clone(), tracker_config);
     let config = Config {
-        max_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_millis(300),
         ..Config::default()
     };
     let (projector, task) = Projector::start(tracker.clone(), mock.clone(), config);
@@ -595,14 +597,37 @@ async fn follows_the_tracker_with_exact_deltas_an_archive_and_staleness() {
     assert_eq!(expected.block.txs.len(), 3);
     assert!(projector.expected(&h1).is_none());
 
-    // The node stops answering cluster requests: the projection says it is stale, then
-    // recovers on its own.
-    mock.0.lock().unwrap().fail_clusters = true;
-    let late = tx(5);
-    mock.set(&[(&bumped, 2_000), (&late, 700)]);
+    // The node stops answering cluster requests while the mempool keeps changing: the
+    // projection says it is stale, the backoff holds however often the tracker publishes,
+    // and it recovers on its own.
+    let before = {
+        let mut n = mock.0.lock().unwrap();
+        n.fail_clusters = true;
+        n.cluster_calls
+    };
+    let mut live = vec![(bumped.clone(), 2_000)];
+    for i in 0..30 {
+        live.push((tx(100 + i), 700));
+        let refs: Vec<(&Transaction, u64)> = live.iter().map(|(t, f)| (t, *f)).collect();
+        mock.set(&refs);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let calls = mock.0.lock().unwrap().cluster_calls - before;
+    // About one a second without backoff would be 30; with it, one per 300 ms at most.
+    assert!(calls <= 6, "{calls} cluster requests while backing off");
     until(&mut sub, &mut view, |_, stale| stale).await;
     mock.0.lock().unwrap().fail_clusters = false;
-    until(&mut sub, &mut view, |r, stale| !stale && r.len() == 2).await;
+    until(&mut sub, &mut view, |r, stale| !stale && r.len() == 31).await;
+    assert_eq!(records(&projector.current()), view.0);
+
+    // A fee change the tracker cannot see (`prioritisetransaction` on the node) is picked up
+    // at the next block, when every cluster is asked again.
+    let bumped_id = bumped.compute_txid();
+    mock.join(&[&bumped], 9_000);
+    mock.mine(block(h1, &[&tx(9_002)]), 2);
+    tracker.tip_changed(); // as the server does from Electrum's header subscription
+    let lifted = u32::try_from(9_000 * 1000 / vsize(&bumped)).unwrap();
+    until(&mut sub, &mut view, |r, _| r[&bumped_id].rate == lifted).await;
     assert_eq!(records(&projector.current()), view.0);
 
     // An empty mempool leaves empty blocks.

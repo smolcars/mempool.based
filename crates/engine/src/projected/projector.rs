@@ -207,6 +207,7 @@ impl Projector {
             pending: HashSet::new(),
             failures: 0,
             retry_at: None,
+            refresh: false,
             tracker_failing: false,
         };
         (Self { shared }, tokio::spawn(runner.run()))
@@ -278,6 +279,8 @@ struct Runner<S> {
     /// When to ask again after a failure. Absolute, so unrelated wakeups do not push it back.
     retry_at: Option<Instant>,
     tracker_failing: bool,
+    /// A block arrived: ask every cluster again right after publishing it.
+    refresh: bool,
 }
 
 impl<S: ClusterSource> Runner<S> {
@@ -336,6 +339,9 @@ impl<S: ClusterSource> Runner<S> {
                     () = sleep_until(retry) => Input::Nothing,
                 };
                 self.update(input).await;
+                if std::mem::take(&mut self.refresh) {
+                    self.update(Input::Nothing).await;
+                }
                 if lagged {
                     break;
                 }
@@ -353,9 +359,14 @@ impl<S: ClusterSource> Runner<S> {
     /// Applies the input, asks the node for every cluster that changed, packs and publishes.
     async fn update(&mut self, input: Input) {
         let shared = self.shared.clone();
-        let (mut need, tip, mempool_seq, deltas) =
+        let (mut need, tip, mempool_seq, deltas, all) =
             blocking(&shared, move |s| apply(s, input)).await;
         need.extend(self.pending.drain());
+        // While backing off, everything waits for the deadline, new work included.
+        let backing_off = self.retry_at.is_some_and(|t| Instant::now() < t);
+        if backing_off {
+            self.pending.extend(need.drain(..));
+        }
 
         let mut stats = UpdateStats {
             deltas,
@@ -378,10 +389,11 @@ impl<S: ClusterSource> Runner<S> {
                     retry_in: self.backoff(),
                 });
             }
-            None => {
+            None if !backing_off => {
                 self.failures = 0;
                 self.retry_at = None;
             }
+            None => {}
         }
         stats.stale = self.failures > 0 || self.tracker_failing;
 
@@ -399,6 +411,12 @@ impl<S: ClusterSource> Runner<S> {
         .await;
         stats.pack = started.elapsed();
         self.pending.extend(recheck);
+        // What we cannot see change (a `prioritisetransaction`, a lost recheck) is corrected
+        // once per block: every cluster is asked again in the update that follows this one.
+        if !all.is_empty() {
+            self.pending.extend(all);
+            self.refresh = true;
+        }
         let _ = self.shared.events.send(Event::Update(stats));
     }
 
@@ -456,10 +474,11 @@ impl<S: ClusterSource> Runner<S> {
 }
 
 /// Applies tracker input to the model. Returns the transactions whose cluster must be asked,
-/// the tip and tracker `seq` now reflected, and how many deltas were folded in.
-fn apply(s: &mut State, input: Input) -> (Vec<Txid>, Option<ChainTip>, u64, usize) {
+/// the tip and tracker `seq` now reflected, how many deltas were folded in, and every txid
+/// when the tip moved.
+fn apply(s: &mut State, input: Input) -> (Vec<Txid>, Option<ChainTip>, u64, usize, Vec<Txid>) {
     let mut need = Vec::new();
-    match input {
+    let (need, tip, seq, deltas) = match input {
         Input::Deltas(ds) => {
             for d in &ds {
                 for (t, _) in &d.removed {
@@ -496,7 +515,17 @@ fn apply(s: &mut State, input: Input) -> (Vec<Txid>, Option<ChainTip>, u64, usiz
             (need, tip, seq, 0)
         }
         Input::Nothing => (need, s.current.tip, s.current.mempool_seq, 0),
-    }
+    };
+    let moved = s
+        .current
+        .tip
+        .is_some_and(|old| tip.is_some_and(|t| t.hash != old.hash));
+    let all = if moved && deltas > 0 {
+        s.model.txids().copied().collect()
+    } else {
+        Vec::new()
+    };
+    (need, tip, seq, deltas, all)
 }
 
 /// Applies the node's clusters, packs, and publishes a delta and a new projection if anything

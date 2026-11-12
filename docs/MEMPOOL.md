@@ -198,7 +198,8 @@ rbitcoin mines by cluster-mempool chunks: each cluster is linearized and cut int
 
 - every transaction the tracker adds (its cluster may now include older transactions it lifts);
 - the remaining members of the cluster of every transaction the tracker removes (the cluster may have split, or lost the child that lifted a parent);
-- a cluster whose answer named members the tracker has not shown us yet, again at the next update.
+- a cluster whose answer named members the tracker has not shown us yet, again at the next update;
+- every cluster, once per block, right after the block's update is published. Anything we cannot see change, such as a `prioritisetransaction` on the node or a lost recheck, is corrected within a block.
 
 It asks once per cluster as far as it knows them: each answer covers its members, and later rounds ask only for what is still uncovered.
 
@@ -248,7 +249,7 @@ When the tip moves, the first block of the last projection on the old tip is kep
 |---|---|
 | Empty mempool | Every block is empty, with zero totals |
 | Smaller than a block (signet, testnet4, regtest) | Everything in the first block; the rest empty |
-| A cluster request fails or answers `Busy` | The affected transactions keep their last chunks, `stale` is set on the projection and in its deltas, and they are asked again after 2 s, doubling to 30 s |
+| A cluster request fails or answers `Busy` | The affected transactions keep their last chunks, `stale` is set on the projection and in its deltas, and nothing is asked until the backoff ends (2 s, doubling to 30 s), however often the tracker publishes. New transactions wait with the rest, placed by their own fee rate |
 | The tracker's own cycles fail (the node is down) | The last good projection stays, marked `stale` until the tracker's next good cycle |
 | A transaction left between the tracker's listing and our request | Its slot answers "not in mempool": it keeps its record until the tracker removes it |
 | Large clusters | Up to 64 transactions (rbitcoin's limit): one answer, a few KB |
@@ -260,7 +261,7 @@ When the tip moves, the first block of the last projection on the old tip is kep
 - **Ties at the boundary.** The node breaks ties between chunks of equal rate and fee in hash-map order, which nobody outside the node can know. Mainnet mempools now hold thousands of identical chunks at one rate, and when the block boundary falls inside such a class, which of them make the first block is arbitrary. The miner's own node picks among them by its own order anyway, so no explorer can predict that part. We break ties by age.
 - **Sigops are not counted.** The template also stops at 80,000 sigop cost. We do not have each transaction's sigops; a mainnet template uses about 8,000, so the limit does not bind today.
 - **Pulling ancestors.** We pull in a chunk's earlier, unplaced chunks of the same cluster, not only its ancestors, since the answer does not say which chunks depend on which. They differ only when an earlier chunk of a cluster did not fit and a later, independent one would.
-- **`prioritisetransaction`** deltas are in the node's chunk fees and rates but not in the record's own `fee`, which is the base fee.
+- **`prioritisetransaction`** deltas are in the node's chunk fees and rates but not in the record's own `fee`, which is the base fee. A delta applied to a transaction whose cluster does not otherwise change shows at the next block's refresh.
 - **One update behind.** The projection follows the tracker, so it trails the node by up to one tracker cycle (about 1.5 s) plus one cluster request.
 
 ### What is exposed for logging
