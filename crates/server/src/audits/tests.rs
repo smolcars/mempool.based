@@ -158,19 +158,16 @@ async fn rpc_block(mock: &Mock, hash: BlockHash) -> Block {
                 fee,
                 vsize,
                 weight: vsize * 4,
-                size: vsize,
                 value: Amount::ZERO,
             }
         })
         .collect();
     Block {
         hash,
-        confirmations: 1,
         height: b.header.time,
         time: b.header.time,
         mediantime: 0,
         size: 0,
-        strippedsize: 0,
         weight: 0,
         previousblockhash: Some(b.header.prev_blockhash),
         tx,

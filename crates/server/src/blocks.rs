@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use bitcoin::BlockHash;
 use engine::blocks::{
-    self, Event, Facts, Header, NodeSource, Progress, Reorgs, Row, Source, SourceError,
+    self, Event, Facts, Header, Lister, NodeSource, Progress, Reorgs, Row, Source, SourceError,
 };
 use engine::store::{self, Store};
 use logging::events::{
@@ -47,7 +47,12 @@ pub struct BlockTable {
 
 impl BlockTable {
     /// Opens `<dir>/<network>.sqlite`. On failure the network runs without a table, and says so.
-    pub fn open(dir: &Path, config: &NetworkConfig, esplora: &str) -> Option<Self> {
+    pub fn open(
+        dir: &Path,
+        config: &NetworkConfig,
+        esplora: &str,
+        lister: &Arc<Lister>,
+    ) -> Option<Self> {
         let network = config.network.name();
         let observer = move |e: &store::Event| match e {
             store::Event::MigrationApplied { name, elapsed } => {
@@ -100,6 +105,7 @@ impl BlockTable {
             )
             .ok()?,
             esplora: Esplora::new(esplora).ok()?,
+            lister: Arc::clone(lister),
         };
         Some(Self {
             store,
