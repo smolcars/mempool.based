@@ -85,15 +85,15 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, frontend at `master` commit `4809cc7` (2026-11-12), and recorded again with the same counts after the frontend fixes of FE4:
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with the frontend fixes of FE4 on top of the live mempool home page and the projected-block page:
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
-| Home | 17 | 9 | 1 | 4 |
+| Home | 18 | 4 | 1 | 2 |
 | Blocks | 16 | 13 | 0 | 2 |
 | Block | 22 | 6 | 0 | 5 |
 | Transaction | 13 | 4 | 0 | 3 |
-| Address | 15 | 3 | 0 | 2 |
+| Address | 17 | 3 | 0 | 2 |
 | Mining, Lightning | 11 | 1 | 0 | 1 |
 
 An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
