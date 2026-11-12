@@ -31,6 +31,7 @@ import { useNetwork } from "../../lib/page";
 import {
   confirmations,
   isCoinbase,
+  keptAfterRefresh,
   mergePages,
   netChange,
   pageIsFull,
@@ -119,8 +120,8 @@ export function History(props: {
   };
   const hasNext = () => (later().length === 0 ? pageIsFull(first() ?? [], PAGE) : lastPageFull());
 
-  // When a refresh brings a new first page, the confirmed transactions the old one held move to
-  // the loaded pages, so one pushed off page one stays on screen. New ones flash once.
+  // When a refresh brings a new first page, what was loaded after it stays only where it still
+  // continues the fresh page, so nothing is skipped and nothing stale stays. New rows flash once.
   let previous: Transaction[] | undefined;
   let known = new Set<string>();
   let fresh = new Set<string>();
@@ -131,9 +132,7 @@ export function History(props: {
       const old = previous;
       if (old) {
         if (untrack(later).length === 0) setLastPageFull(pageIsFull(old, PAGE));
-        setLater((l) =>
-          [...old.filter((t) => t.status.confirmed), ...l].filter((t) => !ids.has(t.txid)),
-        );
+        setLater(keptAfterRefresh(f, mergePages(old, untrack(later)), PAGE));
       }
       fresh = new Set(old ? [...ids].filter((id) => !known.has(id)) : []);
       known = new Set([...known, ...ids]);

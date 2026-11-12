@@ -147,3 +147,20 @@ export function mergePages(
 export function pageIsFull(page: readonly Transaction[], size: number): boolean {
   return page.filter((t) => t.status.confirmed).length >= size;
 }
+
+/**
+ * The loaded history to keep after a refresh brings a new first page: what was shown after the
+ * fresh page's last confirmed transaction. Nothing when the fresh page is the whole history (a
+ * short page) or when it no longer meets what was shown (more arrived than a page holds), so
+ * paging starts again from the fresh page rather than skipping or keeping stale rows.
+ */
+export function keptAfterRefresh(
+  fresh: readonly Transaction[],
+  shown: readonly Transaction[],
+  size: number,
+): Transaction[] {
+  if (!pageIsFull(fresh, size)) return [];
+  const edge = fresh.filter((t) => t.status.confirmed).at(-1)?.txid;
+  const i = shown.findIndex((t) => t.txid === edge);
+  return i === -1 ? [] : shown.slice(i + 1).filter((t) => t.status.confirmed);
+}

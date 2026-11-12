@@ -3,6 +3,7 @@ import { ApiError } from "../../lib/api";
 import type { Transaction, Utxo, Vin, Vout } from "../../lib/esplora";
 import {
   confirmations,
+  keptAfterRefresh,
   mergePages,
   netChange,
   pageIsFull,
@@ -223,5 +224,34 @@ describe("pageIsFull", () => {
     expect(pageIsFull([t(false), t(false), t(true)], 2)).toBe(false);
     expect(pageIsFull([t(false), t(true), t(true)], 2)).toBe(true);
     expect(pageIsFull([], 25)).toBe(false);
+  });
+});
+
+describe("keptAfterRefresh", () => {
+  // Confirmed transactions numbered newest first; "u" ones are unconfirmed.
+  const c = (n: number) => tx([], [], { txid: `c${n}` });
+  const u = (n: number) => tx([], [], { txid: `u${n}`, status: { confirmed: false } });
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => c(from + i));
+  const ids = (list: Transaction[]) => list.map((t) => t.txid);
+
+  it("keeps what was loaded after a page that pushed one transaction down", () => {
+    const kept = keptAfterRefresh(range(0, 24), range(1, 50), 25);
+    expect(ids(kept)).toEqual(ids(range(25, 50)));
+  });
+
+  it("starts over when more arrived than a page holds, rather than skip any", () => {
+    expect(keptAfterRefresh(range(1, 25), range(31, 80), 25)).toEqual([]);
+  });
+
+  it("drops everything else when the fresh page is the whole history, as after a reorg", () => {
+    expect(keptAfterRefresh([], [c(1)], 25)).toEqual([]);
+    expect(keptAfterRefresh(range(1, 3), range(1, 30), 25)).toEqual([]);
+  });
+
+  it("measures from the last confirmed transaction and drops unconfirmed leftovers", () => {
+    const fresh = [u(1), ...range(0, 24)];
+    const shown = [u(2), ...range(1, 25), u(3), c(26)];
+    expect(ids(keptAfterRefresh(fresh, shown, 25))).toEqual(["c25", "c26"]);
   });
 });
