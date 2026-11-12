@@ -3,5 +3,6 @@
 pub mod blocks;
 pub mod difficulty;
 pub mod mempool;
+pub mod mining;
 pub mod projected;
 pub mod store;

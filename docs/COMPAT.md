@@ -36,10 +36,10 @@ One table per group, each on its own page:
 | Group | Page | Rows | served | planned | different | skipped | Confirmed live |
 |---|---|---|---|---|---|---|---|
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 0 | 50 | 0 | 6 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 1 | 55 | 4 | 13 | 72 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 16 | 40 | 4 | 13 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 47 | 0 | 40 | 2 | 5 | 43 |
 | Pages and visible features | [`compat/pages.md`](compat/pages.md) | 46 | 0 | 38 | 2 | 6 | 29 |
-| **Total** | | **222** | **1** | **183** | **8** | **30** | **192** |
+| **Total** | | **222** | **16** | **168** | **8** | **30** | **192** |
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -84,7 +84,7 @@ Proposals for [`PLAN.md`](PLAN.md) and [`TODO.md`](TODO.md); this task does not 
 
 5. **Per-transaction block data needs `getblock` verbosity 2.** The mined-block drawing (`/v1/block/:hash/summary`, W7) and our own fee percentiles (MI1) need every transaction's fee and size. Over TCP that is 0.8 s and 11 MB per full block; the paged Esplora route would take about 270 requests. A sequential full-history backfill at that rate takes days. Proposal: take totals from `getblockstats`; backfill percentiles from `getblock` verbosity 2 newest first, in the background, with a few requests in parallel; prefer the unix-socket `/internal/block/:hash/txs` when co-located. Add `getblock` to N3's method set.
 6. **Block audits depend on keeping the template.** The reference cannot audit at all. MI4 needs MP2 to retain the last template (about 0.4 s and 4.9 MB from `getblocktemplate`) at each block arrival; audits cannot be backfilled for blocks we did not watch.
-7. **Mining pool identification needs a dataset.** Pool names come from coinbase tags and payout addresses. We need a list under a licence compatible with MIT, or our own. Decide before MI2.
+7. **Mining pool identification needs a dataset.** Pool names come from coinbase tags and payout addresses. We need a list under a licence compatible with MIT, or our own. Decide before MI2. Decided in MI2: bitcoin-data/mining-pools, MIT ([`API.md`](API.md#mining)).
 8. **`RBITCOIN.md` overstates the chain-tip stamp.** It says every Esplora response carries the tip headers. `/mempool`, `/mempool/txids`, `/mempool/recent`, `/fee-estimates`, broadcast and the address mempool-history routes carry none (the paged `/mempool/txids/page` is stamped), and address routes stamp the address-index watermark ([`compat/esplora.md`](compat/esplora.md)). N1's tip handling should follow the narrower rule; the owner of `RBITCOIN.md` should correct it.
 9. **Large addresses need a product answer.** Totals and UTXOs are refused above the node's cap. W5 must show history without totals and say why. A paged or capped stats route is a candidate for the rbitcoin wishlist in [`RBITCOIN.md`](RBITCOIN.md).
 

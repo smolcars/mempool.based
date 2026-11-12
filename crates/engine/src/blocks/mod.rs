@@ -5,7 +5,9 @@
 //!   rows a reorg made stale, and takes the newest blocks' fee rates from the summary cache.
 //! - [`backfill`] fills every older row, newest first, in two tiers: totals and coinbase for
 //!   every block (cheap, batched), then fee rates for the recent ones (one `getblock` each).
-//! - [`by_hash`], [`by_height`], [`page`], [`periods`] and [`heights_between`] read it.
+//! - [`by_hash`], [`by_height`], [`page`], [`periods`] and [`heights_between`] read it; the
+//!   mining routes read it through [`span`], [`pool_counts`], [`pool_page`] and the rest of
+//!   `mining.rs`, and [`reattribute`] redoes its pool column when the pool list changes.
 //!
 //! The table itself is the backfill's progress: nothing else records how far it got, so a
 //! restart redoes no work and a deleted file is rebuilt from the node.
@@ -13,6 +15,7 @@
 mod backfill;
 mod db;
 mod follow;
+mod mining;
 mod source;
 pub mod stats;
 #[cfg(test)]
@@ -26,8 +29,13 @@ use crate::store;
 pub use backfill::{Event, Options, Progress, backfill};
 pub use db::{
     Bucket, MAX_PAGE, Period, by_hash, by_hashes, by_height, heights_between, page, periods,
+    pool_page,
 };
 pub use follow::{Followed, Reorgs, follow};
+pub use mining::{
+    PoolCount, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before, pool_counts,
+    pool_weeks, reattribute, retargets, row_counts, span, work,
+};
 pub use source::{Header, NodeSource, Source};
 pub use stats::{Facts, Rates};
 

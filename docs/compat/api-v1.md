@@ -52,30 +52,30 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 | `GET /v1/block/:hash/tx/:txid/summary` | One tx's summary row in a block | As above | planned | M2 | ref | |
 | `GET /v1/block/:hash/audit-summary` | Expected template against the mined block: added, missing, fresh, sigop, prioritized txs, match rate | Engine at block time; store | planned | M3 | pub | 404 `Audit not available` on the reference. Needs our template captured before each block |
 | `GET /v1/block/:hash/tx/:txid/audit` | Whether one tx was expected, seen, added, conflicting, prioritized | Store | planned | M3 | pub | |
-| `GET /v1/mining/blocks/timestamp/:timestamp` | The block nearest a Unix time | Store, or a binary search over headers | planned | M3 | ref | |
+| `GET /v1/mining/blocks/timestamp/:timestamp` | The newest block stamped at or before a Unix time | Store | served | M3 | ref | Not the nearest: the reference answered the block 252 s before rather than the one 17 s after. `404` before the stored history ([`API.md`](../API.md#mining)) |
 | `GET /v1/blocks/tip/height` | Tip height | rbitcoin Esplora | planned | M5 | ref | An alias of `/api/blocks/tip/height` |
 | `GET /v1/blocks-bulk/:min[/:max]` | Many blocks with extras | — | skipped | — | ref, pub | Disabled on the reference and on mempool.space. Revisit if asked for |
 
 ## Mining
 
-Every mining route is served from per-block summaries in our store (MI1, MI2). The reference backend takes 15–58 s for most of these uncached; ours should be precomputed.
+Every mining route is served from the block table in our store (MI1, MI2), never from the node. The reference backend took 14–54 s for most of these; ours answer in under 2 ms once computed, and in under a second cold on a mainnet-sized table ([`API.md`](../API.md#mining)). The audit routes wait for MI4.
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `GET /v1/mining/pools` | Every known pool: name, slug, id | Pool definitions | planned | M3 | ref | Needs a pool-identification dataset; see Findings in [`../COMPAT.md`](../COMPAT.md) |
-| `GET /v1/mining/pools/:interval` | Pool ranking for a period, block count, estimated hashrates | Store | planned | M3 | ref | 24 s on the reference |
-| `GET /v1/mining/pool/:slug` | One pool's share, blocks, hashrate, reward, block health | Store | planned | M3 | ref | 58 s on the reference |
-| `GET /v1/mining/pool/:slug/hashrate` | One pool's hashrate share over time | Store | planned | M3 | ref | |
-| `GET /v1/mining/pool/:slug/blocks[/:height]` | One pool's blocks, with extras, paged by height | Store | planned | M3 | ref | |
-| `GET /v1/mining/hashrate[/:interval]` | Network hashrate and difficulty over time | Store; rbitcoin `getnetworkhashps` for the current value | planned | M3 | ref | |
-| `GET /v1/mining/hashrate/pools[/:interval]` | Hashrate share per pool over time | Store | planned | M3 | ref | |
-| `GET /v1/mining/difficulty-adjustments[/:interval]` | Past retargets: time, height, difficulty, change | Esplora headers; store | planned | M3 | ref | |
-| `GET /v1/mining/reward-stats/:block_count` | Total reward, fees and tx count over the last N blocks | Store | planned | M3 | ref | |
-| `GET /v1/mining/blocks/fees/:interval` | Average block fees over time, with USD | Store | planned | M3 | ref | Fiat column needs prices |
-| `GET /v1/mining/blocks/rewards/:interval` | Average block reward over time, with USD | Store | planned | M3 | ref | |
-| `GET /v1/mining/blocks/fee-rates/:interval` | Fee-rate percentiles per block over time | Store | planned | M3 | ref | Our own percentiles, not `getblockstats`' whole-sat ones |
-| `GET /v1/mining/blocks/fee-rates/:interval/precise` | The same percentiles with sub-sat precision | Store | planned | M3 | pub | 404 on the reference (older release). The useful form on rbitcoin's sub-sat mempool |
-| `GET /v1/mining/blocks/sizes-weights/:interval` | Block size and weight over time | Store | planned | M3 | ref | |
+| `GET /v1/mining/pools` | Every known pool: name, slug, id | Pool list (bitcoin-data/mining-pools, MIT) | served | M3 | ref | Ids and some slugs differ from the reference's own list (`oceanxyz` for `ocean`, `btccom` for `cloverpool`) |
+| `GET /v1/mining/pools/:interval` | Pool ranking for a period, block count, estimated hashrates | Store | served | M3 | ref | 24 s on the reference. Same 895 blocks over a week; 891 attributed alike ([`API.md`](../API.md#mining)) |
+| `GET /v1/mining/pool/:slug` | One pool's share, blocks, hashrate, reward, block health | Store | served | M3 | ref | 54 s on the reference. Block health is `null` until audits |
+| `GET /v1/mining/pool/:slug/hashrate` | One pool's hashrate share over time | Store | served | M3 | ref | Weekly |
+| `GET /v1/mining/pool/:slug/blocks[/:height]` | One pool's blocks, with extras, paged by height | Store | served | M3 | ref | 100 a page, strictly below `:height`. Header and per-transaction fields the table lacks are left out |
+| `GET /v1/mining/hashrate[/:interval]` | Network hashrate and difficulty over time | Store | served | M3 | ref | Our own estimate; within 0.01 % of the node's `getnetworkhashps` over the same blocks. A 7-day window per daily point |
+| `GET /v1/mining/hashrate/pools[/:interval]` | Hashrate share per pool over time | Store | served | M3 | ref | Weekly |
+| `GET /v1/mining/difficulty-adjustments[/:interval]` | Past retargets: time, height, difficulty, change | Store | served | M3 | ref | Identical to the reference for the month compared |
+| `GET /v1/mining/reward-stats/:block_count` | Total reward, fees and tx count over the last N blocks | Store | served | M3 | ref | N from 1 to 52,560 |
+| `GET /v1/mining/blocks/fees/:interval` | Average block fees over time, with USD | Store | served | M3 | ref | No `USD` until prices exist (M3), as the reference answers on a network without prices |
+| `GET /v1/mining/blocks/rewards/:interval` | Average block reward over time, with USD | Store | served | M3 | ref | No `USD`, as above |
+| `GET /v1/mining/blocks/fee-rates/:interval` | Fee-rate percentiles per block over time | Store | served | M3 | ref | Our own percentiles rounded to whole sat/vB; only points whose every block is rated |
+| `GET /v1/mining/blocks/fee-rates/:interval/precise` | The same percentiles with sub-sat precision | Store | served | M3 | pub | 404 on the reference (older release). The useful form on rbitcoin's sub-sat mempool. Three decimals, as mempool.space |
+| `GET /v1/mining/blocks/sizes-weights/:interval` | Block size and weight over time | Store | served | M3 | ref | |
 | `GET /v1/mining/blocks/predictions/:interval` | Audit match rate per block over time | Store (audits) | planned | M3 | ref, pub | Empty on the reference (no audits) |
 | `GET /v1/mining/blocks/audit/score/:hash` | One block's match rate, expected fees and weight | Store (audits) | planned | M3 | ref, pub | |
 | `GET /v1/mining/blocks/audit/scores[/:height]` | Match rates for a page of blocks | Store (audits) | planned | M3 | ref, pub | |

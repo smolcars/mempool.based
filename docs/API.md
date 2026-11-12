@@ -161,11 +161,125 @@ The remaining blocks are projected from now, or from the tip's timestamp if that
 
 How we differ from the reference backend, measured side by side: progress, heights, block counts and `previousTime` match exactly and `previousRetarget` up to floating-point rounding. The reference's `timeAvg` divides the time from the period's first block to *now* by the blocks mined, so it grows between blocks and is wrong when the tip is ahead of the clock; ours uses the tip's timestamp. Its `difficultyChange` follows from that average: within 0.01 percentage points of ours on mainnet and signet, but about two points off on testnet4, where tips run hours ahead. `estimatedRetargetDate` and `remainingTime` differ accordingly.
 
+### Mining
+
+Who mined each block, each pool's share, the network's hashrate and difficulty over time, and the block fee, reward, fee-rate and size series, all from the block table ([`STORE.md`](STORE.md#blocks)), never from the node. They need `DATA_DIR`; without a table every route answers `503`. Code: `crates/engine/src/mining/` for the pool list, attribution and hashrate arithmetic, `crates/engine/src/blocks/mining.rs` for the table's statements, `crates/server/src/mining.rs` for the routes and their cache.
+
+| Route | Answer | Cached |
+|---|---|---|
+| `GET /api/v1/mining/pools` | `[{name, slug, unique_id}]`, `Unknown` (id 0) first | yes |
+| `GET /api/v1/mining/pools/:interval` | `{pools: [{poolId, name, link, blockCount, rank, emptyBlocks, slug, avgMatchRate, avgFeeDelta, poolUniqueId}], blockCount, lastEstimatedHashrate, lastEstimatedHashrate3d, lastEstimatedHashrate1w}`, most blocks first | yes |
+| `GET /api/v1/mining/pool/:slug` | `{pool: {id, name, link, addresses, regexes, slug, unique_id}, blockCount: {all, 24h, 1w}, blockShare: {…}, estimatedHashrate, reportedHashrate, avgBlockHealth, totalReward}` | yes |
+| `GET /api/v1/mining/pool/:slug/hashrate` | `[{timestamp, avgHashrate, share, poolName}]`, one a week | yes |
+| `GET /api/v1/mining/pool/:slug/blocks[/:height]` | Up to 100 of the pool's blocks strictly below `:height` (from the tip without it), newest first, with `extras` | no: one indexed read |
+| `GET /api/v1/mining/hashrate[/:interval]` | `{hashrates: [{timestamp, avgHashrate}], difficulty: [{time, height, difficulty, adjustment}], currentHashrate, currentDifficulty}`; no interval is `all` | yes |
+| `GET /api/v1/mining/hashrate/pools[/:interval]` | `[{timestamp, avgHashrate, share, poolName}]`, every pool with a block that week, most blocks first | yes |
+| `GET /api/v1/mining/difficulty-adjustments[/:interval]` | `[[time, height, difficulty, adjustment]]`, newest first, the ratio to five decimals | yes |
+| `GET /api/v1/mining/reward-stats/:count` | `{startBlock, endBlock, totalReward, totalFee, totalTx}` over the last `count` blocks (1 to 52,560), totals as strings | no: one range sum |
+| `GET /api/v1/mining/blocks/fees/:interval` | `[{avgHeight, timestamp, avgFees}]` | yes |
+| `GET /api/v1/mining/blocks/rewards/:interval` | `[{avgHeight, timestamp, avgRewards}]` | yes |
+| `GET /api/v1/mining/blocks/fee-rates/:interval[/precise]` | `[{avgHeight, timestamp, avgFee_0, avgFee_10, avgFee_25, avgFee_50, avgFee_75, avgFee_90, avgFee_100}]` in sat/vB: whole numbers, or three decimals with `/precise` | yes |
+| `GET /api/v1/mining/blocks/sizes-weights/:interval` | `{sizes: [{avgHeight, timestamp, avgSize}], weights: [{avgHeight, timestamp, avgWeight}]}` | yes |
+| `GET /api/v1/mining/blocks/timestamp/:timestamp` | `{height, hash, timestamp}`: the newest block stamped at or before a Unix time, its time as ISO 8601 | no: one indexed read |
+
+Hashrates are whole hashes a second and can pass 2⁶⁴ (mainnet's is about 9.5 × 10²⁰), so they are written as integers of up to 39 digits, as the reference writes them. Read them as floating point.
+
+#### Parameters
+
+- **Intervals** are exactly `24h`, `3d`, `1w`, `1m` (30 days), `3m`, `6m`, `1y` (365 days), `2y`, `3y` or `all`, counted back from now. Anything else is `400 invalid interval`.
+- **Slugs** are looked up in the list; an unknown one is `404`. **Heights, counts and timestamps** are decimal digits only (`400` otherwise); `reward-stats` takes 1 to 52,560.
+- **Points.** The block series average this many blocks a point, so no answer holds more than about a thousand: one up to `1w`, then 6 (`1m`), 18, 36, 72 (`1y`), 144, 216 and 1,008 (`all`), grouped by height. `avgHeight` is the middle height of a point and `timestamp` the middle of its blocks' times. The hashrate chart has a point a day up to `1y` and a week (Monday 00:00 UTC) beyond; the per-pool shares are weekly.
+
+#### Coverage
+
+The table is only as complete as the backfill ([`STORE.md`](STORE.md#backfill)), and on a fresh install it is still filling in, newest first. Every answer rests only on the run of rows from the tip down to the first missing height; rows below a gap are left out, so a chart never shows a hole as a dip. Three headers say how far an answer reaches, exposed to cross-origin callers like the chain-tip headers:
+
+| Header | Value |
+|---|---|
+| `X-Data-From-Height`, `X-Data-From-Time` | The earliest block the answer includes, and its timestamp (Unix seconds). Absent when it includes none |
+| `X-Data-Complete` | `true` when the answer covers the whole period asked for (all of history for `all`, a pool's statistics and its blocks); `false` otherwise |
+
+A chart can then say "data from … onward" instead of drawing a false zero. Fee rates exist only for rated rows, the last year by default: a fee-rate point appears only when every block in it is rated, so an average of some is never presented as the whole, and a gap leaves `X-Data-Complete` `false`. A timestamp before the stored history is `404` (`no indexed block at or before that time`) rather than a wrong block. `reward-stats` starts at the stored history when asked for more (`startBlock` says where).
+
+#### Who mined a block
+
+**The list.** `crates/engine/data/pools/pool-list.json` is [bitcoin-data/mining-pools](https://github.com/bitcoin-data/mining-pools)' generated list (149 pools, 174 tags, 201 addresses), copied unchanged from the `generated` branch at commit `0158b59` (2026-06-30). Its licence is MIT, read in its `LICENSE` file: copyright btc.com (2019–2021), whose list it forked, and 0xB10C and contributors since. MIT allows redistribution in this MIT project on the one condition that the notice travels with it, so `LICENSE` and a `README.md` naming the source and commit sit beside the file. mempool.space's own pool list was not used or opened. Pool ids are the list's; slugs are each name's ASCII letters and digits, lowercased.
+
+**The rules,** in order (`Pools::attribute`):
+
+1. **A payout to a pool's listed address wins.** Only the pool holds that address's key; anyone can write any tag. A block tagged for one pool that pays another's address is the other's. Among several payouts, the first in output order decides.
+2. **Otherwise the coinbase tag:** the longest listed tag found anywhere in the coinbase script, ignoring ASCII case. Longest first, so a tag that contains another (`/ViaBTC/TATMAS Pool/` holds `/ViaBTC/`, `/solo.ckpool.org/` holds `ckpool`) wins over it. At equal length, the one earlier in the script, then the lower id.
+3. **Otherwise `Unknown`** (id 0), counted and ranked like any pool, never dropped.
+
+A tag is a claim without proof: a block that writes a pool's tag and pays an address not on the list is that pool's. Pools move payout addresses more often than lists follow (in the sample below, 3,615 of the 3,883 blocks attributed by tag belong to pools whose listed addresses they did not pay), so refusing would turn most of them into `Unknown`.
+
+**Hostile input.** The tag and payout scripts are written by whoever mined the block and are stored bounded (at most 100 bytes, eight scripts of 128): matching is a byte comparison of at most 174 tags of at most 30 bytes over 100 bytes and eight map lookups, allocates nothing per block and cannot panic. Invalid UTF-8 is just bytes. Names, tags and addresses in answers are the list's; the only chain bytes in an answer are a pool block's coinbase, as hex and as one Latin-1 character per byte, serialized as JSON strings.
+
+**Stored, not computed per request.** The block table keeps each row's pool (`pool` column, [`STORE.md`](STORE.md#blocks)), set when the row is written. Measured on a 975,000-row table: counting blocks per pool over all of history takes 0.2 s from the column, while attributing at query time means reading and matching every coinbase, 1.8 s, past the store's 2 s read limit under any load. Writing costs 2 µs a row more. The table records which list and rules (`pool_list.version`, a hash of the file and a rules number) its rows were attributed with; when a build ships another list, the first start redoes every row in batches of 10,000 (1.8 s for 975,000 rows, no node call) before the mining routes answer.
+
+**Quality,** over a bounded mainnet sample of 7,851 blocks (heights 967,676 to 975,526, 54 days): 99.69 % identified, 3,944 by address and 3,883 by tag; 24 `Unknown` (blocks with no readable tag, a `j://<uuid>` tag, or `Sv2/MARA`). No block in the sample had a tag and an address naming different listed pools. For the same week the reference ranked 895 blocks and so did we; 891 were attributed alike. The 4 others carry the tag `/trustpool/` but pay ViaBTC's listed address: the reference says TrustPool, we say ViaBTC by rule 1, and the list has no TrustPool. Two pools are named differently from the reference's list: `Ocean.xyz` (`oceanxyz`, theirs `ocean`) and `BTC.com` (`btccom`, theirs `cloverpool`).
+
+#### Hashrate
+
+A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate over a stretch of chain is the work of its blocks over the time they took: the sum of their difficulties × 2³², divided by the seconds from the last block before them to the last of them. This is the estimate `getnetworkhashps` makes.
+
+- **Daily points use the trailing 7 days.** A day's ~144 blocks vary by ±8 % from luck alone; a week's 1,008 by ±3 %, and a change still shows within days. A point appears only when its whole window is stored. Weekly points use the week itself.
+- `currentHashrate` and `lastEstimatedHashrate1w` are the last 1,008 blocks; `lastEstimatedHashrate` 144 and `lastEstimatedHashrate3d` 432. A pool's `estimatedHashrate` is its share of the last 24 hours' blocks times the network's hashrate over them; its weekly `avgHashrate` is its share of the week times the week's.
+- **Against the node:** on mainnet, `getnetworkhashps 1008` gave 9.51382 × 10²⁰ and ours 9.51368 × 10²⁰; over 144 blocks 9.47105 × 10²⁰ and 9.47091 × 10²⁰ (the node times from the earliest timestamp in the window rather than the block before it). The node's value does not fit a `u64` either, and asking it would be a node call per request; ours is computed from the table.
+- **Against the reference:** `currentHashrate` within 0.3 % (its window is not stated). Its daily points move 9 % from day to day on average, ours 1.2 %: it uses one day per point.
+- **Retargets** come from the table: the first block of each 2,016-block period against the first of the period before (on testnet4 the last block of a period may be a minimum-difficulty one). Identical to the reference for the month compared.
+
+#### Differences from the reference
+
+| Field or route | Here | Why |
+|---|---|---|
+| `poolId`, `poolUniqueId`, `unique_id`, `pool.id` | All the list's id | The reference numbers its own database rows; we have one id |
+| `regexes` | The list's tags, matched as literal text | The list has tags, not patterns |
+| `avgMatchRate`, `avgFeeDelta`, `avgBlockHealth`, `reportedHashrate`, `minerNames` | `null` | Block audits are MI4; no pool reports hashrate to us |
+| `USD` in the fee and reward series | Absent | No price feed yet (M3). The reference leaves it out the same way on a network without prices (observed on mempool.space's signet) |
+| Block series points | A fixed number of blocks a point (above) | The reference merges blocks mined close together into one point (its 715 points for a week's 895 blocks); where its point is one block, the values are equal |
+| `avgFee_*` (whole numbers) | Our size-weighted percentiles, rounded | rbitcoin's sub-sat rates round to `0`; use `/precise` |
+| Pool blocks | `id`, `height`, `timestamp`, `difficulty`, `tx_count`, `size`, `weight`, and `extras` with `totalFees`, `medianFee`, `feeRange`, `reward`, `pool`, `avgFee`, `avgFeeRate`, `coinbaseRaw`, `coinbaseAddress`, `coinbaseAddresses`, `coinbaseSignature` (the first payout script's assembly) and `coinbaseSignatureAscii` | The block table holds no header fields (version, bits, nonce, merkle root, previous hash, median time) and no per-transaction totals; asking the node would be a call per request. `medianFee` and `feeRange` are `null` until the block is rated, with three decimals |
+| `blocks/timestamp` | At or before the time | The reference answered the same way, not with the nearest block |
+| Coverage | `X-Data-*` headers | Not on the reference, whose history is complete |
+
+#### Freshness and cost
+
+An answer is computed once per change to the table and served from memory. A task per network recomputes the answers clients have asked for whenever `follow` writes a new block, and at most once a minute while the backfill adds rows; between those, a request is a lookup. An answer nobody has asked for is computed by the first request, one computation at a time per network. A pool's statistics and weekly shares are computed for every pool together. The routes marked "no" above are a single bounded indexed read each. Headers as for every `/api/v1` route; `Age` appears while the node's tip is not the one the answer was computed at.
+
+Measured on the Apple M4 under the load described in [`STORE.md`](STORE.md#measurements), release build, from `curl` on the same machine. The reference backend (a stock mempool backend in front of the same node) was asked once per route, over the network; the pool routes for Foundry USA.
+
+| Route | Reference | Ours, 7,851 mainnet rows: first / then | Ours, 975,000 rows: first / then |
+|---|---|---|---|
+| `pools` | 0.09 s | 0.8 / 0.4 ms | |
+| `pools/1w` | 23.7 s | 1.2 / 0.3 ms | 1.4 / 0.4 ms |
+| `pools/all` | | 2.0 / 0.3 ms | 222 / 0.5 ms |
+| `pool/:slug` | 54.2 s | 7.1 / 0.4 ms | 999 / 0.3 ms (every pool's at once) |
+| `pool/:slug/hashrate` | 24.0 s | 0.5 / 0.4 ms (computed with the above) | 0.5 / 0.5 ms |
+| `pool/:slug/blocks` | 13.9 s | 0.9 ms | 0.9 ms |
+| `hashrate/1m` | 23.4 s | 3.4 / 0.4 ms | 4.1 / 0.4 ms |
+| `hashrate/all` | | 4.0 / 0.3 ms | 597 / 0.4 ms |
+| `hashrate/pools/1m` | 24.4 s | 3.2 / 0.3 ms | 3.6 / 0.3 ms |
+| `hashrate/pools/all` | | | 836 / 1.8 ms (2 MB) |
+| `difficulty-adjustments/1m` | 0.01 s | 0.8 / 0.3 ms | 0.7 / 0.4 ms |
+| `reward-stats/144` | 0.08 s | 0.7 ms | 0.6 ms; 31 ms for 52,560 |
+| `blocks/fees/1w` | 23.9 s | 1.4 / 0.4 ms | 1.6 / 0.5 ms |
+| `blocks/fees/all` | | | 565 / 0.5 ms |
+| `blocks/rewards/1w` | 23.9 s | 1.6 / 0.5 ms | 1.7 / 0.4 ms |
+| `blocks/fee-rates/1w` | 23.9 s | 1.5 / 0.4 ms | 1.7 / 0.5 ms |
+| `blocks/fee-rates/all/precise` | 404 | | 591 / 0.4 ms |
+| `blocks/sizes-weights/1w` | 24.0 s | 1.6 / 0.4 ms | 68 / 1.2 ms (a busy moment) |
+| `blocks/sizes-weights/all` | | | 560 / 0.6 ms |
+| `blocks/timestamp/:t` | 0.02 s | 0.6 ms | 0.4 ms |
+
+The 975,000-row table is synthetic (realistic sizes, the list's tags, the last year rated): `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark` fills it and times the statements; the server then runs over it as regtest with no reachable node. With every route and interval asked for, a new block costs the refresh a few seconds of reads on one of the four reader connections, once per block.
+
 ## Using it from the frontend
 
 - Call `/api/...` (mainnet) or `/<network>/api/...` with `fetch`. Same origin, so CORS does not apply.
 - Treat any non-2xx as `{"error": string}` JSON. The message is safe to show; the status says what to do: `404` not found, `400` bad input, `503` retry later (or, for address pages, the index is off).
 - Tip and mempool answers are at most a second old by design; poll no faster than that. For live data use the WebSocket when it exists.
 - Difficulty progress is `/api/v1/difficulty-adjustment` ([above](#difficulty-adjustment)). It changes once a block; its time fields can be counted down locally between fetches.
+- Mining charts read `/api/v1/mining/…` ([above](#mining)) and must check `X-Data-From-Time` and `X-Data-Complete`: while the backfill runs, history starts later than asked.
 - Read `X-Bitcoin-Chain-Tip` to detect a tip change between two fetches of one page, and refetch the page.
 - Response bodies are chain data: render them as text, never as HTML (rule 14).

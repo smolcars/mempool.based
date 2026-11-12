@@ -599,6 +599,45 @@ pub struct MempoolSubscriberLagged {
     pub total: u64,
 }
 event!(MempoolSubscriberLagged, "mempool_subscriber_lagged", Warn);
+// Mining.
+
+/// Every block row's pool was recomputed because the pool list or its rules changed (also on
+/// the first start after the upgrade that added the column). Mining routes answer once it is done.
+#[derive(Debug, Serialize)]
+pub struct PoolsReattributed {
+    pub network: &'static str,
+    pub rows: u64,
+    /// Rows whose pool changed.
+    pub changed: u64,
+    pub duration_ms: f64,
+}
+event!(PoolsReattributed, "pools_reattributed", Info);
+
+/// The mining answers were recomputed because the block table changed: once a block per
+/// network, and at most once a minute while the backfill adds rows.
+#[derive(Debug, Serialize)]
+pub struct MiningRefreshed {
+    pub network: &'static str,
+    pub tip: u32,
+    /// The lowest height of the history the answers cover.
+    pub from: u32,
+    pub answers: usize,
+    pub duration_ms: f64,
+}
+event!(MiningRefreshed, "mining_refreshed", Debug);
+
+/// Mining answers could not be computed from the block table; the last ones are still served.
+/// Written at the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct MiningFailed {
+    pub network: &'static str,
+    /// `reattribute`, `refresh` or `request`.
+    pub task: &'static str,
+    /// `timed_out` (a read ran past the store's limit) or `store`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(MiningFailed, "mining_failed", Warn);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -905,6 +944,25 @@ mod tests {
                 source: "tracker",
                 missed: 3,
                 total: 1,
+            }),
+            both(&PoolsReattributed {
+                network: n,
+                rows: 7850,
+                changed: 7790,
+                duration_ms: 80.5,
+            }),
+            both(&MiningRefreshed {
+                network: n,
+                tip: 975_525,
+                from: 967_676,
+                answers: 12,
+                duration_ms: 40.2,
+            }),
+            both(&MiningFailed {
+                network: n,
+                task: "refresh",
+                error: "timed_out",
+                failures: 1,
             }),
         ]
     }

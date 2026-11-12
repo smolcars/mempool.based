@@ -35,6 +35,8 @@ pub struct BlockTable {
     pub store: Arc<Store>,
     /// Where the backfill stands; stays at its default while the backfill is off.
     pub progress: watch::Sender<Progress>,
+    /// Counts the times `follow` has written to the table, so the mining answers can follow.
+    pub followed: watch::Sender<u64>,
     /// The table's own node clients: one RPC slot, shared by follow and the backfill, never one
     /// of the four shared ones. Each task makes one Esplora request at a time.
     source: NodeSource,
@@ -99,6 +101,7 @@ impl BlockTable {
         Some(Self {
             store,
             progress: watch::Sender::new(Progress::default()),
+            followed: watch::Sender::new(0),
             source,
         })
     }
@@ -224,6 +227,9 @@ async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
                         failures,
                     });
                     failures = 0;
+                }
+                if f.written > 0 || f.rated > 0 || f.fork.is_some() {
+                    table.followed.send_modify(|n| *n += 1);
                 }
                 if let Some(fork_height) = f.fork {
                     logging::emit(&BlockRowsReorged {

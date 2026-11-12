@@ -8,6 +8,7 @@ use rusqlite::types::Type;
 
 use super::stats::Rates;
 use super::{Coinbase, Rated, Row, hash_bytes};
+use crate::mining::pools;
 use crate::store::{Error, OptionalExtension, Sql, SqlError, Store, params};
 
 /// Most rows [`page`] returns at once.
@@ -33,9 +34,9 @@ macro_rules! insert {
             " INTO blocks (height, hash, time, tx_count, size, weight, paying_weight, fees, ",
             "subsidy, reward, difficulty, coinbase_tag, payouts, rated, fee_min, fee_p10, fee_p25, ",
             "fee_median, fee_p75, fee_p90, fee_max, band0, band1, band2, band3, band4, band5, ",
-            "band6, band7, band8, band9) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ",
-            "?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ",
-            "?29, ?30, ?31)",
+            "band6, band7, band8, band9, pool) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ",
+            "?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ",
+            "?28, ?29, ?30, ?31, ?32)",
             $tail
         )
     };
@@ -52,7 +53,7 @@ pub(super) const RATE: &str = "UPDATE blocks SET rated = 1, fee_min = ?3, fee_p1
     band8 = ?18, band9 = ?19 WHERE height = ?1 AND hash = ?2";
 
 /// SQLite integers are `i64`; no value stored here comes near the limit.
-fn int(v: u64) -> i64 {
+pub(super) fn int(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
@@ -66,9 +67,11 @@ fn rate_columns(r: Option<&Rated>) -> ([Option<f64>; 7], [Option<i64>; 10]) {
     )
 }
 
-/// Runs [`INSERT_NEW`] or [`REPLACE`] for one row; the number of rows it changed.
+/// Runs [`INSERT_NEW`] or [`REPLACE`] for one row, attributing it to a pool; the number of rows
+/// it changed.
 pub(super) fn write_row(stmt: &mut rusqlite::Statement, row: &Row) -> Result<usize, SqlError> {
     let (f, b) = rate_columns(row.rates.as_ref());
+    let (pool, _) = pools::list().attribute(&row.coinbase.tag, &row.coinbase.payouts);
     stmt.execute(params![
         row.height,
         &hash_bytes(&row.hash)[..],
@@ -101,6 +104,7 @@ pub(super) fn write_row(stmt: &mut rusqlite::Statement, row: &Row) -> Result<usi
         b[7],
         b[8],
         b[9],
+        pool,
     ])
 }
 
@@ -136,13 +140,13 @@ pub(super) fn rate_row(
     Ok(n > 0)
 }
 
-fn read_hash(r: &rusqlite::Row, i: usize) -> Result<BlockHash, SqlError> {
+pub(super) fn read_hash(r: &rusqlite::Row, i: usize) -> Result<BlockHash, SqlError> {
     let bytes: [u8; 32] = r.get(i)?;
     Ok(BlockHash::from_byte_array(bytes))
 }
 
 /// Reads a non-negative integer column into `T`, refusing a value that does not fit.
-fn get<T: TryFrom<i64>>(r: &rusqlite::Row, i: usize) -> Result<T, SqlError> {
+pub(super) fn get<T: TryFrom<i64>>(r: &rusqlite::Row, i: usize) -> Result<T, SqlError> {
     let v: i64 = r.get(i)?;
     T::try_from(v).map_err(|_| SqlError::IntegralValueOutOfRange(i, v))
 }
@@ -263,6 +267,26 @@ pub async fn page(store: &Store, below: Option<u32>, limit: u32) -> Result<Vec<R
             let mut stmt =
                 sql.prepare(select!("WHERE height < ?1 ORDER BY height DESC LIMIT ?2"))?;
             let rows = stmt.query_map(params![below, limit], read_row)?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+}
+
+/// Up to `limit` (at most [`MAX_PAGE`]) of one pool's rows in `from..below`, newest first.
+pub async fn pool_page(
+    store: &Store,
+    pool: u16,
+    from: u32,
+    below: u32,
+    limit: u32,
+) -> Result<Vec<Row>, Error> {
+    let limit = limit.min(MAX_PAGE);
+    store
+        .read(move |sql| {
+            let mut stmt = sql.prepare(select!(
+                "WHERE pool = ?1 AND height >= ?2 AND height < ?3 ORDER BY height DESC LIMIT ?4"
+            ))?;
+            let rows = stmt.query_map(params![pool, from, below, limit], read_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
         .await

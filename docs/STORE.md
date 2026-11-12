@@ -63,7 +63,8 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 
 | Table | Migration | Holds | Rebuildable |
 |---|---|---|---|
-| [`blocks`](#blocks) | `0001_blocks.sql` | One row per block on the best chain | Yes, by backfill |
+| [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column) | One row per block on the best chain | Yes, by backfill |
+| `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
 
 ### Adding a table
 
@@ -94,8 +95,11 @@ One row per block on the best chain: what the mining dashboard and the history c
 | `rated` | integer, 0 or 1 | Completeness: 1 once the columns below are known |
 | `fee_min` … `fee_max` | real, nullable | Size-weighted fee-rate percentiles in sat/vB, unrounded (min, p10, p25, median, p75, p90, max). Null until rated, and for a rated block that holds only its coinbase |
 | `band0` … `band9` | integer, nullable | Virtual size paying in each of the design's ten fee bands; they sum to the paying transactions' virtual size |
+| `pool` | integer, indexed | Who mined the block, by the rules in [`API.md`](API.md#mining): the pool list's id, 0 for Unknown. Set when the row is written. The index gives a pool's blocks by height |
 
-The coinbase tag and scripts are written by whoever mined the block. They are stored as bytes, bounded as above, and never interpreted or turned into text here; a page renders them as text ([`SECURITY.md`](SECURITY.md) rule 14).
+The coinbase tag and scripts are written by whoever mined the block. They are stored as bytes, bounded as above, and never turned into text here; a page renders them as text ([`SECURITY.md`](SECURITY.md) rule 14). Pool attribution reads them only as bytes to compare with the pool list.
+
+**The pool column follows the list.** `blocks::reattribute` compares `pool_list.version` (a hash of the list file and a rules number) with the build's; when they differ, as on the first start after `0002_pools.sql` or with a new list, it recomputes every row's pool from its stored coinbase in writes of 10,000 rows, newest first, then records the version: 1.8 s for 975,000 rows, no node call. Rows written meanwhile already use the build's list, and a row replaced between the read and the write keeps its new pool (the update is keyed by height and hash). The mining routes wait for it.
 
 **Completeness.** A row exists only once its totals and coinbase are known, so every row has everything above `rated`. `rated = 0` means the fee rates are still to come; a partial index on those rows lets the backfill find the next one at once. A height with no row is a block not yet backfilled.
 
@@ -165,6 +169,22 @@ Unfiltered `getblockstats` took about 1 s per recent block (its UTXO statistics)
 | `page(store, below, limit)` | Up to `limit` (at most 1,000) rows below a height, newest first; missing heights skipped | 0.1 to 0.3 ms for 15 or 100 rows, at the top or deep in history |
 | `heights_between(store, from, to)` | The heights timestamped in a period, through the `time` index | 1.7 to 2.6 ms for a year |
 | `periods(store, from, to, Period::Day \| Period::Blocks(n))` | One `Bucket` per UTC day or per `n` heights, oldest first: block count, first and last height and time, sums of transactions, size, weight, fees, subsidy and reward, mean difficulty, and mean fee-rate percentiles over the rated blocks | 31 to 42 ms for a year by day; 0.5 to 0.8 s for all of history in 2,016-block buckets |
+
+For the mining routes, `crates/engine/src/blocks/mining.rs` (and `pool_page` in `db.rs`):
+
+| Call | Returns | 975,000 rows |
+|---|---|---|
+| `span(store)` | The tip and the lowest height from which every row up to it is stored | 64 ms (walks down to the first gap) |
+| `row_counts(store)` | Rows, and rated rows | |
+| `pool_counts(store, from, to)` | Blocks, empty blocks and reward per pool over a range, most blocks first | 0.2 ms for a week; 0.2 s for all of history |
+| `pool_weeks(store, from, to)` | Blocks per pool per week from Monday 00:00 UTC | 0.24 s for all of history |
+| `pool_page(store, pool, from, below, limit)` | One pool's rows below a height, newest first | 0.2 ms for 100 |
+| `retargets(store, from, to)` | Each retarget's time and difficulty, with the period before's | 0.9 ms for all of history |
+| `work(store, from, to)` | Difficulty summed over a range and its first and last time: a hashrate estimate's inputs | |
+| `at_or_before(store, time)` | The newest block stamped at or before a time, through the `time` index | 0.4 ms |
+| `reattribute(store, pools)` | Redoes the `pool` column if the list changed (above) | 1.8 s for every row |
+
+Measured with `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark`, which writes 975,000 rows attributed as they go in 9 s (attribution adds about 2 µs a row).
 
 Measured on the machine and load described under [Measurements](#measurements) with `cargo test --release -p engine -- --ignored --nocapture read_benchmark`: 975,000 realistic rows written in 7 s, 295 MB.
 
