@@ -15,6 +15,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .hash--whole .hash__text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .hash--full {
     align-items: flex-start;
   }

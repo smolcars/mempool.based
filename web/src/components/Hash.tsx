@@ -15,13 +15,16 @@ export interface HashProps {
   copy?: boolean;
   /** What the copy button copies, for its label: "Copy transaction ID". */
   copyLabel?: string;
+  /** The whole value, wrapping where it must, instead of a shortened one. */
+  whole?: boolean;
 }
 
 /** A hash or address shortened in the middle, in the monospace cut. Full value in the title and the copy. */
 export function Hash(props: HashProps) {
-  const short = () => truncateMiddle(props.value, props.head, props.tail);
+  const short = () =>
+    props.whole ? props.value : truncateMiddle(props.value, props.head, props.tail);
   return (
-    <span class="hash">
+    <span class={["hash", { "hash--whole": props.whole === true }]}>
       <Show
         when={props.href}
         fallback={
@@ -43,7 +46,7 @@ export function Hash(props: HashProps) {
   );
 }
 
-/** A hash shown whole as a page subject, in groups of eight that alternate in tone, with a copy button. */
+/** A hash shown whole as a page subject, in groups of eight, with a copy button. */
 export function HashFull(props: { value: string; copyLabel?: string }) {
   return (
     <span class="hash hash--full">

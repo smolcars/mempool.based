@@ -773,8 +773,110 @@ function Body(props: {
     }
   };
 
+  const totalOut = () => props.tx.vout.reduce((sum, o) => sum + o.value, 0);
+  const statusWord = () => (props.shown.kind === "loading" ? undefined : BADGES[props.shown.kind]);
+  const summaryStatus = (): JSX.Element => {
+    const s = status();
+    if (s?.confirmed) {
+      const c = props.confs;
+      return c === undefined
+        ? ""
+        : `${groupDigits(c)} confirmation${c === 1 ? "" : "s"}`;
+    }
+    const p = mempool()?.position;
+    if (p) {
+      const at = place(p, network());
+      return <Link href={paths.projected(at.page)}>{at.where}</Link>;
+    }
+    return statusWord() ? steps()[1]?.title ?? "" : "";
+  };
+  /** Confirmed, nothing replaced or reorganised: the steps say no more than the summary does. */
+  const settled = () =>
+    confirmed() && props.shown.kind === "confirmed" && props.reorged === undefined;
+
   return (
     <>
+      {/* The answer first: where it is, how much it moved, what it paid, and when. */}
+      <dl class="tx-summary panel" aria-label="Summary">
+        <div class="tx-summary__item">
+          <dt>Status</dt>
+          <dd>
+            <span class="tx-summary__value">{statusWord()?.[0] ?? MISSING}</span>
+            <span class="tx-summary__sub">{summaryStatus()}</span>
+          </dd>
+        </div>
+        <div class="tx-summary__item">
+          <dt>Amount</dt>
+          <dd>
+            <span class="tx-summary__value">
+              <Amount sats={totalOut()} />
+            </span>
+            <span class="tx-summary__sub">
+              {`Sent to ${groupDigits(props.tx.vout.length)} output${props.tx.vout.length === 1 ? "" : "s"}`}
+            </span>
+          </dd>
+        </div>
+        <div class="tx-summary__item">
+          <dt>Fee</dt>
+          <dd>
+            <Show
+              when={rate() !== undefined}
+              fallback={<span class="tx-summary__value">{coinbase() ? "None" : MISSING}</span>}
+            >
+              <span class="tx-summary__value">
+                <FeeRate rate={effective() ?? rate() ?? 0} />
+              </span>
+              <span class="tx-summary__sub">
+                <Sats sats={props.tx.fee ?? 0} />
+                {effective() === undefined ? "" : ", effective rate with its group"}
+              </span>
+            </Show>
+          </dd>
+        </div>
+        <div class="tx-summary__item">
+          <Show
+            when={status()?.confirmed && status()}
+            fallback={
+              <>
+                <dt>First seen</dt>
+                <dd>
+                  <Show
+                    when={mempool()?.time}
+                    fallback={<span class="tx-summary__value">{MISSING}</span>}
+                  >
+                    {(t) => (
+                      <>
+                        <span class="tx-summary__value">
+                          <TimeAgo time={t()} />
+                        </span>
+                        <span class="tx-summary__sub">
+                          <TimeUtc time={t()} />
+                        </span>
+                      </>
+                    )}
+                  </Show>
+                </dd>
+              </>
+            }
+          >
+            {(st) => (
+              <>
+                <dt>Block</dt>
+                <dd>
+                  <span class="tx-summary__value">
+                    <Link href={paths.block(st().block_hash ?? st().block_height ?? "")}>
+                      <span class="num">{groupDigits(st().block_height ?? Number.NaN)}</span>
+                    </Link>
+                  </span>
+                  <span class="tx-summary__sub">
+                    <Show when={st().block_time}>{(t) => <TimeUtc time={t()} />}</Show>
+                  </span>
+                </dd>
+              </>
+            )}
+          </Show>
+        </div>
+      </dl>
       <Switch>
         <Match when={props.shown.kind === "replaced" && props.shown} keyed>
           {(r) => <ReplacedNotice chain={r.chain} truncated={r.truncated} />}
@@ -796,7 +898,7 @@ function Body(props: {
           )}
         </Match>
       </Switch>
-      <ol class="tx-timeline" aria-label="Status">
+      <ol class={["tx-timeline", { "tx-timeline--line": settled() }]} aria-label="Status">
         <For each={steps()}>
           {(step, i) => (
             <li

@@ -2,7 +2,7 @@
   .tx-page {
     display: grid;
     align-content: start;
-    gap: var(--space-6);
+    gap: var(--space-5);
     /* Keeps the footer below the fold, so it never jumps when the transaction arrives. */
     min-height: 100dvh;
     padding-top: var(--space-6);
@@ -57,6 +57,71 @@
   }
 
   /* ---- Status timeline: a real sequence, so its steps are numbered ---- */
+  /* ---- The answer first ---- */
+  .tx-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+  .tx-summary__item {
+    min-width: 0;
+  }
+  .tx-summary__item dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-summary__item dd {
+    display: grid;
+  }
+  .tx-summary__value {
+    min-height: 1.4em;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    line-height: 1.4;
+  }
+  .tx-summary__value .unit {
+    font-size: var(--text-sm);
+  }
+  .tx-summary__sub {
+    min-height: 1.5em;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  /* Confirmed and settled: the steps shrink to one line of words; the summary holds the rest. */
+  .tx-timeline.tx-timeline--line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    font-size: var(--text-sm);
+  }
+  .tx-timeline.tx-timeline--line .tx-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0;
+  }
+  .tx-timeline.tx-timeline--line .tx-step::before {
+    display: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step__marker {
+    width: 18px;
+    height: 18px;
+    border-width: 1.5px;
+    font-size: var(--text-xs);
+    box-shadow: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step__title {
+    font-weight: var(--weight-medium);
+  }
+  .tx-timeline.tx-timeline--line .tx-step__detail {
+    display: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step:last-child .tx-step__detail {
+    display: inline;
+    min-height: 0;
+  }
+
   .tx-timeline {
     display: grid;
     grid-auto-flow: column;
@@ -356,11 +421,23 @@
   .tx-flow__more:hover {
     color: var(--color-accent);
   }
+  /* Sized by its row, never by its own viewBox: without size containment the box it was last
+     drawn at fed back into the row's height, so a page widened from a phone kept a tall empty
+     region until reload. */
   .tx-flow__ribbons {
     align-self: stretch;
     width: 100%;
-    height: 100%;
+    height: auto;
+    min-height: 100%;
+    contain: size;
     overflow: visible;
+  }
+  /* Addresses whole where the cards have room; shortened in the middle on a phone. */
+  .tx-flow__addr--short {
+    display: none;
+  }
+  .tx-flow__addr--whole .hash__text {
+    font-size: var(--text-sm);
   }
   .tx-ribbon {
     fill: var(--color-line-strong);
@@ -841,6 +918,12 @@
     .tx-flow {
       grid-template-columns: minmax(0, 1fr) 2.25rem minmax(0, 1fr);
     }
+    .tx-flow__addr--short {
+      display: contents;
+    }
+    .tx-flow__addr--whole {
+      display: none;
+    }
     .tx-flow__item {
       padding: var(--space-1) var(--space-2);
     }
@@ -853,6 +936,10 @@
     }
     .tx-facts--two {
       grid-template-columns: minmax(0, 1fr);
+    }
+    .tx-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-3);
     }
     .tx-facts--single .tx-fact,
     .tx-inspector .tx-fact {

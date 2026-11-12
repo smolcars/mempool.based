@@ -247,7 +247,21 @@ export function Flow(props: {
                     fallback={input.prevout ? scriptLabel(input.prevout) : "Unknown"}
                   >
                     {(a) => (
-                      <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                      <span class="tx-flow__addrs">
+                        <span class="tx-flow__addr tx-flow__addr--short">
+                          <span class="tx-flow__addrs">
+                      <span class="tx-flow__addr tx-flow__addr--short">
+                        <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                      </span>
+                      <span class="tx-flow__addr tx-flow__addr--whole">
+                        <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                      </span>
+                    </span>
+                        </span>
+                        <span class="tx-flow__addr tx-flow__addr--whole">
+                          <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                        </span>
+                      </span>
                     )}
                   </Show>
                 </span>
@@ -309,7 +323,14 @@ export function Flow(props: {
                   fallback={<span class="tx-flow__label">{scriptLabel(out)}</span>}
                 >
                   {(a) => (
-                    <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                    <span class="tx-flow__addrs">
+                      <span class="tx-flow__addr tx-flow__addr--short">
+                        <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                      </span>
+                      <span class="tx-flow__addr tx-flow__addr--whole">
+                        <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                      </span>
+                    </span>
                   )}
                 </Show>
               </span>
