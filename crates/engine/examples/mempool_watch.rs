@@ -4,6 +4,8 @@
 //! `NET=MAINNET SECS=600 cargo run --release -p engine --example mempool_watch`
 //! reads `{NET}_RPC_HOST`, `_RPC_PORT`, `_RPC_USER`, `_RPC_PASSWORD` and `_ESPLORA_URL`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// A command-line proof program: its printed output is its purpose.
+#![allow(clippy::print_stdout)]
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
