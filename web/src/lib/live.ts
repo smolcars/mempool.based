@@ -21,6 +21,12 @@ export interface Topic<M> {
   readonly name: string;
   /** Reads one of this topic's messages; `undefined` ignores it (an unknown or malformed type). */
   parse: (message: Record<string, unknown>) => M | undefined;
+  /**
+   * Reads a binary frame, for a topic that sends them. Every binary frame is offered to every such
+   * subscriber, since a frame names its topic in its own bytes: return `undefined` for one that is
+   * not this topic's, or of a kind this client does not know (docs/WS.md "Binary frames").
+   */
+  binary?: (frame: ArrayBuffer) => M | undefined;
 }
 
 export interface TopicHandlers<M> {
@@ -33,7 +39,7 @@ export interface TopicHandlers<M> {
 /** The part of the browser's WebSocket the client uses, so tests can hand it a fake. */
 export type SocketLike = Pick<
   WebSocket,
-  "onopen" | "onmessage" | "onclose" | "onerror" | "send" | "close"
+  "onopen" | "onmessage" | "onclose" | "onerror" | "send" | "close" | "binaryType"
 >;
 
 /** Close codes after which reconnecting cannot help: the client sent something wrong (docs/WS.md). */
@@ -70,6 +76,8 @@ export class LiveConnection {
   private readonly subscribers = new Set<Subscriber>();
   /** Topics the server has been asked for on the current socket. */
   private subscribed = new Set<string>();
+  /** Topics to unsubscribe and subscribe again at the next flush: a binary topic lost its place. */
+  private restarting = new Set<string>();
   private ws: SocketLike | undefined;
   private greeted = false;
   /** Whether any socket was ever greeted: every later greeting is a reconnect. */
@@ -134,6 +142,15 @@ export class LiveConnection {
     };
   }
 
+  /**
+   * Unsubscribes from a topic and subscribes again, so its current state is sent afresh: for a
+   * topic of deltas whose client has lost its place. Sent with the next batch of changes.
+   */
+  restart(name: string): void {
+    this.restarting.add(name);
+    this.scheduleFlush();
+  }
+
   /** Stops for good and forgets the page's listeners. For tests. */
   dispose(): void {
     this.subscribers.clear();
@@ -156,9 +173,12 @@ export class LiveConnection {
       this.drop();
       return;
     }
+    // Binary frames as bytes in hand, not Blobs to read asynchronously, so they stay in order.
+    ws.binaryType = "arraybuffer";
     this.ws = ws;
     this.greeted = false;
     this.subscribed = new Set();
+    this.restarting = new Set();
     // oxlint-disable unicorn/prefer-add-event-listener -- `forget` detaches these by setting them to null
     ws.onmessage = (ev) => this.receive(ev.data);
     ws.onclose = (ev) => this.closed(ev.code);
@@ -171,7 +191,10 @@ export class LiveConnection {
 
   private receive(data: unknown): void {
     this.lastReceivedAt = Date.now();
-    // Binary frames carry kinds this client may not know yet (docs/WS.md "Frames").
+    if (data instanceof ArrayBuffer) {
+      this.receiveBinary(data);
+      return;
+    }
     if (typeof data !== "string") return;
     let msg: unknown;
     try {
@@ -190,6 +213,17 @@ export class LiveConnection {
     for (const sub of [...this.subscribers]) {
       if (sub.topic.name !== m["topic"] || !this.subscribers.has(sub)) continue;
       const parsed = sub.topic.parse(m);
+      if (parsed !== undefined) sub.handlers.message(parsed);
+    }
+  }
+
+  /** A binary frame goes to each topic that reads it; topics without a reader never see one. */
+  private receiveBinary(data: ArrayBuffer): void {
+    if (!this.greeted) return;
+    // oxlint-disable-next-line unicorn/no-useless-spread -- a copy: a handler may subscribe while this runs
+    for (const sub of [...this.subscribers]) {
+      if (!sub.topic.binary || !this.subscribers.has(sub)) continue;
+      const parsed = sub.topic.binary(data);
       if (parsed !== undefined) sub.handlers.message(parsed);
     }
   }
@@ -240,14 +274,19 @@ export class LiveConnection {
     }, wait);
   }
 
-  /** Brings the server's subscriptions in line with the page's, in at most two messages. */
+  /**
+   * Brings the server's subscriptions in line with the page's, in at most two messages.
+   * Unsubscribing goes first, so switching between capped topics never holds one too many.
+   */
   private flush(): void {
     if (!this.greeted) return;
     const wanted = new Set([...this.subscribers].map((s) => s.topic.name));
-    const add = [...wanted].filter((t) => !this.subscribed.has(t));
-    const remove = [...this.subscribed].filter((t) => !wanted.has(t));
-    if (add.length > 0) this.send({ op: "subscribe", topics: add });
+    const again = [...this.restarting].filter((t) => wanted.has(t) && this.subscribed.has(t));
+    this.restarting.clear();
+    const add = [...[...wanted].filter((t) => !this.subscribed.has(t)), ...again];
+    const remove = [...[...this.subscribed].filter((t) => !wanted.has(t)), ...again];
     if (remove.length > 0) this.send({ op: "unsubscribe", topics: remove });
+    if (add.length > 0) this.send({ op: "subscribe", topics: add });
     if (add.length > 0 || remove.length > 0) this.lastControlAt = Date.now();
     this.subscribed = wanted;
   }
@@ -373,13 +412,17 @@ export function liveConnection(network: Network): LiveConnection {
   return c;
 }
 
-/** Subscribes the calling component to a topic on the page's network for as long as it is mounted. */
-export function useTopic<M>(topic: Topic<M>, handlers: TopicHandlers<M>): void {
+/**
+ * Subscribes the calling component to a topic on the page's network for as long as it is mounted.
+ * Returns a function that subscribes again (`LiveConnection.restart`), for a topic of deltas.
+ */
+export function useTopic<M>(topic: Topic<M>, handlers: TopicHandlers<M>): () => void {
   const network = useNetwork();
   createEffect(() => {
     const off = liveConnection(network()).add(topic, handlers);
     onCleanup(off);
   });
+  return () => liveConnection(network()).restart(topic.name);
 }
 
 /** The state of the page network's live connection. */

@@ -49,6 +49,9 @@ export const paths = {
   block: (hashOrHeight: string | number) => `/block/${segment(hashOrHeight)}`,
   /** Recent blocks, newest first; from a height when paging back. */
   blocks: (from?: number) => (from === undefined ? "/blocks" : `/blocks/${segment(from)}`),
+  /** A projected block by its place in the queue, 1 for the next; the last (8) is the rest. */
+  projected: (position: number) =>
+    position <= 1 ? "/block/next" : `/block/next/${segment(position)}`,
   tx: (txid: string) => `/tx/${segment(txid)}`,
   address: (address: string) => `/address/${segment(address)}`,
   mining: () => "/mining",

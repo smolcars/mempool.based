@@ -25,6 +25,8 @@ web/
       api.ts            HTTP client and `createApi` resource
       live.ts           The WebSocket client: `useTopic`, `useLiveStatus` (see "Live data")
       blocks-topic.ts   The `blocks` topic: its messages and how to keep a block list current
+      projected-topic.ts The `projected` topic: every projected block's totals and the tip they sit on
+      projected-txs.ts  The `projected-txs:N` topics: binary frames, and a block's transactions kept from them
       summary.ts        Block summaries: their type, a check, a page-wide cache and the batch fetch
       fakes.ts          Test stand-ins: a fake WebSocket and made-up blocks
       esplora.ts        Types for the Esplora replies pages use
@@ -50,6 +52,7 @@ The network comes from the path. `useNetwork()` returns it; never keep it anywhe
 | Home | `/` | `pages/home` | W2 |
 | Block | `/block/:id` (hash or height) | `pages/block` | W3 |
 | Blocks | `/blocks`, `/blocks/:from` (paging back from a height) | `pages/blocks` | W3 |
+| Projected block | `/block/next`, `/block/next/:n` (2 to 8 places from now; 8 is the rest of the mempool) | `pages/projected` | W8 |
 | Transaction | `/tx/:txid` | `pages/tx` | W4 |
 | Address | `/address/:address` | `pages/address` | W5 |
 | Mining | `/mining` | `pages/mining` | W9 |
@@ -163,9 +166,9 @@ Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUin
 
 ### Live data
 
-`lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms, and ignores binary frames and message types it does not know. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.
+`lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms (unsubscribes before it subscribes, so switching between capped topics never holds one too many), and ignores message types it does not know. Binary frames are read as `ArrayBuffer`s and offered to every subscribed topic that has a `binary` reader; the others never see them. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.
 
-A topic is a name and a parser. Write one per topic in `lib/`, as `blocks-topic.ts` does; the client never changes for a new topic:
+A topic is a name and a parser, and a binary reader if it sends binary frames. Write one per topic in `lib/`, as `blocks-topic.ts` does; the client never changes for a new topic:
 
 ```ts
 export const mempoolTopic: Topic<MempoolMessage> = {
@@ -186,7 +189,8 @@ const status = useLiveStatus(); // "connecting" | "live" | "reconnecting" | "off
 ```
 
 - **Load over HTTP, then keep up over the socket.** The socket only reports changes. Fetch the state with `fetchApi`, apply messages on top, and treat a gap, a `resync` message that disagrees and the `resync` handler the same way: fetch again. Messages that arrive while that fetch is in flight are held and replayed on its answer (`pages/home/feeds.ts`, `createBlockFeed`).
-- **The mempool topics** exist now ([`WS.md`](WS.md#mempool-topics)): `mempool` for the mempool panel and bar, `projected` for the projected tiles, `transactions` for the latest transactions, and `projected-txs:N` for one projected block's grid. The first three are JSON and each message is the whole state, so a page keeps the last one. `projected-txs:N` is binary: write its parser in `lib/` from the tables in `WS.md`, apply deltas only when `prev` matches, and resubscribe when it does not. A page holds at most two of these at once. On a server with the mempool switched off each topic sends `{"type":"off"}` once: show that the mempool is not available, without polling. Rates are in sat per 1,000 vB.
+- **The mempool topics** exist now ([`WS.md`](WS.md#mempool-topics)): `mempool` for the mempool panel and bar, `projected` for the projected tiles, `transactions` for the latest transactions, and `projected-txs:N` for one projected block's grid. The first three are JSON and each message is the whole state, so a page keeps the last one; `projectedTopic` in `lib/projected-topic.ts` reads `projected`, with rates turned into sat/vB. On a server with the mempool switched off each topic sends `{"type":"off"}` once: show that the mempool is not available, without polling. Rates on the wire are in sat per 1,000 vB.
+- **A projected block's transactions** (`lib/projected-txs.ts`). `projectedTxsTopic(n)` reads block `n`'s frames with `decodeFrame`, which never throws: a frame of another kind is ignored, one in a newer format version comes back as `version` (ask for a reload), and one that is cut short, too long, has nonzero padding or a fee beyond 2^53 comes back as `malformed`. `BlockTxs` keeps the block as a `Map` from txid to a `GridTx`-shaped record (`{ id, vsize, fee, rate }`, rate in sat/vB), the same object until its record changes. `apply(frame)` answers `changed` (with the txids that came in and went out), `lost`, `ignored` or `version`. On `lost`, call the function `useTopic` returns: it unsubscribes and subscribes again in the next batch (`LiveConnection.restart`), and the snapshot that follows starts the block over. Until it comes the model keeps the last picture and ignores the old subscription's deltas still in flight, so one gap never becomes a loop. Call `expectSnapshot()` from the topic's `resync` handler: a reconnect subscribes afresh. A page holds at most two of these topics at once, and leaving the page unsubscribes. `fakes.ts` builds frames for tests (`snapshotFrame`, `deltaFrame`, `fakeTxid`).
 - **Say when it is not live.** While `status()` is not `live`, poll what the socket would have sent, no faster than every few seconds, and tell the reader (the home page's indicator).
 - In tests, stub the global `WebSocket` with `FakeSocket` from `lib/fakes.ts` and play the server: `FakeSocket.last().hello()`, `.receive({...})`, `.drop(1006)`.
 
@@ -222,7 +226,7 @@ For a figure without a component, use `lib/format.ts` directly: `formatBtc`, `fo
 
 ## Transaction grid
 
-`components/txgrid/` draws transactions as packed squares in WebGL2: area by virtual size, color by fee band, the highest fee rate at the top left, resting on the floor of the frame like sediment ([`DESIGN.md`](DESIGN.md#the-transaction-grid)). The block page uses it; a projected block will too.
+`components/txgrid/` draws transactions as packed squares in WebGL2: area by virtual size, color by fee band, the highest fee rate at the top left, resting on the floor of the frame like sediment ([`DESIGN.md`](DESIGN.md#the-transaction-grid)). The block page and the projected-block page use it.
 
 | File | Holds |
 |---|---|
@@ -251,7 +255,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 </div>
 ```
 
-**A whole block** is one array. **Changes** are a new array: the grid matches it to the last by `id`, so keep ids stable (the block index for a mined block, the txid for a projected one) and keep each unchanged transaction the same object (the grid caches its band per object). Squares that stay travel to their new places, new ones drop in, gone ones fade out where they stood, and a change that arrives mid-animation starts from where each square is. For a projected block (`projected-txs:N`, [`WS.md`](WS.md#binary-frames)), make each record `{ id: txid, vsize, fee, rate: effectiveRate / 1000 }`: `rate`, in sat/vB, orders and colors the square by the chunk it is mined in rather than by its own fee, and `value` is left out because the record does not carry it. Keep a `Map<txid, GridTx>`, apply the snapshot and each delta to it, and pass `[...map.values()]`; order does not matter, because the layout sorts. A transaction whose fee rate changed is a new object with the same id: it moves. Changes that arrive while the tab is hidden are applied without animation.
+**A whole block** is one array. **Changes** are a new array: the grid matches it to the last by `id`, so keep ids stable (the block index for a mined block, the txid for a projected one) and keep each unchanged transaction the same object (the grid caches its band per object). Squares that stay travel to their new places, new ones drop in, gone ones fade out where they stood, and a change that arrives mid-animation starts from where each square is. For a projected block (`projected-txs:N`, [`WS.md`](WS.md#binary-frames)), make each record `{ id: txid, vsize, fee, rate: effectiveRate / 1000 }`: `rate`, in sat/vB, orders and colors the square by the chunk it is mined in rather than by its own fee, and `value` is left out because the record does not carry it. `BlockTxs` in `lib/projected-txs.ts` keeps that map: apply the snapshot and each delta to it, and pass `[...model.txs.values()]`; order does not matter, because the layout sorts. Keep the grid mounted when the block empties, so the last squares fade out instead of vanishing. A transaction whose fee rate changed is a new object with the same id: it moves. Changes that arrive while the tab is hidden are applied without animation.
 
 - **Layout.** Every square's side is its exact side (√(vsize ÷ vB per cell)) rounded to whole cells, at least 2; squares are placed first fit, row by row from the top left in fee order, then every square drops until it rests on the floor or another. The grid has about 160 000 cells, shaped to the frame in 4% steps, so a frame that changes size by a pixel keeps its picture and is only rescaled. If the squares overflow, they all shrink a little and are packed again. A full mainnet block (4 198 transactions) lays out in 5 to 8 ms in Chrome on an Apple M4, on the main thread.
 - **Hit testing** is a lookup in the cell map, exact to the cell. It answers for where squares are going, not where an animation has them.
