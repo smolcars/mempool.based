@@ -734,7 +734,10 @@ function CoreSample(props: {
           Each square is a transaction, as large as its virtual size and colored by the rate it
           would be mined at, the highest at the top left. Newcomers drop in; what is outbid or
           leaves fades where it stood.{" "}
-          <a href="#projected-txs-title">Every transaction is in the list below.</a>
+          {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
+          <a href="#projected-txs-title" rel="external">
+            Every transaction is in the list below.
+          </a>
         </Show>
         <Show when={props.block && props.block.txs > 0}>
           <span class="visually-hidden">

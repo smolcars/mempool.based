@@ -933,7 +933,10 @@ function CoreSample(props: {
         <span class={["block-core__text", { "block-core__text--off": !drawn() }]}>
           The block fills {filled()} of its weight limit. Each square is a transaction, as large as
           its virtual size and colored by its fee rate, the highest at the top left.{" "}
-          <a href="#block-txs-title">Every transaction is in the list below.</a>
+          {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
+          <a href="#block-txs-title" rel="external">
+            Every transaction is in the list below.
+          </a>
         </span>
         <Show when={described().length > 0}>
           <span class="visually-hidden"> Layers, cheapest first: {described().join("; ")}.</span>
