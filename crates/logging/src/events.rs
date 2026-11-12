@@ -184,6 +184,23 @@ pub struct ConnectionsRefused {
 }
 event!(ConnectionsRefused, "connections_refused", Warn);
 
+/// Requests that named a client address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded` but came
+/// from a peer outside `TRUSTED_PROXIES`, so the header was ignored and the peer counted as the
+/// client: a proxy in front that is not trusted puts every visitor in one allowance. Written at a
+/// total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct ProxyHeaderIgnored {
+    /// The first of the three headers the request had, in lower case.
+    pub header: &'static str,
+    /// The peer, when it is a loopback, private or link-local address, as a proxy's is: the value
+    /// `TRUSTED_PROXIES` is missing. Null for any other address, which may be a visitor's.
+    pub peer: Option<String>,
+    /// Whether `TRUSTED_PROXIES` is set at all.
+    pub trusted_proxies_set: bool,
+    pub total: u64,
+}
+event!(ProxyHeaderIgnored, "proxy_header_ignored", Warn);
+
 // HTTP.
 
 /// One HTTP request, written when its response head is ready.
@@ -1590,6 +1607,12 @@ mod tests {
                 node_chain: "main",
             }),
             both(&ConnectionsRefused { total: 8 }),
+            both(&ProxyHeaderIgnored {
+                header: "x-real-ip",
+                peer: Some("172.18.0.1".into()),
+                trusted_proxies_set: false,
+                total: 1,
+            }),
             both(&RpcUnreachable {
                 network: n,
                 error: "timeout",

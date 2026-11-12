@@ -55,6 +55,7 @@ Who can cause each event that is not on a fixed schedule, and how often. Per-cli
 | `requests_refused` | Any client | One a minute while anything is refused, the same size whatever the number of clients |
 | `connections_refused` | A client past `CLIENT_MAX_CONNECTIONS` | At a total of 1, 2, 4, 8…: about 30 lines over a process's life |
 | `ws_origin_refused` | Another site's page | At a total of 1, 2, 4, 8… |
+| `proxy_header_ignored` | A request naming a client address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded`, from a peer outside `TRUSTED_PROXIES` | At a total of 1, 2, 4, 8… |
 | `ws_clients_dropped` (`too_big`, `rate`, `bad_message`, `binary`, `invalid_utf8`, `protocol_error`, `too_many_subscriptions`, `too_slow`, `idle`) | A client breaking a WebSocket limit | At a total of 1, 2, 4, 8… per reason and network. Each socket first cost an admitted upgrade |
 | `ws_closed` (debug) | Any client opening and closing sockets | One per socket, each of which cost an admitted upgrade; debug, so off by default and under the ceiling |
 | `tracking_refused` | Clients following more transactions or addresses than the server holds | At a total of 1, 2, 4, 8… per kind and network |
@@ -127,6 +128,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `panic` | error | `message`, `location`, `thread` | Any panic. In a request handler the client gets a 500 and the server keeps running |
 | `log_events_dropped` | warn | `count`, `queue_full`, `over_budget`, `events` | Events were dropped: `queue_full` because the output fell behind, `over_budget` past the [ceiling](#the-ceiling); `events` counts them by event name. Written by the writer at most once a second, the first at once |
 | `connections_refused` | warn | `total` | Connections closed as soon as they were accepted because their address already had `CLIENT_MAX_CONNECTIONS` open: at a total of 1, 2, 4, 8…. The client sees a reset and no response, so no `http_request` records it |
+| `proxy_header_ignored` | warn | `header`, `peer`, `trusted_proxies_set`, `total` | Requests that named a client address in `header` (`x-forwarded-for`, `x-real-ip` or `forwarded`) from a peer not in `TRUSTED_PROXIES`, so the header was ignored and the peer is the client: at a total of 1, 2, 4, 8…. Behind a proxy it means every visitor shares the proxy's allowance, and says so at the first request rather than at the first refusal. `peer` is the address to add to `TRUSTED_PROXIES` when it is loopback, private or link-local, as a proxy on the same host or network is, and null otherwise, since it may then be a visitor's own. `trusted_proxies_set` `false`: the proxy settings are not set at all ([`DEPLOY.md`](DEPLOY.md#client-addresses)). Without a proxy in front it only means a client sent such a header, which changes nothing |
 
 ### HTTP
 

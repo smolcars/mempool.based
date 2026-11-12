@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -318,6 +319,8 @@ pub struct Limiter {
     preflights: Arc<Clients>,
     pub limits: Limits,
     in_flight: Arc<Semaphore>,
+    /// Requests whose forwarding header was ignored, for `proxy_header_ignored`.
+    ignored_forwarding: Arc<AtomicU64>,
 }
 
 impl Limiter {
@@ -332,6 +335,7 @@ impl Limiter {
             preflights: Clients::new(limits),
             limits: limits.clone(),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
+            ignored_forwarding: Arc::default(),
         }
     }
 
@@ -367,7 +371,7 @@ impl Drop for AbortOnDrop {
 
 /// Headers a proxy names the client in. Sent by a peer we do not trust, they hint that a proxy in
 /// front is missing from `TRUSTED_PROXIES`.
-const FORWARDING: [HeaderName; 3] = [
+static FORWARDING: [HeaderName; 3] = [
     HeaderName::from_static("x-forwarded-for"),
     HeaderName::from_static("x-real-ip"),
     HeaderName::from_static("forwarded"),
@@ -401,10 +405,17 @@ impl Limiter {
     ) -> Result<(Hold, IpAddr, Refusal), (Refused, Refusal)> {
         let trust = self.limits.trusted_proxy.as_ref();
         let addr = client_addr(headers, peer, trust);
+        let ignored = if trust.is_some_and(|t| t.trusts(peer.to_canonical())) {
+            None
+        } else {
+            FORWARDING.iter().find(|h| headers.contains_key(*h))
+        };
+        if let Some(header) = ignored {
+            self.forwarding_ignored(header, peer);
+        }
         let who = Refusal {
             client: addr,
-            untrusted_forwarded: !trust.is_some_and(|t| t.trusts(peer.to_canonical()))
-                && FORWARDING.iter().any(|h| headers.contains_key(h)),
+            untrusted_forwarded: ignored.is_some(),
             proxy_keyed: trust.is_some_and(|t| t.trusts(addr)),
         };
         let (table, max) = if is_static(path) {
@@ -418,6 +429,30 @@ impl Limiter {
             Ok(hold) => Ok((hold, addr, who)),
             Err(refused) => Err((refused, who)),
         }
+    }
+}
+
+impl Limiter {
+    /// Counts a request whose forwarding header was ignored, and says so at a total of 1, 2, 4…
+    fn forwarding_ignored(&self, header: &'static HeaderName, peer: IpAddr) {
+        let total = self.ignored_forwarding.fetch_add(1, Ordering::Relaxed) + 1;
+        if total.is_power_of_two() {
+            logging::emit(&logging::events::ProxyHeaderIgnored {
+                header: header.as_str(),
+                peer: proxy_like(peer).then(|| peer.to_canonical().to_string()),
+                trusted_proxies_set: self.limits.trusted_proxy.is_some(),
+                total,
+            });
+        }
+    }
+}
+
+/// Whether `ip` is an address a proxy in front would connect from (loopback, private, link-local),
+/// rather than one that may be a visitor's own, which is not logged unasked.
+fn proxy_like(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 
@@ -512,6 +547,16 @@ mod tests {
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn only_a_proxy_like_peer_is_named_when_its_header_is_ignored() {
+        for p in ["127.0.0.1", "172.18.0.1", "10.0.0.2", "::1", "fd00::1", "::ffff:192.168.1.1"] {
+            assert!(proxy_like(ip(p)), "{p}");
+        }
+        for v in ["203.0.113.9", "2001:db8::1", "::ffff:198.51.100.1"] {
+            assert!(!proxy_like(ip(v)), "{v}");
+        }
     }
 
     #[test]
