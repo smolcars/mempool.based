@@ -19,8 +19,12 @@ export const STRIP_MAX = 10;
 export const FALLBACK_POLL_MS = 15_000;
 /** Messages held while a fetch is in flight; past this the fetch is simply repeated. */
 const QUEUE_MAX = 32;
-/** Tip answers are cached for a second (docs/API.md); an older list is asked for again after this. */
+/**
+ * Tip answers are cached for a second (docs/API.md), and the node may serve a new block a moment
+ * after announcing it: a list behind what is known is asked for again after this, a few times.
+ */
 const STALE_RETRY_MS = 1_500;
+const STALE_RETRIES = 8;
 
 export interface Feed<T> {
   data: Accessor<T | undefined>;
@@ -42,8 +46,19 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
   /** Messages that arrived while a fetch was in flight, replayed on top of its answer. */
   let queue: BlocksMessage[] | undefined;
   let again = false;
+  /** The tip the socket said exists, until a list that reaches it arrives. */
+  let expected: { height: number; hash: string } | undefined;
   let staleRetries = 0;
   let staleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Asks again in a moment, unless it has already asked enough times. */
+  const retryLater = () => {
+    if (staleRetries >= STALE_RETRIES) return false;
+    staleRetries++;
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(refresh, STALE_RETRY_MS);
+    return true;
+  };
 
   const refresh = () => {
     if (controller) {
@@ -65,19 +80,21 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
         .slice(0, STRIP_MAX);
       const shown = data();
       const newest = list[0];
-      if (shown?.[0] && newest && newest.height < shown[0].height && staleRetries < 1) {
-        // The server's one-second cache can answer with the list from before the block we just showed.
-        staleRetries++;
-        clearTimeout(staleTimer);
-        staleTimer = setTimeout(refresh, STALE_RETRY_MS);
-      } else {
-        staleRetries = 0;
-        if (!sameList(shown, list)) setData(list);
-      }
+      const behindShown = !!shown?.[0] && !!newest && newest.height < shown[0].height;
+      const behindExpected = !!expected && (!newest || newest.height < expected.height);
+      // A list older than what is on screen is never shown; one that is ahead of it but not yet at
+      // the announced tip is shown, and asked for again.
+      if (!behindShown && !sameList(shown, list)) setData(list);
+      if ((behindShown || behindExpected) && retryLater()) return;
+      staleRetries = 0;
+      expected = undefined;
+      // Retries ran out: take the node's word over the screen's.
+      if (behindShown) setData(list);
       setError(undefined);
     } catch (e) {
       if (signal.aborted || isAbort(e)) return;
       setError(e);
+      if (expected) retryLater();
     } finally {
       if (!signal.aborted) {
         controller = undefined;
@@ -105,12 +122,16 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
     }
     if (m.type === "block") {
       const next = applyBlock(shown, m.block, STRIP_MAX);
-      if (next === "gap") refresh();
-      else if (!sameList(shown, next)) setData(next);
+      if (next === "gap") {
+        expected = { height: m.block.height, hash: m.block.id };
+        refresh();
+      } else if (!sameList(shown, next)) setData(next);
     } else if (m.type === "reorg") {
       const next = applyReorg(shown, m.forkHeight);
       if (next.length !== shown.length) setData(next);
-    } else if (differsFrom(shown, m.tip)) {
+    } else if (m.tip && differsFrom(shown, m.tip)) {
+      // Often the hub's answer to a block the node could not serve yet: wait for HTTP to have it.
+      expected = m.tip;
       refresh();
     }
   }

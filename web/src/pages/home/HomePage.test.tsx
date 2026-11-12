@@ -168,6 +168,45 @@ describe("the strip, kept live", () => {
     await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(11));
   });
 
+  it("keeps asking after a resync until HTTP has the announced block", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { el, ws } = await open();
+      // The server's cache still holds the list from before block 11, twice.
+      let stale = 2;
+      replies["/blocks"] = () => Response.json(stale-- > 0 ? chain(1, 10) : chain(2, 11));
+      ws.receive({ topic: "blocks", type: "resync", tip: { height: 11, hash: fakeBlock(11).id } });
+      await vi.waitFor(() => expect(blocksFetches()).toBeGreaterThanOrEqual(2));
+      expect(tileHeights(el)[0]).toBe(10);
+      vi.advanceTimersByTime(1_500);
+      await vi.waitFor(() => expect(blocksFetches()).toBeGreaterThanOrEqual(3));
+      vi.advanceTimersByTime(1_500);
+      await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(11));
+      // Caught up: no more asking.
+      const settled = blocksFetches();
+      vi.advanceTimersByTime(10_000);
+      expect(blocksFetches()).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps asking after a failed fetch for an announced block, but not forever", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { ws } = await open();
+      replies["/blocks"] = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
+      ws.receive({ topic: "blocks", type: "resync", tip: { height: 11, hash: fakeBlock(11).id } });
+      // The first load, the resync's fetch, then eight retries.
+      for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_500);
+      expect(blocksFetches()).toBe(10);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(blocksFetches()).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refetches after a reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
