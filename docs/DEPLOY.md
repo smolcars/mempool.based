@@ -177,7 +177,7 @@ It must:
 | Compress `application/json` | [Point 1](#tls-and-the-reverse-proxy) | `gzip on; gzip_types application/json;` |
 | Accept request bodies of 1 MB | A broadcast transaction may be 800,000 hex characters ([`API.md`](API.md#broadcast)) | `client_max_body_size` is 1 MB by default |
 
-A CDN in front must also honour the server's `Cache-Control` headers: confirmed blocks are cacheable for long, live answers are `no-store`.
+A CDN in front must also honour the server's `Cache-Control` headers: confirmed blocks are cacheable for long, live answers are `no-store`. A page's head names that page for link previews, so a cache in front must key pages on the whole URL, query string included, as caches do by default ([`FRONTEND.md`](FRONTEND.md#link-previews)).
 
 ### Client addresses
 

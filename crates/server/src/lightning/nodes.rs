@@ -148,7 +148,7 @@ pub(crate) fn scid(s: &str) -> Result<u64, ApiError> {
 }
 
 /// `%XX` and `+` decoded; `None` if the bytes are not UTF-8 or an escape is broken.
-fn decode(s: &str) -> Option<String> {
+pub(crate) fn decode(s: &str) -> Option<String> {
     let mut out = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
     while let Some(b) = bytes.next() {
