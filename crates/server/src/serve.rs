@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ConnectInfo;
+use axum::http::Method;
+use axum::response::Response;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -21,7 +23,47 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Sleep;
 use tower::ServiceExt;
 
-use crate::limits::Limiter;
+use crate::limits::{Checked, Hold, Limiter};
+use crate::refusals::Refusals;
+
+/// What a request needs before it is routed: the per-client limits, checked here so a refusal
+/// costs no routing, middleware or log line ([`refused_early`](crate::refused_early)).
+pub(crate) struct Early {
+    pub limiter: Limiter,
+    pub refusals: Arc<Refusals>,
+}
+
+impl Early {
+    /// `Ok` to route the request, holding the client's request slot if it was admitted here;
+    /// `Err` with the answer to a refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the error is the response, handed straight to hyper: boxing it would add an allocation to every refusal"
+    )]
+    fn step(
+        &self,
+        req: &mut hyper::Request<Incoming>,
+        peer: SocketAddr,
+    ) -> Result<Option<Hold>, Response> {
+        // Preflights are answered before the limits (`cors`), as they always were.
+        if req.method() == Method::OPTIONS {
+            return Ok(None);
+        }
+        let path = req.uri().path();
+        match self.limiter.check(req.headers(), path, peer.ip()) {
+            Ok((hold, addr, who)) => {
+                req.extensions_mut().insert(Checked::Admitted { addr, who });
+                Ok(Some(hold))
+            }
+            // The first of its reason in a while: routed, so it is logged with its route.
+            Err((refused, who)) if self.refusals.record(refused.reason, path, who) => {
+                req.extensions_mut().insert(Checked::Refused(refused, who));
+                Ok(None)
+            }
+            Err((refused, _)) => Err(crate::refused_early(path, refused)),
+        }
+    }
+}
 
 /// Largest request head (request line and headers) a client may send.
 const MAX_HEAD_BYTES: usize = 16 * 1024;
@@ -31,9 +73,10 @@ const MAX_HEAD_BYTES: usize = 16 * 1024;
 pub async fn serve(
     listener: TcpListener,
     router: Router,
-    limiter: Limiter,
+    early: Arc<Early>,
     shutdown: impl Future<Output = ()>,
 ) {
+    let limiter = &early.limiter;
     let limits = limiter.limits.clone();
     let open = Arc::new(Semaphore::new(limits.max_connections));
     let (stop, stopped) = watch::channel(());
@@ -57,13 +100,27 @@ pub async fn serve(
             continue;
         };
         let router = router.clone();
+        let early = Arc::clone(&early);
         let mut stopped = stopped.clone();
         let timeout = limits.request_timeout;
         tokio::spawn(async move {
             let _slots = (permit, hold);
             let service = service_fn(move |mut req: hyper::Request<Incoming>| {
                 req.extensions_mut().insert(ConnectInfo(peer));
-                router.clone().oneshot(req)
+                // Cloned only to route: a shared count every core would contend on.
+                let routed = early
+                    .step(&mut req, peer)
+                    .map(|hold| (hold, router.clone()));
+                async move {
+                    match routed {
+                        Ok((hold, router)) => {
+                            let res = router.oneshot(req).await;
+                            drop(hold);
+                            res
+                        }
+                        Err(res) => Ok(res),
+                    }
+                }
             });
             let mut builder = http1::Builder::new();
             builder

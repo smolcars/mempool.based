@@ -1,5 +1,6 @@
-//! One `http_request` event per request, and an `X-Request-Id` on every response
-//! (`docs/LOGGING.md`).
+//! One `http_request` event per request served, and an `X-Request-Id` on every response
+//! (`docs/LOGGING.md`). A refused request is counted in [`Refusals`] instead, so a client cannot
+//! choose how much we write; the first of each reason after a quiet minute is still written.
 //!
 //! The event names the matched route template, never the raw path or query: a path says which
 //! address or transaction someone looked up, and the log must not become a record of that.
@@ -7,8 +8,8 @@
 use std::hash::BuildHasher;
 use std::hash::RandomState;
 use std::net::SocketAddr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::body::HttpBody;
@@ -20,33 +21,40 @@ use logging::events::HttpRequest;
 
 use crate::config::{Config, Network, RequestLog, TrustedProxy};
 use crate::esplora::{ApiOutcome, Source};
-use crate::limits::{Refused, client_addr};
+use crate::limits::{Counted, Refused, client_addr};
+use crate::refusals::{Refusal, Refusals};
 
 pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
 /// Route label for everything the frontend fallback serves: pages, the app shell, static files.
 const FRONTEND: &str = "frontend";
 
-/// Settings for [`log_request`].
+/// Settings and state for [`log_request`]. Cloned per request, so behind one pointer.
 #[derive(Debug, Clone)]
-pub struct RequestLogger {
+pub struct RequestLogger(Arc<Inner>);
+
+#[derive(Debug)]
+struct Inner {
     mode: RequestLog,
     client_addr: bool,
     trusted_proxy: Option<TrustedProxy>,
+    refusals: Arc<Refusals>,
 }
 
 impl RequestLogger {
-    pub fn new(config: &Config) -> Self {
-        Self {
+    pub fn new(config: &Config, refusals: Arc<Refusals>) -> Self {
+        Self(Arc::new(Inner {
             mode: config.log_requests,
             client_addr: config.log_client_addr,
             trusted_proxy: config.limits.trusted_proxy.clone(),
-        }
+            refusals,
+        }))
     }
 }
 
 /// Outermost middleware: times the request, tags the response with its id and records it.
 pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: Next) -> Response {
+    let log = &*log.0;
     let started = Instant::now();
     let id = request_id();
     let method = req.method().clone();
@@ -62,9 +70,30 @@ pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: N
         })
         .flatten();
 
+    let path = req.uri().clone();
     let mut res = next.run(req).await;
     if let Ok(v) = HeaderValue::from_str(&id) {
         res.headers_mut().insert(REQUEST_ID, v);
+    }
+    // A refusal is counted; only the first of its reason after a quiet window goes on.
+    // A timeout is not one: the request was admitted and its work ran.
+    if let Some(r) = res.extensions().get::<Refused>()
+        && r.reason != "timeout"
+    {
+        let who = res
+            .extensions()
+            .get::<Refusal>()
+            .copied()
+            .unwrap_or(Refusal {
+                client: std::net::Ipv4Addr::UNSPECIFIED.into(),
+                untrusted_forwarded: false,
+                proxy_keyed: false,
+            });
+        // `serve` counted it already when it chose to route it, to be written here.
+        let counted = res.extensions().get::<Counted>().is_some();
+        if !counted && !log.refusals.record(r.reason, path.path(), who) {
+            return res;
+        }
     }
     let status = res.status();
     let failed = status.is_client_error() || status.is_server_error();
@@ -111,7 +140,7 @@ fn ms(micros: u128) -> f64 {
 
 /// Unique within the process and unguessable across restarts: a counter through a randomly
 /// keyed SipHash, as 16 hex digits.
-fn request_id() -> String {
+pub(crate) fn request_id() -> String {
     static KEYS: OnceLock<RandomState> = OnceLock::new();
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);

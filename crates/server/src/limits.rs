@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderName};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::{Limits, TrustedProxy};
 use crate::error::ApiError;
+use crate::refusals::Refusal;
 
 /// A limit said no: the error the client gets, and a fixed reason for the request log. Its
 /// response carries it as an extension.
@@ -357,25 +358,98 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Middleware applying, in order: the per-client rate and concurrency limits (static files'
-/// own, or the API's), the global
-/// concurrency limit (shedding load instead of queueing), then the request timeout.
-pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next) -> Response {
-    let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() else {
-        // Only reachable if the router is served without `serve`; refuse rather than share one bucket.
-        return ApiError::INTERNAL.into_response();
+/// Headers a proxy names the client in. Sent by a peer we do not trust, they hint that a proxy in
+/// front is missing from `TRUSTED_PROXIES`.
+const FORWARDING: [HeaderName; 3] = [
+    HeaderName::from_static("x-forwarded-for"),
+    HeaderName::from_static("x-real-ip"),
+    HeaderName::from_static("forwarded"),
+];
+
+/// The per-client verdict, reached before routing by `serve` (or by [`limit`] when the router is
+/// driven alone). It rides on the request as an extension so [`limit`] does not decide twice.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Checked {
+    /// Admitted: the caller holds the client's request slot until the response head is ready.
+    Admitted { addr: IpAddr, who: Refusal },
+    /// Refused, and the first of its reason in a while: routed only to be logged whole. Already
+    /// counted in the refusal summary.
+    Refused(Refused, Refusal),
+}
+
+/// On a response, says its refusal is already counted in the summary.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Counted;
+
+impl Limiter {
+    /// Takes `peer`'s rate token and request slot for `path` (static files' own limits, or the
+    /// API's), or says why not. Who the client is, for the refusal summary, either way.
+    pub(crate) fn check(
+        &self,
+        headers: &HeaderMap,
+        path: &str,
+        peer: IpAddr,
+    ) -> Result<(Hold, IpAddr, Refusal), (Refused, Refusal)> {
+        let trust = self.limits.trusted_proxy.as_ref();
+        let addr = client_addr(headers, peer, trust);
+        let who = Refusal {
+            client: addr,
+            untrusted_forwarded: !trust.is_some_and(|t| t.trusts(peer.to_canonical()))
+                && FORWARDING.iter().any(|h| headers.contains_key(h)),
+            proxy_keyed: trust.is_some_and(|t| t.trusts(addr)),
+        };
+        let (table, max) = if is_static(path) {
+            (&self.statics, STATIC_CONCURRENCY)
+        } else {
+            (&self.clients, self.limits.client_requests)
+        };
+        match table.acquire(addr, Held::Request, max, 1.0) {
+            Ok(hold) => Ok((hold, addr, who)),
+            Err(refused) => Err((refused, who)),
+        }
+    }
+}
+
+/// Middleware applying, in order: the per-client limits ([`Limiter::check`], unless `serve`
+/// already did), the global concurrency limit (shedding load instead of queueing), then the
+/// request timeout. A refused response, from here or from a handler, leaves with a [`Refusal`]
+/// saying who was refused. Its state is one pointer: axum clones it for every request, and each
+/// shared count it holds is a cache line every core fights over under a flood.
+pub async fn limit(State(limiter): State<Arc<Limiter>>, mut req: Request, next: Next) -> Response {
+    let (_hold, addr, who) = match req.extensions_mut().remove::<Checked>() {
+        Some(Checked::Admitted { addr, who }) => (None, addr, who),
+        Some(Checked::Refused(refused, who)) => {
+            let mut res = refused.into_response();
+            res.extensions_mut().insert(who);
+            res.extensions_mut().insert(Counted);
+            return res;
+        }
+        None => {
+            let Some(ConnectInfo(peer)) =
+                req.extensions().get::<ConnectInfo<SocketAddr>>().copied()
+            else {
+                // Only reachable if the router is served without `serve`; refuse rather than
+                // share one bucket.
+                return ApiError::INTERNAL.into_response();
+            };
+            match limiter.check(req.headers(), req.uri().path(), peer.ip()) {
+                Ok((hold, addr, who)) => (Some(hold), addr, who),
+                Err((refused, who)) => {
+                    let mut res = refused.into_response();
+                    res.extensions_mut().insert(who);
+                    return res;
+                }
+            }
+        }
     };
-    let limits = &limiter.limits;
-    let addr = client_addr(req.headers(), peer.ip(), limits.trusted_proxy.as_ref());
-    let (table, max) = if is_static(req.uri().path()) {
-        (&limiter.statics, STATIC_CONCURRENCY)
-    } else {
-        (&limiter.clients, limits.client_requests)
-    };
-    let _hold = match table.acquire(addr, Held::Request, max, 1.0) {
-        Ok(hold) => hold,
-        Err(e) => return e.into_response(),
-    };
+    let mut res = admitted(&limiter, addr, req, next).await;
+    if res.extensions().get::<Refused>().is_some() {
+        res.extensions_mut().insert(who);
+    }
+    res
+}
+
+async fn admitted(limiter: &Limiter, addr: IpAddr, mut req: Request, next: Next) -> Response {
     let Ok(_permit) = limiter.in_flight.clone().try_acquire_owned() else {
         return Refused {
             error: ApiError::OVERLOADED,
@@ -389,7 +463,7 @@ pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next)
     });
     // A task of its own turns a handler panic into a 500 instead of a dropped connection.
     let mut task = AbortOnDrop(tokio::spawn(next.run(req)));
-    match tokio::time::timeout(limits.request_timeout, &mut task.0).await {
+    match tokio::time::timeout(limiter.limits.request_timeout, &mut task.0).await {
         Ok(Ok(res)) => res,
         Ok(Err(_)) => ApiError::INTERNAL.into_response(),
         Err(_) => Refused {

@@ -39,6 +39,7 @@ fn capture() -> &'static Capture {
         let settings = Settings {
             format: Format::Json,
             level: Level::Debug,
+            max_bytes_per_sec: logging::DEFAULT_MAX_BYTES_PER_SEC,
         };
         assert!(logging::init(settings, c.clone()));
         c

@@ -16,6 +16,7 @@ pub mod health;
 pub mod lightning;
 pub mod limits;
 pub mod mining;
+mod refusals;
 pub mod relatives;
 pub mod replacements;
 pub mod report;
@@ -36,7 +37,7 @@ use axum::http::header::{
     ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_SECURITY_POLICY,
     HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -205,6 +206,9 @@ pub struct App {
     sockets: Arc<ws::Sockets>,
     /// Stopped after the last request, so each peer writes its graph.
     lightning: Vec<Arc<lightning::Lightning>>,
+    /// Summarised once more at shutdown, so the last window's refusals are not lost.
+    refusals: Arc<refusals::Refusals>,
+    log_client_addr: bool,
 }
 
 impl App {
@@ -313,19 +317,26 @@ impl App {
             |v| SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static(v));
 
         let limiter = Limiter::new(&config.limits);
+        let refusals = refusals::Refusals::new(std::time::Instant::now());
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(refusals::report(
+                Arc::clone(&refusals),
+                config.log_client_addr,
+            ));
+        }
         let router = app
             .nest_service("/assets", cache(IMMUTABLE).layer(assets))
             // The shell and unhashed files are revalidated on every load, so a deploy shows at once.
             .fallback_service(cache("no-cache").layer(pages))
             .layer(DefaultBodyLimit::max(config.limits.max_body_bytes))
             .layer(middleware::from_fn_with_state(
-                limiter.clone(),
+                Arc::new(limiter.clone()),
                 limits::limit,
             ))
             .layer(middleware::map_response(finish))
             .layer(middleware::from_fn(cors))
             .layer(middleware::from_fn_with_state(
-                request_log::RequestLogger::new(config),
+                request_log::RequestLogger::new(config, Arc::clone(&refusals)),
                 request_log::log_request,
             ));
         Self {
@@ -333,6 +344,8 @@ impl App {
             limiter,
             sockets,
             lightning: peers,
+            refusals,
+            log_client_addr: config.log_client_addr,
         }
     }
 
@@ -355,8 +368,15 @@ impl App {
             shutdown.await;
             sockets.close_all();
         };
-        serve::serve(listener, self.router, self.limiter, signal).await;
+        let early = Arc::new(serve::Early {
+            limiter: self.limiter,
+            refusals: Arc::clone(&self.refusals),
+        });
+        serve::serve(listener, self.router, early, signal).await;
         sockets.drain().await;
+        if let Some(summary) = self.refusals.roll(std::time::Instant::now()) {
+            summary.emit(self.log_client_addr);
+        }
         for l in &self.lightning {
             l.stop().await;
         }
@@ -392,7 +412,11 @@ async fn cors(req: Request, next: Next) -> Response {
     } else {
         next.run(req).await
     };
-    let h = res.headers_mut();
+    api_headers(res.headers_mut(), preflight);
+    res
+}
+
+fn api_headers(h: &mut HeaderMap, preflight: bool) {
     h.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     if preflight {
         h.insert(
@@ -417,12 +441,28 @@ async fn cors(req: Request, next: Next) -> Response {
     if !h.contains_key(CACHE_CONTROL) {
         h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
+}
+
+/// A request the limits refused before routing gets the response the router would have sent
+/// (`finish`, `cors`, the request id), built without routing it.
+fn refused_early(path: &str, refused: limits::Refused) -> Response {
+    let mut res = finished(refused.into_response());
+    if is_api(path) {
+        api_headers(res.headers_mut(), false);
+    }
+    if let Ok(id) = HeaderValue::from_str(&request_log::request_id()) {
+        res.headers_mut().insert(request_log::REQUEST_ID, id);
+    }
     res
 }
 
 /// Last step for every response: errors through the error model, then the security headers.
 /// An error is `no-store` unless its route said otherwise: the same URL can succeed a moment later.
 async fn finish(res: Response) -> Response {
+    finished(res)
+}
+
+fn finished(res: Response) -> Response {
     let mut res = error::sanitize(res);
     let failed = res.status().is_client_error() || res.status().is_server_error();
     let headers = res.headers_mut();

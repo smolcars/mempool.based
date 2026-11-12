@@ -75,6 +75,7 @@ fn started(config: &Config, log: logging::Settings) {
         log_level: log.level.as_str(),
         log_requests: config.log_requests.as_str(),
         log_client_addr: config.log_client_addr,
+        log_max_bytes_per_sec: log.max_bytes_per_sec,
         broadcast_enabled: config.broadcast,
         max_body_bytes: l.max_body_bytes,
         request_timeout_secs: l.request_timeout.as_secs(),

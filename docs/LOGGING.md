@@ -11,6 +11,7 @@ The server writes structured logs to stdout. Every line is one **event**: a decl
 5. **No secrets.** No event field holds a password, a token, a credentialed URL or a request body. Configuration types that hold secrets (`Secret`) cannot be formatted, and the config refuses URLs with credentials, so nothing can carry them into an event by accident.
 6. **Library crates do not log.** `node` and `engine` report through values: errors they return, and state they expose (the Electrum client's `health()` watch). The server turns those into events (`crates/server/src/report.rs`). This keeps the libraries free of global state and testable without a logger.
 7. **Keep fields bounded.** A field holds a fixed label, a number, or text whose size the code controls. Attacker-chosen text is allowed only when it is needed (the node's software string, a panic message) and is always escaped, never trusted to be short or clean.
+8. **A client cannot choose how much we write.** An event a client can cause at will is either one per request served (bounded by its limits) or a summary: refusals are counted ([below](#refusals)), repeats follow rule 3. Above that, the whole log has a ceiling ([below](#the-ceiling)). A new event says in the [table](#what-a-client-can-make-us-write) who can cause it and how often.
 
 ## Field conventions
 
@@ -31,7 +32,7 @@ The server writes structured logs to stdout. Every line is one **event**: a decl
 
 **One event is always exactly one line, and a value cannot leave its field.** Quotes, backslashes and control characters are escaped by the JSON encoder; DEL, C1 controls (NEL and the 8-bit CSI among them), Unicode line and paragraph separators and bidirectional overrides are escaped as `\uXXXX` in both formats. Invalid UTF-8 cannot reach a field: fields are Rust strings, so bytes from the network are converted lossily first.
 
-**Logging never blocks or crashes the server.** `emit` formats the line on the caller's thread and puts it on a bounded queue (4,096 lines) drained by one writer thread. When the queue is full the event is dropped and counted, and a `log_events_dropped` event with the count is written once the queue drains. A write error is ignored. At exit the server waits at most two seconds for the queue to empty.
+**Logging never blocks or crashes the server.** `emit` formats the line on the caller's thread and puts it on a bounded queue (4,096 lines) drained by one writer thread. When the queue is full (the output is slower than the events: a slow or full disk, a stalled pipe) the event is dropped and counted, and `log_events_dropped` says how many of each kind, written by the writer itself once it can write again. A write error is ignored. A request never waits for the log: `crates/server/tests/slow_log.rs` answers 8,192 requests with the output blocked outright. At exit the server waits at most two seconds for the queue to empty.
 
 ## Settings
 
@@ -41,6 +42,62 @@ The server writes structured logs to stdout. Every line is one **event**: a decl
 
 A request event already says when someone used which kind of page or API route. With the client address it becomes a per-person activity record, and together with the timing it can often be matched back to what was looked up. The operator did not ask for that record, and anyone who later reads the log (a backup, a log service, a subpoena) gets it too. The limits that stop abuse work on live counters and do not need the log. An operator investigating abuse can turn `LOG_CLIENT_ADDR` on for the duration, or use the access log of the reverse proxy in front of the server, which most deployments already keep under their own retention policy.
 
+## What a client can make us write
+
+Who can cause each event that is not on a fixed schedule, and how often. Per-client limits are in [`CONFIG.md`](CONFIG.md#limits) (defaults: 20 API requests a second, a burst of 120; static files 100 a second, a burst of 400). "Many clients" is what the [ceiling](#the-ceiling) is for: a crowd each within its limits is bounded only by the server's throughput.
+
+| Event | Who causes it | How often, at most |
+|---|---|---|
+| `http_request`, served (any status a handler answered, `400`, `404` and `413` included) | Any client | One per request admitted: 20 a second per client sustained on the API (120 at once), 100 on static files (400 at once). Many clients together: as many as the server answers, so the ceiling applies; `LOG_REQUESTS=failures` or `off` lowers it |
+| `http_request`, an `OPTIONS` preflight to `/api` | Any client | One each, `204`: preflights are answered before the limits, so browsers can always read a refusal. Bounded only by the [ceiling](#the-ceiling) |
+| `http_request`, refused by a limit (`refused` set, except `timeout`) | Any client | One per reason after a minute without that reason; the rest go into `requests_refused` |
+| `http_request`, `timeout` | A client whose request outlives `REQUEST_TIMEOUT_SECS` | One each: admitted work that ran, bounded by `CLIENT_MAX_CONCURRENT_REQUESTS` per timeout per client |
+| `requests_refused` | Any client | One a minute while anything is refused, the same size whatever the number of clients |
+| `connections_refused` | A client past `CLIENT_MAX_CONNECTIONS` | At a total of 1, 2, 4, 8…: about 30 lines over a process's life |
+| `ws_origin_refused` | Another site's page | At a total of 1, 2, 4, 8… |
+| `ws_clients_dropped` (`too_big`, `rate`, `bad_message`, `binary`, `invalid_utf8`, `protocol_error`, `too_many_subscriptions`, `too_slow`, `idle`) | A client breaking a WebSocket limit | At a total of 1, 2, 4, 8… per reason and network. Each socket first cost an admitted upgrade |
+| `ws_closed` (debug) | Any client opening and closing sockets | One per socket, each of which cost an admitted upgrade; debug, so off by default and under the ceiling |
+| `tracking_refused` | Clients following more transactions or addresses than the server holds | At a total of 1, 2, 4, 8… per kind and network |
+| `block_summaries_refused` | Clients asking for uncached block summaries past the queue or their share | At a total of 1, 2, 4, 8… per reason and network |
+| `block_summary_computed` (debug) | A client asking for an uncached block summary | One per computation, bounded by `route_rate` per client and the queue; debug |
+| `mining_failed`, `mempool_history_failed` (`task` `request`) | A client asking while the store fails | At the 1st, 2nd, 4th, 8th… failure in a row |
+| `panic` | A bug a client can reach | One per panic. Kept, because each is a bug to fix ([`SECURITY.md`](SECURITY.md) rule 18 says it cannot happen on untrusted input) |
+| Broadcast refusals | A client posting transactions | `http_request` lines like any other request: `route_rate` refusals are summarised |
+| Anything else | Not a client: the node, the chain, the schedule | Lifecycle once, summaries once a minute, block facts once a block, failures by rule 3 |
+
+Requests hyper rejects before they reach us (a malformed request line, a head over 16 KB) get a `400` or `431` from hyper and no event at all.
+
+### Refusals
+
+A request a limit refused is counted, not written (`crates/server/src/refusals.rs`). Once a minute, if anything was refused, one `requests_refused` (warn) says how many by reason and by route class, how many distinct clients, and how much the busiest one took. Its size never depends on the attackers: reasons are labels from our code, route classes are five, distinct clients are estimated in a 2 KB sketch and the busiest is found among 8 counters.
+
+**The first refusal of each reason after a minute without one is also written whole**, as the `http_request` it would always have been, at once: an operator chasing one user's `429` finds it by its `X-Request-Id`. A `timeout` is not a refusal here: it is written like any served request.
+
+Telling an attack from a mistake:
+
+| What the summary shows | Likely cause |
+|---|---|
+| `top_client_refused` near `total`, `untrusted_forwarded` and `proxy_keyed` near 0 | One address flooding. Block it in front, if it bothers you; it costs about 17 µs of CPU per refusal and nothing else |
+| `untrusted_forwarded` near `total` | A proxy in front of the server is not in `TRUSTED_PROXIES`, so every visitor is that one address ([`CONFIG.md`](CONFIG.md#client-addresses)) |
+| `proxy_keyed` near `total` | The proxy is trusted but does not send the configured header (or sends it unparsable), so every visitor is the proxy |
+| `clients` high and `top_client_refused` small | Many addresses, each a little over its limit: a crowd or a distributed flood. Raise the limits if they are your users |
+
+A refused request is answered before it is routed (`crates/server/src/serve.rs`): the per-client check runs as soon as hyper has the request head, and the refusal is the same response the router would have built, without the routing, middleware or log line. A flood of one client at 150,000 to 210,000 requests a second costs about 17 µs of CPU per refusal on the development machine, against 27 µs before; what is left is the kernel's socket reads and writes, which only a proxy or firewall in front can save.
+
+### The ceiling
+
+Above `LOG_MAX_BYTES_PER_SEC` (default 256 KiB a second, after a burst of ten seconds' worth), events that may be dropped are dropped before they are formatted, and counted in `log_events_dropped` by kind. The check is one atomic load, so a dropped event costs next to nothing.
+
+- **May be dropped:** `http_request`, every `debug` event, and any `info` event not marked `keep` in [`events.rs`](../crates/logging/src/events.rs). A new event is droppable until it is marked.
+- **Never dropped:** every `warn` and `error` event (each is already a summary by rule 3, or a fact an operator must not lose: `panic`, `rpc_auth_failed`, `store_open_failed`, `requests_refused`), and the `info` events marked `keep`: lifecycle (`server_starting`, `listening`, `server_stopped`…), the once-a-minute summaries and the once-a-block facts. Their rate is fixed by the code, so they are not charged against the ceiling. `log_events_dropped` is written by the writer itself.
+- An `http_request` line is about 250 bytes, so the default is about 1,000 requests a second sustained: 90 million a day, which a busy honest site does not reach.
+
+**Worst case.** At the ceiling the log grows by 256 KiB a second: **22.6 GB (21.1 GiB) a day**, plus the kept events (a few megabytes a day) and one 2.5 MB burst. Size the disk, or the log rotation in front of it (journald, logrotate, Docker's `max-size`), for that, or lower `LOG_MAX_BYTES_PER_SEC`.
+
+### For operators
+
+What a client can make the server log is bounded, whatever it sends. Each request served is still one `http_request` line; refused requests are counted in one `requests_refused` line a minute (plus the first of each kind, written whole); and the whole log is capped at `LOG_MAX_BYTES_PER_SEC`, 256 KiB a second by default, past which request lines are dropped and counted in `log_events_dropped` while warnings, errors and summaries are always written. So the most the log can grow is about 22.6 GB a day at the default: plan the disk or the rotation for that, or lower the setting ([`CONFIG.md`](CONFIG.md#logging)). Seeing `log_events_dropped` with `over_budget` means the site served more than the ceiling: raise it if that is real traffic. Seeing `requests_refused` tells you whether one address is flooding or a proxy is misconfigured ([refusals](#refusals)).
+
 ## Request ids
 
 Every response carries `X-Request-Id`, a 16-digit hex id that also appears in its `http_request` event, so a user's report can be matched to one line. It is exposed to cross-origin callers of `/api`. Ids are unique within a process and unguessable; a client cannot set its own.
@@ -48,7 +105,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 ## Adding an event
 
 1. Declare a struct in `crates/logging/src/events.rs` with `#[derive(Debug, Serialize)]` and the fields it needs, following the conventions above. Borrow strings (`&'a str`) rather than allocating.
-2. Give it a name and level on the line after: `event!(UpstreamSlow, "upstream_slow", Warn);`
+2. Give it a name and level on the line after: `event!(UpstreamSlow, "upstream_slow", Warn);`. An `info` event the [ceiling](#the-ceiling) must never drop ends in `keep`: `event!(MempoolSummary, "mempool_summary", Info, keep);`, only for an event whose rate the code fixes whatever clients do. If a client can cause it at will, add a row to [the table](#what-a-client-can-make-us-write).
 3. Add a sample to `samples()` in the same file's tests, and a row to the catalogue below. Tests fail until both exist.
 4. Emit it where the thing happens: `logging::emit(&UpstreamSlow { network, endpoint, duration_ms });`
 
@@ -58,7 +115,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
+| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `log_max_bytes_per_sec`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
 | `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool`, `lightning` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`), `lightning` whether its Lightning peer does (`{NET}_LIGHTNING_ENABLED`) |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
@@ -68,14 +125,15 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `config_invalid` | error | `error` | Invalid configuration; the process exits. The message names the variable, never its value |
 | `listen_failed` | error | `addr`, `error` | The listen address could not be bound; the process exits |
 | `panic` | error | `message`, `location`, `thread` | Any panic. In a request handler the client gets a 500 and the server keeps running |
-| `log_events_dropped` | warn | `count` | The log queue was full; written once it drains |
+| `log_events_dropped` | warn | `count`, `queue_full`, `over_budget`, `events` | Events were dropped: `queue_full` because the output fell behind, `over_budget` past the [ceiling](#the-ceiling); `events` counts them by event name. Written by the writer at most once a second, the first at once |
 | `connections_refused` | warn | `total` | Connections closed as soon as they were accepted because their address already had `CLIENT_MAX_CONNECTIONS` open: at a total of 1, 2, 4, 8…. The client sees a reset and no response, so no `http_request` records it |
 
 ### HTTP
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `http_request` | info | `request_id`, `network`, `method`, `route`, `status`, `duration_ms`, `bytes`, `refused`, `endpoint`, `source`, `upstream_ms`, `upstream_error`, `client` | Each request, when its response head is ready, subject to `LOG_REQUESTS` |
+| `http_request` | info | `request_id`, `network`, `method`, `route`, `status`, `duration_ms`, `bytes`, `refused`, `endpoint`, `source`, `upstream_ms`, `upstream_error`, `client` | Each request served, when its response head is ready, subject to `LOG_REQUESTS`. A refused request only when it is the first of its reason after a quiet minute ([refusals](#refusals)) |
+| `requests_refused` | warn | `window_secs`, `total`, `logged`, `reasons`, `routes`, `clients`, `top_client_refused`, `top_client`, `untrusted_forwarded`, `proxy_keyed` | Once a minute while requests are refused, and at shutdown: how many (`logged` of them were the first of their reason, written whole when `LOG_REQUESTS` allows), by `refused` reason and by route class (`api`, `app`, `ws`, `health`, `pages`), distinct clients (estimated), the busiest client's count (a lower bound) and, only with `LOG_CLIENT_ADDR=true`, its address, and the [proxy hints](#refusals) |
 
 - `route` is the matched route template (`/signet/api/{*rest}`, `/healthz`), or `frontend` for pages and static files.
 - `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
@@ -83,6 +141,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 - `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), `heavy_busy` (the network's address and batch calls are all running) and `route_concurrency` (one client's are), or for a WebSocket upgrade `origin` (another site's page, [`WS.md`](WS.md#connection-rules)), `client_sockets` (`WS_CLIENT_MAX_SOCKETS`), `server_sockets` (`WS_MAX_SOCKETS`), `v1_client_sockets` (`WS_V1_CLIENT_MAX_SOCKETS`) and `v1_server_sockets` (`WS_V1_MAX_SOCKETS`). A `413` is an oversized body.
 - `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)), for the block summary routes and for the mining routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`, `mining_pools`, `mining_hashrate`, …), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache or a mining answer already computed, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, `busy` when the node's RPC queue was full, or `auth` when the node refused our RPC credentials; the client sees only `upstream unavailable`).
 - `client` only with `LOG_CLIENT_ADDR=true`.
+- Dropped first when the log is over its [ceiling](#the-ceiling).
 
 ### Node clients
 
@@ -127,7 +186,7 @@ The routes are in [`FRONTEND.md`](FRONTEND.md#block-summaries). Each request is 
 | `block_audited` | info | `network`, `height`, `match_rate`, `expected_txs`, `matched_txs`, `missing_txs`, `displaced_txs`, `fresh_txs`, `conflicted_txs`, `added_txs`, `unseen_txs`, `duration_ms` | A new block was audited against the block we expected on its parent ([`MEMPOOL.md`](MEMPOOL.md#block-audits)): its score and each category's size. Once per block |
 | `block_audit_skipped` | info | `network`, `height`, `reason` | A new block got no audit, and why: `no_projection` (no projection on its parent: the server started after it, or the projector had not caught up), `stale` (the projection on its parent was stale), `superseded` (another block replaced it or followed it before it could be audited), `store` (the write failed). Once per block. A server without `DATA_DIR` or with the network's mempool engine off audits nothing and says so only at startup (`server_starting`, `network_enabled`) |
 
-Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503` and `refused` naming the cap.
+Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is counted in `requests_refused` under route class `ws`, and the first after a quiet minute is the same event with `403`, `429` or `503` and `refused` naming the cap.
 
 ### The live mempool
 

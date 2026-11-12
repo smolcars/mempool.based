@@ -49,6 +49,7 @@ No budget miss had a fix small and clear enough to make in this change: the one 
 - **Evidence.** One client at 64 connections sent 103,000 requests a second. All but 32 a second were refused with `429` in 0.005 ms of server time, and 100 ordinary clients beside it kept a median of 2 ms and were never refused. But the server used 3 cores (busiest second 4) and wrote 3.1 million `http_request` events, 772 MB in 30 s, and dropped some (`log_events_dropped`). `LOG_REQUESTS=failures` would log the same lines, since a `429` is a failure. With `LOG_REQUESTS=off` the same flood still took 3.4 cores against 3.8 with logging, so the log costs about 0.4 cores and the disk (911 MB in that run); the rest is the HTTP work of refusing, which only a proxy or firewall in front can save.
 - **Expected gain.** A flood costs the refusal only, and the log stays useful and its disk bounded. Count `client_rate` refusals per client and log the count at 1, 2, 4, 8… as `connections_refused` already does.
 - **Touches.** `crates/server/src/request_log.rs`, `limits.rs`, the event catalogue in [`LOGGING.md`](LOGGING.md).
+- **Done since.** Refusals are counted in one `requests_refused` a minute, the whole log has a ceiling, and an over-limit request is refused before it is routed ([`LOGGING.md`](LOGGING.md#what-a-client-can-make-us-write)). The same flood on the same machine, back to back with the build before: 27 to 17 µs of CPU per refusal, and 1,080 MB of log in 30 s to under 1 MB.
 
 ### 4. Shorten the page's request chain on slow networks
 
