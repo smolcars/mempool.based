@@ -1,5 +1,5 @@
 import { Router } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import "../../design/tokens.css";
 import "./styles/global.css";
 import { watchStyles } from "./lib/chunks";

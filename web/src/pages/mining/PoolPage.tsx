@@ -122,7 +122,7 @@ function Pool(props: { network: Network; slug: string }) {
           <SectionHeader title="Blocks found" id="pool-stats-title" />
           {/* Its height is held, coverage note included, so the figures arriving move nothing. */}
           <div class="pool-stats">
-            <dl class="mining-rewards" aria-busy={!s()}>
+            <dl class="mining-rewards" aria-busy={!s() ? "true" : "false"}>
               <Stat
                 label="Last 24 hours"
                 sub={s() ? `${formatShare(s()?.blockShare["24h"] ?? 0)} of blocks` : undefined}

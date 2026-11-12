@@ -1,4 +1,5 @@
-import { For, type JSX, Show } from "solid-js";
+import { For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import "./DataTable.css";
 
 export interface Column<T> {
@@ -32,7 +33,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
     <Show when={props.rows.length > 0 || props.empty === undefined} fallback={props.empty}>
       <div class="table-scroll">
         <table class="table">
-          <caption classList={{ "visually-hidden": !props.showCaption, table__caption: true }}>
+          <caption class={{ "visually-hidden": !props.showCaption, table__caption: true }}>
             {props.caption}
           </caption>
           <thead>

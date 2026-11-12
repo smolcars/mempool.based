@@ -1,5 +1,6 @@
 // Small pieces the address page's sections share.
-import type { JSX, Resource } from "solid-js";
+import type { Resource } from "solid-js";
+import type { JSX } from "@solidjs/web";
 
 /**
  * A resource's value once it has one, also while it refreshes; undefined while it first loads or
@@ -29,7 +30,7 @@ export function UnconfirmedMark(props: { label?: string }) {
 /** Important state that is not an error: what is going on, and what it means for the reader. */
 export function Notice(props: { title: string; children: JSX.Element; tone?: "caution" }) {
   return (
-    <div class="address-notice" classList={{ "address-notice--caution": props.tone === "caution" }}>
+    <div class={["address-notice", { "address-notice--caution": props.tone === "caution" }]}>
       <svg class="address-notice__icon" viewBox="0 0 16 16" aria-hidden="true">
         <circle cx="8" cy="8" r="6.5" />
         <path d="M8 7.5v4M8 4.5v.5" />

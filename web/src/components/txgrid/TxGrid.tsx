@@ -363,11 +363,11 @@ export default function TxGrid(props: TxGridProps) {
   });
 
   return (
-    <div class="txgrid" classList={{ "txgrid--lost": lost() }}>
+    <div class={["txgrid", { "txgrid--lost": lost() }]}>
       <canvas
         ref={canvas}
-        class="txgrid__canvas"
-        classList={{ "txgrid__canvas--over": active() !== undefined }}
+        class={["txgrid__canvas", { "txgrid__canvas--over": active() !== undefined }]}
+
         role="img"
         aria-label={props.label}
         data-squares={rankOf().size}
@@ -391,8 +391,8 @@ export default function TxGrid(props: TxGridProps) {
       </Show>
       <div
         ref={tip}
-        class="txgrid__tip"
-        classList={{ "txgrid__tip--shown": shownTx() !== undefined }}
+        class={["txgrid__tip", { "txgrid__tip--shown": shownTx() !== undefined }]}
+
         aria-hidden="true"
         style={{ "--tip-x": `${tipAt().x}px`, "--tip-y": `${tipAt().y}px` }}
       >

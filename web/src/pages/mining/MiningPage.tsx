@@ -125,7 +125,7 @@ function NetworkNow(props: { network: Network; hashrates: MiningData<Hashrates> 
     <section class="mining-now" aria-labelledby="mining-now-title">
       <SectionHeader title="The network now" id="mining-now-title" />
       <div class="mining-now__grid">
-        <dl class="mining-now__stats" aria-busy={!h()}>
+        <dl class="mining-now__stats" aria-busy={!h() ? "true" : "false"}>
           <Stat
             label="Hashrate"
             sub={
@@ -522,7 +522,7 @@ function OverTime(props: { period: Period; network: Network }) {
             <button
               type="button"
               class="btn"
-              aria-pressed={shown() === s.id}
+              aria-pressed={shown() === s.id ? "true" : "false"}
               onClick={() => setShown(s.id)}
             >
               {s.label}

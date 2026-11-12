@@ -66,8 +66,8 @@ export function ProjectedTile(props: {
     <Show when={t()}>
       {(tile) => (
         <li
-          class="home-tile home-tile--projected"
-          classList={{ "home-tile--empty": tile().txs === 0 }}
+          class={["home-tile home-tile--projected", { "home-tile--empty": tile().txs === 0 }]}
+
           data-key={tile().key}
         >
           <Link

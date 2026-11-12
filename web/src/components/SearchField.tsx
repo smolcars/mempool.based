@@ -164,9 +164,9 @@ export function SearchField(props: SearchFieldProps) {
           type="search"
           placeholder="Transaction, address or block"
           autocomplete="off"
-          spellcheck={false}
+          spellcheck="false"
           enterkeyhint="search"
-          maxLength={MAX_LENGTH}
+          maxlength={MAX_LENGTH}
           aria-describedby={`${id()}-reading`}
           value={text()}
           onFocus={warm}
@@ -195,7 +195,7 @@ export function SearchField(props: SearchFieldProps) {
           >
             <Show when={reading()}>
               {(r) => (
-                <span class="search__label" classList={{ "search__label--ready": r().ready }}>
+                <span class={["search__label", { "search__label--ready": r().ready }]}>
                   {r().label}
                   <Show when={r().ready}>
                     <kbd class="search__key" title="Press Enter to search">

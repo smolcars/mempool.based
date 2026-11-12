@@ -6,7 +6,7 @@ import {
   useNavigate,
 } from "@solidjs/router";
 import { type Component, lazy, Suspense } from "solid-js";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearApiCache } from "../lib/api";
 import { SearchField } from "./SearchField";

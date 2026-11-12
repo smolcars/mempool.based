@@ -1,5 +1,5 @@
 import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "../../components/test-utils";
 import { clearApiCache } from "../../lib/api";

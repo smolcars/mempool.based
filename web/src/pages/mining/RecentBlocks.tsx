@@ -64,7 +64,7 @@ export function RecentBlocks() {
         <ol
           class="mining-tiles"
           aria-label="Latest blocks, newest first"
-          aria-busy={blocks.state !== "ready"}
+          aria-busy={blocks.state !== "ready" ? "true" : "false"}
         >
           <Show
             when={list()}

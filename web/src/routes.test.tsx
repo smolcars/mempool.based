@@ -1,5 +1,5 @@
 import { createMemoryHistory, MemoryRouter } from "@solidjs/router";
-import { render } from "solid-js/web";
+import { render } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./routes";
 import { Shell } from "./shell/Shell";

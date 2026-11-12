@@ -5,7 +5,6 @@ import {
   createResource,
   createSignal,
   For,
-  type JSX,
   lazy,
   Match,
   on,
@@ -15,6 +14,7 @@ import {
   Suspense,
   Switch,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
@@ -189,12 +189,14 @@ function Fact(props: {
 }) {
   return (
     <div
-      class="block-fact"
-      classList={{
-        "block-fact--wide": props.wide === true,
-        "block-fact--wide-phone": props.wide === "phone",
-        "block-fact--tall": props.tall === true,
-      }}
+      class={[
+        "block-fact",
+        {
+          "block-fact--wide": props.wide === true,
+          "block-fact--wide-phone": props.wide === "phone",
+          "block-fact--tall": props.tall === true,
+        },
+      ]}
     >
       <dt>{props.label}</dt>
       <dd>
@@ -739,7 +741,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 <button
                   class="btn"
                   type="button"
-                  aria-disabled={moreLoading()}
+                  aria-disabled={moreLoading() ? "true" : "false"}
                   onClick={() => void loadMore()}
                 >
                   {moreLoading()
@@ -880,7 +882,7 @@ function CoreSample(props: {
     return `Map of the block's ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. The list below has every one.`;
   };
   return (
-    <figure class="block-core" classList={{ "block-core--grid": drawn() }}>
+    <figure class={["block-core", { "block-core--grid": drawn() }]}>
       <div class="block-core__frame">
         <span class="block-core__limit" aria-hidden="true">
           Weight limit
@@ -893,11 +895,14 @@ function CoreSample(props: {
         <Show when={share()} keyed>
           {(f) => (
             <div
-              class="block-core__fill"
-              classList={{
-                "block-core__fill--high": f > 0.85,
-                "block-core__fill--strata": layers().length > 0,
-              }}
+              class={[
+                "block-core__fill",
+                {
+                  "block-core__fill--high": f > 0.85,
+                  "block-core__fill--strata": layers().length > 0,
+                },
+              ]}
+
               style={{ "--fill": String(Math.max(f, strataTop(layers()))) }}
             >
               <span class="block-core__level num">{percent(f)} full</span>
@@ -922,7 +927,7 @@ function CoreSample(props: {
       {/* Both captions are always laid out in one cell, so the taller sets its height and the
           swap from layers to map moves nothing. */}
       <figcaption class="block-core__caption">
-        <span class="block-core__text" classList={{ "block-core__text--off": drawn() }}>
+        <span class={["block-core__text", { "block-core__text--off": drawn() }]}>
           The block fills {filled()} of its weight limit, in layers by fee rate: each is as thick as
           the virtual size paying that rate, the cheapest at the bottom.
           <Show when={grid() === "unsupported"}>
@@ -939,7 +944,7 @@ function CoreSample(props: {
             </button>
           </Show>
         </span>
-        <span class="block-core__text" classList={{ "block-core__text--off": !drawn() }}>
+        <span class={["block-core__text", { "block-core__text--off": !drawn() }]}>
           The block fills {filled()} of its weight limit. Each square is a transaction, as large as
           its virtual size and colored by its fee rate, the highest at the top left.{" "}
           <a href="#block-txs-title">Every transaction is in the list below.</a>

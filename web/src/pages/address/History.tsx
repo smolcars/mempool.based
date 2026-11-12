@@ -5,7 +5,6 @@ import {
   createMemo,
   createSignal,
   For,
-  type JSX,
   Match,
   on,
   onCleanup,
@@ -14,6 +13,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import "../../components/Button.css";
 import { type Column, DataTable } from "../../components/DataTable";
@@ -235,7 +235,7 @@ export function History(props: {
                 class="address-tab"
                 id={`address-tab-${v.id}`}
                 aria-controls="address-panel"
-                aria-selected={view() === v.id}
+                aria-selected={view() === v.id ? "true" : "false"}
                 tabindex={view() === v.id ? 0 : -1}
                 onClick={() => select(v.id)}
               >
@@ -273,7 +273,7 @@ export function History(props: {
                         class="btn"
                         type="button"
                         onClick={() => void loadMore()}
-                        aria-disabled={loadingMore()}
+                        aria-disabled={loadingMore() ? "true" : "false"}
                       >
                         {loadingMore()
                           ? "Loading…"
@@ -398,7 +398,7 @@ function Transactions(props: {
         </Empty>
       </Match>
       <Match when={true}>
-        <div class="address-txs" aria-busy={props.shown === undefined}>
+        <div class="address-txs" aria-busy={props.shown === undefined ? "true" : "false"}>
           <DataTable
             caption="Transactions of this address, newest first"
             columns={columns}
@@ -502,7 +502,7 @@ function Unspent(props: { utxos: Resource<Utxo[]>; tip: Resource<string>; retry:
         </Empty>
       </Match>
       <Match when={true}>
-        <div class="address-utxos" aria-busy={sorted() === undefined}>
+        <div class="address-utxos" aria-busy={sorted() === undefined ? "true" : "false"}>
           <DataTable
             caption="Unspent outputs of this address, newest first"
             columns={columns}

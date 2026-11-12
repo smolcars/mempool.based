@@ -15,14 +15,14 @@ export function Amount(props: { sats: number; unit?: boolean; signed?: boolean }
     <Show when={parts()} fallback={<span class="amount">{MISSING}</span>}>
       {(p) => (
         <span
-          class="amount num"
-          classList={{ "amount--in": direction() === "in" }}
+          class={["amount num", { "amount--in": direction() === "in" }]}
+
           title={`${formatSats(props.sats)} sats`}
         >
           {direction() === "in" ? "+" : p().sign}
           {p().whole}.{p().significant}
           <span class="amount__zeros">{p().zeros}</span>
-          <span classList={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>
+          <span class={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>
         </span>
       )}
     </Show>
@@ -34,7 +34,7 @@ export function Sats(props: { sats: number; unit?: boolean }) {
   return (
     <span class="amount num">
       {formatSats(props.sats)}
-      <span classList={{ unit: true, "visually-hidden": props.unit === false }}> sats</span>
+      <span class={{ unit: true, "visually-hidden": props.unit === false }}> sats</span>
     </span>
   );
 }

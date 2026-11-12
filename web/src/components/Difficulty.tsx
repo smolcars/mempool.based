@@ -1,6 +1,7 @@
 // The difficulty adjustment (docs/API.md "Difficulty adjustment"): how far through its period the
 // chain is, and what the next retarget is expected to do. The home and mining pages show it.
-import { type Accessor, createEffect, createSignal, type JSX, on, onCleanup, Show } from "solid-js";
+import { type Accessor, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { fetchStamped, withRetry } from "../lib/api";
 import { useNow } from "../lib/clock";
 import {
@@ -129,8 +130,8 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
       <figure class="difficulty__period">
         <div class="difficulty__bar">
           <span
-            class="difficulty__done"
-            classList={{ "difficulty__done--loading": !d() }}
+            class={["difficulty__done", { "difficulty__done--loading": !d() }]}
+
             style={{ "--p": String(progress()) }}
           />
           <Show when={d()}>
@@ -146,7 +147,7 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
           </span>
         </figcaption>
       </figure>
-      <dl class="difficulty__stats" aria-busy={!d()}>
+      <dl class="difficulty__stats" aria-busy={!d() ? "true" : "false"}>
         <Stat label="Expected change">
           <Show when={d()}>
             {(a) => (

@@ -1,5 +1,6 @@
 // Pieces the mining page and a pool's page share.
-import { type JSX, lazy, Show, Suspense } from "solid-js";
+import { lazy, Show, Suspense } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import type { ChartProps } from "../../components/chart/Chart";
 import { formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
@@ -75,8 +76,8 @@ export function Section(props: {
 }) {
   return (
     <div
-      class="mining-slot"
-      classList={{ "mining-slot--loose": props.hold === false && props.ready }}
+      class={["mining-slot", { "mining-slot--loose": props.hold === false && props.ready }]}
+
       style={{ "--reserve": props.reserve }}
     >
       <Show
@@ -84,7 +85,7 @@ export function Section(props: {
         fallback={<Failure what={props.what} error={props.error} retry={props.retry} />}
       >
         <Show when={props.ready} fallback={<Loading label={`Loading ${props.what}`} />}>
-          <div class="mining-busy" aria-busy={props.busy}>
+          <div class="mining-busy" aria-busy={props.busy ? "true" : "false"}>
             {props.children}
           </div>
         </Show>

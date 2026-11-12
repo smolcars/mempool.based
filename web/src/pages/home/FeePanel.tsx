@@ -1,13 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  Index,
-  onCleanup,
-  onMount,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { FeeRate } from "../../components/FeeRate";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
@@ -87,14 +78,17 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
                 )}
               </For>
             </div>
-            <Index each={PRIORITIES}>
+            <For keyed={false} each={PRIORITIES}>
               {(p, i) => (
                 <div
-                  class="home-ladder__pin"
-                  classList={{
-                    "home-ladder__pin--flip": layout()[i]?.flip ?? false,
-                    "home-ladder__pin--none": rates()?.[i] === undefined,
-                  }}
+                  class={[
+                    "home-ladder__pin",
+                    {
+                      "home-ladder__pin--flip": layout()[i]?.flip ?? false,
+                      "home-ladder__pin--none": rates()?.[i] === undefined,
+                    },
+                  ]}
+
                   style={{
                     "--px": `${ladderPos(rates()?.[i] ?? 0) * width()}px`,
                     "--row": String(layout()[i]?.row ?? 0),
@@ -109,7 +103,7 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
                   </span>
                 </div>
               )}
-            </Index>
+            </For>
             <div class="home-ladder__ticks">
               <For each={TICKS}>
                 {(t) => (
@@ -130,8 +124,8 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
             </p>
           }
         >
-          <dl class="home-ladder__list" aria-busy={!props.feed.data()}>
-            <Index each={PRIORITIES}>
+          <dl class="home-ladder__list" aria-busy={!props.feed.data() ? "true" : "false"}>
+            <For keyed={false} each={PRIORITIES}>
               {(p, i) => (
                 <div class="home-ladder__item">
                   <dt>
@@ -145,7 +139,7 @@ export function FeePanel(props: { feed: Feed<FeeEstimates> }) {
                   </dd>
                 </div>
               )}
-            </Index>
+            </For>
           </dl>
         </Show>
         <p class="home-fees__note">

@@ -5,13 +5,13 @@ import {
   createResource,
   createSignal,
   For,
-  type JSX,
   Match,
   on,
   onCleanup,
   Show,
   Switch,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash, HashFull } from "../../components/Hash";
@@ -802,10 +802,13 @@ function Body(props: {
         <For each={steps()}>
           {(step, i) => (
             <li
-              class={`tx-step tx-step--${step.state}${step.tone ? ` tx-step--${step.tone}` : ""}`}
-              classList={{
-                "tx-step--landed": props.justConfirmed && i() === 1 && step.tone === "positive",
-              }}
+              class={[
+                `tx-step tx-step--${step.state}${step.tone ? ` tx-step--${step.tone}` : ""}`,
+                {
+                  "tx-step--landed": props.justConfirmed && i() === 1 && step.tone === "positive",
+                },
+              ]}
+
               aria-current={step.state === "current" ? "step" : undefined}
             >
               <span class="tx-step__marker num" aria-hidden="true">

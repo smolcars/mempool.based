@@ -531,7 +531,7 @@ export function BlockStrip(props: {
                 class="home-strip__lane"
                 ref={lane}
                 aria-label="Mined blocks, newest first"
-                aria-busy={!shown()}
+                aria-busy={!shown() ? "true" : "false"}
               >
                 <Show
                   when={shown()}
@@ -630,8 +630,8 @@ function MinedTile(props: {
       .join(", ");
   return (
     <li
-      class="home-tile home-tile--mined"
-      classList={{ "home-tile--guessing": guessing() }}
+      class={["home-tile home-tile--mined", { "home-tile--guessing": guessing() }]}
+
       data-id={b().id}
       data-height={b().height}
     >
@@ -665,8 +665,8 @@ function MinedTile(props: {
           {/* The neutral gauge: how full the block is, until its layers arrive and settle over it. */}
           <Show when={(layers().length === 0 && !guessing()) || settle}>
             <span
-              class="home-tile__fill"
-              classList={{ "home-tile__fill--gone": layers().length > 0 }}
+              class={["home-tile__fill", { "home-tile__fill--gone": layers().length > 0 }]}
+
               style={{ "--fill": String(full()) }}
             />
           </Show>
@@ -674,8 +674,10 @@ function MinedTile(props: {
           <Show when={guess}>
             {(g) => (
               <span
-                class="home-tile__layers home-tile__guess"
-                classList={{ "home-tile__guess--gone": !guessing() }}
+                class={[
+                  "home-tile__layers home-tile__guess",
+                  { "home-tile__guess--gone": !guessing() },
+                ]}
               >
                 <Strata layers={g()} />
               </span>

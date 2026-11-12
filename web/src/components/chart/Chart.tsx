@@ -1,16 +1,7 @@
 // A time-series chart in SVG: lines, areas, steps, percentile bands and stacked shares, with a
 // readout that follows the pointer, the finger or the arrow keys (docs/FRONTEND.md "Charts").
 // The default export so pages load it with lazy().
-import {
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  Index,
-  onCleanup,
-  onMount,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from "solid-js";
 import { FEE_KEY_BOUNDS } from "../../lib/format";
 import { DataTable } from "../DataTable";
 import {
@@ -328,13 +319,15 @@ export default function Chart(props: ChartProps) {
       <div class="chart__readout" aria-hidden="true">
         <span class="chart__when num">{when(index())}</span>
         <ul class="chart__values">
-          <Index each={readings(index())}>
+          <For keyed={false} each={readings(index())}>
             {(r) => (
               <li
-                class="chart__value"
-                classList={{
-                  "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
-                }}
+                class={[
+                  "chart__value",
+                  {
+                    "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
+                  },
+                ]}
               >
                 <span
                   class={`chart__key chart__key--${r().kind}`}
@@ -344,7 +337,7 @@ export default function Chart(props: ChartProps) {
                 <span class="chart__figure num">{r().value}</span>
               </li>
             )}
-          </Index>
+          </For>
         </ul>
       </div>
       <div
@@ -460,8 +453,8 @@ export default function Chart(props: ChartProps) {
               <For each={f().layers}>
                 {(d, k) => (
                   <path
-                    class="chart__layer"
-                    classList={{ "chart__layer--on": hoverLayer() === k() }}
+                    class={["chart__layer", { "chart__layer--on": hoverLayer() === k() }]}
+
                     d={d}
                     style={{ "--mix": layerMix(k()) }}
                   />

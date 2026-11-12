@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
 import type { Outspend, Transaction, Vin, Vout } from "../../lib/esplora";

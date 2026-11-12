@@ -1,4 +1,5 @@
-import { type JSX, Show } from "solid-js";
+import { Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import "./SectionHeader.css";
 
 /** A section heading over a 2 px rule. `children` sit at the right end (counts, a live dot, controls). */

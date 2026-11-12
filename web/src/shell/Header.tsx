@@ -60,8 +60,8 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
         <ThemeToggle />
       </div>
       <div
-        class="route-progress"
-        classList={{ "route-progress--on": isRouting() }}
+        class={["route-progress", { "route-progress--on": isRouting() }]}
+
         aria-hidden="true"
       />
     </header>

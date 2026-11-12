@@ -3,7 +3,6 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  type JSX,
   lazy,
   Match,
   on,
@@ -13,6 +12,7 @@ import {
   Suspense,
   Switch,
 } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
@@ -566,7 +566,7 @@ function Fact(props: {
   wide?: boolean;
 }) {
   return (
-    <div class="projected-fact" classList={{ "projected-fact--wide": props.wide === true }}>
+    <div class={["projected-fact", { "projected-fact--wide": props.wide === true }]}>
       <dt>{props.label}</dt>
       <dd>
         <span class="projected-fact__value">
@@ -653,8 +653,8 @@ function CoreSample(props: {
     return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
   };
   return (
-    <figure class="projected-core" classList={{ "projected-core--grid": drawn() }}>
-      <div class="projected-core__frame" classList={{ "projected-core__frame--empty": empty() }}>
+    <figure class={["projected-core", { "projected-core--grid": drawn() }]}>
+      <div class={["projected-core__frame", { "projected-core__frame--empty": empty() }]}>
         <span class="projected-core__limit" aria-hidden="true">
           {isRest ? "One block's limit" : "Weight limit"}
         </span>
@@ -663,8 +663,11 @@ function CoreSample(props: {
             <Strata layers={layers()} />
           </div>
           <div
-            class="projected-core__level"
-            classList={{ "projected-core__level--high": (fill() ?? 0) > 0.85 }}
+            class={[
+              "projected-core__level",
+              { "projected-core__level--high": (fill() ?? 0) > 0.85 },
+            ]}
+
             style={{ "--fill": String(Math.max(fill() ?? 0, strataTop(layers()))) }}
           >
             <span class="num">
