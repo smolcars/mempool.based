@@ -59,7 +59,9 @@ Refined when M1 lands.
 | FE3 | Show block summaries and the difficulty adjustment in the frontend: median fee rate and fee range on the block page, fee layers and fee figures in the home page's tiles (batch route on load, the WebSocket's `summary` message for new blocks, retry on 503) | BS1, LX1 | done ([#33](https://github.com/smolcars/mempool.based/pull/33)) |
 | W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | done ([#36](https://github.com/smolcars/mempool.based/pull/36)) |
 | FE5 | The live mempool on the home page: projected-block tiles with their fee layers, the mempool panel and the latest transactions from the WebSocket topics; the projected tile becomes the mined one when a block arrives | MP3, FE3 | doing |
-| W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | doing |
+| W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | done ([#40](https://github.com/smolcars/mempool.based/pull/40)) |
+| MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | todo |
+| MI6 | Give each block its miner where pages show it: the pool in the block facts and in the WebSocket's `summary` message, then on the block page and the home tiles | MI2, FE3 | todo |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | likely explained by [#39](https://github.com/smolcars/mempool.based/pull/39): the per-address connection cap closed connections without logging; watch for a recurrence |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | done ([#30](https://github.com/smolcars/mempool.based/pull/30)) |
 | WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
@@ -77,8 +79,8 @@ Refined when M2 lands.
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
-| W9 | Mining dashboard and pool pages | MI2, MI3 | todo |
-| W10 | Charts with uPlot | MI5 | todo |
+| W9 | Mining dashboard and pool pages | MI2, MI3 | doing |
+| W10 | Charts with uPlot | MI5 | doing (with W9) |
 
 ## M4 — Lightning
 
