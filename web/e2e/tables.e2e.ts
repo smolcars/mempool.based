@@ -1,4 +1,5 @@
 // Every table fits a phone's width with nothing cut off, and no page scrolls sideways (WCAG 1.4.10).
+import type { Locator, Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
@@ -69,27 +70,35 @@ test.describe("without the web font", () => {
   test("no page scrolls sideways at 320 px in wide fallback faces", async ({ page }) => {
     await page.route(/\.woff2$/, (route) => route.abort());
     await page.setViewportSize({ width: 320, height: 700 });
-    for (const path of [
-      "/regtest/",
-      "/regtest/blocks",
-      `/regtest/block/${chain.blocks[106]}`,
-      "/regtest/block/next",
-      `/regtest/tx/${chain.txs.script_types}`,
-      `/regtest/address/${chain.addresses.p2tr}`,
-      "/regtest/mining",
-      "/regtest/mempool",
-      "/regtest/lightning",
-      "/regtest/no/such/page",
-    ]) {
+    // Each page with what shows it has loaded: a page is measured whole, never as its skeleton.
+    const pages: [string, (p: Page) => Locator][] = [
+      ["/regtest/", (p) => p.getByRole("table", { name: /newest transactions/ }).getByRole("link")],
+      ["/regtest/blocks", (p) => p.getByRole("table").getByRole("link")],
+      [`/regtest/block/${chain.blocks[106]}`, (p) => p.getByRole("table").getByRole("link")],
+      ["/regtest/block/next", (p) => p.locator("main table a")],
+      [`/regtest/tx/${chain.txs.script_types}`, (p) => p.locator(".tx-summary .amount")],
+      [`/regtest/address/${chain.addresses.p2tr}`, (p) => p.getByRole("table").getByRole("link")],
+      // Regtest's chain is months old: all of history has its pools table.
+      ["/regtest/mining?period=all", (p) => p.locator("main table a")],
+      ["/regtest/mempool", (p) => p.getByRole("slider")],
+      ["/regtest/lightning", (p) => p.getByText("Lightning is switched off on Regtest")],
+      ["/regtest/no/such/page", (p) => p.getByRole("main").getByRole("searchbox")],
+    ];
+    for (const [path, ready] of pages) {
       await page.goto(path);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await expect(ready(page).first()).toBeVisible();
       await page.evaluate(() => {
         const root = document.documentElement.style;
         root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
         root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
       });
-      // Let anything that loads after the heading arrive and lay out in the wide faces.
-      await page.waitForTimeout(1500);
+      // One frame in the new faces before measuring.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
       const over = await page.evaluate(() =>
         [...document.querySelectorAll("main *")]
           .filter((el) => el.getBoundingClientRect().right > 320.5 && !el.closest(".table-scroll"))
