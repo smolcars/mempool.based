@@ -72,12 +72,12 @@ A successful answer is forwarded byte for byte. Any other answer is replaced by 
 | Bad parameter | `400` | names the parameter, for example `invalid txid` |
 | Cursor txid not in that history | `422` | `after_txid not found` |
 | Node runs without `--sh-index` | `503` | `address index is disabled on this server` |
-| Unpaged address answer too large (`--max-sh-creates`) | `503` | `address history too large for this route; use the paged /txs routes` |
+| Address above the node's `--max-sh-creates`: its totals, unspent outputs and history ([below](#very-large-addresses)) | `503` | `address history too large for this server` |
 | Tip moved under a pinned read | `503` | `chain tip moved during the request; retry` |
 | The network's address and batch calls are all running ([below](#protection-for-the-node)) | `503` | `node busy; retry` |
 | Node answered `503` for another reason (no tip, no fee estimates yet) | `503` | `node unavailable` |
 | Node unreachable, failed, or answered nonsense | `502` | `upstream unavailable` |
-| Node too slow | `504` | `request timed out` |
+| Node too slow, or a page of address history it took over 5 s on moments ago ([below](#very-large-addresses)) | `504` | `request timed out` |
 
 `503` and `429` carry `Retry-After`.
 
@@ -106,8 +106,27 @@ Block JSON has no confirmation status (the node drops a block that leaves the be
 - **Identical requests share one call** (rule 8). Requests that arrive while the same upstream call is in flight wait for it and get its answer. Once answered, the next request asks the node again. Measured: 300 concurrent identical requests made one upstream call.
 - **Hot answers are held for one second:** `/blocks/tip/height`, `/blocks/tip/hash`, `/blocks`, `/mempool`, `/mempool/txids`, `/mempool/recent` and `/fee-estimates`. Their keys are fixed, so this cache holds at most seven answers per network. Measured: 20,303 sequential `/blocks/tip/height` requests in 3 seconds made three upstream calls.
 - **Address and batch routes have a cost limit** (rules 8 and 11). Every address and scripthash route, `/txs/outspends` and `POST /block-heights/txs/outs` can cost the node far more than a lookup: totals for one busy signet address took 9.7 s. At most four run at once per network, and eight more wait for a slot; a client has a share of those and a rate of its own ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)). Past that the answer is immediate, `503` `node busy; retry` or `429`, with `Retry-After: 1`. Joining an identical call already running is free. A call runs in a task of its own that holds its slots until the node has answered, or 60 seconds have passed, even after the request has timed out (`504` at `REQUEST_TIMEOUT_SECS`): retrying a slow query cannot pile more work onto the node than the limit allows. On a regtest node, rbitcoin v0.9.2 stopped using CPU within half a second of its clients hanging up on 200 large address answers, but that work was mostly encoding the answer; nothing shows that a long index scan is abandoned, so the limit assumes it is not.
+- **Address histories the node will not finish are refused at once** ([below](#very-large-addresses)).
 - **`?asof=` is served, under that limit.** It pins an answer to a block and makes every request a distinct key, so sharing calls never helps; but the limit counts calls started, not keys, so distinct keys buy nothing. Dropping it would break Esplora clients that page consistently through a history, for no protection the limit does not already give.
 - **Every request** passes the server-wide limits in [`CONFIG.md`](CONFIG.md): body size, timeout, per-client rate and concurrency.
+
+### Very large addresses
+
+The node refuses an address's totals and unspent outputs at once when it has more outputs than its `--max-sh-creates` (10,000 by default), but serves any page of its history however long that takes: tens of seconds on mainnet for the addresses measured, growing with the blocks the page spans or, for a dormant address, with every output it ever had ([`RBITCOIN.md`](RBITCOIN.md#address-history-cost)). The client would get a `504` after `REQUEST_TIMEOUT_SECS` while the node kept working. So the server learns from the node's answers, remembers, and refuses what it knows will not finish without asking again. Code: `crates/server/src/verdicts.rs`, used by `esplora.rs`.
+
+| Request | Answer | Node work |
+|---|---|---|
+| Totals (`/address/:a`) or `/utxo` of an address above the cap | `503 address history too large for this server`, from the node's own refusal (10–35 ms on mainnet) | One cheap call |
+| Any history page of that address (`/txs`, `/txs/chain[/:last]`, `/txs/summary[/:last]`, any cursor or `?asof=`, address or scripthash form) for 5 minutes after | The same `503`, at once | None |
+| A history page whose node call has run 5 s | `504 request timed out`, at 5 s. The call keeps its place under the cost limit until the node answers or 60 s pass ([above](#protection-for-the-node)) | The call already running |
+| That page again (same script, cursor and `?asof=`; its `/txs`, `/txs/chain` and `/txs/summary` forms alike) for 5 minutes after | `504 request timed out`, at once | None |
+| `/txs/mempool` | Asked as before: mempool rows only, at most 50 | Cheap |
+
+- **The threshold is the node's own `--max-sh-creates`.** An address the node totals has its history served as before, at the cap included; one create above, the node refuses its totals and the server its history. Every above-cap address measured took 10 to 42 s for its first page, past the 5 s below. One whose newest 25 transactions all fall within a few hundred blocks could still have answered in time: the server refuses it anyway, because it cannot tell without asking, and asking is what costs the node. A size refusal counts only once the totals or unspent outputs have been asked: a history request that comes first is served, or times out.
+- **5 s for a page of history** counts from when the node call starts, not the wait for a slot. Ordinary pages answer in 0.3 to 0.5 s on mainnet; every slower page measured took over 10 s, so a reader gains nothing from waiting longer. A page slowed by a moment of load (a 261-transaction address's fifth page once timed out while the node served a backfill) is refused for 5 minutes, then asked again.
+- **Memory is bounded.** Per network at most 4,096 verdicts of about 100 bytes, each kept 5 minutes; when full, expired ones go first, then the one closest to expiring. Each verdict is learned from a node call, so the cost limit bounds how fast the table fills, and many distinct huge addresses cost one cheap totals call each.
+- **The frontend** asks for an address's first history page once its totals have answered (or after a second), and never after a "too large" totals answer; it says in a sentence that the transactions are not available ([`FRONTEND.md`](FRONTEND.md#live-data)).
+- **Logged** as refusals, counted in `requests_refused` with the reasons `history_too_large` and `history_slow`, never one line per request ([`LOGGING.md`](LOGGING.md#refusals)).
 
 ## Broadcast
 
