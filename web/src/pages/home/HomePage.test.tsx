@@ -183,12 +183,25 @@ describe("the strip, kept live", () => {
     expect(blocksFetches()).toBe(fetched);
   });
 
-  it("refetches over HTTP on a gap", async () => {
-    const { el, ws } = await open();
-    blocksServed = chain(4, 13);
-    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
-    await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
-    expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
+  it("refetches over HTTP on a gap, and shows ten blocks while the ones it drops fade out", async () => {
+    // The tests have no motion tokens, so a leaving tile's fade lasts 0 ms and its ghost goes at a
+    // timer's whim: a read could find it or not. Give the fade a length, so it is always there.
+    document.documentElement.style.setProperty("--dur-slow", "10s");
+    try {
+      const { el, ws } = await open();
+      blocksServed = chain(4, 13);
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
+      await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
+      expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
+      // The three it dropped fade where they stood: hidden from readers, not links to follow.
+      const ghosts = [
+        ...el.querySelectorAll<HTMLElement>(".home-strip__lane > .home-tile--leaving"),
+      ];
+      expect(ghosts.map((g) => Number(g.dataset["height"]))).toStrictEqual([3, 2, 1]);
+      expect(ghosts.every((g) => g.getAttribute("aria-hidden") === "true" && g.inert)).toBe(true);
+    } finally {
+      document.documentElement.style.removeProperty("--dur-slow");
+    }
   });
 
   it("refetches on a resync whose tip differs, and not on one that matches", async () => {
