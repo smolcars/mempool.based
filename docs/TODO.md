@@ -107,6 +107,9 @@ Refined when M4 lands.
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
+| C1a | The `/api/v1` block routes still planned: `blocks`, `block/:hash`, the block summary routes and the tip-height alias, with their extras from the store | MI1, MI4 | doing |
+| C1b | The `/api/v1` transaction routes still planned: replacements, CPFP, first-seen times, address validation and prevouts | MP1, MP5 | todo |
+| WS2 | Follow-ups on the compatible WebSocket: send the first `mempool-blocks` with the block instead of about 4 s later, and decide on the bounded `track-mempool-txids` its PR proposes | WS1 | todo |
 | C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
