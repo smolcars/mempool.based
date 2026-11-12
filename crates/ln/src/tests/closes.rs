@@ -647,3 +647,76 @@ async fn history_and_sweeps_are_bounded() {
     let s = n.g.watch.status();
     assert_eq!((s.force, s.sweeps), (5, MAX_SWEEPS));
 }
+
+#[tokio::test]
+async fn channels_sharing_a_funding_script_are_told_apart_by_position() {
+    // Two channels between the same nodes with the same funding keys: one script, two outputs.
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let (fa, fb) = (fund(1, 2, 1_000_000), fund(1, 2, 2_000_000));
+    let h = mine(&node, vec![fa.clone(), fb]);
+    mine_empty(&node, 5);
+    let n = net(&node, &config(), Replay::default());
+    n.at(6).await;
+    let (a, b) = (scid(h, 1, 0), scid(h, 2, 0));
+    n.open(a, 1, 2).await;
+    n.open(b, 1, 2).await;
+    // A third output paying the same script, not a channel, spent first.
+    let stray = fund(1, 2, 5_000);
+    let sh = mine(&node, vec![stray.clone()]);
+    let spend = coop(
+        OutPoint::new(stray.compute_txid(), 0),
+        1,
+        2,
+        vec![out(wpkh(), 4_000)],
+    );
+    let close = coop(
+        OutPoint::new(fa.compute_txid(), 0),
+        1,
+        2,
+        vec![out(wpkh(), 999_000)],
+    );
+    let ch = mine(&node, vec![spend, close]);
+    n.at(ch).await;
+    let c = n.closed();
+    assert_eq!(c.iter().map(|c| c.scid).collect::<Vec<_>>(), [a]);
+    assert!(!n.in_graph(a) && n.in_graph(b));
+    assert_eq!(n.g.watch.status().watched, 1);
+    assert!(sh < ch);
+}
+
+#[tokio::test]
+async fn a_close_found_while_down_and_undone_by_a_reorg_is_watched_again() {
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let fa = fund(1, 2, 1_000_000);
+    let h = mine(&node, vec![fa.clone()]);
+    mine_empty(&node, 5);
+    let fid = OutPoint::new(fa.compute_txid(), 0);
+    let ch = mine(&node, vec![coop(fid, 1, 2, vec![out(wpkh(), 999_000)])]);
+    let a = scid(h, 1, 0);
+    let graph = Graph::new(NET, sink());
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(a, 1, 2))
+        .unwrap();
+    let n = net(&node, &config(), Replay::from_graph(&graph));
+    wait_for("replayed", || {
+        n.g.replay_tick(5000);
+        !n.g.replaying()
+    })
+    .await;
+    n.at(ch).await;
+    assert_eq!(n.closed().len(), 1);
+    // The closing block, which the watcher started from, is replaced without the close.
+    unmine(&node, ch);
+    mine_empty(&node, 2);
+    n.at(ch + 1).await;
+    assert!(n.history().contains(&History::CloseUndone { scid: a }));
+    assert_eq!(n.g.watch.status().watched, 1);
+    // The new chain force-closes it: recorded, though it never went back in the graph.
+    let fh = mine(&node, vec![commitment(fid, 1, 2)]);
+    n.at(fh).await;
+    let kinds: Vec<CloseKind> = n.closed().iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [CloseKind::Cooperative, CloseKind::Force]);
+    assert_eq!(n.g.watch.status().watched, 0);
+}

@@ -43,7 +43,6 @@ fn alias(a: &[u8; 32]) -> String {
 
 #[tokio::main]
 async fn main() {
-    let dir = std::env::var("LN_DIR").expect("LN_DIR is not set");
     let secs: u64 = std::env::var("SECS").map_or(600, |s| s.parse().unwrap());
     let top: usize = std::env::var("TOP").map_or(0, |s| s.parse().unwrap());
     let esplora =
@@ -51,6 +50,7 @@ async fn main() {
     if let Ok(n) = std::env::var("SAMPLE_BLOCKS") {
         return sample(&esplora, n.parse().unwrap()).await;
     }
+    let dir = std::env::var("LN_DIR").expect("LN_DIR is not set");
     let mut config = Config::new(Network::Bitcoin, dir.into());
     if let Ok(ms) = std::env::var("LOOKUP_MS") {
         config.lookup_interval = Duration::from_millis(ms.parse().unwrap());

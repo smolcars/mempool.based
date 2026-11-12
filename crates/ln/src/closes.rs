@@ -190,6 +190,12 @@ pub fn funding_program(input: &TxIn) -> Option<[u8; 32]> {
     two_of_two.then(|| sha256::Hash::hash(s).to_byte_array())
 }
 
+/// The short channel id of an output position, if it fits one.
+fn scid_of(height: u32, index: u32, vout: u32) -> Option<u64> {
+    (height < 1 << 24 && index < 1 << 24 && vout < 1 << 16)
+        .then(|| u64::from(height) << 40 | u64::from(index) << 16 | u64::from(vout))
+}
+
 /// The program of a P2WSH output script.
 pub(crate) fn program_of(script: &Script) -> Option<[u8; 32]> {
     if !script.is_p2wsh() {
@@ -282,6 +288,9 @@ struct State {
     sweeps: HashMap<u64, Sweeps>,
     swept: HashMap<OutPoint, u64>,
     seen: VecDeque<Seen>,
+    /// The block being read, once its inputs were matched: a channel verified below it was not
+    /// among them, and is checked again.
+    reading: Option<u32>,
     /// Whether the last look at the node found no newer block.
     at_tip: bool,
     history: VecDeque<Record>,
@@ -413,7 +422,8 @@ impl Watch {
         if s.funding.contains_key(&scid) {
             return;
         }
-        if s.seen.back().is_some_and(|b| b.height > f.verified_at) {
+        let read = s.seen.back().map(|b| b.height).max(s.reading);
+        if read.is_some_and(|h| h > f.verified_at) {
             s.recheck.push_back(scid);
         }
         let open = Opened {
@@ -699,6 +709,7 @@ impl<C: Chain> Watcher<C> {
         let gap = from.is_some();
         let mut s = self.watch().lock();
         s.seen.clear();
+        s.reading = None;
         s.seen.push_back(Seen {
             height: tip.height,
             hash: tip.id,
@@ -742,36 +753,41 @@ impl<C: Chain> Watcher<C> {
         // Inputs that may spend a watched funding output.
         let mut candidates = Vec::new();
         {
-            let s = self.watch().lock();
+            let mut s = self.watch().lock();
             for (i, tx) in block.txdata.iter().enumerate().skip(1) {
                 for (n, input) in tx.input.iter().enumerate() {
                     let Some(p) = funding_program(input) else {
                         continue;
                     };
-                    let scids: Vec<u64> = s
-                        .programs
-                        .range((p, 0)..=(p, u64::MAX))
-                        .map(|(_, scid)| *scid)
-                        .collect();
-                    if !scids.is_empty() {
-                        candidates.push((i, n, input.previous_output, scids));
+                    if s.programs.range((p, 0)..=(p, u64::MAX)).next().is_some() {
+                        candidates.push((i, n, input.previous_output, p));
                     }
                 }
             }
+            // Channels verified from now on at a lower tip were not matched above.
+            s.reading = Some(at.height);
         }
-        // Each candidate's spent output must be the channel's own: same block, index and output.
+        // Each candidate's spent output must be a channel's own: the channel id its position
+        // makes, watched, with this script.
         let mut closes = Vec::new();
-        for (i, n, prev, scids) in candidates {
+        for (i, n, prev, p) in candidates {
             // Unknown to the node: not a channel's, whose output it found.
             let Some((height, index)) = self.ask_found(self.chain.tx_position(prev.txid)).await?
             else {
                 continue;
             };
-            let own = scids.into_iter().find(|scid| {
-                let p = position(*scid);
-                (p.height, p.index, p.vout) == (height, index, prev.vout)
-            });
-            let Some(scid) = own else { continue };
+            let Some(scid) = scid_of(height, index, prev.vout) else {
+                continue;
+            };
+            let own = self
+                .watch()
+                .lock()
+                .funding
+                .get(&scid)
+                .is_some_and(|f| f.program == p);
+            if !own {
+                continue;
+            }
             let Some(tx) = block.txdata.get(i) else {
                 continue;
             };
@@ -816,6 +832,7 @@ impl<C: Chain> Watcher<C> {
             );
             done.push((scid, sweeps));
         }
+        s.reading = None;
         s.seen.push_back(Seen {
             height: at.height,
             hash: at.hash,
@@ -959,8 +976,8 @@ impl<C: Chain> Watcher<C> {
         }
     }
 
-    /// Reopens a channel whose close left the best chain, and puts it back in the graph if it was
-    /// there. The next block that spends it closes it again.
+    /// Reopens a channel whose close left the best chain: watched again, and back in the graph if
+    /// it was there. The next block that spends it closes it again.
     fn unclose(&self, u: Undo) {
         self.gossip.lookup.forget(u.scid);
         let (one, two) = u.funding.nodes;
@@ -995,9 +1012,9 @@ impl<C: Chain> Watcher<C> {
         }
         let mut s = self.watch().lock();
         s.drop_sweeps(u.scid);
-        if u.snapshot.is_some() {
-            s.watch(u.scid, u.funding);
-        }
+        // Watched again even if it was not in the graph (found closed by the catch-up), so its
+        // next close is recorded; gossip puts it back in the graph.
+        s.watch(u.scid, u.funding);
         s.count(u.kind, -1);
         s.counts.undone += 1;
         self.watch()
@@ -1157,5 +1174,48 @@ impl<C: Chain> Watcher<C> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_channel_verified_below_the_block_being_read_is_checked_again() {
+        let w = Watch::new(10, HashMap::new());
+        w.lock().seen.push_back(Seen {
+            height: 100,
+            hash: BlockHash::all_zeros(),
+            closes: Vec::new(),
+            penalties: Vec::new(),
+        });
+        // Block 101's inputs were matched; a lookup answered at tip 100 registers a channel.
+        w.lock().reading = Some(101);
+        let n = NodeId::from_slice(&[2; 33]).unwrap();
+        let f = |verified_at| Funding {
+            nodes: (n, n),
+            capacity: 1,
+            program: [1; 32],
+            block: BlockRef {
+                height: 1,
+                hash: BlockHash::all_zeros(),
+                time: 0,
+            },
+            verified_at,
+        };
+        w.opened(1, f(100));
+        w.opened(2, f(101));
+        assert_eq!(w.lock().recheck, [1]);
+    }
+
+    #[test]
+    fn scid_of_is_the_inverse_of_position() {
+        let id = scid_of(975_000, 1234, 5).unwrap();
+        let p = position(id);
+        assert_eq!((p.height, p.index, p.vout), (975_000, 1234, 5));
+        assert_eq!(scid_of(1 << 24, 0, 0), None);
+        assert_eq!(scid_of(1, 0, 1 << 16), None);
     }
 }
