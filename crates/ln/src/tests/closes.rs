@@ -761,3 +761,31 @@ async fn a_close_found_ahead_of_the_watcher_is_left_to_the_block_read() {
     assert!(n.history().contains(&History::CloseUndone { scid: a }));
     assert_eq!(n.g.watch.status().watched, 1);
 }
+
+#[test]
+fn real_mainnet_closes_are_classified() {
+    let fixtures = include_str!("../../../../fixtures/lightning/mainnet/closes.txt");
+    let mut seen = Vec::new();
+    for line in fixtures.lines().filter(|l| !l.starts_with('#')) {
+        let mut f = line.split(' ');
+        let (kind, txid, hex) = (f.next().unwrap(), f.next().unwrap(), f.next().unwrap());
+        let tx: Transaction = lightning::bitcoin::consensus::encode::deserialize_hex(hex).unwrap();
+        assert_eq!(tx.compute_txid().to_string(), txid);
+        let funding = tx.input.iter().position(|i| funding_program(i).is_some());
+        let got = funding.map(|i| format!("{:?}", crate::classify(&tx, i)));
+        assert_eq!(got.as_deref().unwrap_or("None"), kind, "{txid}");
+        assert!(!tx.input.iter().any(revoked), "{txid}");
+        seen.push(kind);
+    }
+    assert_eq!(
+        seen,
+        [
+            "Cooperative",
+            "Cooperative",
+            "Force",
+            "Force",
+            "None",
+            "Other"
+        ]
+    );
+}
