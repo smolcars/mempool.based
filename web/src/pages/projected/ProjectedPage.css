@@ -1,0 +1,435 @@
+@layer pages {
+  .projected-page {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+    padding-top: var(--space-5);
+    padding-bottom: var(--space-8);
+  }
+
+  .projected-message {
+    gap: var(--space-4);
+    padding-top: var(--space-7);
+  }
+  .projected-message__text {
+    max-width: 60ch;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  /* As tall as a line of text, so nothing moves when the text arrives. */
+  .projected-skel {
+    display: inline-block;
+    vertical-align: middle;
+    width: 6em;
+    max-width: 100%;
+    height: 0.9em;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+  }
+
+  /* ---- Previous and next ---- */
+  .projected-pager {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: 1.5em;
+    font-size: var(--text-sm);
+  }
+  .projected-pager a {
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+  .projected-pager a:hover {
+    color: var(--color-accent);
+  }
+  .projected-pager__next {
+    margin-left: auto;
+    text-align: right;
+  }
+
+  /* ---- Title ---- */
+  .projected-head {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .projected-head__title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+  .projected-head__lede {
+    max-width: 62ch;
+    min-height: 3em;
+    color: var(--color-text-muted);
+  }
+  /* Provisional, like the projected tiles: a dashed outline, never a fill. */
+  .projected-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-3) 2px var(--space-2);
+    border: 1.5px dashed var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .projected-badge__icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-dasharray: 2.4 2;
+  }
+
+  .projected-live {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+  }
+  .projected-live__icon {
+    width: 12px;
+    height: 12px;
+    overflow: visible;
+    fill: var(--color-positive);
+  }
+  .projected-live--live .projected-live__icon {
+    animation: projected-breathe 2.4s var(--ease-in-out) infinite;
+  }
+  .projected-live--connecting .projected-live__icon,
+  .projected-live--reconnecting .projected-live__icon,
+  .projected-live--stale .projected-live__icon {
+    fill: none;
+    stroke: var(--color-caution);
+    stroke-width: 1.6;
+    stroke-dasharray: 2.6 2;
+  }
+  .projected-live--offline .projected-live__icon,
+  .projected-live--off .projected-live__icon {
+    fill: none;
+    stroke: var(--color-negative);
+    stroke-width: 1.4;
+  }
+  @keyframes projected-breathe {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  /* ---- Notices ---- */
+  .projected-notice {
+    max-width: 72ch;
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--color-caution);
+    border-radius: 0 var(--radius-m) var(--radius-m) 0;
+    background: var(--color-surface);
+    font-size: var(--text-sm);
+  }
+
+  /* A block was found: the accent marks the block that just landed. */
+  .projected-found {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3);
+    max-width: 72ch;
+    padding: var(--space-3) var(--space-4);
+    border: 1.5px solid var(--color-accent);
+    border-radius: var(--radius-m);
+    background: var(--color-surface);
+    animation: projected-found-in var(--dur-base) var(--ease-settle) both;
+  }
+  /* A small solid tile: what was dashed has set. */
+  .projected-found__mark {
+    width: 14px;
+    height: 17px;
+    margin-top: 3px;
+    border-radius: var(--radius-s);
+    background: var(--color-accent);
+  }
+  .projected-found__body {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .projected-found__title {
+    font-weight: var(--weight-bold);
+  }
+  .projected-found__ago {
+    font-weight: var(--weight-regular);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .projected-found__text {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .projected-found__text a {
+    color: var(--color-text);
+  }
+  .projected-found__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-5);
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+  }
+  .projected-found__actions a {
+    color: var(--color-accent);
+  }
+  .projected-found__dismiss {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-muted);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  @keyframes projected-found-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+
+  /* ---- Core sample and facts ---- */
+  .projected-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: var(--space-7);
+    align-items: start;
+  }
+
+  /* The same box a mined block's map gets, but dashed and open: nothing here has set yet. */
+  .projected-core__frame {
+    position: relative;
+    aspect-ratio: 6 / 5;
+    border: 1.5px dashed var(--color-line-strong);
+    border-radius: var(--radius-l);
+  }
+  .projected-core__strata {
+    --strata-seam: var(--color-bg);
+    position: absolute;
+    inset: var(--space-2);
+    overflow: hidden;
+    border-radius: var(--radius-m);
+  }
+  .projected-core__limit {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-3);
+    z-index: 1;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  /* The level the block reaches, dashed like the frame: it will move. */
+  .projected-core__level {
+    position: absolute;
+    inset: auto var(--space-2) var(--space-2);
+    height: calc(var(--fill) * (100% - 2 * var(--space-2)));
+    border-top: 2px dashed var(--color-text);
+    pointer-events: none;
+  }
+  .projected-core__level span {
+    position: absolute;
+    left: var(--space-2);
+    bottom: calc(100% + var(--space-1));
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-s);
+    background: var(--color-bg);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .projected-core__level--high span {
+    bottom: auto;
+    top: var(--space-2);
+  }
+  .projected-core__grid {
+    position: absolute;
+    inset: var(--space-2);
+  }
+  /* Once the map is drawn, the stand-in layers fade from under it. */
+  .projected-core__strata,
+  .projected-core__level,
+  .projected-core__limit {
+    transition: opacity var(--dur-base) var(--ease-out);
+  }
+  .projected-core--grid .projected-core__strata,
+  .projected-core--grid .projected-core__level,
+  .projected-core--grid .projected-core__limit {
+    opacity: 0;
+  }
+
+  /* Nothing waiting: an empty frame on a dashed floor, said in words. Normal on test networks. */
+  .projected-core__empty,
+  .projected-core__wait {
+    position: absolute;
+    inset: auto var(--space-5) var(--space-5);
+    display: grid;
+    gap: var(--space-1);
+    padding-bottom: var(--space-3);
+    border-bottom: 2px dashed var(--color-line-strong);
+  }
+  .projected-core__empty-title {
+    font-weight: var(--weight-bold);
+  }
+  .projected-core__empty-text,
+  .projected-core__wait {
+    max-width: 42ch;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  /* When the chain moves, the dashed frame sets solid in the accent for a moment. */
+  .projected-core__set {
+    position: absolute;
+    inset: -1.5px;
+    border: 2px solid var(--color-accent);
+    border-radius: var(--radius-l);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+    pointer-events: none;
+    opacity: 0;
+    animation: projected-set max(var(--dur-block), var(--dur-fade)) var(--ease-out);
+  }
+  @keyframes projected-set {
+    20%,
+    55% {
+      opacity: 1;
+    }
+  }
+
+  .projected-core .feekey {
+    margin-top: var(--space-3);
+  }
+  .projected-core__caption,
+  .projected-core__change {
+    margin-top: var(--space-3);
+    max-width: 60ch;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .projected-core__caption a {
+    color: var(--color-text);
+  }
+  .projected-core__change {
+    min-height: 1.5em;
+    margin-top: var(--space-1);
+  }
+
+  .projected-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 var(--space-5);
+    align-content: start;
+  }
+  .projected-fact {
+    min-width: 0;
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-line);
+  }
+  .projected-fact--wide {
+    grid-column: 1 / -1;
+  }
+  .projected-fact dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .projected-fact dd {
+    display: grid;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
+  }
+  .projected-fact__value {
+    min-height: 1.5em;
+  }
+  /* Always one line tall, empty or not, so facts never move when their data arrives. */
+  .projected-fact__sub {
+    min-height: 1.5em;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    color: var(--color-text-muted);
+  }
+
+  /* ---- Transactions ---- */
+  .projected-txs {
+    margin-top: var(--space-5);
+  }
+  .projected-txs__empty {
+    padding: var(--space-5) 0;
+    color: var(--color-text-muted);
+  }
+  /* A row that just came in flashes once; it never slides. */
+  .projected-txs__row--new td {
+    animation: projected-row-in calc(var(--dur-block) * 2) var(--ease-out);
+  }
+  @keyframes projected-row-in {
+    from {
+      background: var(--color-accent-soft);
+    }
+  }
+  .projected-rate {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 var(--space-2);
+  }
+  .projected-rate__own {
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  .projected-txs__pages {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    margin-top: var(--space-4);
+  }
+  .projected-txs__of {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  /* ---- The mempool is off on this network ---- */
+  .projected-off {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 62ch;
+    padding: var(--space-5) 0;
+  }
+  .projected-off__title {
+    font-size: var(--text-lg);
+  }
+  .projected-off__text {
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 1040px) {
+    .projected-layout {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-6);
+    }
+  }
+  @media (max-width: 640px) {
+    .projected-page {
+      padding-top: var(--space-4);
+    }
+    .projected-facts {
+      gap: 0 var(--space-4);
+    }
+    /* Copy lives on the transaction page; here the room goes to the numbers. */
+    .projected-txs .copy {
+      display: none;
+    }
+    .projected-core__empty,
+    .projected-core__wait {
+      inset: auto var(--space-3) var(--space-3);
+    }
+  }
+}

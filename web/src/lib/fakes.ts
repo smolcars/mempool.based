@@ -14,6 +14,7 @@ export class FakeSocket implements SocketLike {
   onmessage: SocketLike["onmessage"] = null;
   onclose: SocketLike["onclose"] = null;
   onerror: SocketLike["onerror"] = null;
+  binaryType: BinaryType = "blob";
   readonly sent: unknown[] = [];
   closedWith: number | undefined | null = null;
 
@@ -65,3 +66,63 @@ export function fakeBlock(height: number, branch = "a", parentBranch = branch): 
     difficulty: 1,
   };
 }
+
+/** A record for a `projected-txs:N` frame: rate in sat per 1,000 vB, as on the wire. */
+export interface FakeRecord {
+  txid: string;
+  rate: number;
+  vsize: number;
+  fee: number;
+}
+
+function writeRecord(view: DataView, bytes: Uint8Array, at: number, r: FakeRecord): void {
+  writeTxid(bytes, at, r.txid);
+  view.setUint32(at + 32, r.rate, true);
+  view.setUint32(at + 36, r.vsize, true);
+  view.setBigUint64(at + 40, BigInt(r.fee), true);
+}
+
+function writeTxid(bytes: Uint8Array, at: number, txid: string): void {
+  for (let i = 0; i < 32; i++) bytes[at + i] = Number.parseInt(txid.slice(i * 2, i * 2 + 2), 16);
+}
+
+/** A snapshot frame (kind 1) as the server sends it (docs/WS.md "Binary frames"). */
+export function snapshotFrame(
+  block: number,
+  seq: number,
+  records: readonly FakeRecord[],
+): ArrayBuffer {
+  const buf = new ArrayBuffer(16 + 48 * records.length);
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  bytes.set([1, 1, block, 0]);
+  view.setUint32(4, records.length, true);
+  view.setBigUint64(8, BigInt(seq), true);
+  for (const [i, r] of records.entries()) writeRecord(view, bytes, 16 + i * 48, r);
+  return buf;
+}
+
+/** A delta frame (kind 2): the txids removed, then the records set. */
+export function deltaFrame(
+  block: number,
+  seq: number,
+  prev: number,
+  removed: readonly string[],
+  set: readonly FakeRecord[],
+): ArrayBuffer {
+  const buf = new ArrayBuffer(32 + 32 * removed.length + 48 * set.length);
+  const view = new DataView(buf);
+  const bytes = new Uint8Array(buf);
+  bytes.set([2, 1, block, 0]);
+  view.setUint32(4, removed.length, true);
+  view.setBigUint64(8, BigInt(seq), true);
+  view.setBigUint64(16, BigInt(prev), true);
+  view.setUint32(24, set.length, true);
+  for (const [i, txid] of removed.entries()) writeTxid(bytes, 32 + i * 32, txid);
+  const at = 32 + 32 * removed.length;
+  for (const [i, r] of set.entries()) writeRecord(view, bytes, at + i * 48, r);
+  return buf;
+}
+
+/** A txid made from a number, for tests. */
+export const fakeTxid = (n: number): string => n.toString(16).padStart(64, "0");

@@ -115,6 +115,59 @@ describe("LiveConnection", () => {
     expect(c.status()).toBe("live");
   });
 
+  it("asks for binary frames as bytes and offers each to the topics that read them", () => {
+    const c = connect();
+    const bin: Topic<number> = {
+      name: "projected-txs:1",
+      parse: () => undefined,
+      binary: (f) => (new Uint8Array(f)[2] === 1 ? f.byteLength : undefined),
+    };
+    const got: number[] = [];
+    const text: unknown[] = [];
+    c.add(bin, { message: (m) => got.push(m), resync: () => {} });
+    c.add(echo, { message: (m) => text.push(m), resync: () => {} });
+    const ws = FakeSocket.last();
+    expect(ws.binaryType).toBe("arraybuffer");
+    ws.receive(Uint8Array.of(1, 1, 1, 0, 9).buffer); // before the greeting: ignored
+    ws.hello();
+    ws.receive(Uint8Array.of(1, 1, 1, 0).buffer);
+    ws.receive(Uint8Array.of(1, 1, 2, 0).buffer); // another block's frame
+    expect(got).toStrictEqual([4]);
+    expect(text).toStrictEqual([]);
+  });
+
+  it("restarts a topic by unsubscribing and subscribing again, batched with other changes", () => {
+    const c = connect();
+    c.add(echo, { message: () => {}, resync: () => {} });
+    const ws = FakeSocket.last();
+    ws.hello();
+    ws.sent.length = 0;
+    c.restart("blocks");
+    c.restart("blocks");
+    c.restart("not-subscribed");
+    vi.advanceTimersByTime(TIMING.controlGapMs);
+    expect(ws.sent).toStrictEqual([
+      { op: "unsubscribe", topics: ["blocks"] },
+      { op: "subscribe", topics: ["blocks"] },
+    ]);
+  });
+
+  it("unsubscribes before it subscribes, so switching capped topics never holds one too many", () => {
+    const c = connect();
+    c.add({ name: "projected", parse: () => undefined }, { message: () => {}, resync: () => {} });
+    const off = c.add(echo, { message: () => {}, resync: () => {} });
+    const ws = FakeSocket.last();
+    ws.hello();
+    ws.sent.length = 0;
+    off();
+    c.add(other, { message: () => {}, resync: () => {} });
+    vi.advanceTimersByTime(TIMING.controlGapMs);
+    expect(ws.sent).toStrictEqual([
+      { op: "unsubscribe", topics: ["blocks"] },
+      { op: "subscribe", topics: ["mempool"] },
+    ]);
+  });
+
   it("reconnects with growing backoff, resubscribes, and asks every subscriber to resync", () => {
     const c = connect();
     const resyncs = vi.fn<() => void>();

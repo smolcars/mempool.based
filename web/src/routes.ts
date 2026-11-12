@@ -7,6 +7,7 @@ import { routes as home } from "./pages/home/routes";
 import { routes as lightning } from "./pages/lightning/routes";
 import { routes as mining } from "./pages/mining/routes";
 import { routes as notFound } from "./pages/not-found/routes";
+import { routes as projected } from "./pages/projected/routes";
 import { routes as tx } from "./pages/tx/routes";
 
 /** Every page, on every network: mainnet at the root, the others under their prefix. */
@@ -15,6 +16,7 @@ export const routes: RouteDefinition[] = [
     path: ["/", "/signet", "/testnet4", "/regtest"],
     children: [
       ...home,
+      ...projected,
       ...block,
       ...blocks,
       ...tx,
