@@ -1,0 +1,411 @@
+{
+ "_about": "Answers of mempool.space's public API (its Lightning backend, last updated 2026-08-30) recorded 2026-11-12, for the shape tests of crates/server/tests/lightning.rs: field names, order and JSON types. Lists are trimmed to one or two items; values are public gossip and chain data. channels?status=open also sent X-Total-Count: 1936.",
+ "search": {
+  "nodes": [
+   {
+    "public_key": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+    "alias": "ACINQ",
+    "capacity": 36101511053,
+    "channels": 1836,
+    "status": 1
+   }
+  ],
+  "channels": []
+ },
+ "search_channel": {
+  "nodes": [],
+  "channels": [
+   {
+    "id": "956630091861393409",
+    "short_id": "870050x1753x1",
+    "capacity": 2108069,
+    "status": 2
+   }
+  ]
+ },
+ "rankings": {
+  "topByCapacity": [
+   {
+    "publicKey": "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025",
+    "alias": "bfx-lnd0",
+    "capacity": 42515679181
+   }
+  ],
+  "topByChannels": [
+   {
+    "publicKey": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+    "alias": "ACINQ",
+    "channels": 1836,
+    "city": null,
+    "country": {
+     "de": "Vereinigte Staaten",
+     "en": "United States",
+     "es": "Estados Unidos",
+     "fr": "États Unis",
+     "ja": "アメリカ",
+     "pt-BR": "EUA",
+     "ru": "США",
+     "zh-CN": "美国"
+    },
+    "iso_code": "US",
+    "subdivision": null
+   }
+  ]
+ },
+ "rankings_liquidity": [
+  {
+   "publicKey": "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025",
+   "alias": "bfx-lnd0",
+   "capacity": 42697885558,
+   "channels": 582,
+   "firstSeen": 1574813156,
+   "updatedAt": 1787223663,
+   "city": {
+    "de": "Zürich",
+    "en": "Zurich",
+    "es": "Zúrich",
+    "fr": "Zurich",
+    "ja": "チューリッヒ",
+    "pt-BR": "Zurique",
+    "ru": "Цюрих",
+    "zh-CN": "苏黎世"
+   },
+   "country": {
+    "de": "Schweiz",
+    "en": "Switzerland",
+    "es": "Suiza",
+    "fr": "Suisse",
+    "ja": "スイス連邦",
+    "pt-BR": "Suíça",
+    "ru": "Швейцария",
+    "zh-CN": "瑞士"
+   },
+   "iso_code": "CH",
+   "subdivision": "{\"de\":\"Zürich\",\"en\":\"Zurich\",\"es\":\"Zúrich\",\"fr\":\"Zurich\",\"ja\":\"チューリヒ州\",\"pt-BR\":\"cantão Zurique\",\"ru\":\"Цюрих\",\"zh-CN\":\"苏黎世州\"}"
+  }
+ ],
+ "rankings_connectivity": [
+  {
+   "publicKey": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+   "alias": "ACINQ",
+   "channels": 2645,
+   "capacity": 52321649200,
+   "firstSeen": 1522941222,
+   "updatedAt": 1717234720,
+   "city": null,
+   "country": {
+    "de": "Vereinigte Staaten",
+    "en": "United States",
+    "es": "Estados Unidos",
+    "fr": "États Unis",
+    "ja": "アメリカ",
+    "pt-BR": "EUA",
+    "ru": "США",
+    "zh-CN": "美国"
+   },
+   "iso_code": "US",
+   "subdivision": null
+  }
+ ],
+ "rankings_age": [
+  {
+   "publicKey": "02d4531a2f2e6e5a9033d37d548cff4834a3898e74c3abe1985b493c42ebbd707d",
+   "alias": "coinfinity.co",
+   "channels": 5,
+   "capacity": 12399276,
+   "firstSeen": 1518001533,
+   "updatedAt": 1787559276,
+   "city": {
+    "de": "Brüssel",
+    "en": "Brussels",
+    "es": "Bruselas",
+    "fr": "Bruxelles",
+    "ja": "ブリュッセル",
+    "pt-BR": "Bruxelas",
+    "ru": "Брюссель",
+    "zh-CN": "布鲁塞尔"
+   },
+   "country": {
+    "de": "Belgien",
+    "en": "Belgium",
+    "es": "Bélgica",
+    "fr": "Belgique",
+    "ja": "ベルギー王国",
+    "pt-BR": "Bélgica",
+    "ru": "Бельгия",
+    "zh-CN": "比利时"
+   },
+   "iso_code": "BE",
+   "subdivision": "{\"de\":\"Region Brüssel-Hauptstadt\",\"en\":\"Brussels Capital\",\"es\":\"Bruselas\",\"fr\":\"Région de Bruxelles\",\"pt-BR\":\"Bruxelas-Capital\"}"
+  }
+ ],
+ "node": {
+  "public_key": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+  "alias": "ACINQ",
+  "first_seen": 1546452819,
+  "updated_at": 1783964790,
+  "color": "#49daaa",
+  "sockets": "3.33.236.230:9735,of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735",
+  "as_number": 16509,
+  "city_id": null,
+  "country_id": 6252001,
+  "subdivision_id": null,
+  "longitude": -97.822,
+  "latitude": 37.751,
+  "iso_code": "US",
+  "as_organization": "Amazon.com",
+  "city": null,
+  "country": {
+   "de": "USA",
+   "en": "United States",
+   "es": "Estados Unidos",
+   "fr": "États Unis",
+   "ja": "アメリカ",
+   "pt-BR": "EUA",
+   "ru": "США",
+   "zh-CN": "美国"
+  },
+  "subdivision": null,
+  "features": [
+   {
+    "bit": 0,
+    "name": "data-loss-protect",
+    "is_required": true,
+    "is_known": true
+   },
+   {
+    "bit": 7,
+    "name": "gossip-queries",
+    "is_required": false,
+    "is_known": true
+   }
+  ],
+  "featuresBits": "a00098a82a8a6981",
+  "active_channel_count": 2026,
+  "capacity": "35779265012",
+  "opened_channel_count": 2126,
+  "closed_channel_count": 6573,
+  "custom_records": {}
+ },
+ "node_statistics": [
+  {
+   "added": 1788048000,
+   "capacity": 36101511053,
+   "channels": 1836
+  },
+  {
+   "added": 1787961600,
+   "capacity": 35579388481,
+   "channels": 1837
+  }
+ ],
+ "node_fees_histogram": {
+  "incoming": [
+   {
+    "bucket": null,
+    "count": 10,
+    "capacity": "19696815"
+   },
+   {
+    "bucket": "0.0",
+    "count": 68,
+    "capacity": "1675551033"
+   }
+  ],
+  "outgoing": [
+   {
+    "bucket": null,
+    "count": 7,
+    "capacity": "33589904"
+   },
+   {
+    "bucket": "500.0",
+    "count": 1565,
+    "capacity": "7482806240"
+   }
+  ]
+ },
+ "channels_open": [
+  {
+   "status": 1,
+   "closing_reason": null,
+   "closing_date": null,
+   "capacity": 500000000,
+   "short_id": "811984x2037x0",
+   "id": "892785849701564416",
+   "fee_rate": 2499,
+   "node": {
+    "alias": "bfx-lnd0",
+    "public_key": "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025",
+    "channels": 573,
+    "capacity": "42515679181"
+   }
+  }
+ ],
+ "channels_closed": [
+  {
+   "status": 2,
+   "closing_reason": 1,
+   "closing_date": 1788066600,
+   "capacity": 161974908,
+   "short_id": "958086x236x0",
+   "id": "1053426697424863232",
+   "fee_rate": 999,
+   "node": {
+    "alias": "connect-to-this-node-please",
+    "public_key": "026c2595bddf44ca1eadb65ad26942b325616690d104442f8560a7faaf67c4c323",
+    "channels": 8,
+    "capacity": "68521608"
+   }
+  }
+ ],
+ "channel": {
+  "id": "892785849701564416",
+  "short_id": "811984x2037x0",
+  "capacity": 500000000,
+  "transaction_id": "a7f10c2595c8ea0cc85c3183709d10aada60c7b87fe0c405f3f5b8a44150d4f5",
+  "transaction_vout": 0,
+  "closing_transaction_id": null,
+  "closing_fee": 0,
+  "closing_reason": null,
+  "closing_date": null,
+  "updated_at": "2026-08-29T09:53:33.000Z",
+  "created": "2023-10-13T09:32:44.000Z",
+  "status": 1,
+  "funding_ratio": 0.999989,
+  "closed_by": null,
+  "single_funded": false,
+  "node_left": {
+   "alias": "ACINQ",
+   "public_key": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+   "channels": 1836,
+   "capacity": 36101511053,
+   "base_fee_mtokens": 1000,
+   "cltv_delta": 144,
+   "fee_rate": 2499,
+   "is_disabled": 0,
+   "max_htlc_mtokens": 20000000000,
+   "min_htlc_mtokens": 1,
+   "updated_at": "2026-08-27T23:19:46.000Z",
+   "longitude": -97.822,
+   "latitude": 37.751,
+   "funding_balance": 419893063,
+   "closing_balance": 0
+  },
+  "node_right": {
+   "alias": "bfx-lnd0",
+   "public_key": "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025",
+   "channels": 573,
+   "capacity": 42515679181,
+   "base_fee_mtokens": 1000,
+   "cltv_delta": 80,
+   "fee_rate": 1,
+   "is_disabled": 0,
+   "max_htlc_mtokens": 20000000000,
+   "min_htlc_mtokens": 1000,
+   "updated_at": "2026-08-29T09:53:33.000Z",
+   "longitude": 8.5437,
+   "latitude": 47.3643,
+   "funding_balance": 0,
+   "closing_balance": 0
+  }
+ },
+ "channels_txids": [
+  {
+   "inputs": {},
+   "outputs": {
+    "1": {
+     "id": "956630091861393409",
+     "short_id": "870050x1753x1",
+     "capacity": 2108069,
+     "transaction_id": "b7046da1040bafd381468efde3f7dfe98f594afed6249f42d1fe8e3eeb49e7ab",
+     "transaction_vout": 1,
+     "closing_transaction_id": "3e762735dc7eb040ef14685466679155d3eba8a62fed88a18803b698960b4f64",
+     "closing_fee": 0,
+     "closing_reason": 3,
+     "closing_date": "2026-07-11T11:05:43.000Z",
+     "updated_at": "2026-07-11T09:42:47.000Z",
+     "created": "2024-11-12T21:30:42.000Z",
+     "status": 2,
+     "funding_ratio": null,
+     "closed_by": null,
+     "single_funded": false,
+     "node_left": {
+      "alias": "be-kind_ZA🇿🇦",
+      "public_key": "03e4d457261595cb52bb2088c831304905a47df8715a5d83a11b60dca5bd4933c4",
+      "base_fee_mtokens": 0,
+      "cltv_delta": 100,
+      "fee_rate": 0,
+      "is_disabled": 1,
+      "max_htlc_mtokens": 2086989000,
+      "min_htlc_mtokens": 1000,
+      "updated_at": "2026-07-11T03:33:58.000Z",
+      "funding_balance": 0,
+      "closing_balance": 0
+     },
+     "node_right": {
+      "alias": "02071ce929b58266c895",
+      "public_key": "02071ce929b58266c895f929226c00da19e14dd4783bef30b29829f0e6e2ff4bf2",
+      "base_fee_mtokens": 19000,
+      "cltv_delta": 100,
+      "fee_rate": 1200,
+      "is_disabled": 1,
+      "max_htlc_mtokens": 2086989000,
+      "min_htlc_mtokens": 1000,
+      "updated_at": "2026-07-11T09:42:47.000Z",
+      "funding_balance": 0,
+      "closing_balance": 0
+     }
+    }
+   }
+  },
+  {
+   "inputs": {
+    "0": {
+     "id": "956630091861393409",
+     "short_id": "870050x1753x1",
+     "capacity": 2108069,
+     "transaction_id": "b7046da1040bafd381468efde3f7dfe98f594afed6249f42d1fe8e3eeb49e7ab",
+     "transaction_vout": 1,
+     "closing_transaction_id": "3e762735dc7eb040ef14685466679155d3eba8a62fed88a18803b698960b4f64",
+     "closing_fee": 0,
+     "closing_reason": 3,
+     "closing_date": "2026-07-11T11:05:43.000Z",
+     "updated_at": "2026-07-11T09:42:47.000Z",
+     "created": "2024-11-12T21:30:42.000Z",
+     "status": 2,
+     "funding_ratio": null,
+     "closed_by": null,
+     "single_funded": false,
+     "node_left": {
+      "alias": "be-kind_ZA🇿🇦",
+      "public_key": "03e4d457261595cb52bb2088c831304905a47df8715a5d83a11b60dca5bd4933c4",
+      "base_fee_mtokens": 0,
+      "cltv_delta": 100,
+      "fee_rate": 0,
+      "is_disabled": 1,
+      "max_htlc_mtokens": 2086989000,
+      "min_htlc_mtokens": 1000,
+      "updated_at": "2026-07-11T03:33:58.000Z",
+      "funding_balance": 0,
+      "closing_balance": 0
+     },
+     "node_right": {
+      "alias": "02071ce929b58266c895",
+      "public_key": "02071ce929b58266c895f929226c00da19e14dd4783bef30b29829f0e6e2ff4bf2",
+      "base_fee_mtokens": 19000,
+      "cltv_delta": 100,
+      "fee_rate": 1200,
+      "is_disabled": 1,
+      "max_htlc_mtokens": 2086989000,
+      "min_htlc_mtokens": 1000,
+      "updated_at": "2026-07-11T09:42:47.000Z",
+      "funding_balance": 0,
+      "closing_balance": 0
+     }
+    }
+   },
+   "outputs": {}
+  }
+ ]
+}

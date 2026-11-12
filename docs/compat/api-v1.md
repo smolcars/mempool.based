@@ -83,24 +83,24 @@ Every mining route is served from the block table in our store (MI1, MI2), never
 
 ## Lightning
 
-The reference backend runs with Lightning off, so shapes here were observed on mempool.space's public API. All come from our gossip peer and Lightning store (LN1–LN4).
+The reference backend runs with Lightning off, so shapes here were observed on mempool.space's public API. All come from our gossip peer and Lightning store (LN1–LN4). We list only channels whose funding output we verified on chain, where the reference lists what gossip claims, and our history starts when our peer started.
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
 | `GET /v1/lightning/statistics/latest` | Network totals: nodes by network type, channels, capacity, fee-rate and base-fee averages and medians | Lightning store (a snapshot of the verified graph every ten minutes) | served | M4 | pub | Same fields, order and types. Counts only channels whose funding output we verified; `id` is the snapshot's ten-minute slot ([`API.md`](../API.md#lightning)) |
 | `GET /v1/lightning/statistics/:interval` | Network totals over time | Lightning store | served | M4 | pub | Same seven fields, newest first. The reference sends a point a day; ours have the interval's step, never under ten minutes. History starts when our peer first ran; `X-Data-*` headers say how far it reaches |
-| `GET /v1/lightning/search?searchText=` | Matching nodes and channels | Lightning store | planned | M4 | pub | Alias substring and exact pubkey or channel id |
-| `GET /v1/lightning/nodes/rankings` | Top nodes by capacity and by channel count | Lightning store | planned | M4 | pub | |
-| `GET /v1/lightning/nodes/rankings/liquidity` | Top 100 by capacity | Lightning store | planned | M4 | pub | Location columns come back empty without GeoIP |
-| `GET /v1/lightning/nodes/rankings/connectivity` | Top 100 by channels | Lightning store | planned | M4 | pub | As above |
-| `GET /v1/lightning/nodes/rankings/age` | Oldest 100 nodes | Lightning store | planned | M4 | pub | "First seen" is bounded by our own history |
-| `GET /v1/lightning/nodes/:pubkey` | One node: alias, color, sockets, features, capacity, channel counts | Lightning store | planned | M4 | pub | Location fields (`city`, `country`, `as_number`) are GeoIP and will be absent |
-| `GET /v1/lightning/nodes/:pubkey/statistics` | One node's capacity and channels over time | Lightning store | planned | M4 | pub | |
-| `GET /v1/lightning/nodes/:pubkey/fees/histogram` | Distribution of one node's incoming and outgoing fee rates | Lightning store | planned | M4 | pub | |
-| `GET /v1/lightning/channels?public_key=&status=` | A node's channels, open or closed, paged | Lightning store | planned | M4 | pub | |
-| `GET /v1/lightning/channels/:short_id` | One channel: both ends, policies, capacity, funding and closing tx | Lightning store; rbitcoin position routes | planned | M4 | pub | |
-| `GET /v1/lightning/channels/txids?txId[]=` | Channels opened or closed by given transactions | Lightning store | planned | M4 | pub | Lets the tx page mark channel opens and closes |
-| `GET /v1/lightning/penalties` | Channels closed by a penalty transaction | Lightning store (LN3 close classification) | planned | M4 | pub | |
+| `GET /v1/lightning/search?searchText=` | Matching nodes and channels | Lightning store | served | M4 | pub | Same fields, order and types. Public key by prefix, alias by substring, channel by either id form; at most 10 nodes. Only chain-verified channels and the nodes that have one ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
+| `GET /v1/lightning/nodes/rankings` | Top nodes by capacity and by channel count | Lightning store | served | M4 | pub | Same fields, order and types, 6 of each. Location `null` ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
+| `GET /v1/lightning/nodes/rankings/liquidity` | Top 100 by capacity | Lightning store | served | M4 | pub | Same fields, order and types, 100 nodes. Location fields `null` without GeoIP; `firstSeen` is the oldest funding among channels we hold |
+| `GET /v1/lightning/nodes/rankings/connectivity` | Top 100 by channels | Lightning store | served | M4 | pub | As above |
+| `GET /v1/lightning/nodes/rankings/age` | Oldest 100 nodes | Lightning store | served | M4 | pub | As above. "First seen" is bounded by our own history: the oldest funding among the channels we hold, open or closed |
+| `GET /v1/lightning/nodes/:pubkey` | One node: alias, color, sockets, features, capacity, channel counts | Lightning store | served | M4 | pub | Same fields, order and types. Location fields `null`, `custom_records` `{}`. Closed counts start with our history ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
+| `GET /v1/lightning/nodes/:pubkey/statistics` | One node's capacity and channels over time | Lightning store | served | M4 | pub | Same fields, order and types. Rebuilt from our record of opens and closes, nothing new stored: a point per UTC midnight since our first statistics snapshot, and now ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
+| `GET /v1/lightning/nodes/:pubkey/fees/histogram` | Distribution of one node's incoming and outgoing fee rates | Lightning store | served | M4 | pub | Same fields, order and types, buckets as the reference's (exact under 10 ppm, then tens, hundreds, thousands) |
+| `GET /v1/lightning/channels?public_key=&status=` | A node's channels, open or closed, paged | Lightning store | served | M4 | pub | Same fields, order and types, 10 a page from `index`, `X-Total-Count`. Closed channels from our history only; their `fee_rate` is `null` |
+| `GET /v1/lightning/channels/:short_id` | One channel: both ends, policies, capacity, funding and closing tx | Lightning store; rbitcoin position routes | served | M4 | pub | Same fields, order and types, except `single_funded` and the ends' balances, which we cannot know. Takes the decimal id, as the reference does, and `<h>x<i>x<o>`. `node_left` is node one ([`API.md`](../API.md#nodes-channels-search-and-rankings)) |
+| `GET /v1/lightning/channels/txids?txId[]=` | Channels opened or closed by given transactions | Lightning store | served | M4 | pub | Same fields, order and types. Funding txids are asked of the node once per channel in the background; until then a channel is not found by it. A close that spends more than the funding output (`other`) is left out of `inputs` |
+| `GET /v1/lightning/penalties` | Channels closed by a penalty transaction | Lightning store (LN3 close classification) | skipped | — | pub | Its rows are the reference's database records of a closed channel (each end's last policy, balances, outputs, resolution state), which we do not keep. Our breaches show in `/app/lightning/channels/closed` (`penalty`) |
 | `GET /v1/lightning/nodes/countries` | Node counts and capacity per country | — | skipped | — | pub | Needs GeoIP |
 | `GET /v1/lightning/nodes/country/:code` | Nodes in a country | — | skipped | — | pub | Needs GeoIP |
 | `GET /v1/lightning/nodes/isp-ranking` | Capacity per hosting provider, Tor share | — | skipped | — | pub | Needs an ASN database |

@@ -6,9 +6,17 @@
 //! into [`Change`]s and its graph into [`Stats`].
 
 mod db;
+mod graph;
 mod sampler;
 
-pub use db::{apply, closed, insert, latest, opened, record, series};
+pub use db::{
+    apply, by_txids, channel, closed, insert, latest, node_closed, node_spans, opened, past,
+    record, series, set_funding, unfunded,
+};
+pub use graph::{
+    Announcement, Bucket, GraphChannel, GraphNode, Index, Node, NodePast, NodePoint, Past, Policy,
+    RANKED, Rank, Span, bucket, node_series,
+};
 pub use sampler::{Config, Event, Skip, run};
 
 use bitcoin::{BlockHash, Txid};
@@ -109,6 +117,8 @@ pub struct Channel {
     pub open: Open,
     pub close: Option<Close>,
     pub penalty: Option<Penalty>,
+    /// The funding transaction, once asked of the node ([`unfunded`], [`set_funding`]).
+    pub funding_txid: Option<Txid>,
 }
 
 /// The network as one snapshot of the verified graph saw it, or several snapshots' values

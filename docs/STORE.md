@@ -68,7 +68,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
 | [`mempool_history`](#mempool_history) | `0004_mempool_history.sql` | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
 | [`replacements`](#replacements) | `0005_replacements.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
-| [`ln_channels`](#ln_channels) | `0006_lightning.sql` | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
+| [`ln_channels`](#ln_channels) | `0006_lightning.sql`, `0007_lightning_lookups.sql` (`open_txid` and the lookup indexes) | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
 | [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
 
 ### Adding a table
@@ -316,10 +316,11 @@ Every public channel the Lightning peer verified, and how it ended: what a node'
 | Column | Type | Why |
 |---|---|---|
 | `scid` | integer key | The short channel id: funding height, transaction index and output index. Ordering by it orders channels by where they were funded, so the newest opens are a walk down the key |
-| `node_one`, `node_two` | 33-byte blobs | The nodes' public keys, as announced: a node's channels, open or closed |
+| `node_one`, `node_two` | 33-byte blobs | The nodes' public keys, as announced: a node's channels, open or closed. Each indexed |
 | `capacity` | integer, sats | The funding output's value, as the node reported it |
 | `open_hash`, `open_time` | blob, integer | The funding block (its height is the scid's) and its header time: a channel's age |
-| `close_height`, `close_hash`, `close_time`, `close_txid` | nullable | The block and transaction that spent the funding output. Null while open. Indexed by height (partial index) for the newest closes |
+| `close_height`, `close_hash`, `close_time`, `close_txid` | nullable | The block and transaction that spent the funding output. Null while open. Indexed by height (partial index) for the newest closes, and by txid for the transaction page |
+| `open_txid` | blob, nullable | The funding transaction, asked of the node once per channel in the background ([`LIGHTNING.md`](LIGHTNING.md#funding-transactions)). Null until then; cleared when an `Opened` moves the channel to another block. Indexed, for the transaction page; a partial index on the rows still without one is what the background task walks |
 | `close_kind` | integer, nullable | 0 cooperative, 1 force, 2 penalty, 3 other ([`LIGHTNING.md`](LIGHTNING.md#how-a-close-is-classified)) |
 | `close_fee` | integer, nullable | The closing transaction's fee, when the node said |
 | `penalty_txid`, `penalty_height`, `penalty_hash`, `penalty_time` | nullable | A force close found to be a breach: the revocation sweep. The close keeps its kind; the penalty columns say it was a breach |
@@ -340,7 +341,7 @@ So a reorg leaves the table as if the undone record had never arrived, and apply
 
 **A gap.** If the consumer falls further behind than the peer's memory (10,000 records, five times the largest write; at the start-up burst of about 600 records a second that is a store stalled for 16 s), the records in between are lost. The consumer then stores every channel the peer holds open, as of a sequence number, and goes on from there (`lightning_history_gap`). Opens are whole again; a close among the lost records is not recorded, and its row reads open, like a channel the peer stopped watching ([`LIGHTNING.md`](LIGHTNING.md#limits)).
 
-**Writes and size.** Through `try_write`: a full write queue makes the consumer wait and retry rather than take a slot, so the block table's and the mempool history's writes never queue behind it. This is stronger than the drop-and-log queue of the replacement record and the snapshots: a dropped channel record would be a hole nothing fills, so records are kept until committed and a lag is repaired from the peer's memory. Measured on mainnet: the first start writes one row per channel as validation verifies it, 36,219 in about two minutes, in writes of at most 2,000 records; a restart sends the same 36,219 records again and changes no row (an open that matches is not written). After that, a few hundred rows a day: the new opens and about 200 closes. About 150 bytes a row: 5.5 MB at 36,000 channels, 15 MB at the 100,000 ceiling. The table grows with the channels ever seen, not with time: each row stands for a funding output on the chain, and the graph's ceiling bounds how many are open at once.
+**Writes and size.** Through `try_write`: a full write queue makes the consumer wait and retry rather than take a slot, so the block table's and the mempool history's writes never queue behind it. This is stronger than the drop-and-log queue of the replacement record and the snapshots: a dropped channel record would be a hole nothing fills, so records are kept until committed and a lag is repaired from the peer's memory. Measured on mainnet: the first start writes one row per channel as validation verifies it, 36,219 in about two minutes, in writes of at most 2,000 records; a restart sends the same 36,219 records again and changes no row (an open that matches is not written). After that, a few hundred rows a day: the new opens and about 200 closes. About 150 bytes a row: 5.5 MB at 36,000 channels, 15 MB at the 100,000 ceiling. The funding txid and the lookup indexes (`0007`) add about 190 bytes a row once every txid is known (measured on mainnet with all 36,227 filled: the two node indexes 1.9 MB each, the funding-txid index 1.9 MB, the table 0.95 MB more): 6.8 MB at 36,000 channels, 19 MB at the ceiling. The table grows with the channels ever seen, not with time: each row stands for a funding output on the chain, and the graph's ceiling bounds how many are open at once.
 
 **Not rebuildable.** Nodes, capacity and the funding block of a closed channel come from gossip that stops once it closes. Deleting the file loses every closed channel; open ones come back at the next start.
 
@@ -352,6 +353,12 @@ So a reorg leaves the table as if the undone record had never arrived, and apply
 |---|---|
 | `opened(store, limit)` | Up to `limit` rows, newest funding first, with their closes |
 | `closed(store, limit)` | Up to `limit` closed rows, newest close first, through the partial index |
+| `channel(store, scid)` | One row, by its key |
+| `node_closed(store, node, offset, limit)` | A node's closed rows, newest close first, and how many it has: through the node indexes, so it reads that node's rows only (2.3 ms for ACINQ's 1,807) |
+| `node_spans(store, node)` | A node's rows' funding and closing times and capacity, for its history ([`LIGHTNING.md`](LIGHTNING.md#routes)) |
+| `by_txids(store, txids)` | The rows each txid funded or closed: two index lookups per txid |
+| `past(store)` | Every node's oldest funding time and closes by kind, and the oldest statistics row: one grouped pass over the table for the graph's index, done again only after new rows were stored |
+| `unfunded(store, after, limit)`, `set_funding(store, found)` | The rows still without a funding txid, and storing them (`try_write`, and only while the row names the same block) |
 | `apply(store, changes)` | Stores records in order, in one write; fails with `Error::Full` rather than wait |
 
 ### ln_statistics

@@ -1136,8 +1136,36 @@ pub struct LightningSummary {
     /// History records stored and the last one's sequence number.
     pub history_records: u64,
     pub history_seq: u64,
+    /// The last index build, and funding txids learned since start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_ms: Option<f64>,
+    pub funding_txids: u64,
 }
 event!(LightningSummary, "lightning_summary", Info, keep);
+
+/// The first index of the synced graph was built: the routes for nodes, channels, search and
+/// rankings answer from now on. Later builds, every 30 s, show in `lightning_summary`.
+#[derive(Debug, Serialize)]
+pub struct LightningIndexBuilt {
+    pub network: &'static str,
+    pub nodes: usize,
+    pub channels: usize,
+    /// Copying the graph, and the longest the graph's lock was held for one chunk of it.
+    pub copy_ms: f64,
+    pub longest_hold_ms: f64,
+    pub duration_ms: f64,
+}
+event!(LightningIndexBuilt, "lightning_index_built", Info);
+
+/// A funding-txid request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
+/// failure in a row.
+#[derive(Debug, Serialize)]
+pub struct LightningFundingFailed<'a> {
+    pub network: &'static str,
+    pub error: &'a str,
+    pub failures: u32,
+}
+event!(LightningFundingFailed<'a>, "lightning_funding_failed", Warn);
 
 /// The graph reached its ceiling (`{NET}_LIGHTNING_MAX_CHANNELS`); new channels are refused.
 #[derive(Debug, Serialize)]
@@ -1875,6 +1903,21 @@ mod tests {
                 gossip_bytes: 50_000_000,
                 history_records: 36_250,
                 history_seq: 36_250,
+                index_ms: Some(41.5),
+                funding_txids: 36_000,
+            }),
+            both(&LightningIndexBuilt {
+                network: n,
+                nodes: 13_600,
+                channels: 36_250,
+                copy_ms: 12.0,
+                longest_hold_ms: 0.4,
+                duration_ms: 40.0,
+            }),
+            both(&LightningFundingFailed {
+                network: n,
+                error: "connection refused",
+                failures: 1,
             }),
             both(&LightningCeilingReached {
                 network: n,

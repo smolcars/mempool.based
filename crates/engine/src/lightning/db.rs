@@ -4,18 +4,24 @@
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 
+use std::collections::HashMap;
+
+use rusqlite::OptionalExtension;
+
 use super::{
     Block, Change, Channel, Close, DAY, EVERY, HOUR, Interval, KEEP_HOURS, KEEP_MINUTES, Kind,
-    Level, Open, Penalty, Point, Series, Stats,
+    Level, NodePast, Open, Past, Penalty, Point, Series, Span, Stats,
 };
 use crate::history::Rolled;
 use crate::store::{Error, Sql, SqlError, Store, params};
 
 /// Opens a channel: inserts it, or makes the stored row match and clears any close, which the
-/// chain no longer holds. A row that already matches is not written again.
+/// chain no longer holds. A row that already matches is not written again. The funding txid
+/// stays only while the funding block does.
 const OPEN: &str = "INSERT INTO ln_channels (scid, node_one, node_two, capacity, open_hash, open_time) \
      VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (scid) DO UPDATE SET \
      node_one = excluded.node_one, node_two = excluded.node_two, capacity = excluded.capacity, \
+     open_txid = CASE WHEN open_hash IS excluded.open_hash THEN open_txid END, \
      open_hash = excluded.open_hash, open_time = excluded.open_time, close_height = NULL, \
      close_hash = NULL, close_time = NULL, close_txid = NULL, close_kind = NULL, close_fee = NULL, \
      penalty_txid = NULL, penalty_height = NULL, penalty_hash = NULL, penalty_time = NULL \
@@ -29,6 +35,7 @@ const CLOSE: &str = "INSERT INTO ln_channels (scid, node_one, node_two, capacity
      close_height, close_hash, close_time, close_txid, close_kind, close_fee) \
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT (scid) DO UPDATE SET \
      node_one = excluded.node_one, node_two = excluded.node_two, capacity = excluded.capacity, \
+     open_txid = CASE WHEN open_hash IS excluded.open_hash THEN open_txid END, \
      open_hash = excluded.open_hash, open_time = excluded.open_time, \
      close_height = excluded.close_height, close_hash = excluded.close_hash, \
      close_time = excluded.close_time, close_txid = excluded.close_txid, \
@@ -132,8 +139,17 @@ fn height(r: &rusqlite::Row, i: usize) -> Result<u32, SqlError> {
     u32::try_from(v).map_err(|_| SqlError::IntegralValueOutOfRange(i, v))
 }
 
-/// A row of the channel columns, in the table's order.
-fn channel(r: &rusqlite::Row) -> Result<Channel, SqlError> {
+/// The columns [`channel`] reads, in its order.
+macro_rules! channel_columns {
+    () => {
+        "scid, node_one, node_two, capacity, open_hash, open_time, close_height, close_hash, \
+         close_time, close_txid, close_kind, close_fee, penalty_txid, penalty_height, \
+         penalty_hash, penalty_time, open_txid"
+    };
+}
+
+/// A row of [`channel_columns!`].
+fn row(r: &rusqlite::Row) -> Result<Channel, SqlError> {
     let scid = get(r, 0)?;
     let open = Open {
         scid,
@@ -172,10 +188,15 @@ fn channel(r: &rusqlite::Row) -> Result<Channel, SqlError> {
             },
         }),
     };
+    let funding_txid = r
+        .get::<_, Option<Vec<u8>>>(16)?
+        .map(|_| bytes(r, 16).map(Txid::from_byte_array))
+        .transpose()?;
     Ok(Channel {
         open,
         close,
         penalty,
+        funding_txid,
     })
 }
 
@@ -185,12 +206,12 @@ pub async fn opened(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> 
         .read(move |sql| {
             Ok(sql
                 .prepare(concat!(
-                    "SELECT scid, node_one, node_two, capacity, open_hash, open_time, ",
-                    "close_height, close_hash, close_time, close_txid, close_kind, close_fee, ",
-                    "penalty_txid, penalty_height, penalty_hash, penalty_time FROM ln_channels ",
+                    "SELECT ",
+                    channel_columns!(),
+                    " FROM ln_channels ",
                     "ORDER BY scid DESC LIMIT ?1"
                 ))?
-                .query_map(params![int(limit as u64)], channel)?
+                .query_map(params![int(limit as u64)], row)?
                 .collect::<Result<Vec<_>, _>>()?)
         })
         .await
@@ -202,13 +223,197 @@ pub async fn closed(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> 
         .read(move |sql| {
             Ok(sql
                 .prepare(concat!(
-                    "SELECT scid, node_one, node_two, capacity, open_hash, open_time, ",
-                    "close_height, close_hash, close_time, close_txid, close_kind, close_fee, ",
-                    "penalty_txid, penalty_height, penalty_hash, penalty_time FROM ln_channels ",
+                    "SELECT ",
+                    channel_columns!(),
+                    " FROM ln_channels ",
                     "WHERE close_height IS NOT NULL ORDER BY close_height DESC, scid DESC LIMIT ?1"
                 ))?
-                .query_map(params![int(limit as u64)], channel)?
+                .query_map(params![int(limit as u64)], row)?
                 .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+}
+
+/// One channel by its short channel id.
+pub async fn channel(store: &Store, scid: u64) -> Result<Option<Channel>, Error> {
+    store
+        .read(move |sql| {
+            Ok(sql
+                .prepare(concat!(
+                    "SELECT ",
+                    channel_columns!(),
+                    " FROM ln_channels WHERE scid = ?1"
+                ))?
+                .query_row(params![int(scid)], row)
+                .optional()?)
+        })
+        .await
+}
+
+/// A node's closed channels, newest close first: `limit` of them from `offset`, and how many it
+/// has. Through the node indexes.
+pub async fn node_closed(
+    store: &Store,
+    node: [u8; 33],
+    offset: usize,
+    limit: usize,
+) -> Result<(u64, Vec<Channel>), Error> {
+    store
+        .read(move |sql| {
+            let id = node.to_vec();
+            let total = sql
+                .prepare(
+                    "SELECT count(*) FROM ln_channels \
+                     WHERE (node_one = ?1 OR node_two = ?1) AND close_height IS NOT NULL",
+                )?
+                .query_row(params![id], |r| get(r, 0))?;
+            let rows = sql
+                .prepare(concat!(
+                    "SELECT ",
+                    channel_columns!(),
+                    " FROM ln_channels WHERE (node_one = ?1 OR node_two = ?1) ",
+                    "AND close_height IS NOT NULL ORDER BY close_height DESC, scid DESC ",
+                    "LIMIT ?2 OFFSET ?3"
+                ))?
+                .query_map(params![id, int(limit as u64), int(offset as u64)], row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((total, rows))
+        })
+        .await
+}
+
+/// The channels any of `txids` funded or closed, each once, in `txids` order. Two indexed
+/// lookups per txid.
+pub async fn by_txids(store: &Store, txids: Vec<Txid>) -> Result<Vec<Channel>, Error> {
+    store
+        .read(move |sql| {
+            let mut out: Vec<Channel> = Vec::new();
+            let mut funded = sql.prepare(concat!(
+                "SELECT ",
+                channel_columns!(),
+                " FROM ln_channels WHERE open_txid = ?1 ORDER BY scid"
+            ))?;
+            let mut closed = sql.prepare(concat!(
+                "SELECT ",
+                channel_columns!(),
+                " FROM ln_channels WHERE close_txid = ?1 ORDER BY scid"
+            ))?;
+            for t in &txids {
+                let t = t.to_byte_array().to_vec();
+                for s in [&mut funded, &mut closed] {
+                    for c in s.query_map(params![t], row)? {
+                        let c = c?;
+                        if !out.iter().any(|o| o.open.scid == c.open.scid) {
+                            out.push(c);
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// A node's channels as stored, open and closed: what its past is rebuilt from.
+pub async fn node_spans(store: &Store, node: [u8; 33]) -> Result<Vec<Span>, Error> {
+    store
+        .read(move |sql| {
+            Ok(sql
+                .prepare(
+                    "SELECT open_time, close_time, capacity FROM ln_channels \
+                     WHERE node_one = ?1 OR node_two = ?1",
+                )?
+                .query_map(params![node.to_vec()], |r| {
+                    Ok(Span {
+                        open: get(r, 0)?,
+                        close: r
+                            .get::<_, Option<i64>>(1)?
+                            .map(|t| u64::try_from(t).unwrap_or(0)),
+                        capacity: get(r, 2)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+}
+
+/// Every stored node's oldest funding and closes by kind, and when the history starts: the part
+/// of the index the live graph cannot give. One pass over the table.
+pub async fn past(store: &Store) -> Result<Past, Error> {
+    store
+        .read(move |sql| {
+            let start: Option<i64> = sql
+                .prepare("SELECT min(time) FROM ln_statistics")?
+                .query_row([], |r| r.get(0))?;
+            let mut nodes = HashMap::new();
+            let mut rows = sql.prepare(
+                "SELECT node, min(open_time), \
+                 count(*) FILTER (WHERE close_kind = 0 AND penalty_txid IS NULL), \
+                 count(*) FILTER (WHERE close_kind = 1 AND penalty_txid IS NULL), \
+                 count(*) FILTER (WHERE close_kind = 2 OR penalty_txid IS NOT NULL), \
+                 count(*) FILTER (WHERE close_kind = 3 AND penalty_txid IS NULL) \
+                 FROM (SELECT node_one AS node, open_time, close_kind, penalty_txid FROM ln_channels \
+                 UNION ALL SELECT node_two, open_time, close_kind, penalty_txid FROM ln_channels) \
+                 GROUP BY node",
+            )?;
+            let mut q = rows.query([])?;
+            while let Some(r) = q.next()? {
+                let closed = [2, 3, 4, 5].map(|i| get(r, i).map(|n| u32::try_from(n).unwrap_or(u32::MAX)));
+                let [a, b, c, d] = closed;
+                nodes.insert(
+                    bytes(r, 0)?,
+                    NodePast {
+                        first_seen: get(r, 1)?,
+                        closed: [a?, b?, c?, d?],
+                    },
+                );
+            }
+            Ok(Past {
+                nodes,
+                start: start.and_then(|t| u64::try_from(t).ok()),
+            })
+        })
+        .await
+}
+
+/// Up to `limit` channels after `after` whose funding txid is still to be asked, with their
+/// funding block.
+pub async fn unfunded(
+    store: &Store,
+    after: u64,
+    limit: usize,
+) -> Result<Vec<(u64, BlockHash)>, Error> {
+    store
+        .read(move |sql| {
+            Ok(sql
+                .prepare(
+                    "SELECT scid, open_hash FROM ln_channels WHERE open_txid IS NULL AND scid > ?1 \
+                     ORDER BY scid LIMIT ?2",
+                )?
+                .query_map(params![int(after), int(limit as u64)], |r| {
+                    Ok((get(r, 0)?, BlockHash::from_byte_array(bytes(r, 1)?)))
+                })?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+}
+
+/// Stores funding txids, each only while its row still names the block it was read from. Fails
+/// with [`Error::Full`] rather than wait behind a full write queue.
+pub async fn set_funding(store: &Store, found: Vec<(u64, BlockHash, Txid)>) -> Result<(), Error> {
+    store
+        .try_write(move |sql| {
+            let mut set = sql.prepare(
+                "UPDATE ln_channels SET open_txid = ?3 WHERE scid = ?1 AND open_hash = ?2",
+            )?;
+            for (scid, hash, txid) in &found {
+                set.execute(params![
+                    int(*scid),
+                    hash.to_byte_array().to_vec(),
+                    txid.to_byte_array().to_vec()
+                ])?;
+            }
+            Ok(())
         })
         .await
 }
