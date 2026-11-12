@@ -80,3 +80,15 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<crate::http::Error> for Error {
+    fn from(e: crate::http::Error) -> Self {
+        use crate::http::Error as H;
+        match e {
+            H::Config(m) => Self::Config(m),
+            H::Unavailable(m) => Self::Unavailable(m),
+            H::Timeout => Self::Timeout,
+            H::ResponseTooBig => Self::ResponseTooBig,
+        }
+    }
+}

@@ -1,4 +1,5 @@
 //! HTTP/1.1 to the node over TCP or a unix socket, with pooled keep-alive connections.
+//! Shared by the Esplora and JSON-RPC clients.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -9,14 +10,22 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full, LengthLimitError, Limited};
-use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST, HeaderMap};
+use hyper::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
 use hyper::{Request, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::net::UnixStream;
 
-use super::Error;
+/// A transport failure. Each client maps it into its own error type.
+#[derive(Debug)]
+pub(crate) enum Error {
+    /// The request could not be formed from the endpoint and path.
+    Config(&'static str),
+    Unavailable(String),
+    Timeout,
+    ResponseTooBig,
+}
 
 /// Idle keep-alive connections are closed after this long.
 const POOL_IDLE: Duration = Duration::from_secs(30);
@@ -32,25 +41,23 @@ pub enum Endpoint {
 
 impl Endpoint {
     /// Parses `{NET}_ESPLORA_URL`: an `http://` URL, or otherwise a unix-socket path.
-    pub fn parse(s: &str) -> Result<Self, Error> {
+    pub fn parse(s: &str) -> Result<Self, &'static str> {
         let s = s.trim();
         if s.is_empty() {
-            return Err(Error::Config("empty"));
+            return Err("empty");
         }
         if !s.contains("://") {
             return Ok(Self::Unix(PathBuf::from(s)));
         }
-        let uri: Uri = s.parse().map_err(|_| Error::Config("not a URL"))?;
+        let uri: Uri = s.parse().map_err(|_| "not a URL")?;
         // The node speaks plain HTTP; TLS belongs to a reverse proxy in front of the public site.
         if uri.scheme_str() != Some("http") {
-            return Err(Error::Config(
-                "only http:// URLs and unix-socket paths are supported",
-            ));
+            return Err("only http:// URLs and unix-socket paths are supported");
         }
         if uri.query().is_some() {
-            return Err(Error::Config("a query string is not allowed"));
+            return Err("a query string is not allowed");
         }
-        let authority = uri.authority().ok_or(Error::Config("no host"))?;
+        let authority = uri.authority().ok_or("no host")?;
         Ok(Self::Tcp {
             origin: format!("http://{authority}"),
             base_path: uri.path().trim_end_matches('/').to_owned(),
@@ -59,7 +66,7 @@ impl Endpoint {
 }
 
 /// An upstream answer, read in full.
-pub(super) struct Response {
+pub(crate) struct Response {
     pub status: hyper::StatusCode,
     pub headers: HeaderMap,
     pub body: Bytes,
@@ -72,12 +79,14 @@ enum Pool {
 }
 
 #[derive(Clone)]
-pub(super) struct Transport {
+pub(crate) struct Transport {
     pool: Pool,
     /// `http://authority` plus base path, prepended to each route path.
     prefix: Arc<str>,
     timeout: Duration,
     max_body: usize,
+    /// Sent on every request. Marked sensitive so `Debug` never prints it.
+    authorization: Option<HeaderValue>,
 }
 
 impl Transport {
@@ -109,7 +118,15 @@ impl Transport {
             prefix: prefix.into(),
             timeout,
             max_body,
+            authorization: None,
         }
+    }
+
+    /// Sends `value` as the `Authorization` header on every request.
+    pub fn with_authorization(mut self, mut value: HeaderValue) -> Self {
+        value.set_sensitive(true);
+        self.authorization = Some(value);
+        self
     }
 
     pub fn is_unix(&self) -> bool {
@@ -140,6 +157,9 @@ impl Transport {
         let mut req = Request::builder().method(method).uri(uri);
         if matches!(self.pool, Pool::Unix(_)) {
             req = req.header(HOST, "localhost");
+        }
+        if let Some(auth) = &self.authorization {
+            req = req.header(AUTHORIZATION, auth.clone());
         }
         let body = match body {
             Some((bytes, content_type)) => {

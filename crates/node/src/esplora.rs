@@ -13,7 +13,6 @@
 mod error;
 pub mod model;
 mod route;
-mod transport;
 
 use std::future::Future;
 use std::str::FromStr;
@@ -26,17 +25,17 @@ use hyper::StatusCode;
 use hyper::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
 
+pub use crate::http::Endpoint;
 pub use error::Error;
 pub use route::{
     BlockTxsStart, MAX_OUT_POSITIONS, OutPosition, OutPositions, Route, ScriptHash, ScriptRef,
 };
-pub use transport::Endpoint;
 
+use crate::http::Transport;
 use model::{
     Block, BlockStatus, FeeEstimates, MempoolInfo, MempoolRecent, MerkleProof, Outspend,
     PositionedOutput, ScriptInfo, Tx, TxStatus, TxSummary, Utxo,
 };
-use transport::Transport;
 
 /// The view a response was computed against: the live tip, the address-index watermark,
 /// or the `?asof=` block. From `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height`.
@@ -156,7 +155,7 @@ impl Esplora {
         timeout: Duration,
         max_response_bytes: usize,
     ) -> Result<Self, Error> {
-        let endpoint = Endpoint::parse(url)?;
+        let endpoint = Endpoint::parse(url).map_err(Error::Config)?;
         Ok(Self {
             transport: Transport::new(&endpoint, timeout, max_response_bytes),
         })
