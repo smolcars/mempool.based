@@ -47,8 +47,6 @@ const ANCHOR_SATS: u64 = 330;
 const RETRY_MIN: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// After a restart, how long the watcher waits for the replay before it reads blocks.
-const RESUME_WAIT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 120 });
 
 /// A block, as a history record names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -566,10 +564,9 @@ pub(crate) async fn run<C: Chain>(
     };
     // Resumed from the block it had read before a restart: the replay first hands back the
     // channels the saved file answers, or the blocks read meanwhile would send them all to be
-    // checked again. Bounded, since a channel handed back later is only checked again.
+    // checked again. No deadline: they are sent first, 2,000 a second, whatever the node does.
     let resumed = w.watch().lock().seen.back().map(|b| b.hash);
-    let until = Instant::now() + RESUME_WAIT;
-    while resumed.is_some() && w.gossip.replay_left() > 0 && Instant::now() < until {
+    while resumed.is_some() && w.gossip.saved_left() > 0 {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     // From here the saved block may be left behind, even for a shorter branch: a channel

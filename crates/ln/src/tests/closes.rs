@@ -1026,12 +1026,8 @@ async fn saved_answers_are_forgotten_once_the_watcher_reads_on() {
         vec![out(wpkh(), 999_000)],
     );
     mine(&node, vec![close]);
-    let graph = Graph::new(NET, sink());
-    graph
-        .update_channel_from_announcement_no_lookup(&channel(id, 1, 2))
-        .unwrap();
     let config = config();
-    let (g, _, _) = gossip(&config, Replay::from_graph(&graph));
+    let (g, _, _) = gossip(&config, Replay::default());
     g.lookup.restore(&v);
     g.watch.resume(v.height, v.hash);
     let pace = pace(&config);
@@ -1042,13 +1038,11 @@ async fn saved_answers_are_forgotten_once_the_watcher_reads_on() {
         pace,
         config.tip_every,
     ));
-    // The replay hands the channel back only after the watcher stopped waiting for it.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    wait_for("replayed", || {
-        g.replay_tick(5000);
-        !g.replaying()
-    })
-    .await;
+    // The watcher has moved to the shorter branch; only then does gossip bring the channel.
+    let at_seven = || g.watch.status().height == Some(7);
+    wait_for("on the shorter branch", at_seven).await;
+    let _ = g.handle_channel_announcement(None, &channel(id, 1, 2));
+    wait_for("answered", || rejected(&g).spent == 1).await;
     // Asked of the node, which says spent: never shown as open.
     assert!(g.graph().read_only().channel(id).is_none());
     assert_eq!(rejected(&g).spent, 1);

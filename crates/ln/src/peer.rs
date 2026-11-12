@@ -115,8 +115,11 @@ impl Peer {
         let verified = loaded.as_ref().and_then(|_| {
             store::load_verified(&config.data_dir, config.network, config.max_channels)
         });
-        let replay = loaded.as_ref().map(Replay::from_graph).unwrap_or_default();
+        let mut replay = loaded.as_ref().map(Replay::from_graph).unwrap_or_default();
         drop(loaded);
+        if let Some(v) = &verified {
+            replay.prefer(&v.channels.iter().map(|c| c.scid).collect());
+        }
         let graph = Arc::new(Graph::new(config.network, Arc::clone(&logger)));
         let gossip = Arc::new(Gossip::new(
             &config,
