@@ -325,9 +325,20 @@ impl App {
         }
 
         let dir = &config.web_dir;
-        let assets = ServeDir::new(dir.join("assets"))
+        let assets_dir = dir.join("assets");
+        let assets = ServeDir::new(&assets_dir)
             .precompressed_br()
             .precompressed_gzip();
+        // A non-JSON 404, so `finish` replaces it whole and it loses the `immutable` header.
+        let assets = tower::service_fn(move |req: Request| {
+            let (assets, unservable) = (assets.clone(), too_long(&assets_dir, req.uri().path()));
+            async move {
+                if unservable {
+                    return Ok(axum::http::StatusCode::NOT_FOUND.into_response());
+                }
+                assets.oneshot(req).await.map(IntoResponse::into_response)
+            }
+        });
         // ServeDir rejects `..` and absolute components, so nothing outside web_dir is reachable.
         // A path that is no file, `/` included, is a page: the shell with its head ([`pages`]).
         let page = axum::handler::Handler::with_state(pages::page, pages);
@@ -336,12 +347,12 @@ impl App {
             .precompressed_gzip()
             .append_index_html_on_directories(false)
             .fallback(page.clone());
+        let web_dir = dir.clone();
         let pages = tower::service_fn(move |req: Request| {
             let (files, page) = (files.clone(), page.clone());
+            let unservable = too_long(&web_dir, req.uri().path());
             async move {
-                // No file has a name this long, and asking the file system fails with an error
-                // (a 500) rather than "not found".
-                if req.uri().path().split('/').any(|s| s.len() > 255) {
+                if unservable {
                     return page.oneshot(req).await;
                 }
                 files.oneshot(req).await.map(IntoResponse::into_response)
@@ -434,6 +445,14 @@ impl App {
             l.stop().await;
         }
     }
+}
+
+/// Whether `path` names no file under `dir` because it is too long to be one: a segment over 255
+/// bytes, or the whole over 1024 (macOS's `PATH_MAX`; Linux allows 4096). The file system answers
+/// those with an error, which `ServeDir` turns into a 500, rather than "not found". The raw path
+/// is never shorter than the one `ServeDir` decodes, so this errs towards "too long".
+fn too_long(dir: &std::path::Path, path: &str) -> bool {
+    dir.as_os_str().len() + path.len() >= 1024 || path.split('/').any(|s| s.len() > 255)
 }
 
 async fn healthz() -> Json<serde_json::Value> {
