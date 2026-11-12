@@ -16,7 +16,9 @@ function useFallbackFonts() {
   const root = document.documentElement;
   const tokens = getComputedStyle(root);
   for (const name of ["--font-sans", "--font-mono"]) {
-    const stack = tokens.getPropertyValue(name).replaceAll(/["']?Recursive [A-Za-z]+["']?\s*,\s*/g, "");
+    const stack = tokens
+      .getPropertyValue(name)
+      .replaceAll(/["']?Recursive [A-Za-z]+["']?\s*,\s*/g, "");
     root.style.setProperty(name, stack);
   }
 }

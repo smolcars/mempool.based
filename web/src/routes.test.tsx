@@ -47,7 +47,7 @@ describe("routes", () => {
       "Testnet4 is a test network. Coins here have no value.",
     );
     expect(el.querySelector(".brand")?.getAttribute("href")).toBe("/testnet4");
-    expect(el.querySelector('nav[aria-label="Main"] a:nth-child(2)')?.getAttribute("href")).toBe(
+    expect(el.querySelector('nav[aria-label="Main"] a:nth-child(3)')?.getAttribute("href")).toBe(
       "/testnet4/mining",
     );
     expect(document.title).toBe("Testnet4: Transaction | rbitcoin.space");

@@ -41,11 +41,7 @@
     width: 18px;
     height: 12px;
     border-radius: var(--radius-s);
-    background: repeating-linear-gradient(
-      -45deg,
-      var(--color-network) 0 3px,
-      transparent 3px 6px
-    );
+    background: repeating-linear-gradient(-45deg, var(--color-network) 0 3px, transparent 3px 6px);
   }
 
   /* At least a screen tall, so the footer starts below the fold and a page that loads after the

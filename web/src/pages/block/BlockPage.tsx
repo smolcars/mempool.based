@@ -698,7 +698,6 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               </HeaderFact>
             </dl>
           </div>
-
         </div>
 
         <Show when={props.hash && sum() === undefined}>

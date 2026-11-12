@@ -15,7 +15,7 @@ const answer = (high: number, medium: number, low: number, noRush: number): FeeA
 describe("groupLevels", () => {
   it("shows four answers, slowest first, when every rate prints differently", () => {
     const g = groupLevels(answer(3.31, 0.246, 0.215, 0.133), formatFeeRateUp);
-    expect(g.map((x) => [x.name, x.when, x.span])).toEqual([
+    expect(g.map((x) => [x.name, x.when, x.span])).toStrictEqual([
       ["No rush", "within a day", 1],
       ["Low", "within an hour", 1],
       ["Medium", "within 30 min", 1],
@@ -25,13 +25,13 @@ describe("groupLevels", () => {
 
   it("reads four equal rates as one answer (signet's 0.100 on every level)", () => {
     const g = groupLevels(answer(0.1, 0.1, 0.1, 0.1), formatFeeRateUp);
-    expect(g).toEqual([{ name: "Any wait", when: "next block", span: 4, rate: 0.1 }]);
+    expect(g).toStrictEqual([{ name: "Any wait", when: "next block", span: 4, rate: 0.1 }]);
   });
 
   it("merges neighbours that print the same, and promises the fastest wait among them", () => {
     // 0.121 and 0.129 both print 0.13 rounded up.
     const g = groupLevels(answer(1.001, 0.129, 0.121, 0.1), formatFeeRateUp);
-    expect(g.map((x) => [x.name, x.when, x.span])).toEqual([
+    expect(g.map((x) => [x.name, x.when, x.span])).toStrictEqual([
       ["No rush", "within a day", 1],
       ["Low or medium", "within 30 min", 2],
       ["High", "next block", 1],

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  bandShares,
-  isMempoolSummary,
-  isRecentList,
-  lowestRate,
-} from "./mempool";
+import { bandShares, isMempoolSummary, isRecentList, lowestRate } from "./mempool";
 
 describe("bandShares", () => {
   it("puts each histogram entry in the band of its rate as printed", () => {

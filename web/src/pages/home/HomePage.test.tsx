@@ -120,7 +120,7 @@ describe("home page", () => {
     await vi.waitFor(() => expect(el.querySelector(".home-stats")?.textContent).toContain("3"));
     expect(el.querySelector(".home-stats")?.textContent).toContain("1\u202F500 vB");
     expect(el.querySelector(".home-stats")?.textContent).toContain("≈ 1 block");
-    expect(el.querySelector(".home-ladder__list")?.textContent).toContain("5.200");
+    expect(el.querySelector(".home-fees__list")?.textContent).toContain("5.20");
     expect(el.querySelector(".home-fees__note")?.textContent).toContain("node's own estimates");
     await vi.waitFor(() =>
       expect(el.querySelector(".home-recent tbody")?.textContent).toContain("cccccccc"),
@@ -369,8 +369,9 @@ describe("the tiles' fee facts", () => {
   it("loads every tile's facts in one request on first paint, and settles their layers in", async () => {
     summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
     const { el } = await open();
+    // One quiet gauge of the block's fees, not its every band.
     await vi.waitFor(() =>
-      expect(tile(el, 10)?.querySelectorAll(".strata__layer")).toHaveLength(3),
+      expect(tile(el, 10)?.querySelectorAll(".strata__layer")).toHaveLength(1),
     );
     expect(summaryRequests()).toHaveLength(1);
     expect(summaryRequests()[0]?.split(",")).toHaveLength(10);
@@ -383,10 +384,11 @@ describe("the tiles' fee facts", () => {
     expect(t.querySelector("a")?.getAttribute("aria-label")).toContain(
       "median fee 1.23 sat/vB, fee range 0.10 to 12.5 sat/vB",
     );
-    // The median's swatch is the color of a band the strata draw.
-    const swatch = t.querySelector<HTMLElement>(".fee__swatch")?.style.getPropertyValue("--swatch");
-    const layers = [...t.querySelectorAll<HTMLElement>(".strata__layer")];
-    expect(layers.map((l) => l.style.getPropertyValue("--c"))).toContain(swatch);
+    // The gauge takes the band of the block's median vbyte, and the tile states its fees.
+    const gauge = t.querySelector<HTMLElement>(".strata__layer")?.style.getPropertyValue("--c");
+    expect(gauge).toMatch(/^var\(--fee-\d+\)$/);
+    expect(t.querySelector(".fee__swatch")).toBeNull();
+    expect(t.querySelector(".home-tile__fees")?.textContent).toMatch(/ BTC$/);
   });
 
   it("shows the neutral gauge and loading lines while the facts are on their way", async () => {
@@ -734,9 +736,11 @@ describe("the live mempool", () => {
     expect(stats).toContain("≈ 3 blocks");
     expect(stats).toContain("0.10 sat/vB");
     expect(stats).toContain("node minimum");
-    const segs = [...el.querySelectorAll<HTMLElement>(".home-feebar__seg")];
-    expect(segs.map((s) => s.style.getPropertyValue("--w"))).toStrictEqual([
+    // One row per fee band, dearest first, each with its size; a band with nothing says so.
+    const rows = [...el.querySelectorAll<HTMLElement>(".home-depth__row")];
+    expect(rows.map((r) => r.style.getPropertyValue("--w"))).toStrictEqual([
       "0.4",
+      "0",
       "0",
       "0",
       "0",
@@ -744,9 +748,11 @@ describe("the live mempool", () => {
       "0",
       "0",
       "0",
-      "0",
       "0.4",
     ]);
+    expect(rows[0]?.querySelector(".home-depth__range")?.textContent).toBe("10+");
+    expect(rows[9]?.querySelector(".home-depth__range")?.textContent).toBe("< 0.2");
+    expect(rows[1]?.querySelector(".home-depth__size")?.textContent).toContain("–");
     expect(el.querySelector(".home-recent tbody")?.textContent).toContain("dddddddd");
     expect(el.querySelector(".home-recent tbody")?.textContent).toContain("250 vB");
     expect(el.querySelector(".home-recent thead")?.textContent).toContain("Virtual size");
@@ -868,10 +874,9 @@ describe("the projected tiles", () => {
       "/signet/block/next/3",
       "/signet/block/next/4",
     ]);
-    // The swatch is the band of the rate as printed.
-    expect(
-      next.querySelector<HTMLElement>(".fee__swatch")?.style.getPropertyValue("--swatch"),
-    ).toBe("var(--fee-9)");
+    // Its one gauge is in the band of the median vbyte; the median itself is a number.
+    expect(next.querySelector(".fee__swatch")).toBeNull();
+    expect(next.querySelectorAll(".strata__layer")).toHaveLength(1);
   });
 
   it("make a small mempool one short tile, and an empty one an empty tile that says so", async () => {
@@ -979,51 +984,47 @@ describe("the projected tiles", () => {
 });
 
 const feeList = (el: HTMLElement) =>
-  [...el.querySelectorAll(".home-ladder__item")].map((i) => i.textContent);
+  [...el.querySelectorAll(".home-fees__item")].map((i) => i.textContent);
+/** The fastest answer: the last, as the panel goes slowest first. */
+const highest = (el: HTMLElement) => feeList(el).at(-1);
 const feeNote = (el: HTMLElement) => el.querySelector(".home-fees__note")?.textContent ?? "";
 
 describe("the fee panel", () => {
-  it("shows the server's own recommendation at the node's resolution, slowest first", async () => {
+  it("shows the server's own recommendation, rounded up, slowest first", async () => {
     const { el, ws } = await open(true);
     ws.receive(feesMsg("projected", [2001, 1031, 199, 100]));
     expect(feeList(el)).toStrictEqual([
-      "No rushwithin a day0.100 sat/vB",
-      "Lowwithin an hour0.199 sat/vB",
-      "Mediumwithin 30 min1.031 sat/vB",
-      "Highnext block2.001 sat/vB",
+      "No rushwithin a day0.10 sat/vB",
+      "Lowwithin an hour0.20 sat/vB",
+      "Mediumwithin 30 min1.04 sat/vB",
+      "Highnext block2.01 sat/vB",
     ]);
-    // Colored by the figure shown: 0.199 is below the 0.2 band, though it rounds to 0.20.
-    const swatches = [...el.querySelectorAll<HTMLElement>(".home-ladder__list .fee__swatch")];
-    expect(swatches.map((s) => s.style.getPropertyValue("--swatch"))).toStrictEqual([
-      "var(--fee-1)",
-      "var(--fee-1)",
-      "var(--fee-5)",
-      "var(--fee-7)",
-    ]);
-    const pins = [...el.querySelectorAll<HTMLElement>(".home-ladder__pin")];
-    expect(pins.map((p) => p.style.getPropertyValue("--c"))).toStrictEqual([
-      "var(--fee-1)",
-      "var(--fee-1)",
-      "var(--fee-5)",
-      "var(--fee-7)",
-    ]);
-    expect(pins.map((p) => p.querySelector(".home-ladder__pin-value")?.textContent)).toStrictEqual([
-      "0.100",
-      "0.199",
-      "1.031",
-      "2.001",
-    ]);
-    expect(feeNote(el)).toContain("read from the projected blocks");
+    // The rates are numbers alone: colour belongs to the drawings.
+    expect(el.querySelector(".home-fees .fee__swatch")).toBeNull();
+    expect(feeNote(el)).toContain("Read from the projected blocks");
     expect(feeNote(el)).not.toContain("node");
     expect(count("/v1/fees/precise")).toBe(0);
+  });
+
+  it("reads levels that print the same rate as one answer, never stacked labels", async () => {
+    const { el, ws } = await open(true);
+    // Signet's usual answer: 0.100 on every level.
+    ws.receive(feesMsg("projected", [100, 100, 100, 100]));
+    expect(feeList(el)).toStrictEqual(["Any waitnext block0.10 sat/vB"]);
+    ws.receive(feesMsg("projected", [1500, 1000, 1000, 120]));
+    expect(feeList(el)).toStrictEqual([
+      "No rushwithin a day0.12 sat/vB",
+      "Low or mediumwithin 30 min1.00 sat/vB",
+      "Highnext block1.50 sat/vB",
+    ]);
   });
 
   it("says when the figures are the node's estimates rather than its own", async () => {
     const { el, ws } = await open(true);
     ws.receive(feesMsg("node", [1500, 1000, 1000, 120]));
-    expect(feeList(el)[3]).toBe("Highnext block1.500 sat/vB");
+    expect(highest(el)).toBe("Highnext block1.50 sat/vB");
     expect(feeNote(el)).toBe(
-      "The node's own estimates, in sat/vB: this server cannot make its own recommendation right now.",
+      "The node's own estimates: this server cannot make its own recommendation right now.",
     );
   });
 
@@ -1031,23 +1032,22 @@ describe("the fee panel", () => {
     const { el, ws } = await open(true);
     ws.receive(feesMsg("node", [1500, 1000, 1000, 120]));
     ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
-    expect(feeList(el)[3]).toBe("Highnext block3.000 sat/vB");
-    expect(feeNote(el)).toContain("read from the projected blocks");
+    expect(highest(el)).toBe("Highnext block3.00 sat/vB");
+    expect(feeNote(el)).toContain("Read from the projected blocks");
     ws.receive({ topic: "fees", type: "unavailable" });
     const panel = el.querySelector(".home-fees") as HTMLElement;
     expect(panel.textContent).toContain("No recommendation right now");
     expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
-    expect(panel.querySelectorAll(".home-ladder__pin--none")).toHaveLength(4);
     // A malformed message changes nothing.
     ws.receive({ ...feesMsg("projected", [3000, 2000, 1000, 100]), levels: [] });
     expect(panel.textContent).toContain("No recommendation right now");
     ws.receive(feesMsg("projected", [1200, 1100, 1000, 100]));
-    expect(feeList(el)[3]).toBe("Highnext block1.200 sat/vB");
+    expect(highest(el)).toBe("Highnext block1.20 sat/vB");
   });
 
   it("waits with empty places, not a number, before the first answer", async () => {
     const { el } = await open(true);
-    expect(el.querySelector(".home-ladder__list")?.getAttribute("aria-busy")).toBe("true");
+    expect(el.querySelector(".home-fees__list")?.getAttribute("aria-busy")).toBe("true");
     expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
   });
 
@@ -1067,7 +1067,7 @@ describe("the fee panel", () => {
       ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
       ws.drop(1006);
       // The node's estimates carry no chain tip: marked as the node's.
-      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block5.200 sat/vB"));
+      await vi.waitFor(() => expect(highest(el)).toBe("Highnext block5.20 sat/vB"));
       expect(feeNote(el)).toContain("node's own estimates");
       expect(count("/v1/fees/precise")).toBe(1);
       // Ours carries the tip it was projected on.
@@ -1082,8 +1082,8 @@ describe("the fee panel", () => {
           },
         );
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
-      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block2.500 sat/vB"));
-      expect(feeNote(el)).toContain("read from the projected blocks");
+      await vi.waitFor(() => expect(highest(el)).toBe("Highnext block2.50 sat/vB"));
+      expect(feeNote(el)).toContain("Read from the projected blocks");
       // A failed ask shows no number rather than the last one.
       reply = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
@@ -1098,7 +1098,7 @@ describe("the fee panel", () => {
       }
       FakeSocket.last().hello();
       FakeSocket.last().receive(feesMsg("projected", [4000, 2000, 1000, 100]));
-      expect(feeList(el)[3]).toBe("Highnext block4.000 sat/vB");
+      expect(highest(el)).toBe("Highnext block4.00 sat/vB");
       const asked = count("/v1/fees/precise");
       // A whole poll interval, ending before the fake socket's unanswered ping would drop it.
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS + 5_000);
@@ -1127,7 +1127,7 @@ describe("the fee panel", () => {
             );
       const { el, ws } = await open(true);
       ws.drop(1006);
-      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block5.200 sat/vB"));
+      await vi.waitFor(() => expect(highest(el)).toBe("Highnext block5.20 sat/vB"));
       // The server withdraws its answer: every ask is refused, and retried, from now on.
       ok = false;
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS + FEES_CONFIRM_MS);

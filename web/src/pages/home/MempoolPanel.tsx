@@ -19,12 +19,17 @@ export function blocksOf(vsize: number): string {
   return `≈ ${groupDigits(n)} ${n === 1 ? "block" : "blocks"}`;
 }
 
+/** The bands, dearest first: the order they are mined in. */
+function dearestFirst(bands: readonly FeeBandShare[]): FeeBandShare[] {
+  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
+  return [...bands].reverse();
+}
+
 /** A band's range in sat/vB, as short as a row allows: `10+`, `0.5–1`, `< 0.2`. */
 export function rangeLabel(b: FeeBandShare): string {
-  const r = (x: number) => String(x);
-  if (b.to === null) return `${r(b.from)}+`;
-  if (b.band === 1) return `< ${r(b.to)}`;
-  return `${r(b.from)}–${r(b.to)}`;
+  if (b.to === null) return `${b.from}+`;
+  if (b.band === 1) return `< ${b.to}`;
+  return `${b.from}–${b.to}`;
 }
 
 const percent = (share: number) =>
@@ -90,7 +95,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
             Waiting, by fee rate: the dearest are mined first.
           </figcaption>
           <ol class="home-depth__list" aria-busy={m() ? "false" : "true"}>
-            <For each={[...bands()].reverse()}>
+            <For each={dearestFirst(bands())}>
               {(b) => (
                 <li
                   class={["home-depth__row", { "home-depth__row--none": b.vsize === 0 }]}

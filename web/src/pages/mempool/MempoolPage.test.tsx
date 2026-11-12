@@ -80,7 +80,8 @@ describe("mempool history page", () => {
         points: [point(T0 + 3600)],
       }),
     );
-    const el = mount(() => <MempoolPage />, "/mempool");
+    // A period the reader chose keeps its whole width, the time before the records hatched.
+    const el = mount(() => <MempoolPage />, "/mempool?interval=24h");
     const chart = await drawn(el);
     // A lone point is a short tick on the line and a sliver in its layers, not nothing.
     expect(chart.querySelector(".chart__line")?.getAttribute("d")).toContain("h0.1");
@@ -89,6 +90,23 @@ describe("mempool history page", () => {
       "This server has recorded the mempool since 12 Nov 2026, 15:00 UTC, so this view holds 1 minute of the 1 440 minutes in the last 24 hours (under 1%).",
     );
     expect(text(el)).toContain("No data stored");
+  });
+
+  it("opens on what is recorded when the reader chose no period, and says so", async () => {
+    replies["/app/mempool/history/24h"] = answer(
+      history({
+        interval: "24h",
+        complete: false,
+        sampled: 1,
+        minutes: 1440,
+        first: T0 + 3600,
+        points: [point(T0 + 3600)],
+      }),
+    );
+    const el = mount(() => <MempoolPage />, "/mempool");
+    await drawn(el);
+    expect(text(el)).toContain("The charts start there");
+    expect(text(el)).not.toContain("No data stored");
   });
 
   it("says when nothing has been recorded at all", async () => {

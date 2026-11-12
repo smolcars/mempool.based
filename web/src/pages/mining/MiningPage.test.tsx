@@ -87,7 +87,9 @@ describe("mining page", () => {
     // A week's estimate: its share of the week's blocks times the week's hashrate.
     expect(pools?.textContent).toContain("713 EH/s");
     await vi.waitFor(() => expect(text(el)).toContain("Paid to miners"));
-    expect(text(el)).toContain("126.00000000 BTC");
+    // A summary reads in magnitude, the exact amount in its title.
+    expect(text(el)).toContain("126.00 BTC");
+    expect(el.querySelector('[title^="126.00000000 BTC"]')).not.toBeNull();
   });
 
   it("names each recent block's miner from one batch of facts", async () => {
@@ -230,7 +232,7 @@ describe("pool page", () => {
     expect(el.querySelector("a[href^='javascript']")).toBeNull();
     expect(text(el)).toContain("No blocks from this pool are stored");
     expect(text(el)).toContain("10\u202FEH/s");
-    expect(text(el)).toContain("9.37500000 BTC");
+    expect(text(el)).toContain("9.38 BTC");
   });
 
   it("links a pool's site by its host", async () => {

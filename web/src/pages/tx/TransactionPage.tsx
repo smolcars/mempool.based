@@ -779,16 +779,14 @@ function Body(props: {
     const s = status();
     if (s?.confirmed) {
       const c = props.confs;
-      return c === undefined
-        ? ""
-        : `${groupDigits(c)} confirmation${c === 1 ? "" : "s"}`;
+      return c === undefined ? "" : `${groupDigits(c)} confirmation${c === 1 ? "" : "s"}`;
     }
     const p = mempool()?.position;
     if (p) {
       const at = place(p, network());
       return <Link href={paths.projected(at.page)}>{at.where}</Link>;
     }
-    return statusWord() ? steps()[1]?.title ?? "" : "";
+    return statusWord() ? (steps()[1]?.title ?? "") : "";
   };
   /** Confirmed, nothing replaced or reorganised: the steps say no more than the summary does. */
   const settled = () =>

@@ -36,8 +36,9 @@ describe("Amount", () => {
 });
 
 describe("FeeRate", () => {
-  it("colors the swatch by the printed value", () => {
-    const el = mount(() => <FeeRate rate={0.1996} />);
+  it("shows a swatch only when asked, colored by the printed value", () => {
+    expect(mount(() => <FeeRate rate={0.1996} />).querySelector(".fee__swatch")).toBeNull();
+    const el = mount(() => <FeeRate rate={0.1996} swatch />);
     expect(el.textContent).toBe("0.20 sat/vB");
     expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-2)");
     expect(mount(() => <FeeRate rate={0.64} approx />).textContent).toBe("~0.64 sat/vB");
