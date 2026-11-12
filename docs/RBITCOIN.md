@@ -31,6 +31,7 @@ RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `
 | Any mempool push (no ZMQ, WebSocket or SSE) | We poll the mempool |
 | `/internal/*` bulk routes over TCP | They exist only on a unix-socket listener, so bulk fetches need the server on the node's host |
 | Address-prefix search | Search is exact match only |
+| Outpoint pushes for mempool spends | `blockchain.outpoint.subscribe` notifies on each new block only. A spend shows up at the next block, or through `blockchain.outpoint.get_status` |
 | A large recent-transactions feed | `/mempool/recent` returns 10 entries; it cannot serve as a change feed |
 | The mempool.space `/api/v1` and WebSocket surface | A permanent non-goal upstream. This project is that surface |
 
@@ -59,6 +60,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Never poll verbose `getrawmempool`.** Use it at most once at startup. Diff txids and fetch details for new ones.
 - **Compute fee-rate percentiles ourselves.** `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
 - **Expect 503 on huge addresses.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused. Use the paged routes and surface the limit to the user.
+- **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
 - **`getmempoolfeeratediagram` returns one point per chunk,** in mining order, not Core's running total.
