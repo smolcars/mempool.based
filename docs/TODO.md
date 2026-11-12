@@ -128,6 +128,7 @@ Refined when M4 lands.
 | G6 | Later: Lightning nodes by network type over time; a BTC/sats units switch; `/clock` | C1 | todo |
 | G7 | After the owner's decision on a broadcast page: `/tx/push`, then `/tx/preview` (needs a transaction and PSBT parser in the browser), then goggles (needs per-transaction flags from the engine) | C1 | todo; waits on the owner |
 | G8 | Owner's decisions from the audit: a broadcast page (the route is already served under its rules); package submission and test-accept (the audit recommends skipping both); fiat prices stay parked | C1 | waits on the owner |
+| RD1 | Redesign by design council (the owner's process): three independent reviewers score the site in ten categories against the explorer its readers know; a builder acts on their findings; repeat for at most five rounds or until every reviewer gives 9 in every category; one pull request at the end with every round's scores and screenshots, left open for the owner. New frontend tasks (G2, G3, G4, G6, Q1, Q2, D2) wait until it is done | SB1, PF4, G5 | doing: round 1 review of the site as it is |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | done ([#70](https://github.com/smolcars/rbitcoin-space/pull/70)); results in `docs/PERFORMANCE.md`; its PR took 3 min 4 s of CI on a partly cold cache, so check the next Rust PR against the budget |
