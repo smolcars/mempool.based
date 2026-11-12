@@ -92,6 +92,8 @@ fn started(config: &Config, log: logging::Settings) {
             .map(|t| t.proxies.iter().map(ToString::to_string).collect()),
         ws_max_sockets: config.ws.max_sockets,
         ws_client_max_sockets: config.ws.client_max_sockets,
+        ws_v1_max_sockets: config.ws.v1_max_sockets,
+        ws_v1_client_max_sockets: config.ws.v1_client_max_sockets,
         ws_max_message_bytes: config.ws.max_message_bytes,
         ws_messages_per_sec: config.ws.messages_per_sec,
         ws_max_subscriptions: config.ws.max_subscriptions,

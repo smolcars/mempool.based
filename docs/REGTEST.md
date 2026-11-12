@@ -21,7 +21,7 @@ dev/regtest/regtest.py down       # remove the node and its chain
 | `env` | Prints the `.env` lines for the running node |
 | `mine N` | Mines N blocks, prints their hashes |
 | `send ADDRESS SATS [--feerate R]` | Pays SATS to a regtest address from a mature coinbase, prints the txid. Default 2 sat/vB |
-| `rbf` | Broadcasts a transaction at 1 sat/vB and a replacement at 5 sat/vB, prints both txids |
+| `rbf [--gap S]` | Broadcasts a transaction at 1 sat/vB and a replacement at 5 sat/vB, `S` seconds apart (default 0), prints both txids |
 | `cpfp` | Broadcasts a parent at 1 sat/vB and a child at 25 sat/vB, prints both txids |
 | `scenario` | `reset`, then builds the known chain, checks it, prints its manifest. Stdout is only the JSON manifest; progress and the `.env` lines go to stderr |
 | `hostile` | Mines a transaction whose OP_RETURN outputs hold markup, a `javascript:` URL, bidi overrides, ANSI escapes and NUL, with a payment to the scenario's P2WPKH address; then submits an empty block, built by hand, whose coinbase tag is `<script>` markup with a right-to-left override and which claims 1,000 sats less than the subsidy. Prints the txid, the block hash and its coinbase txid. Mines on top of whatever chain is there, so the scenario's hashes are unchanged; the browser tests run it from a `*.mine.e2e.ts` file |

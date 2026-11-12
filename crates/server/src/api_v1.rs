@@ -33,7 +33,7 @@ const CACHE: &str = "public, max-age=1";
 /// In the reference's field order. Times are Unix milliseconds except `previousTime` (seconds).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DifficultyAdjustment {
+pub(crate) struct DifficultyAdjustment {
     progress_percent: f64,
     difficulty_change: f64,
     estimated_retarget_date: u64,
@@ -62,7 +62,7 @@ pub fn routes() -> Router<Arc<NetworkContext>> {
 /// The reference's five levels, in its order. `T` is whole sat/vB (`u64`) or precise (`f64`).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FeeLevels<T> {
+pub(crate) struct FeeLevels<T> {
     fastest_fee: T,
     half_hour_fee: T,
     hour_fee: T,
@@ -93,7 +93,12 @@ async fn fees_recommended(State(ctx): State<Arc<NetworkContext>>) -> Response {
 }
 
 async fn fees_precise(State(ctx): State<Arc<NetworkContext>>) -> Response {
-    fee_levels(&ctx, |r| FeeLevels::of(r, sat_vb))
+    fee_levels(&ctx, precise)
+}
+
+/// `/fees/precise`'s body; also the `fees` of `/api/v1/ws`.
+pub(crate) fn precise(r: &engine::fees::Rates) -> FeeLevels<f64> {
+    FeeLevels::of(r, sat_vb)
 }
 
 fn fee_levels<T: Serialize>(
@@ -120,7 +125,7 @@ fn fee_levels<T: Serialize>(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MempoolBlockJson {
+pub(crate) struct MempoolBlockJson {
     block_size: u64,
     #[serde(rename = "blockVSize")]
     block_vsize: u64,
@@ -137,8 +142,19 @@ async fn fees_mempool_blocks(State(ctx): State<Arc<NetworkContext>>) -> Response
     let Some(b) = ctx.fees.blocks() else {
         return NOT_READY.into_response();
     };
-    let body: Vec<MempoolBlockJson> = b
-        .blocks
+    let mut res = Json(mempool_blocks(&b)).into_response();
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(CACHE));
+    tip_headers(&mut res, b.tip);
+    if b.stale {
+        age(&mut res, b.at);
+    }
+    res
+}
+
+/// `/fees/mempool-blocks`' body; also the `mempool-blocks` of `/api/v1/ws`.
+pub(crate) fn mempool_blocks(b: &crate::ws::fees::Blocks) -> Vec<MempoolBlockJson> {
+    b.blocks
         .iter()
         // An empty projected block has nothing to report: only a mempool smaller than the blocks.
         .filter(|m| m.txs > 0)
@@ -150,15 +166,7 @@ async fn fees_mempool_blocks(State(ctx): State<Arc<NetworkContext>>) -> Response
             median_fee: sat_vb(m.median),
             fee_range: m.range.iter().copied().map(sat_vb).collect(),
         })
-        .collect();
-    let mut res = Json(body).into_response();
-    res.headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static(CACHE));
-    tip_headers(&mut res, b.tip);
-    if b.stale {
-        age(&mut res, b.at);
-    }
-    res
+        .collect()
 }
 
 fn tip_headers(res: &mut Response, tip: Option<node::esplora::ChainTip>) {
@@ -184,8 +192,15 @@ async fn difficulty_adjustment(State(ctx): State<Arc<NetworkContext>>) -> Respon
         return NOT_READY.into_response();
     };
     let now = SystemTime::now();
+    let mut res = Json(difficulty(&answer, now)).into_response();
+    stamp(&mut res, &ctx, &answer, now);
+    res
+}
+
+/// `/difficulty-adjustment`'s body at `now`; also the `da` of `/api/v1/ws`.
+pub(crate) fn difficulty(answer: &Answer, now: SystemTime) -> DifficultyAdjustment {
     let e = answer.period.estimate(unix_ms(now));
-    let body = DifficultyAdjustment {
+    DifficultyAdjustment {
         progress_percent: e.progress_percent,
         difficulty_change: e.difficulty_change,
         estimated_retarget_date: e.estimated_retarget_ms,
@@ -198,10 +213,7 @@ async fn difficulty_adjustment(State(ctx): State<Arc<NetworkContext>>) -> Respon
         adjusted_time_avg: e.time_avg_ms,
         time_offset: 0,
         expected_blocks: e.expected_blocks,
-    };
-    let mut res = Json(body).into_response();
-    stamp(&mut res, &ctx, &answer, now);
-    res
+    }
 }
 
 /// Cache headers, the tip the answer is as of, and `Age` when the node cannot confirm the answer

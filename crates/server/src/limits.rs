@@ -40,8 +40,10 @@ pub enum Held {
     Request,
     /// An open TCP connection.
     Connection,
-    /// An open WebSocket.
+    /// An open WebSocket on `/app/ws`.
     Socket,
+    /// An open WebSocket on the mempool.space-shaped `/api/v1/ws`, counted apart.
+    V1Socket,
 }
 
 /// Rate and concurrency state for every recently active client, in a table of bounded size.
@@ -66,6 +68,7 @@ struct Entry {
     requests: u32,
     connections: u32,
     sockets: u32,
+    v1_sockets: u32,
 }
 
 impl Entry {
@@ -74,6 +77,7 @@ impl Entry {
             Held::Request => &mut self.requests,
             Held::Connection => &mut self.connections,
             Held::Socket => &mut self.sockets,
+            Held::V1Socket => &mut self.v1_sockets,
         }
     }
 
@@ -86,7 +90,11 @@ impl Entry {
     /// An entry with a full bucket and nothing held is the same as no entry, so it can be dropped.
     fn idle(&mut self, now: Instant, rate: f64, burst: f64) -> bool {
         self.refill(now, rate, burst);
-        self.tokens >= burst && self.requests == 0 && self.connections == 0 && self.sockets == 0
+        self.tokens >= burst
+            && self.requests == 0
+            && self.connections == 0
+            && self.sockets == 0
+            && self.v1_sockets == 0
     }
 }
 
@@ -156,6 +164,7 @@ impl Clients {
             requests: 0,
             connections: 0,
             sockets: 0,
+            v1_sockets: 0,
         });
         entry.refill(now, self.rate, self.burst);
         if entry.tokens < cost || *entry.count(kind) >= max {

@@ -121,7 +121,7 @@ Block JSON has no confirmation status (the node drops a block that leaves the be
 
 ## mempool.space-shaped routes (`/api/v1`)
 
-A subset of mempool.space's own API, for wallets and tools written against it, under each network's `/api/v1` (`/api/v1`, `/signet/api/v1`, …). Which routes exist is the `served` rows of [`compat/api-v1.md`](compat/api-v1.md). Any other path under `/api/v1` is a `404`.
+A subset of mempool.space's own API, for wallets and tools written against it, under each network's `/api/v1` (`/api/v1`, `/signet/api/v1`, …). Which routes exist is the `served` rows of [`compat/api-v1.md`](compat/api-v1.md). Any other path under `/api/v1` is a `404`. Its WebSocket, `/api/v1/ws`, is in [`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws).
 
 ### How every route here works
 

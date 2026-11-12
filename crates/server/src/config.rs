@@ -217,6 +217,11 @@ impl RequestLog {
 pub struct WsLimits {
     pub max_sockets: usize,
     pub client_max_sockets: u32,
+    /// Sockets open at once on the mempool.space-shaped `/api/v1/ws`, a pool apart from
+    /// `max_sockets`, so other sites' pages cannot take our own pages' slots.
+    pub v1_max_sockets: usize,
+    /// `/api/v1/ws` sockets per client, counted apart from `client_max_sockets`.
+    pub v1_client_max_sockets: u32,
     pub max_message_bytes: usize,
     pub messages_per_sec: u32,
     pub max_subscriptions: usize,
@@ -248,6 +253,8 @@ impl Default for WsLimits {
         Self {
             max_sockets: 1024,
             client_max_sockets: 16,
+            v1_max_sockets: 256,
+            v1_client_max_sockets: 4,
             max_message_bytes: 1024,
             messages_per_sec: 10,
             max_subscriptions: 8,
@@ -386,6 +393,12 @@ impl Config {
         let ws = WsLimits {
             max_sockets: positive(&var, "WS_MAX_SOCKETS", w.max_sockets)?,
             client_max_sockets: positive(&var, "WS_CLIENT_MAX_SOCKETS", w.client_max_sockets)?,
+            v1_max_sockets: positive(&var, "WS_V1_MAX_SOCKETS", w.v1_max_sockets)?,
+            v1_client_max_sockets: positive(
+                &var,
+                "WS_V1_CLIENT_MAX_SOCKETS",
+                w.v1_client_max_sockets,
+            )?,
             max_message_bytes: positive(&var, "WS_MAX_MESSAGE_BYTES", w.max_message_bytes)?,
             messages_per_sec: positive(&var, "WS_MESSAGES_PER_SEC", w.messages_per_sec)?,
             max_subscriptions: positive(&var, "WS_MAX_SUBSCRIPTIONS", w.max_subscriptions)?,
@@ -442,6 +455,7 @@ impl Config {
         }
         for (name, value, max) in [
             ("WS_MAX_SOCKETS", ws.max_sockets, 1 << 20),
+            ("WS_V1_MAX_SOCKETS", ws.v1_max_sockets, 1 << 20),
             ("WS_SEND_QUEUE", ws.send_queue, 1 << 16),
             ("WS_MAX_MESSAGE_BYTES", ws.max_message_bytes, 1 << 20),
         ] {

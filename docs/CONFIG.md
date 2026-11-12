@@ -140,12 +140,14 @@ The block table ([`STORE.md`](STORE.md#blocks)) needs `DATA_DIR`. Its newest 100
 
 ### WebSocket
 
-Bounds on `/app/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its close codes are in [`WS.md`](WS.md)). Each must be a positive integer. An upgraded socket gives up its slot under `MAX_CONNECTIONS` and `CLIENT_MAX_CONNECTIONS` and counts under these instead, so keep `MAX_CONNECTIONS` plus `WS_MAX_SOCKETS` below the process's open-file limit. A socket that stops reading is dropped after `REQUEST_TIMEOUT_SECS` without write progress, as for HTTP.
+Bounds on `/app/ws` and `/api/v1/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its close codes are in [`WS.md`](WS.md)). Each must be a positive integer. An upgraded socket gives up its slot under `MAX_CONNECTIONS` and `CLIENT_MAX_CONNECTIONS` and counts under these instead, so keep `MAX_CONNECTIONS` plus `WS_MAX_SOCKETS` and `WS_V1_MAX_SOCKETS` below the process's open-file limit. A socket that stops reading is dropped after `REQUEST_TIMEOUT_SECS` without write progress, as for HTTP.
 
 | Variable | Default | Protects against |
 |---|---|---|
 | `WS_MAX_SOCKETS` | `1024` | Memory and file descriptors held by open sockets, every network together. Past it an upgrade gets `503`. At most 1,048,576 |
 | `WS_CLIENT_MAX_SOCKETS` | `16` | One address holding many sockets. Past it an upgrade gets `429`. Keyed on the client address as above, behind a trusted proxy too. Only this site's pages may open sockets, so another site cannot use up its visitors' allowance ([`WS.md`](WS.md#connection-rules)) |
+| `WS_V1_MAX_SOCKETS` | `256` | Sockets on the mempool.space-shaped `/api/v1/ws`, every network together: a pool apart from `WS_MAX_SOCKETS`, so other sites' pages, which may open it, never take a slot of ours ([`WS.md`](WS.md#why-other-sites-may-open-it)). Past it an upgrade gets `503`. At most 1,048,576 |
+| `WS_V1_CLIENT_MAX_SOCKETS` | `4` | One address holding many `/api/v1/ws` sockets, counted apart from `WS_CLIENT_MAX_SOCKETS`. Past it an upgrade gets `429` |
 | `WS_MAX_MESSAGE_BYTES` | `1024` | Large messages from a client. Checked against the frame header before the payload is read, and against a fragmented message's total. Over it: close `1009`. At most 1,048,576 |
 | `WS_MESSAGES_PER_SEC` | `10` | A client flooding the server with frames, pings and pongs included. The same number is the burst allowed. Over it: close `4002` |
 | `WS_MAX_SUBSCRIPTIONS` | `8` | One socket subscribing to many topics. Over it: close `4001` |

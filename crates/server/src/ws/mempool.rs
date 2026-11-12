@@ -650,6 +650,7 @@ async fn latest_feed(ctx: Arc<NetworkContext>, tracker: Tracker, stats: Arc<Mute
                     if published.as_ref() != Some(&list) {
                         let frame = Frame::text(latest(&list).to_string().as_bytes());
                         publish(&ctx.hub, &stats, Topic::Transactions, &frame, Snapshot::Replace);
+                        super::v1::latest(&ctx.v1, list.iter().map(|s| (s.txid, s.time, s.fee, s.vsize, s.value)));
                         published = Some(list.clone());
                         next = Instant::now() + interval;
                     }
