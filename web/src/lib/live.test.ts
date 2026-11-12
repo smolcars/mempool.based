@@ -1,6 +1,13 @@
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeSocket } from "./fakes";
 import { backoff, LiveConnection, liveUrl, TIMING, type Topic } from "./live";
+
+/** The status once the update the last event made is applied, as it is before the next event. */
+const statusOf = (c: LiveConnection) => {
+  flush();
+  return c.status();
+};
 
 const echo: Topic<Record<string, unknown>> = {
   name: "blocks",
@@ -63,10 +70,10 @@ describe("LiveConnection", () => {
     c.add(echo, { message: () => {}, resync: () => {} });
     const ws = FakeSocket.last();
     expect(ws.url).toBe("ws://test/regtest/app/ws");
-    expect(c.status()).toBe("connecting");
+    expect(statusOf(c)).toBe("connecting");
     expect(ws.sent).toStrictEqual([]);
     ws.hello();
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
     expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["blocks"] }]);
   });
 
@@ -74,7 +81,7 @@ describe("LiveConnection", () => {
     const c = connect();
     c.add(echo, { message: () => {}, resync: () => {} });
     FakeSocket.last().hello({ v: 2 });
-    expect(c.status()).toBe("offline");
+    expect(statusOf(c)).toBe("offline");
     expect(FakeSocket.last().closedWith).toBe(1000);
     vi.advanceTimersByTime(120_000);
     expect(FakeSocket.all).toHaveLength(1);
@@ -82,7 +89,7 @@ describe("LiveConnection", () => {
     const d = connect();
     d.add(echo, { message: () => {}, resync: () => {} });
     FakeSocket.last().hello({ network: "signet" });
-    expect(d.status()).toBe("offline");
+    expect(statusOf(d)).toBe("offline");
   });
 
   it("delivers a topic's messages to its subscribers only, parsed", () => {
@@ -112,7 +119,7 @@ describe("LiveConnection", () => {
     ws.receive({ type: "pong" });
     ws.receive({ type: "notice", text: "new kind of message" });
     expect(got).toStrictEqual([]);
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
   });
 
   it("asks for binary frames as bytes and offers each to the topics that read them", () => {
@@ -176,7 +183,7 @@ describe("LiveConnection", () => {
     expect(resyncs).not.toHaveBeenCalled();
 
     FakeSocket.last().drop(1006);
-    expect(c.status()).toBe("reconnecting");
+    expect(statusOf(c)).toBe("reconnecting");
     vi.advanceTimersByTime(999);
     expect(FakeSocket.all).toHaveLength(1);
     vi.advanceTimersByTime(1);
@@ -191,7 +198,7 @@ describe("LiveConnection", () => {
 
     const ws = FakeSocket.last();
     ws.hello();
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
     expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["blocks"] }]);
     expect(resyncs).toHaveBeenCalledOnce();
 
@@ -206,7 +213,7 @@ describe("LiveConnection", () => {
     c.add(echo, { message: () => {}, resync: () => {} });
     FakeSocket.last().hello();
     FakeSocket.last().drop(4002);
-    expect(c.status()).toBe("offline");
+    expect(statusOf(c)).toBe("offline");
     vi.advanceTimersByTime(120_000);
     expect(FakeSocket.all).toHaveLength(1);
   });
@@ -218,7 +225,7 @@ describe("LiveConnection", () => {
       c.add(echo, { message: () => {}, resync: () => {} });
       FakeSocket.last().hello();
       FakeSocket.last().drop(code);
-      expect(c.status()).toBe("reconnecting");
+      expect(statusOf(c)).toBe("reconnecting");
       vi.advanceTimersByTime(TIMING.backoffBaseMs);
       expect(FakeSocket.all).toHaveLength(2);
       c.dispose();
@@ -242,11 +249,11 @@ describe("LiveConnection", () => {
     expect(ws.sent.at(-1)).toStrictEqual({ op: "ping" });
     ws.receive({ type: "pong" });
     vi.advanceTimersByTime(TIMING.pongTimeoutMs);
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
     vi.advanceTimersByTime(TIMING.pingEveryMs - TIMING.pongTimeoutMs);
     expect(ws.sent.filter((m) => JSON.stringify(m) === '{"op":"ping"}')).toHaveLength(2);
     vi.advanceTimersByTime(TIMING.pongTimeoutMs);
-    expect(c.status()).toBe("reconnecting");
+    expect(statusOf(c)).toBe("reconnecting");
   });
 
   it("batches subscription changes so navigation never floods the server", () => {
@@ -288,7 +295,7 @@ describe("LiveConnection", () => {
     FakeSocket.last().drop(1006);
     vi.advanceTimersByTime(120_000);
     expect(FakeSocket.all).toHaveLength(1);
-    expect(c.status()).toBe("reconnecting");
+    expect(statusOf(c)).toBe("reconnecting");
     hidden = false;
     document.dispatchEvent(new Event("visibilitychange"));
     expect(FakeSocket.all).toHaveLength(2);
@@ -313,24 +320,24 @@ describe("LiveConnection", () => {
     online = false;
     window.dispatchEvent(new Event("offline"));
     FakeSocket.last().drop(1006);
-    expect(c.status()).toBe("offline");
+    expect(statusOf(c)).toBe("offline");
     vi.advanceTimersByTime(120_000);
     expect(FakeSocket.all).toHaveLength(1);
     online = true;
     window.dispatchEvent(new Event("online"));
     expect(FakeSocket.all).toHaveLength(2);
     FakeSocket.last().hello();
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
   });
 
   it("goes offline with the browser even while its socket still looks open", () => {
     const c = connect();
     c.add(echo, { message: () => {}, resync: () => {} });
     FakeSocket.last().hello();
-    expect(c.status()).toBe("live");
+    expect(statusOf(c)).toBe("live");
     online = false;
     window.dispatchEvent(new Event("offline"));
-    expect(c.status()).toBe("offline");
+    expect(statusOf(c)).toBe("offline");
     online = true;
     window.dispatchEvent(new Event("online"));
     expect(FakeSocket.all).toHaveLength(2);

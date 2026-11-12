@@ -1,7 +1,6 @@
 // Mounts components for tests, inside a router so links and network hooks work.
-import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
-import type { JSX } from "@solidjs/web";
-import { render } from "@solidjs/web";
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { type JSX, render } from "@solidjs/web";
 import { afterEach } from "vitest";
 
 const mounted: (() => void)[] = [];
@@ -12,19 +11,12 @@ afterEach(() => {
 
 /** Renders `ui` at `url` and returns its container. */
 export function mount(ui: () => JSX.Element, url = "/"): HTMLElement {
-  const history = createMemoryHistory();
-  history.set({ value: url });
+  const Router = createRouter({
+    routes: [{ path: "*", component: ui }],
+    history: memoryHistory(url),
+  });
   const el = document.createElement("div");
   document.body.append(el);
-  mounted.push(
-    render(
-      () => (
-        <MemoryRouter history={history}>
-          <Route path="*" component={ui} />
-        </MemoryRouter>
-      ),
-      el,
-    ),
-  );
+  mounted.push(render(() => <Router>{(page) => page.children}</Router>, el));
   return el;
 }
