@@ -355,6 +355,12 @@ impl App {
         self.router.clone()
     }
 
+    /// Each enabled network's Lightning side. Tests use it to serve a graph they built.
+    #[doc(hidden)]
+    pub fn lightning(&self) -> &[Arc<lightning::Lightning>] {
+        &self.lightning
+    }
+
     /// WebSocket state shared by every network.
     pub fn sockets(&self) -> &Arc<ws::Sockets> {
         &self.sockets
