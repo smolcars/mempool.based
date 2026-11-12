@@ -69,6 +69,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `listen_failed` | error | `addr`, `error` | The listen address could not be bound; the process exits |
 | `panic` | error | `message`, `location`, `thread` | Any panic. In a request handler the client gets a 500 and the server keeps running |
 | `log_events_dropped` | warn | `count` | The log queue was full; written once it drains |
+| `connections_refused` | warn | `total` | Connections closed as soon as they were accepted because their address already had `CLIENT_MAX_CONNECTIONS` open: at a total of 1, 2, 4, 8…. The client sees a reset and no response, so no `http_request` records it |
 
 ### HTTP
 

@@ -145,6 +145,14 @@ pub struct LogEventsDropped {
 }
 event!(LogEventsDropped, "log_events_dropped", Warn);
 
+/// Connections closed at accept because their address had `CLIENT_MAX_CONNECTIONS` open. The
+/// client sees only a reset, with no response to log. Written at a total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct ConnectionsRefused {
+    pub total: u64,
+}
+event!(ConnectionsRefused, "connections_refused", Warn);
+
 // HTTP.
 
 /// One HTTP request, written when its response head is ready.
@@ -836,6 +844,7 @@ mod tests {
                 total: 2,
             }),
             both(&RpcAuthFailed { network: n }),
+            both(&ConnectionsRefused { total: 8 }),
             both(&RpcUnreachable {
                 network: n,
                 error: "timeout",

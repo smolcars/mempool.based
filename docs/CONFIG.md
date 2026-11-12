@@ -61,7 +61,7 @@ Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md)
 | `REQUEST_TIMEOUT_SECS` | `10` | Slow handlers and slow uploads holding a slot forever. The same value bounds how long a connection may take to send its request headers or sit idle between requests, so half-sent requests (slowloris) and idle keep-alives are closed, and how long a write to the client may make no progress, so a client that stops reading its responses is disconnected |
 | `MAX_CONNECTIONS` | `1024` | Running out of file descriptors. Past it the server stops accepting until a connection closes. Keep it below the process's open-file limit |
 | `MAX_CONCURRENT_REQUESTS` | `256` | Overload. Requests past it are refused at once with `503`, not queued |
-| `CLIENT_MAX_CONNECTIONS` | `32` | One address holding many open connections. Not applied to connections from a trusted proxy (`TRUSTED_PROXIES`), which carry many clients |
+| `CLIENT_MAX_CONNECTIONS` | `64` | One address holding many open connections. Derived [below](#per-client-defaults). Past it a new connection is closed at once (the client sees a reset) and counted in a `connections_refused` event. Not applied to connections from a trusted proxy (`TRUSTED_PROXIES`), which carry many clients |
 | `CLIENT_MAX_CONCURRENT_REQUESTS` | `48` | One address occupying many request slots with slow requests. Derived [below](#per-client-defaults) |
 | `CLIENT_RATE_PER_SEC` | `20` | One address sending a sustained flood. Refilled continuously |
 | `CLIENT_BURST` | `120` | Size of a client's token bucket: how many requests it may send at once. Derived [below](#per-client-defaults) |
@@ -100,6 +100,7 @@ An open home page then polls about once every 3 seconds. Static files are `/asse
 
 | Limit | Default | Derivation |
 |---|---|---|
+| `CLIENT_MAX_CONNECTIONS` | `64` | A browser opens up to six HTTP/1.1 connections per site, shared by its tabs, plus one per WebSocket while it upgrades, and Chrome opens spare ones ahead of need. Ten browsers behind one address: 60. The browser tests' five parallel browsers went past the old 32 in three runs of three |
 | `CLIENT_MAX_CONCURRENT_REQUESTS` | `48` | Three cold loads of the heaviest page at the same moment (three browsers behind one NAT, or one restoring tabs), with every API request of each in flight together: 3 × 13 = 39, against a measured peak of 5 per page. Headroom for the page that grows next |
 | `CLIENT_BURST` | `120` | A restored session of eight tabs loading one after another: 8 × 13 = 104 |
 | `CLIENT_RATE_PER_SEC` | `20` | Unchanged: sixty open home pages polling, or a full burst refilled in 6 seconds |

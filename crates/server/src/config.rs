@@ -122,7 +122,7 @@ impl Default for Limits {
             request_timeout: Duration::from_secs(10),
             max_connections: 1024,
             max_requests: 256,
-            client_connections: 32,
+            client_connections: 64,
             // Derived from the frontend's cold page loads: docs/CONFIG.md, "Per-client defaults".
             client_requests: 48,
             client_rate_per_sec: 20,

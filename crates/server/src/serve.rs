@@ -38,6 +38,7 @@ pub async fn serve(
     let open = Arc::new(Semaphore::new(limits.max_connections));
     let (stop, stopped) = watch::channel(());
     let mut shutdown = pin!(shutdown);
+    let mut refused = 0u64;
     loop {
         let accepted = tokio::select! {
             () = &mut shutdown => break,
@@ -46,8 +47,13 @@ pub async fn serve(
         let Some((stream, peer, permit)) = accepted else {
             continue;
         };
-        // Over its connection cap: dropping the stream closes it.
+        // Over its connection cap: dropping the stream closes it. The client sees only a reset,
+        // so the log says it happened.
         let Ok(hold) = limiter.connection(peer.ip()) else {
+            refused += 1;
+            if refused.is_power_of_two() {
+                logging::emit(&logging::events::ConnectionsRefused { total: refused });
+            }
             continue;
         };
         let router = router.clone();
