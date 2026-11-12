@@ -198,6 +198,8 @@ export default function Chart(props: ChartProps) {
     );
     const yr = props.right ? valueAxis(props.right, on("right"), yRange, count) : undefined;
     const gap = props.gap ?? maxGap(xs);
+    // A fixed step makes a lone point a real sample between known gaps: show it as a sliver.
+    const sliver = props.gap === undefined ? 0 : 2;
     const yOf = (s: ChartSeries) => ((s.axis ?? "left") === "right" && yr ? yr : yl).scale;
     const floor = yl.scale(yl.scale.domain[0]);
     const time = timeTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 84)));
@@ -217,11 +219,11 @@ export default function Chart(props: ChartProps) {
         covered !== undefined && covered > domain[0]
           ? { x: left, w: Math.min(right, sx(covered)) - left }
           : undefined,
-      layers: stack.map((s) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap)),
+      layers: stack.map((s) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver)),
       stack,
-      bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap)),
+      bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap, sliver)),
       areas: series().map((s) =>
-        s.draw === "area" ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap) : "",
+        s.draw === "area" ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver) : "",
       ),
       lines: series().map((s) => linePath(xs, s.values, sx, yOf(s), gap, s.draw === "step")),
       floor,

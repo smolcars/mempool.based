@@ -162,8 +162,8 @@ describe("gaps", () => {
       ),
     ).toBe("M0 5L1 6L1 0L0 0Z");
   });
-  it("shows a lone point in an area as a sliver, not nothing", () => {
-    expect(
+  it("shows a lone point in an area as a sliver when asked, and as nothing otherwise", () => {
+    const area = (sliver?: number) =>
       areaPath(
         [0, 60, 300],
         [5, 6, 9],
@@ -171,8 +171,10 @@ describe("gaps", () => {
         (x) => x,
         (y) => y,
         60,
-      ),
-    ).toBe("M0 5L60 6L60 0L0 0ZM299 9L301 9L301 0L299 0Z");
+        sliver,
+      );
+    expect(area(2)).toBe("M0 5L60 6L60 0L0 0ZM299 9L301 9L301 0L299 0Z");
+    expect(area()).toBe("M0 5L60 6L60 0L0 0ZM300 9L300 0Z");
   });
   it("breaks at a fixed step: one missing minute is a gap, which three times the median would bridge", () => {
     const minutes = [0, 60, 180, 240];

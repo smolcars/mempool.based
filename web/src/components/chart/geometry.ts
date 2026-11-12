@@ -73,7 +73,8 @@ export function linePath(
 
 /**
  * The area between `hi` and `lo` (a constant baseline when `lo` is a number), broken at gaps:
- * filled areas under a line, and bands between percentiles.
+ * filled areas under a line, and bands between percentiles. With `sliver`, a lone point is a
+ * sliver that many px wide; without, it draws nothing, as the mining charts always have.
  */
 export function areaPath(
   xs: readonly number[],
@@ -82,6 +83,7 @@ export function areaPath(
   sx: Px,
   sy: Px,
   gap: number,
+  sliver = 0,
 ): string {
   const low = (i: number) => (typeof lo === "number" ? lo : lo[i]);
   let d = "";
@@ -90,12 +92,12 @@ export function areaPath(
     (i) => typeof hi[i] === "number" && typeof low(i) === "number",
     gap,
   )) {
-    // A lone point still shows: a sliver 2 px wide.
-    if (a === b) {
+    if (a === b && sliver > 0) {
       const x = sx(xs[a] ?? 0);
+      const w = sliver / 2;
       const t = n(sy(hi[a] ?? 0));
       const f = n(sy(low(a) ?? 0));
-      d += `M${n(x - 1)} ${t}L${n(x + 1)} ${t}L${n(x + 1)} ${f}L${n(x - 1)} ${f}Z`;
+      d += `M${n(x - w)} ${t}L${n(x + w)} ${t}L${n(x + w)} ${f}L${n(x - w)} ${f}Z`;
       continue;
     }
     let top = "";
