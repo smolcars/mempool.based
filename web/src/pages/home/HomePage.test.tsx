@@ -719,6 +719,22 @@ describe("the live mempool", () => {
     }
   });
 
+  it("on a new tip asks only for the panel that is being polled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { ws } = await open(true);
+      ws.receive(MEMPOOL_MSG);
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(count("/mempool/recent")).toBe(1);
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(count("/mempool/recent")).toBe(2);
+      expect(count("/mempool")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says quietly when the server has lost its node, and keeps the last state", async () => {
     const { el, ws } = await open(true);
     ws.receive(projectedMsg(10, 8, 3000, true));
@@ -827,6 +843,19 @@ describe("the projected tiles", () => {
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
     expect(projectedTiles(el).map((t) => t.dataset["key"])).toStrictEqual(["12", "13", "14", "15"]);
     expect(tile(el, 11)?.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
+  });
+
+  it("keeps showing the projection until the tile lands, even when its facts came first", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el, ws } = await open(true);
+    ws.receive(projectedMsg(10));
+    ws.receive({ topic: "blocks", type: "summary", summary: facts(fakeBlock(11).id) });
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+    const mined = tile(el, 11) as HTMLElement;
+    expect(mined.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
+    await vi.waitFor(() =>
+      expect(mined.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB"),
+    );
   });
 
   it("an empty mined block drops what was projected for it", async () => {

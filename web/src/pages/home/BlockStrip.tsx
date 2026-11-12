@@ -49,8 +49,6 @@ import type { TileFacts } from "./summaries";
 const MAX_WEIGHT = 4_000_000;
 /** Projected tiles on screen, not the ones fading out. */
 const PROJECTED = ".home-tile--projected[data-key]:not(.home-tile--leaving)";
-/** When in the crossing a block lands, as a share of the sequence: its real layers start there. */
-const LAND_AT = 0.55;
 
 /** How full a block is, as tile text: `99.9% full`, `under 1% full`. */
 export function fullness(weight: number): string {
@@ -92,8 +90,14 @@ export function BlockStrip(props: {
   const [announcement, setAnnouncement] = createSignal("");
   // A held projection is released by time, not by a message: this ticks when it is due.
   const [tick, setTick] = createSignal(0);
-  /** What each block that crossed the line was projected to be, until its own facts take over. */
-  const provisional = new Map<string, ProjectedBlock>();
+  /** Blocks crossing the line: what each was projected to be, until it lands. */
+  const crossings = new Map<string, Crossing>();
+  /** Lands each crossing still in the air; the sequence calls one as its tile touches down. */
+  const landers = new Map<string, () => void>();
+  const landAll = () => {
+    for (const land of landers.values()) land();
+    landers.clear();
+  };
   /** Whether projected tiles drawn now settle their layers in by themselves (see `sequence`). */
   let settleNew = false;
   let scroller: HTMLDivElement | undefined;
@@ -125,6 +129,8 @@ export function BlockStrip(props: {
 
   /** Ends the sequence in progress where it stands, so a new one starts from what is on screen. */
   const interrupt = () => {
+    // Whatever was in the air lands where the next sequence starts it from: settled.
+    landAll();
     for (const a of running) a.cancel();
     running.clear();
     for (const g of ghosts) g.remove();
@@ -163,14 +169,24 @@ export function BlockStrip(props: {
       if (before && list && tip && tip.height > oldTip) {
         const txs = `${groupDigits(tip.tx_count)} ${tip.tx_count === 1 ? "transaction" : "transactions"}`;
         setAnnouncement(`Block ${groupDigits(tip.height)} mined: ${txs}.`);
-        // What the new blocks were projected to be, while they wait for their own facts.
+      }
+      // What the new blocks were projected to be, shown until each lands.
+      const fresh: [string, ProjectedBlock][] = [];
+      if (before && list && !document.hidden) {
         const model = untrack(props.projection);
         for (const b of list) {
           if (b.height <= oldTip) break;
           const p = provisionalFor(model, list, b);
-          if (p && !document.hidden) provisional.set(b.id, p);
+          if (p) fresh.push([b.id, p]);
         }
       }
+      const fly = () => {
+        for (const [id, guess] of fresh) {
+          const [landed, setLanded] = createSignal(false);
+          crossings.set(id, { guess, landed });
+          landers.set(id, () => setLanded(true));
+        }
+      };
       const show = () =>
         batch(() => {
           setShown(list);
@@ -215,6 +231,7 @@ export function BlockStrip(props: {
           return { g, parent, left: box ? r.left - box.left : 0 };
         });
       interrupt();
+      fly();
       // A tile that forms behind a crossing block settles in time with the crossing, below.
       const crossingNow = !!tip && tip.height > oldTip;
       settleNew = !crossingNow;
@@ -230,7 +247,10 @@ export function BlockStrip(props: {
     out: { g: HTMLElement; parent: HTMLElement | null; left: number }[],
     oldTip: number,
   ) {
-    if (!lane || !upcoming) return;
+    if (!lane || !upcoming) {
+      landAll();
+      return;
+    }
     const m: Motion = motion();
     const mined = [...lane.children] as HTMLElement[];
     const projected = [...upcoming.querySelectorAll<HTMLElement>(PROJECTED)];
@@ -324,15 +344,24 @@ export function BlockStrip(props: {
         fill: "backwards",
       });
     }
-    if (crossing.length === 0) return;
+    if (crossing.length === 0) {
+      landAll();
+      return;
+    }
 
     // Each new block crosses the line from its projected tile on a shallow arc and lands with a
     // small squash. Several at once leave one after another, the one going farthest first.
     crossing.forEach((el, k) => {
       const delay = (crossing.length - 1 - k) * m.stagger * 3;
+      const id = el.dataset["id"] ?? "";
+      const land = () => {
+        landers.get(id)?.();
+        landers.delete(id);
+      };
       el.classList.add("home-tile--landing");
       if (m.reduced) {
         play(el, [{ opacity: 0 }, { opacity: 1 }], { duration: m.fade, delay, fill: "backwards" });
+        later(delay + m.fade, land);
         // Nothing travels, but the accent still marks the new block for about as long.
         later(delay + m.fade * 6, () => el.classList.remove("home-tile--landing"));
         return;
@@ -364,6 +393,8 @@ export function BlockStrip(props: {
           { duration: m.block, easing: m.easeSettle, delay },
         );
       }
+      // Its projected figures and layers give way to its own as it touches down.
+      later(delay + m.block * 0.82, land);
       void arc.finished.then(
         () => el.classList.remove("home-tile--landing"),
         () => {
@@ -418,11 +449,11 @@ export function BlockStrip(props: {
     return tip ? formatRelative(tip.timestamp, now(), { suffix: false }) : undefined;
   };
   const keys = createMemo(() => view().tiles.map((t) => t.key));
-  /** A crossing's projection is for the tile drawn for it, once: a refetch redraws it settled. */
+  /** A crossing is for the tile drawn for it, once: a refetch redraws it settled. */
   const take = (id: string) => {
-    const p = provisional.get(id);
-    provisional.delete(id);
-    return p;
+    const c = crossings.get(id);
+    crossings.delete(id);
+    return c;
   };
   const tileAt = (key: number) => () => view().tiles.find((t) => t.key === key);
   const note = () => {
@@ -514,7 +545,7 @@ export function BlockStrip(props: {
                         block={b}
                         now={now}
                         facts={props.facts(b.id)}
-                        provisional={take(b.id)}
+                        crossing={take(b.id)}
                       />
                     )}
                   </For>
@@ -544,25 +575,27 @@ export function tileFeeText(facts: TileFacts): string | undefined {
   return `median fee ${formatFeeRate(r.median)} sat/vB, fee range ${formatFeeRate(r.min)} to ${formatFeeRate(r.max)} sat/vB`;
 }
 
+/** A block crossing the line: what it was projected to be, and whether it has landed. */
+interface Crossing {
+  guess: ProjectedBlock;
+  landed: Accessor<boolean>;
+}
+
 function MinedTile(props: {
   block: Block;
   now: Accessor<number>;
   facts: TileFacts;
-  /** What it was projected to be, when it crossed the line: shown until its facts arrive. */
-  provisional: ProjectedBlock | undefined;
+  /** When it is crossing the line: what it was projected to be, and whether it has landed. */
+  crossing: Crossing | undefined;
 }) {
   const b = () => props.block;
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
-  const projected = untrack(() => props.provisional);
+  const crossing = untrack(() => props.crossing);
+  const projected = crossing?.guess;
   const guess = projected ? projectedLayers(projected) : undefined;
   // A block crossing the line shows what it was projected to be until it lands, however soon its
   // own facts arrive; then its layers grow out of the projected ones.
-  const [landed, setLanded] = createSignal(!projected);
-  if (projected) {
-    const t = setTimeout(() => setLanded(true), motion().block * LAND_AT);
-    onCleanup(() => clearTimeout(t));
-  }
-  const facts = () => (landed() ? props.facts : undefined);
+  const facts = () => (!crossing || crossing.landed() ? props.facts : undefined);
   const summary = () => {
     const f = facts();
     return typeof f === "object" ? f : undefined;

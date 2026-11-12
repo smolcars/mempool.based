@@ -47,10 +47,8 @@ function Home(props: { network: Network }) {
       (tip, before) => {
         if (before === undefined || tip === undefined) return;
         fees.refresh();
-        if (live.polling()) {
-          live.mempool.refresh();
-          live.recent.refresh();
-        }
+        if (live.polling.mempool()) live.mempool.refresh();
+        if (live.polling.recent()) live.recent.refresh();
       },
     ),
   );

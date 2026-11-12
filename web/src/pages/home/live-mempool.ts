@@ -37,8 +37,8 @@ export interface LiveMempool {
   projection: Accessor<ProjectionModel>;
   /** The server says it has lost its node: the figures shown are its last good ones. */
   stale: Accessor<boolean>;
-  /** Whether the panels are being polled, so a new tip should ask them at once. */
-  polling: Accessor<boolean>;
+  /** Whether each panel is being polled, so a new tip should ask it at once. */
+  polling: { mempool: Accessor<boolean>; recent: Accessor<boolean> };
 }
 
 export function createLiveMempool(network: Network, status: Accessor<LiveStatus>): LiveMempool {
@@ -83,20 +83,23 @@ export function createLiveMempool(network: Network, status: Accessor<LiveStatus>
   const down = () => off() || status() === "reconnecting" || status() === "offline";
   // A topic sends only when its state changes, so silence after its first state is not a fault:
   // the server says `stale` when it loses its node. Silence before it is a server still starting.
-  const polling = () => down() || (!state() && silent()) || (!seen() && silent());
+  const polling = {
+    mempool: () => down() || (!state() && silent()),
+    recent: () => down() || (!seen() && silent()),
+  };
   const polledMempool = createPoll<MempoolSummary>(
     network,
     "/mempool",
     MEMPOOL_MS,
     isMempoolSummary,
-    () => down() || (!state() && silent()),
+    polling.mempool,
   );
   const polledRecent = createPoll<RecentTx[]>(
     network,
     "/mempool/recent",
     RECENT_MS,
     isRecentList,
-    () => down() || (!seen() && silent()),
+    polling.recent,
   );
 
   // The socket's state wins while it is live; otherwise the newer of the two.
