@@ -132,7 +132,9 @@ The browser tests run at these defaults too, each test as a client of its own be
 
 ### Static files
 
-Pages and the files under `/assets` are answered from memory or disk with no node work behind them. They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+Pages and the files under `/assets` are answered from memory or disk with no node work behind them; a block page's head reads at most one row of the block table, two at once server-wide ([`FRONTEND.md`](FRONTEND.md#link-previews)). They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+
+There is no setting for the site's public address. Link previews ([`FRONTEND.md`](FRONTEND.md#link-previews)) leave out `og:url` and the canonical link rather than build them from the request's `Host`, which a client chooses. A preview image will need an absolute URL; that change adds the setting.
 
 ### Preflights
 
@@ -149,6 +151,14 @@ The block summary routes ([`FRONTEND.md`](FRONTEND.md#block-summaries)) keep com
 | Variable | Default | Protects against |
 |---|---|---|
 | `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 56 bytes per transaction (its record, txid and weight) plus about 0.5 KB: 110 to 390 KB for today's mainnet blocks, so the default holds 80 to 290 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a block listing: about 0.3 MB on a node with `/block/:hash/txs/summary`, a `getblock` of up to 10 MB on one without ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)). At most 1,048,576 |
+
+### Answers kept in memory
+
+Answers the server computes once and keeps until they can change ([`API.md`](API.md#answers-kept-in-memory)): the store-backed block and audit routes, and a buried block's immutable answers from the node.
+
+| Variable | Default | Protects against |
+|---|---|---|
+| `ANSWER_CACHE_MB` | `32` | Memory held by kept answers, per network: the least recently used go first once it is reached, and one larger than a 64th of it is never kept. At mainnet's sizes 32 MB holds about 25,000 blocks' JSON (about 1.3 KB each as counted), or 1,600 lists of 15 blocks (about 20 KB each). Lower it on a small machine; raise it when no CDN sits in front and clients walk old blocks. A request for an answer not kept costs what it did before. At most 1,048,576 |
 
 ### Block table
 

@@ -11,7 +11,7 @@ mod tests;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -31,6 +31,50 @@ pub(crate) const MIGRATIONS: &[migrate::Migration] =
 const SLOW_WRITE: Duration = Duration::from_secs(1);
 /// How long a connection waits for a lock held by another process, such as a backup.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A table whose writes [`Store::version`] follows, so an answer computed from it can be kept
+/// until the table changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Table {
+    Blocks,
+    Audits,
+    MempoolHistory,
+}
+
+/// The SQL names of [`Table`]'s tables, in its order.
+const TABLES: [&str; 3] = ["blocks", "audits", "mempool_history"];
+
+/// One counter per [`Table`]: odd from the first statement a write prepares on that table until
+/// the write has committed or rolled back, even otherwise. Only the writer thread changes them.
+#[derive(Debug, Default)]
+struct Versions([AtomicU64; 3]);
+
+impl Versions {
+    /// Marks `table` as being written. Called by the authorizer, before the statement runs.
+    fn begin(&self, table: &str) {
+        let Some(v) = TABLES
+            .iter()
+            .position(|t| *t == table)
+            .and_then(|i| self.0.get(i))
+        else {
+            return;
+        };
+        let n = v.load(Ordering::SeqCst);
+        if n % 2 == 0 {
+            v.store(n + 1, Ordering::SeqCst);
+        }
+    }
+
+    /// Ends every open mark, once the write is committed or rolled back.
+    fn settle(&self) {
+        for v in &self.0 {
+            let n = v.load(Ordering::SeqCst);
+            if n % 2 == 1 {
+                v.store(n + 1, Ordering::SeqCst);
+            }
+        }
+    }
+}
 
 /// Something an operator may want recorded. Passed to [`Options::observer`].
 #[derive(Debug)]
@@ -229,9 +273,10 @@ fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|d| Instant::now() >= d)
 }
 
-/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit. The
-/// job reports how it ended before it wakes its caller, so health is current when `write` returns.
-type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool, &dyn Fn(Wrote)) + Send>;
+/// Writer work. The flag is set while caller or migration SQL runs, to refuse any commit. Once
+/// the transaction has ended, the job settles the versions and reports how it ended before it
+/// wakes its caller, so both are current when `write` returns.
+type Job = Box<dyn FnOnce(&mut Connection, &AtomicBool, &Versions, &dyn Fn(Wrote)) + Send>;
 
 /// How a job ended, for [`WriteHealth`].
 enum Wrote {
@@ -249,6 +294,7 @@ pub struct Store {
     writer: JoinHandle<()>,
     readers: Arc<Readers>,
     options: Options,
+    versions: Arc<Versions>,
 }
 
 struct Readers {
@@ -334,11 +380,21 @@ impl Store {
         // ended it, is turned into a rollback. An error or panic still undoes everything.
         let sealed = Arc::new(AtomicBool::new(false));
         let gate = sealed.clone();
+        // The authorizer also sees every table a statement will change, before it runs: that
+        // marks the table's version (`Store::version`), whatever form the change takes.
+        let versions = Arc::new(Versions::default());
+        let marks = versions.clone();
         conn.authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
             AuthAction::Transaction { .. } | AuthAction::Savepoint { .. }
                 if gate.load(Ordering::Relaxed) =>
             {
                 Authorization::Deny
+            }
+            AuthAction::Insert { table_name }
+            | AuthAction::Delete { table_name }
+            | AuthAction::Update { table_name, .. } => {
+                marks.begin(table_name);
+                Authorization::Allow
             }
             _ => Authorization::Allow,
         }))?;
@@ -350,6 +406,7 @@ impl Store {
                 e => e,
             },
         )?;
+        versions.settle();
 
         let mut idle = Vec::with_capacity(options.readers);
         for _ in 0..options.readers.max(1) {
@@ -370,12 +427,17 @@ impl Store {
         let observer = options.observer.clone();
         let health = Arc::new(Mutex::new(WriteHealth::default()));
         let seen = health.clone();
+        let settled = versions.clone();
         let writer = std::thread::Builder::new()
             .name(format!("store-{network}"))
             .spawn(move || {
                 while let Some(job) = jobs.blocking_recv() {
                     let start = Instant::now();
-                    job(&mut conn, &sealed, &|wrote| record(&seen, wrote, &observer));
+                    job(&mut conn, &sealed, &settled, &|wrote| {
+                        record(&seen, wrote, &observer);
+                    });
+                    // Settled again in case a job ended without reaching its own settle.
+                    settled.settle();
                     let elapsed = start.elapsed();
                     if elapsed >= SLOW_WRITE {
                         observer(&Event::SlowWrite {
@@ -392,6 +454,7 @@ impl Store {
             writer,
             readers,
             options,
+            versions,
         })
     }
 
@@ -426,6 +489,22 @@ impl Store {
     /// Whether writes are committing, and when one last did.
     pub fn write_health(&self) -> WriteHealth {
         *self.health.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A number that changes whenever any of `tables` changes, or `None` while a write to one
+    /// of them is open. An answer computed from these tables after reading `Some(v)` is still
+    /// what a fresh read would give for as long as this returns `Some(v)`: a write marks its
+    /// tables before it changes them and settles them only after it has committed.
+    pub fn version(&self, tables: &[Table]) -> Option<u64> {
+        let mut sum = 0u64;
+        for t in tables {
+            let n = self.versions.0.get(*t as usize)?.load(Ordering::SeqCst);
+            if n % 2 == 1 {
+                return None;
+            }
+            sum = sum.wrapping_add(n);
+        }
+        Some(sum)
     }
 
     /// Writes waiting for the writer.
@@ -499,7 +578,7 @@ where
     T: Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let job: Job = Box::new(move |conn, sealed, report| {
+    let job: Job = Box::new(move |conn, sealed, versions, report| {
         let result: Result<T, Error> = (|| {
             let t = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             sealed.store(true, Ordering::Relaxed);
@@ -515,6 +594,10 @@ where
             t.commit()?;
             Ok(value)
         })();
+        // The transaction has ended: committed, or rolled back when `t` was dropped. Settle the
+        // versions before the caller resumes, so a version read after `write` returns is
+        // `Some` and already reflects this write.
+        versions.settle();
         report(match &result {
             Ok(_) => Wrote::Committed,
             Err(Error::Sql(e)) => {

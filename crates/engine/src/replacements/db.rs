@@ -1,18 +1,17 @@
 //! SQL for the `replacements` table. Every statement is a literal; values are bound
 //! (SECURITY.md rule 12).
 
-use bitcoin::Txid;
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Txid};
 
-use super::{Facts, Link};
+use super::{Change, Facts, Link, Mined};
 use crate::store::{Error, Sql, SqlError, Store, params};
 
 const INSERT: &str = "INSERT OR REPLACE INTO replacements (txid, by, seen, fee, vsize, weight, \
-    value, time, rbf, by_fee, by_vsize, by_weight, by_value, by_time, by_rbf, mined) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+    value, time, rbf, by_fee, by_vsize, by_weight, by_value, by_time, by_rbf, mined, height, \
+    block) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 
-const MINED: &str = "UPDATE replacements SET mined = 1 WHERE by = ?1";
-const UNMINED: &str = "UPDATE replacements SET mined = 0 WHERE by = ?1";
+const MINED: &str = "UPDATE replacements SET mined = ?2, height = ?3, block = ?4 WHERE by = ?1";
 const RETURNED: &str = "DELETE FROM replacements WHERE txid = ?1";
 
 /// Keeps the newest ?1 rows by the order recorded. Rows replaced in place leave gaps, so it may
@@ -20,21 +19,19 @@ const RETURNED: &str = "DELETE FROM replacements WHERE txid = ?1";
 const PRUNE: &str = "DELETE FROM replacements WHERE n <= (SELECT max(n) FROM replacements) - ?1";
 
 const LOAD: &str = "SELECT txid, by, seen, fee, vsize, weight, value, time, rbf, by_fee, \
-    by_vsize, by_weight, by_value, by_time, by_rbf, mined FROM replacements \
+    by_vsize, by_weight, by_value, by_time, by_rbf, mined, height, block FROM replacements \
     ORDER BY n DESC LIMIT ?1";
 
-/// What one tracker delta changed, applied in this order, as the record applied it: new links,
-/// replacements seen confirmed, then transactions back in the mempool.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Batch {
-    pub links: Vec<Link>,
-    pub mined: Vec<Txid>,
-    pub returned: Vec<Txid>,
-}
+/// The record's changes from one step (a tracker delta, a check's answers), in the order the
+/// record made them ([`super::Replacements::take_changes`]).
+pub type Batch = Vec<Change>;
 
-impl Batch {
-    pub fn is_empty(&self) -> bool {
-        self.links.is_empty() && self.mined.is_empty() && self.returned.is_empty()
+/// `mined`, `height` and `block` as stored.
+fn mined_columns(m: Mined) -> (u8, Option<u32>, Option<[u8; 32]>) {
+    match m {
+        Mined::No => (0, None, None),
+        Mined::In(b) => (1, b.map(|b| b.0), b.map(|b| b.1.to_byte_array())),
+        Mined::Unknown => (2, None, None),
     }
 }
 
@@ -54,13 +51,28 @@ pub async fn write(store: &Store, batches: Vec<Batch>, keep: usize) -> Result<()
         .await
 }
 
-/// One batch's statements, inside a write's transaction.
-pub(crate) fn insert(sql: &Sql, batch: &Batch) -> Result<(), Error> {
-    let (mut insert, mut stale) = (sql.prepare(INSERT)?, sql.prepare(RETURNED)?);
-    for l in &batch.links {
+/// One batch's statements, inside a write's transaction, in the record's order.
+pub(crate) fn insert(sql: &Sql, batch: &[Change]) -> Result<(), Error> {
+    let (mut insert, mut delete) = (sql.prepare(INSERT)?, sql.prepare(RETURNED)?);
+    let mut mined = sql.prepare(MINED)?;
+    for c in batch {
+        let l = match c {
+            Change::Link(l) => l,
+            Change::Mined(by, m) => {
+                let (m, height, block) = mined_columns(*m);
+                mined.execute(params![by.to_byte_array(), m, height, block])?;
+                continue;
+            }
+            Change::Returned(t) => {
+                delete.execute(params![t.to_byte_array()])?;
+                mined.execute(params![t.to_byte_array(), 0, None::<u32>, None::<[u8; 32]>])?;
+                continue;
+            }
+        };
         // As `Replacements::restore`: the replacement is back, so its own old link is stale.
-        stale.execute(params![l.by.to_byte_array()])?;
+        delete.execute(params![l.by.to_byte_array()])?;
         let by = l.by_tx;
+        let (m, height, block) = mined_columns(l.mined);
         insert.execute(params![
             l.txid.to_byte_array(),
             l.by.to_byte_array(),
@@ -77,17 +89,10 @@ pub(crate) fn insert(sql: &Sql, batch: &Batch) -> Result<(), Error> {
             by.map(|f| int(f.value)),
             by.map(|f| f.time),
             by.map(|f| f.rbf),
-            l.mined,
+            m,
+            height,
+            block,
         ])?;
-    }
-    let mut mined = sql.prepare(MINED)?;
-    for t in &batch.mined {
-        mined.execute(params![t.to_byte_array()])?;
-    }
-    let (mut unmined, mut returned) = (sql.prepare(UNMINED)?, sql.prepare(RETURNED)?);
-    for t in &batch.returned {
-        returned.execute(params![t.to_byte_array()])?;
-        unmined.execute(params![t.to_byte_array()])?;
     }
     Ok(())
 }
@@ -130,7 +135,16 @@ fn read(r: &rusqlite::Row) -> Result<Link, SqlError> {
             rbf: r.get(8)?,
         },
         by_tx,
-        mined: r.get(15)?,
+        mined: match get::<u8>(r, 15)? {
+            0 => Mined::No,
+            1 => Mined::In(
+                r.get::<_, Option<u32>>(16)?.zip(
+                    r.get::<_, Option<[u8; 32]>>(17)?
+                        .map(BlockHash::from_byte_array),
+                ),
+            ),
+            _ => Mined::Unknown,
+        },
     })
 }
 

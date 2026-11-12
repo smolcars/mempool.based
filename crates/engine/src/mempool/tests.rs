@@ -139,6 +139,7 @@ fn pool(txs: &[&Transaction]) -> Mempool {
         added,
         removed: Vec::new(),
         replaced: Vec::new(),
+        blocks: Vec::new(),
     };
     assert!(m.apply(&d));
     m
@@ -156,7 +157,10 @@ fn classify(
         .iter()
         .map(|t| (t.compute_txid(), m.keys().record(&entry(t), t)))
         .collect();
-    let blocks: Vec<_> = blocks.iter().map(|(h, b)| m.keys().block(*h, b)).collect();
+    let blocks: Vec<_> = blocks
+        .iter()
+        .map(|(h, b)| std::sync::Arc::new(m.keys().block(*h, b)))
+        .collect();
     m.classify(&removed, &added, &blocks).into_iter().collect()
 }
 
@@ -221,6 +225,7 @@ fn apply_refuses_out_of_order_deltas_and_keeps_totals() {
         added: Vec::new(),
         removed: vec![(a.compute_txid(), Removal::Evicted)],
         replaced: Vec::new(),
+        blocks: Vec::new(),
     };
     assert!(!m.apply(&d), "seq 3 after 1 is a gap");
     assert_eq!(m.len(), 2);
@@ -292,7 +297,7 @@ fn a_block_rules_out_held_transactions_and_additions_alike() {
     let ac = tx(&[out(&a, 0)], 1, 5);
     let e = tx(&[coin(2)], 1, 6);
     let m = pool(&[&a, &b, &bc, &ac, &e]);
-    let blk = m.keys().block(1, &block(1, genesis(), &[&a, &b2]));
+    let blk = std::sync::Arc::new(m.keys().block(1, &block(1, genesis(), &[&a, &b2])));
     let mut want = vec![a.compute_txid(), b.compute_txid(), bc.compute_txid()];
     want.sort_unstable();
     assert_eq!(m.ruled_out(std::slice::from_ref(&blk)), want);
@@ -306,10 +311,10 @@ fn a_block_rules_out_held_transactions_and_additions_alike() {
     let ec = tx(&[out(&e, 0)], 1, 10);
     let z = tx(&[coin(5)], 1, 11);
     let ac2 = tx(&[out(&ac, 0)], 1, 12);
-    let blk = m.keys().block(
+    let blk = std::sync::Arc::new(m.keys().block(
         1,
         &block(1, genesis(), &[&a, &b2, &x, &tx(&[coin(4)], 1, 13)]),
-    );
+    ));
     let mut added: Vec<(Txid, TxInfo)> = [&yc, &x, &y, &ec, &z, &ac2]
         .iter()
         .map(|t| (t.compute_txid(), m.keys().record(&entry(t), t)))

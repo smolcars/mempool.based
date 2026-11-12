@@ -25,7 +25,7 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 
 | | Expect |
 |---|---|
-| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` (32 MB) per network as the block summary cache fills, and more with open WebSockets: 64 MB at the peak with 5,000 |
+| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` and `ANSWER_CACHE_MB` (32 MB each) per network as the block summaries and kept answers fill, and more with open WebSockets: 64 MB at the peak with 5,000 |
 | CPU | Under 3% of one core on mainnet with one client; 8% with 5,000 WebSockets open |
 | Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)). The log is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)); the compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
 | Network | Nothing published but the node's P2P port and, through the proxy, 443 |
@@ -177,7 +177,7 @@ It must:
 | Compress `application/json` | [Point 1](#tls-and-the-reverse-proxy) | `gzip on; gzip_types application/json;` |
 | Accept request bodies of 1 MB | A broadcast transaction may be 800,000 hex characters ([`API.md`](API.md#broadcast)) | `client_max_body_size` is 1 MB by default |
 
-A CDN in front must also honour the server's `Cache-Control` headers: confirmed blocks are cacheable for long, live answers are `no-store`.
+A CDN in front must also honour the server's `Cache-Control` headers: confirmed blocks are cacheable for long, live answers are `no-store`. A page's head names that page for link previews, so a cache in front must key pages on the whole URL, query string included, as caches do by default ([`FRONTEND.md`](FRONTEND.md#link-previews)).
 
 ### Client addresses
 
@@ -280,7 +280,7 @@ The server writes one JSON object per line to stdout: `ts`, `level`, `event`, th
 docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 ```
 
-**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` with `warming_up` lasts five minutes.
+**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` (`info`) with `warming_up` means the node's fee estimates are served for the first five minutes. A reorg is `chain_reorg` and `block_rows_reorged` at `info`: testnet4 has several a day.
 
 **Alert on:**
 
@@ -292,7 +292,7 @@ docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 | `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
 | `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
 | `rpc_unreachable`, `electrum_unreachable`, `mempool_poll_failed`, `block_rows_failed` repeating | The node is failing or overloaded. They are logged at the 1st, 2nd, 4th, 8th… in a row, so a rising count is a long outage |
-| `store_slow_write`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full |
+| `store_slow_write`, `store_read_timed_out`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full, or the machine is overloaded: the read limit is wall-clock time, so a host that stalls for two seconds trips it even on a read that takes milliseconds ([`STORE.md`](STORE.md#using-it)) |
 | `connections_refused` | One address is holding many connections |
 | `requests_refused` every minute | Something is being refused: one address flooding, or a proxy set up wrong. Its fields tell which ([`LOGGING.md`](LOGGING.md#refusals)) |
 | `log_events_dropped` | Request lines were dropped: `queue_full`, the output (a disk, a pipe) cannot keep up; `over_budget`, the site served more than the log's ceiling ([`LOGGING.md`](LOGGING.md#for-operators)) |

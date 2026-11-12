@@ -15,7 +15,7 @@
 mod model;
 mod tracker;
 
-pub use model::{Delta, Mempool, Removal, TxInfo};
+pub use model::{BlockSpends, Delta, Mempool, Removal, TxInfo};
 pub use tracker::{
     Config, CycleStats, Event, NodeSource, Source, SourceError, Subscription, Tracker,
 };

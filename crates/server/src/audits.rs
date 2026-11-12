@@ -172,16 +172,20 @@ async fn expected(p: &Projector, parent: BlockHash) -> Option<Arc<Expected>> {
     p.expected(&parent)
 }
 
-/// The audits of these blocks, in order, for the block facts. `None` where there is none or the
-/// read failed: a block's facts never wait on its audit.
-pub async fn totals(ctx: &NetworkContext, hashes: &[BlockHash]) -> Vec<Option<Totals>> {
+/// The audits of these blocks, in order, for the block facts, and whether they were read: `None`
+/// where there is none or the read failed, since a block's facts never wait on its audit. An
+/// answer built on a failed read is not kept (`crate::answers`).
+pub async fn totals(ctx: &NetworkContext, hashes: &[BlockHash]) -> (Vec<Option<Totals>>, bool) {
     let rows = match &ctx.blocks {
         Some(t) => audit::by_hashes(&t.store, hashes.to_vec()).await.ok(),
-        None => None,
+        None => Some(vec![None; hashes.len()]),
     };
     match rows {
-        Some(rows) => rows.into_iter().map(|a| a.map(|a| a.totals)).collect(),
-        None => vec![None; hashes.len()],
+        Some(rows) => (
+            rows.into_iter().map(|a| a.map(|a| a.totals)).collect(),
+            true,
+        ),
+        None => (vec![None; hashes.len()], false),
     }
 }
 

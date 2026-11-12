@@ -85,13 +85,15 @@ python3 "$root/dev/regtest/regtest.py" scenario >"$out/manifest.json" 2>"$out/re
 python3 "$perf/activity.py" prepare --outputs 20000 2>>"$out/activity.log"
 m() { python3 -c "import json,sys; m=json.load(open('$out/manifest.json')); print(eval(sys.argv[1]))" "$1"; }
 block=$(m "m['blocks']['106']")
+# Over 100 blocks under the tip: an immutable answer the server keeps in memory once buried.
+buried=$(m "m['blocks']['1']")
 tx=$(m "m['txs']['script_types']")
 address=$(m "m['addresses']['p2wpkh']")
 r=/regtest
 # Classes of route: answered from memory, immutable (passed to the node), from our store, or by
 # asking the node. Read through ${!class} below, which shellcheck cannot follow (SC2034).
 memory="$r/api/v1/fees/mempool-blocks $r/api/v1/difficulty-adjustment $r/api/blocks/tip/height $r/app/block/$block/summary"
-immutable="$r/api/block/$block"
+immutable="$r/api/block/$buried"
 store="$r/api/v1/blocks $r/api/v1/mining/pools/1w $r/api/v1/statistics/24h $r/api/v1/block/$block"
 node="$r/api/tx/$tx $r/api/block/$block/txs $r/api/tx/$tx/outspends $r/api/address/$address"
 # Per-client limits out of the way, so many clients from one machine measure the server itself.

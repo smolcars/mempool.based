@@ -342,7 +342,7 @@ fn transaction_messages_have_the_reference_shapes() {
         seen: 0,
         tx: crate::replacements::Facts::default(),
         by_tx: None,
-        mined: false,
+        mined: crate::replacements::Mined::No,
     };
     assert_eq!(
         tx_message(&txid, &TxState::Replaced(vec![link], false), &starts),
