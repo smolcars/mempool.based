@@ -274,6 +274,9 @@ struct State {
     /// the ceiling never sees a free slot they are about to take.
     resolving: usize,
     cache: Cache,
+    /// Answers from the saved file ([`Lookup::restore`]), kept apart from the cache so nothing
+    /// evicts or expires them before the replay has used them; dropped by `unrestore`.
+    restored: HashMap<u64, (TxOut, Funded)>,
     /// The announcement LDK is about to look up: its channel id and the script its keys require.
     expect: Option<(u64, ScriptBuf)>,
     /// What the cache answered for it, if it was found.
@@ -336,6 +339,7 @@ impl Lookup {
                     map: HashMap::new(),
                     order: VecDeque::new(),
                 },
+                restored: HashMap::new(),
                 expect: None,
                 found: None,
                 tip: None,
@@ -398,16 +402,13 @@ impl Lookup {
                 value: Amount::from_sat(c.capacity),
                 script_pubkey: script,
             };
-            s.cache.put(c.scid, Outcome::Found(out, funded));
+            s.restored.insert(c.scid, (out, funded));
         }
     }
 
-    /// Forgets the answers [`Self::restore`] gave, by the saved block they were stamped with.
-    pub(crate) fn unrestore(&self, saved: BlockHash) {
-        self.lock()
-            .cache
-            .map
-            .retain(|_, (o, _)| !matches!(o, Outcome::Found(_, f) if f.tip_hash == saved));
+    /// Forgets the answers [`Self::restore`] gave.
+    pub(crate) fn unrestore(&self) {
+        self.lock().restored = HashMap::new();
     }
 
     pub(crate) fn count(&self, f: impl FnOnce(&mut Rejected)) {
@@ -532,7 +533,13 @@ impl UtxoLookup for Lookup {
         if *chain_hash != self.chain {
             return UtxoResult::Sync(Err(UtxoLookupError::UnknownChain));
         }
-        match s.cache.get(scid) {
+        // The node's own answers come first; then the saved file's.
+        let saved = s.restored.get(&scid).cloned();
+        match s
+            .cache
+            .get(scid)
+            .or(saved.map(|(o, f)| Outcome::Found(o, f)))
+        {
             Some(Outcome::Found(txout, funded)) if txout.script_pubkey == script => {
                 s.found = Some((scid, txout.clone(), funded));
                 return UtxoResult::Sync(Ok(txout));

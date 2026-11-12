@@ -571,8 +571,8 @@ pub(crate) async fn run<C: Chain>(
     }
     // From here the saved block may be left behind, even for a shorter branch: a channel
     // handed back later is asked of the node instead.
-    if let Some(hash) = resumed {
-        w.gossip.lookup.unrestore(hash);
+    if resumed.is_some() {
+        w.gossip.lookup.unrestore();
     }
     let mut next_tip = Instant::now();
     loop {

@@ -1047,3 +1047,47 @@ async fn saved_answers_are_forgotten_once_the_watcher_reads_on() {
     assert!(g.graph().read_only().channel(id).is_none());
     assert_eq!(rejected(&g).spent, 1);
 }
+
+#[test]
+fn saved_answers_outlast_a_small_cache_and_a_full_queue() {
+    // More saved channels than the cache holds and the queue takes, and no node at all.
+    let config = quick(|c| {
+        c.cache_entries = 1;
+        c.max_pending = 10;
+    });
+    let ids: Vec<u64> = (1..=100).map(|i| scid(500, i, 0)).collect();
+    let graph = Graph::new(NET, sink());
+    for id in &ids {
+        graph
+            .update_channel_from_announcement_no_lookup(&channel(*id, 1, 2))
+            .unwrap();
+    }
+    let block = closes::BlockRef {
+        height: 500,
+        hash: BlockHash::from_byte_array([5; 32]),
+        time: 1_700_000_000,
+    };
+    let v = store::Verified {
+        height: 600,
+        hash: BlockHash::from_byte_array([6; 32]),
+        channels: ids
+            .iter()
+            .map(|id| store::Saved {
+                scid: *id,
+                capacity: 1_000_000,
+                program: closes::program_of(&funding(1, 2)).unwrap(),
+                block,
+            })
+            .collect(),
+    };
+    let mut replay = Replay::from_graph(&graph);
+    replay.prefer(&ids.iter().copied().collect());
+    let (g, _, _) = gossip(&config, replay);
+    g.lookup.restore(&v);
+    g.replay_tick(config.max_pending);
+    // Every one answered from the saved file: none waits for the node, none refused.
+    assert_eq!(g.graph().read_only().channels().len(), 100);
+    assert_eq!(g.saved_left(), 0);
+    assert_eq!(g.lookup.snapshot().pending, 0);
+    assert_eq!(rejected(&g).total(), 0);
+}
