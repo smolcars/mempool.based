@@ -15,6 +15,7 @@ use engine::store::Store;
 use logging::events::{LightningFundingFailed, LightningIndexBuilt};
 
 use super::Lightning;
+use crate::pages::clean_alias;
 use ln::Peer;
 
 /// How often the index is rebuilt: how far an answer can lag the graph, plus a build.
@@ -67,9 +68,10 @@ fn node(id: &ln::NodeId, n: &ln::NodeInfo) -> Option<GraphNode> {
     Some(GraphNode {
         id: key(id)?,
         announcement: n.announcement_info.as_ref().map(|a| Announcement {
-            // LDK's printing: up to the first NUL, control characters as U+FFFD. At most 32 bytes
-            // of gossip, so at most 96 bytes here.
-            alias: a.alias().to_string(),
+            // Cleaned once, here, for every route and page title: LDK's printing (up to the first
+            // NUL, control and format characters as U+FFFD), then the page's own cleaning. At most
+            // 32 bytes of gossip, so at most 96 bytes here; empty when no name is left.
+            alias: clean_alias(&a.alias().to_string()).unwrap_or_default(),
             color: a.rgb(),
             addresses: a.addresses().iter().map(ToString::to_string).collect(),
             features: a.features().le_flags().to_vec(),
@@ -324,7 +326,7 @@ mod tests {
                 .unwrap();
         }
         let mut alias = [0; 32];
-        let name = b"<b>x</b>\x07\x1b[31m";
+        let name = "<b>x</b>\x07\x1b[31m e\u{301}\u{301}\u{301}".as_bytes();
         alias[..name.len()].copy_from_slice(name);
         graph
             .update_node_from_unsigned_announcement(&UnsignedNodeAnnouncement {
@@ -393,8 +395,9 @@ mod tests {
             .find(|n| n.id[1..5] == 7u32.to_be_bytes())
             .unwrap();
         let a = n.announcement.as_ref().unwrap();
-        // Markup stays text; control characters are LDK's replacement character.
-        assert_eq!(a.alias, "<b>x</b>\u{fffd}\u{fffd}[31m");
+        // Markup stays text; control characters are LDK's replacement character; a run of
+        // combining marks keeps two, as on the page.
+        assert_eq!(a.alias, "<b>x</b>\u{fffd}\u{fffd}[31m e\u{301}\u{301}");
         assert_eq!(a.addresses, ["127.0.0.1:9735"]);
         assert_eq!(a.color, [1, 2, 3]);
         // The copy builds into an index without the graph.
