@@ -163,6 +163,9 @@ struct State {
     /// Announcements too shallow for now, with the tip height that makes them deep enough.
     early: HashMap<u64, (u32, Vec<Waiter>)>,
     early_len: usize,
+    /// Announcements answered and being handed to LDK, still counted until LDK has added them, so
+    /// the ceiling never sees a free slot they are about to take.
+    resolving: usize,
     cache: Cache,
     /// The announcement LDK is about to look up: its channel id and the script its keys require.
     expect: Option<(u64, ScriptBuf)>,
@@ -217,6 +220,7 @@ impl Lookup {
                 waiting_len: 0,
                 early: HashMap::new(),
                 early_len: 0,
+                resolving: 0,
                 cache: Cache {
                     cap: config.cache_entries,
                     ttl: config.cache_ttl,
@@ -255,10 +259,10 @@ impl Lookup {
         f(&mut self.lock().rejected);
     }
 
-    /// Announcements waiting for a lookup or held as early.
+    /// Announcements waiting for a lookup, being resolved, or held as early.
     pub(crate) fn held(&self) -> usize {
         let s = self.lock();
-        s.waiting_len + s.early_len
+        s.waiting_len + s.resolving + s.early_len
     }
 
     /// Whether a lookup for this channel is waiting or early.
@@ -267,8 +271,10 @@ impl Lookup {
         s.waiting.contains_key(&scid) || s.early.contains_key(&scid)
     }
 
+    /// Announcements waiting for a lookup or being resolved.
     pub(crate) fn waiting(&self) -> usize {
-        self.lock().waiting_len
+        let s = self.lock();
+        s.waiting_len + s.resolving
     }
 
     pub(crate) fn queue_high(&self) -> bool {
@@ -278,7 +284,7 @@ impl Lookup {
     pub(crate) fn snapshot(&self) -> Snapshot {
         let s = self.lock();
         Snapshot {
-            pending: s.waiting_len,
+            pending: s.waiting_len + s.resolving,
             early: s.early_len,
             rejected: s.rejected,
             failures: s.failures,
@@ -506,12 +512,14 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
                 lookup.settle(&mut s, *scid, outcome, &mut settled, &mut verified);
             }
             Lookup::promote(&mut s, tip);
+            s.resolving += settled.len();
         }
         // Resolved outside our lock: LDK takes its own graph locks here.
-        let graph = gossip.graph();
+        let (graph, n) = (gossip.graph(), settled.len());
         for (future, result) in settled {
             future.resolve_without_forwarding(graph, result);
         }
+        lookup.lock().resolving -= n;
         for scid in verified {
             gossip.admitted(scid);
         }

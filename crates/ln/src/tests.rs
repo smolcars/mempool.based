@@ -1670,3 +1670,71 @@ async fn a_restart_while_the_node_is_down_keeps_the_file() {
     let after = std::fs::read(dir.0.join(store::GRAPH_FILE)).unwrap();
     assert!(before == after, "the file was rewritten");
 }
+
+/// A graph holding channel `scid` between nodes 1 and 2, unchecked, with node 1 announced as
+/// "stored".
+fn stored_graph(scid: u64) -> Graph {
+    let graph = Graph::new(NET, sink());
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(scid, 1, 2))
+        .unwrap();
+    graph
+        .update_node_from_announcement(&node(1, "stored", 0))
+        .unwrap();
+    graph
+}
+
+fn alias_of(g: &Gossip, n: u8) -> Option<[u8; 32]> {
+    let ro = g.graph().read_only();
+    Some(ro.node(&id_of(n))?.announcement_info.as_ref()?.alias().0)
+}
+
+#[tokio::test]
+async fn a_stored_channel_found_early_keeps_the_replay_open_until_it_is_deep() {
+    let id = scid(998, 1, 0);
+    let node = FakeChain::at(1000);
+    node.add(id, &funding(1, 2), 5_000_000, false);
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
+    tokio::spawn(chain::run(
+        Arc::clone(&g),
+        node.clone(),
+        config.lookup_interval,
+    ));
+    g.replay_tick(config.max_pending);
+    wait_for("early", || g.lookup.snapshot().early == 1).await;
+    g.replay_tick(config.max_pending);
+    assert!(
+        g.replaying(),
+        "its stored node announcement is still needed"
+    );
+    node.0.tip.store(1003, Ordering::Relaxed);
+    wait_for("deep enough", || {
+        g.graph().read_only().channel(id).is_some()
+    })
+    .await;
+    g.replay_tick(config.max_pending);
+    assert_eq!(&alias_of(&g, 1).unwrap()[..6], b"stored");
+    assert!(!g.replaying());
+}
+
+#[tokio::test]
+async fn a_newer_oversized_node_announcement_waits_for_its_stored_channel() {
+    let id = scid(900, 1, 0);
+    let fake = FakeChain::at(1000);
+    fake.add(id, &funding(1, 2), 5_000_000, false);
+    let config = quick(|_| {});
+    let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
+    // Newer than the stored one, and over the size limit: kept trimmed.
+    let mut big = node(1, "newer", 2000);
+    big.contents.timestamp += 10;
+    big.signature = sign(&big.contents, &key(1));
+    assert!(big.serialized_length() > MAX_GOSSIP_BYTES);
+    assert!(g.handle_node_announcement(None, &big).is_err());
+    assert_eq!(g.counters.held.load(Ordering::Relaxed), 1);
+    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    g.replay_tick(config.max_pending);
+    wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
+    g.replay_tick(config.max_pending);
+    assert_eq!(&alias_of(&g, 1).unwrap()[..5], b"newer");
+}

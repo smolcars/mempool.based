@@ -114,6 +114,8 @@ pub(crate) struct Replay {
     /// Channel ids still to send, popped from the end.
     order: Vec<u64>,
     nodes: HashMap<NodeId, UnsignedNodeAnnouncement>,
+    /// Channel ids sent and not yet answered, early ones included.
+    sent: Vec<u64>,
     /// Until every stored channel was sent and its lookup answered.
     active: bool,
 }
@@ -303,6 +305,7 @@ impl Gossip {
             let n = r.order.len().min(room);
             let at = r.order.len() - n;
             let ids: Vec<u64> = r.order.drain(at..).collect();
+            r.sent.extend(&ids);
             ids.iter().filter_map(|id| r.channels.remove(id)).collect()
         };
         for st in batch {
@@ -316,11 +319,16 @@ impl Gossip {
         // The replay lock is never held while the graph is read: gossip handlers take them the
         // other way round.
         let (ids, done) = {
-            let Ok(r) = self.replay.lock() else { return };
+            let Ok(mut r) = self.replay.lock() else {
+                return;
+            };
             if !r.active {
                 return;
             }
-            let done = r.channels.is_empty() && self.lookup.waiting() == 0;
+            // A stored channel found early is still the file's: wait for it too (about 12 blocks
+            // at most, see `chain::EARLY_AHEAD`).
+            r.sent.retain(|id| self.lookup.holds(*id));
+            let done = r.channels.is_empty() && r.sent.is_empty() && self.lookup.waiting() == 0;
             (r.nodes.keys().copied().collect::<Vec<NodeId>>(), done)
         };
         let graph = self.graph().read_only();
@@ -422,7 +430,12 @@ impl Gossip {
 
     /// Keeps a node announcement for a stored node not yet in the graph, if it is newer. It is
     /// applied unsigned later, so its signature is checked here.
-    fn hold_node(&self, msg: &NodeAnnouncement) -> bool {
+    /// `trimmed` is an oversized announcement already checked and cut down.
+    fn hold_node(
+        &self,
+        msg: &NodeAnnouncement,
+        trimmed: Option<&UnsignedNodeAnnouncement>,
+    ) -> bool {
         let stored = |r: &Replay| r.nodes.contains_key(&msg.contents.node_id);
         if !self.replay.lock().is_ok_and(|r| stored(&r))
             || self
@@ -430,15 +443,16 @@ impl Gossip {
                 .read_only()
                 .node(&msg.contents.node_id)
                 .is_some()
-            || verify_node_announcement(msg, &self.secp).is_err()
+            || (trimmed.is_none() && verify_node_announcement(msg, &self.secp).is_err())
         {
             return false;
         }
+        let contents = trimmed.unwrap_or(&msg.contents);
         let Ok(mut r) = self.replay.lock() else {
             return false;
         };
         match r.nodes.get_mut(&msg.contents.node_id) {
-            Some(s) if s.timestamp < msg.contents.timestamp => *s = msg.contents.clone(),
+            Some(s) if s.timestamp < contents.timestamp => *s = contents.clone(),
             Some(_) => {}
             None => return false,
         }
@@ -487,14 +501,10 @@ impl Gossip {
         r.map(|_| false)
     }
 
-    /// An oversized node announcement whose signature holds is kept without its excess: at most
-    /// [`MAX_NODE_ADDRESSES`] distinct addresses and no unknown fields. Stored unsigned, which
-    /// only matters for relaying, and we do not relay.
-    /// `None` when it is still too big.
-    fn trim(&self, msg: &NodeAnnouncement) -> Option<Result<bool, LightningError>> {
-        if let Err(e) = verify_node_announcement(msg, &self.secp) {
-            return Some(Err(e));
-        }
+    /// An oversized node announcement, whose signature holds, cut down to at most
+    /// [`MAX_NODE_ADDRESSES`] distinct addresses and no unknown fields. It is stored unsigned, which
+    /// only matters for relaying, and we do not relay. `None` when it is still too big.
+    fn trim(&self, msg: &NodeAnnouncement) -> Option<UnsignedNodeAnnouncement> {
         let mut contents = msg.contents.clone();
         let mut addresses = Vec::new();
         for a in std::mem::take(&mut contents.addresses) {
@@ -512,13 +522,7 @@ impl Gossip {
             self.counters.oversize.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-        let r = self
-            .graph()
-            .update_node_from_unsigned_announcement(&contents);
-        if r.is_ok() {
-            self.counters.trimmed.fetch_add(1, Ordering::Relaxed);
-        }
-        Some(r.map(|()| false))
+        Some(contents)
     }
 
     fn changed(&self, change: Change) {
@@ -709,15 +713,33 @@ impl RoutingMessageHandler for Gossip {
     ) -> Result<bool, LightningError> {
         let bytes = msg.serialized_length();
         self.count(&self.counters.node_announcements, bytes);
-        if bytes <= MAX_GOSSIP_BYTES && self.hold_node(msg) {
+        // An oversized one is kept trimmed and unsigned, so its signature is checked here.
+        let trimmed = if bytes > MAX_GOSSIP_BYTES {
+            if let Err(e) = verify_node_announcement(msg, &self.secp) {
+                return self.tally(Err(e));
+            }
+            Some(
+                self.trim(msg)
+                    .ok_or_else(|| ignore("message over size limit"))?,
+            )
+        } else {
+            None
+        };
+        if self.hold_node(msg, trimmed.as_ref()) {
             self.counters.held.fetch_add(1, Ordering::Relaxed);
             return Err(ignore("held until its stored channels are checked"));
         }
-        let r = if bytes > MAX_GOSSIP_BYTES {
-            self.trim(msg)
-                .ok_or_else(|| ignore("message over size limit"))?
-        } else {
-            self.sync.handle_node_announcement(their_node_id, msg)
+        let r = match &trimmed {
+            Some(contents) => {
+                let r = self
+                    .graph()
+                    .update_node_from_unsigned_announcement(contents);
+                if r.is_ok() {
+                    self.counters.trimmed.fetch_add(1, Ordering::Relaxed);
+                }
+                r.map(|()| false)
+            }
+            None => self.sync.handle_node_announcement(their_node_id, msg),
         };
         if r.is_ok() {
             self.changed(Change::Node(msg.contents.node_id));
