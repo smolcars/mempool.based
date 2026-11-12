@@ -12,6 +12,7 @@ on:
       - Cargo.lock
       - crates/**
       - web/**
+      - design/**
       - deploy/**
       - .github/workflows/image.yml
   workflow_dispatch:

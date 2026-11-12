@@ -20,7 +20,7 @@ Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Ev
 
 It runs as uid and gid 65532, needs no capabilities, and writes nothing, so it runs with a read-only root filesystem. Its health check is the binary itself: `mempool-based healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
 
-[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/` and `web/` (without `node_modules/` and `dist/`) reach the build. `.env`, `target/` and everything else stay out.
+[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
 
 linux/amd64 and linux/arm64 both build from the same Dockerfile, natively on each. [`image.yml`](../.github/workflows/image.yml) builds both after every merge to `master`, starts the image read-only with no capabilities until it reports healthy, and validates the compose file. It is not part of the pull-request checks and publishes nothing; publishing comes with the release workflow.
 
