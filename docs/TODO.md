@@ -30,7 +30,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | todo |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget | F0, R2 | todo |
-| P1 | Docker image and compose file beside rbitcoin | S1 | doing |
+| P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 | L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | doing |
 
@@ -57,7 +57,7 @@ Refined when M2 lands.
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | todo |
+| ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | doing |
 | MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | todo |
 | MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | todo |
 | MI3 | Hashrate history | MI1 | todo |

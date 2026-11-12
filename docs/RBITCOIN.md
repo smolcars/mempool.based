@@ -29,7 +29,7 @@ RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `
 | Missing | Consequence |
 |---|---|
 | Any mempool push (no ZMQ, WebSocket or SSE) | We poll the mempool |
-| `/internal/*` bulk routes over TCP | They exist only on a unix-socket listener, so bulk fetches need the server on the node's host |
+| `/internal/*` bulk routes over TCP | They exist only on a unix-socket listener, so bulk fetches need the server on the node's host. All seven routes were verified over a shared socket on regtest ([`DEPLOY.md`](DEPLOY.md)); access is controlled by the socket's group |
 | Address-prefix search | Search is exact match only |
 | Outpoint pushes for mempool spends | `blockchain.outpoint.subscribe` notifies on each new block only. A spend shows up at the next block, or through `blockchain.outpoint.get_status` |
 | A large recent-transactions feed | `/mempool/recent` returns 10 entries; it cannot serve as a change feed |
@@ -63,6 +63,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
+- **A malformed entry in `/internal/txs/outspends/by-outpoint` is answered as unspent,** not as an error (200 with `{"spent":false}`). Build the entries from typed values only, so a bad one cannot be sent.
 - **`getmempoolfeeratediagram` returns one point per chunk,** in mining order, not Core's running total.
 - **`getblock` verbosity 2 carries every transaction's fee** (the coinbase has none). Its `vsize` is the plain BIP141 size, not adjusted for sigops.
 - **`getmininginfo.networkhashps` does not fit a `u64`** on mainnet.
