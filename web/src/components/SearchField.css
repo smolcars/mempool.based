@@ -1,0 +1,54 @@
+@layer components {
+  .search {
+    position: relative;
+    width: 100%;
+  }
+  .search__icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    translate: 0 -50%;
+    fill: none;
+    stroke: var(--color-text-muted);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    pointer-events: none;
+  }
+  .search input {
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2) var(--space-3) var(--space-2) 36px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+    font-size: var(--text-sm);
+  }
+  .search input::placeholder {
+    color: var(--color-text-muted);
+    opacity: 1;
+  }
+  .search input:focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 0;
+    border-color: transparent;
+  }
+  .search input[aria-invalid="true"] {
+    border-color: var(--color-negative);
+  }
+  /* Floats under the field so a miss never moves the header. */
+  .search__hint:not(:empty) {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    left: 0;
+    right: 0;
+    z-index: var(--z-tooltip);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-sm);
+  }
+}

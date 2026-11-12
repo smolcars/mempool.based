@@ -14,10 +14,12 @@
     "size": "bun scripts/check-size.js"
   },
   "dependencies": {
+    "@solidjs/router": "1.0.0",
     "solid-js": "1.9.19"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
+    "happy-dom": "21.0.4",
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vite-plugin-solid": "2.11.16",

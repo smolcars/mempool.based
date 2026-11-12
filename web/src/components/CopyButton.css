@@ -1,0 +1,40 @@
+@layer components {
+  .copy {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-m);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition:
+      color var(--dur-quick) var(--ease-out),
+      background-color var(--dur-quick) var(--ease-out);
+  }
+  .copy svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+  }
+  .copy:hover {
+    color: var(--color-text);
+    background: var(--color-surface-sunken);
+  }
+  .copy[data-copied] {
+    color: var(--color-positive);
+  }
+  .copy[data-copied] svg {
+    animation: copy-pop var(--dur-base) var(--ease-settle);
+  }
+  @keyframes copy-pop {
+    from {
+      transform: scale(0.6);
+    }
+  }
+}

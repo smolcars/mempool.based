@@ -35,13 +35,16 @@ function precompress(): Plugin {
 
 export default defineConfig({
   plugins: [solid(), precompress()],
-  // Unit tests cover pure logic; vite-plugin-solid would otherwise ask for jsdom.
-  test: { environment: "node" },
+  // happy-dom gives component tests a DOM; pure-logic tests run in it unchanged.
+  test: { environment: "happy-dom" },
   // No data: URIs, so the strict CSP (default-src 'self') holds for every asset.
   build: { assetsInlineLimit: 0 },
   server: {
+    // The tokens and font live in design/, beside web/.
+    fs: { allow: [".."] },
     proxy: {
-      "^/(api|app)(/|$)": { target: server, ws: true },
+      // Every network has its own API under its prefix.
+      "^(/(signet|testnet4|regtest))?/(api|app)(/|$)": { target: server, ws: true },
       "/healthz": server,
     },
   },

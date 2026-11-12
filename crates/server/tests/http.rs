@@ -175,6 +175,34 @@ async fn healthz_is_ok_json() {
 }
 
 #[tokio::test]
+async fn app_config_lists_enabled_networks_at_the_root_only() {
+    let addr = start(limits()).await;
+    let r = get_path(&addr, "/app/config").await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert!(r.head.contains("content-type: application/json"));
+    let json: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(
+        json["networks"],
+        serde_json::json!(["mainnet", "signet", "testnet4"])
+    );
+    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    assert_json_error(
+        &get_path(&addr, "/signet/app/config").await,
+        404,
+        "not found",
+    );
+
+    // Still served when mainnet, which owns the root, is disabled.
+    let mut c = config(limits());
+    c.networks.retain(|n| n.network.name() == "signet");
+    let addr = start_with(c).await;
+    let json: serde_json::Value =
+        serde_json::from_str(&get_path(&addr, "/app/config").await.body).unwrap();
+    assert_eq!(json["networks"], serde_json::json!(["signet"]));
+    assert_json_error(&get_path(&addr, "/app/other").await, 404, "not found");
+}
+
+#[tokio::test]
 async fn each_enabled_network_gets_its_own_context() {
     let addr = start(limits()).await;
     for (path, name) in [

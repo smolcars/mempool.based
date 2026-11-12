@@ -53,6 +53,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/LIGHTNING.md`](docs/LIGHTNING.md) | How the Lightning explorer works |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | The Docker image and the compose file that runs it beside rbitcoin |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Visual design |
+| [`docs/FRONTEND.md`](docs/FRONTEND.md) | Frontend structure, data layer, shared components and rules for page builders |
 | [`AGENTS.md`](AGENTS.md) | Rules for contributors, human or agent |
 
 ## License

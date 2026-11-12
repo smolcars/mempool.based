@@ -3,6 +3,7 @@
 //! [`App::new`] builds everything: per-network routes from [`network_routes`] mounted under each
 //! enabled network's prefix, `/healthz`, the frontend, and the limits around all of it.
 
+mod app_config;
 pub mod config;
 pub mod error;
 pub mod esplora;
@@ -110,7 +111,9 @@ impl App {
 
     /// Like [`App::new`] with other per-network routes. Tests use it to mount probe handlers.
     pub fn with_routes(config: &Config, routes: Router<Arc<NetworkContext>>) -> Self {
-        let mut app = Router::new().route("/healthz", get(healthz));
+        let mut app = Router::new()
+            .route("/healthz", get(healthz))
+            .merge(app_config::routes(config));
         for network in Network::ALL {
             let prefix = network.path_prefix();
             let context = config

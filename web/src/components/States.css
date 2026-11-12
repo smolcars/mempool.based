@@ -1,0 +1,98 @@
+@layer components {
+  .state {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-2);
+    padding: var(--space-6) 0;
+  }
+  .state__title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: var(--weight-bold);
+  }
+  .state__text {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    max-width: 60ch;
+  }
+  .state--error .state__title {
+    color: var(--color-negative);
+  }
+  .state__icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .state--error .btn {
+    margin-top: var(--space-2);
+  }
+
+  /* Loading: a small block whose three strata settle one after another, then start again. */
+  .state--loading {
+    grid-auto-flow: column;
+    align-items: center;
+    justify-content: start;
+    gap: var(--space-3);
+    opacity: 0;
+    animation: state-appear var(--dur-fade) linear 300ms forwards;
+  }
+  @keyframes state-appear {
+    to {
+      opacity: 1;
+    }
+  }
+  .loading-mark {
+    display: grid;
+    align-content: end;
+    gap: 2px;
+    width: 22px;
+    height: 22px;
+    padding: 3px;
+    border: 1.5px dashed var(--color-line-strong);
+    border-radius: var(--radius-m);
+  }
+  .loading-mark__layer {
+    height: 3px;
+    border-radius: 1px;
+    background: var(--color-text-muted);
+    animation: settle 1.8s var(--ease-settle) infinite both;
+  }
+  .loading-mark__layer:nth-child(1) {
+    animation-delay: 0.6s;
+    background: var(--color-accent);
+  }
+  .loading-mark__layer:nth-child(2) {
+    animation-delay: 0.3s;
+  }
+  @keyframes settle {
+    0% {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    25%,
+    80% {
+      opacity: 1;
+      transform: none;
+    }
+    100% {
+      opacity: 0;
+      transform: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    @keyframes settle {
+      0%,
+      100% {
+        opacity: 0.3;
+      }
+      50% {
+        opacity: 1;
+      }
+    }
+  }
+}
