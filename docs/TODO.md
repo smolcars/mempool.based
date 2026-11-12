@@ -31,6 +31,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget | F0, R2 | todo |
 | P1 | Docker image and compose file beside rbitcoin | S1 | todo |
+| A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 
 ## M2 — Live mempool
 
