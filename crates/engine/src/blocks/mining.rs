@@ -7,7 +7,7 @@ use super::Coinbase;
 use super::db::{get, int, read_hash};
 use crate::difficulty::INTERVAL;
 use crate::mining::pools::Pools;
-use crate::store::{Error, OptionalExtension, Store, params};
+use crate::store::{Error, OptionalExtension, Read, Store, params};
 
 /// Heights read per statement while walking the table.
 const CHUNK: u32 = 10_000;
@@ -28,7 +28,7 @@ pub struct Span {
 /// it reads every stored row once in the worst case: about 0.1 s on a full mainnet table.
 pub async fn span(store: &Store) -> Result<Option<Span>, Error> {
     store
-        .read(|sql| {
+        .read(Read::Mining, |sql| {
             let top = sql
                 .prepare("SELECT height, hash, time FROM blocks ORDER BY height DESC LIMIT 1")?
                 .query_row([], |r| {
@@ -71,7 +71,7 @@ pub async fn span(store: &Store) -> Result<Option<Span>, Error> {
 /// The highest row's height and hash: whether the chain the table holds has moved.
 pub async fn top(store: &Store) -> Result<Option<(u32, BlockHash)>, Error> {
     store
-        .read(|sql| {
+        .read(Read::Mining, |sql| {
             Ok(sql
                 .prepare("SELECT height, hash FROM blocks ORDER BY height DESC LIMIT 1")?
                 .query_row([], |r| Ok((get(r, 0)?, read_hash(r, 1)?)))
@@ -82,7 +82,7 @@ pub async fn top(store: &Store) -> Result<Option<(u32, BlockHash)>, Error> {
 
 /// Rows in the table, and how many of them have fee rates.
 pub async fn row_counts(store: &Store) -> Result<(u64, u64), Error> {
-    store.read(super::db::counts).await
+    store.read(Read::BlockCounts, super::db::counts).await
 }
 
 /// Blocks one pool mined in a height range.
@@ -99,7 +99,7 @@ pub struct PoolCount {
 /// Every pool with a block in `from..=to`, most blocks first, then by id.
 pub async fn pool_counts(store: &Store, from: u32, to: u32) -> Result<Vec<PoolCount>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT pool, count(*) AS n, sum(tx_count = 1), sum(reward) FROM blocks \
                  WHERE height BETWEEN ?1 AND ?2 GROUP BY pool ORDER BY n DESC, pool",
@@ -125,7 +125,7 @@ pub const WEEK: u64 = 7 * 86_400;
 /// blocks)`, oldest week first.
 pub async fn pool_weeks(store: &Store, from: u32, to: u32) -> Result<Vec<(u64, u16, u32)>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT (time - ?3) / ?4 AS w, pool, count(*) FROM blocks \
                  WHERE height BETWEEN ?1 AND ?2 GROUP BY w, pool ORDER BY w, pool",
@@ -163,7 +163,7 @@ pub async fn retargets(
     let heights: Vec<u32> = (first..=to).step_by(INTERVAL as usize).collect();
     let heights = serde_json::to_string(&heights).unwrap_or_default();
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT a.height, a.time, a.difficulty, b.difficulty FROM blocks a \
                  JOIN blocks b ON b.height = a.height - ?2 \
@@ -197,7 +197,7 @@ pub struct Work {
 /// The work done in `from + 1..=to`, timed over `from..=to`. `None` with fewer than two rows.
 pub async fn work(store: &Store, from: u32, to: u32) -> Result<Option<Work>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             let (n, sum, lo, hi): (i64, Option<f64>, Option<i64>, Option<i64>) = sql
                 .prepare(
                     "SELECT count(*), sum(difficulty) FILTER (WHERE height > ?1), min(time), \
@@ -227,7 +227,7 @@ pub async fn at_or_before(
     time: u64,
 ) -> Result<Option<(u32, BlockHash, u64)>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             Ok(sql
                 .prepare(
                     "SELECT height, hash, time FROM blocks WHERE time <= ?1 AND height >= ?2 \
@@ -244,7 +244,7 @@ pub async fn at_or_before(
 /// The lowest height at `floor` or above stamped at or after `time`.
 pub async fn first_since(store: &Store, floor: u32, time: u64) -> Result<Option<u32>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Mining, move |sql| {
             let h: Option<i64> = sql
                 // Walk the `time` index from `time`, not every row from the floor up.
                 .prepare(
@@ -274,7 +274,7 @@ pub async fn reattribute(
 ) -> Result<Option<Reattributed>, Error> {
     let version = pools.version().to_owned();
     let (stored, top): (Option<String>, Option<i64>) = store
-        .read(|sql| {
+        .read(Read::Mining, |sql| {
             let v = sql
                 .prepare("SELECT version FROM pool_list WHERE id = 0")?
                 .query_row([], |r| r.get(0))
@@ -293,7 +293,7 @@ pub async fn reattribute(
     while let Some(h) = hi {
         let lo = h.saturating_sub(CHUNK - 1);
         let rows: Vec<(u32, BlockHash, u16, u16)> = store
-            .read(move |sql| {
+            .read(Read::Mining, move |sql| {
                 let mut stmt = sql.prepare(
                     "SELECT height, hash, coinbase_tag, payouts, pool FROM blocks \
                      WHERE height BETWEEN ?1 AND ?2",

@@ -306,7 +306,7 @@ async fn the_table_stays_bounded_over_the_years() {
     }
     let rows: i64 = t
         .store
-        .read(|sql| {
+        .read(crate::store::Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM ln_statistics")?
                 .query_row([], |r| r.get(0))?)

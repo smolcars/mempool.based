@@ -13,5 +13,8 @@ lightning-net-tokio.workspace = true
 node.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

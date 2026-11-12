@@ -34,6 +34,20 @@ pub enum Error {
 }
 
 impl Error {
+    /// A fixed label for the log: never the node's own text, which can carry chain data.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Unavailable(_) => "unavailable",
+            Self::Rejected { .. } => "refused",
+            Self::NotFound => "not_found",
+            Self::Decode(_) => "malformed",
+            Self::TooLarge | Self::ResponseTooBig => "too_big",
+            Self::ChainViewMoved => "chain_moved",
+            Self::Config(_) | Self::AddressIndexDisabled | Self::InternalUnavailable => "config",
+        }
+    }
+
     /// Maps a non-200 upstream answer to an error.
     pub fn from_status(status: StatusCode, body: &[u8]) -> Self {
         let message = message(body);

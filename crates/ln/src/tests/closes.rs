@@ -162,15 +162,12 @@ fn config() -> Config {
 /// A handler with lookups and the close-watcher running against `node`.
 fn net(node: &FakeChain, config: &Config, replay: Replay) -> Net {
     let (g, _, _) = gossip(config, replay);
-    tokio::spawn(chain::run(
-        Arc::clone(&g),
-        node.clone(),
-        config.lookup_interval,
-    ));
+    let pace = pace(config);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), Arc::clone(&pace)));
     tokio::spawn(closes::run(
         Arc::clone(&g),
         node.clone(),
-        config.lookup_interval,
+        pace,
         config.tip_every,
     ));
     Net {
@@ -792,4 +789,305 @@ fn real_mainnet_closes_are_classified() {
             "Other"
         ]
     );
+}
+
+// Load on the node (docs/LIGHTNING.md): one gate for every Lightning request.
+
+/// Announces `n` channels funded at height 1 of a chain six blocks deep, with validation, the
+/// close-watcher and a third loop standing in for the funding fill all asking the node through
+/// one gate; returns when all are verified.
+async fn three_loops(node: &FakeChain, config: &Config, n: u32) {
+    mine_empty(node, 1);
+    let funds: Vec<Transaction> = (0..n).map(|_| fund(1, 2, 1_000_000)).collect();
+    let h = mine(node, funds);
+    mine_empty(node, 5);
+    let (g, _, _) = gossip(config, Replay::default());
+    let pace = pace(config);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), Arc::clone(&pace)));
+    tokio::spawn(closes::run(
+        Arc::clone(&g),
+        node.clone(),
+        Arc::clone(&pace),
+        config.tip_every,
+    ));
+    let filler = node.clone();
+    let fill = tokio::spawn(async move {
+        loop {
+            let _ = pace.run(crate::Chain::tip_height(&filler)).await;
+        }
+    });
+    for i in 0..n {
+        let _ = g.handle_channel_announcement(None, &channel(scid(h, i + 1, 0), 1, 2));
+    }
+    wait_for("all verified", || {
+        g.graph().read_only().channels().len() == n as usize
+    })
+    .await;
+    fill.abort();
+}
+
+/// Most requests started within any one second.
+fn per_second(starts: &[std::time::Instant]) -> usize {
+    starts
+        .iter()
+        .map(|a| {
+            starts
+                .iter()
+                .filter(|b| **b >= *a && **b - *a < Duration::from_secs(1))
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn a_fast_node_gets_one_request_at_a_time_at_most_four_a_second() {
+    let node = FakeChain::default();
+    let config = quick(|c| {
+        c.lookup_interval = Config::new(NET, PathBuf::new()).lookup_interval;
+        c.tip_every = Duration::from_millis(20);
+    });
+    three_loops(&node, &config, 300).await;
+    let starts = node.0.starts.lock().unwrap().clone();
+    assert_eq!(node.0.max_in_flight.load(Ordering::SeqCst), 1);
+    for w in starts.windows(2) {
+        assert!(w[1] - w[0] >= config.lookup_interval, "{:?}", w[1] - w[0]);
+    }
+    assert!(per_second(&starts) <= 4, "{}", per_second(&starts));
+    // 100 positions a request: three requests for 300 channels.
+    let sizes: Vec<usize> = node.batches().iter().map(|b| b.1).collect();
+    assert_eq!(sizes, [100, 100, 100]);
+}
+
+#[tokio::test]
+async fn a_slow_node_is_asked_less() {
+    let node = FakeChain::default();
+    let took = Duration::from_millis(150);
+    *node.0.delay.lock().unwrap() = took;
+    let config = quick(|c| {
+        c.lookup_interval = Duration::from_millis(250);
+        c.tip_every = Duration::from_millis(20);
+    });
+    three_loops(&node, &config, 200).await;
+    let starts = node.0.starts.lock().unwrap().clone();
+    assert_eq!(node.0.max_in_flight.load(Ordering::SeqCst), 1);
+    // 150 ms answering, then 450 ms left alone: busy a quarter of the time, not 60 %.
+    for w in starts.windows(2) {
+        assert!(w[1] - w[0] >= took * 4, "{:?}", w[1] - w[0]);
+    }
+    assert!(per_second(&starts) <= 2, "{}", per_second(&starts));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restart_takes_stored_answers_and_reads_on_from_the_saved_block() {
+    let dir = TempDir::new();
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let (fa, fb) = (fund(1, 2, 1_000_000), fund(3, 4, 2_000_000));
+    let h = mine(&node, vec![fa.clone(), fb]);
+    mine_empty(&node, 5);
+    let (a, b) = (scid(h, 1, 0), scid(h, 2, 0));
+    // A graph file holding both, as gossip left it.
+    let graph = Graph::new(NET, sink());
+    for (id, x, y) in [(a, 1, 2), (b, 3, 4)] {
+        graph
+            .update_channel_from_announcement_no_lookup(&channel(id, x, y))
+            .unwrap();
+    }
+    let bytes = graph.encode();
+    store::write_atomic(&dir.0.join(store::GRAPH_FILE), |f| {
+        std::io::Write::write_all(f, &bytes)
+    })
+    .unwrap();
+    let mut config = config();
+    config.data_dir = dir.0.clone();
+    config.peers.clear();
+
+    // First life: both checked with the node, then saved at shutdown.
+    let (peer, _) = Peer::start(config.clone(), node.clone()).unwrap();
+    let status = peer.status();
+    wait_for("checked", || {
+        let s = status.borrow();
+        s.synced && s.validation.verified == 2 && s.closes.caught_up
+    })
+    .await;
+    peer.shutdown().await.unwrap();
+    let looked_up = |n: &FakeChain| n.batches().iter().map(|b| b.1).sum::<usize>();
+    assert_eq!(looked_up(&node), 2);
+    assert!(dir.0.join(store::VERIFIED_FILE).exists());
+
+    // Down for three blocks; `a` closes in the first.
+    let close = coop(
+        OutPoint::new(fa.compute_txid(), 0),
+        1,
+        2,
+        vec![out(wpkh(), 999_000)],
+    );
+    let ch = mine(&node, vec![close]);
+    mine_empty(&node, 2);
+    node.0.asked.lock().unwrap().clear();
+
+    // Second life: no channel asked of the node again, the close found by reading on.
+    let (peer, _) = Peer::start(config.clone(), node.clone()).unwrap();
+    let status = peer.status();
+    wait_for("caught up", || {
+        let s = status.borrow();
+        s.synced && s.closes.height == Some(ch + 2) && s.closes.caught_up
+    })
+    .await;
+    assert_eq!(looked_up(&node), 2, "a stored answer was asked again");
+    peer.read(|g| {
+        assert!(g.channel(a).is_none());
+        assert_eq!(g.channel(b).unwrap().capacity_sats, Some(2_000_000));
+    });
+    let closed: Vec<(u64, u32)> = peer
+        .recent(0)
+        .into_iter()
+        .filter_map(|r| match r.change {
+            History::Closed(c) => Some((c.scid, c.closed.height)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed, [(a, ch)]);
+    // The three blocks were read: no catch-up of every channel by position.
+    let asked = node.0.asked.lock().unwrap().clone();
+    assert_eq!(
+        asked.iter().filter(|r| **r == "block").count(),
+        3,
+        "{asked:?}"
+    );
+    peer.shutdown().await.unwrap();
+}
+
+#[test]
+fn saved_answers_round_trip_and_a_bad_file_is_ignored() {
+    let dir = TempDir::new();
+    let v = store::Verified {
+        height: 900,
+        hash: BlockHash::from_byte_array([9; 32]),
+        channels: (0..3)
+            .map(|i| store::Saved {
+                scid: scid(800, i, 1),
+                capacity: 1_000 + u64::from(i),
+                program: [i as u8; 32],
+                block: closes::BlockRef {
+                    height: 800,
+                    hash: BlockHash::from_byte_array([8; 32]),
+                    time: 1_700_000_000,
+                },
+            })
+            .collect(),
+    };
+    store::write_verified(&dir.0, NET, &v).unwrap();
+    assert_eq!(store::load_verified(&dir.0, NET, 10), Some(v));
+    // Another network's, or more channels than the ceiling: as if there were none.
+    assert_eq!(store::load_verified(&dir.0, Network::Bitcoin, 10), None);
+    assert_eq!(store::load_verified(&dir.0, NET, 2), None);
+    // Cut short.
+    let path = dir.0.join(store::VERIFIED_FILE);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+    assert_eq!(store::load_verified(&dir.0, NET, 10), None);
+    std::fs::write(&path, b"").unwrap();
+    assert_eq!(store::load_verified(&dir.0, NET, 10), None);
+}
+
+#[tokio::test]
+async fn saved_answers_are_forgotten_once_the_watcher_reads_on() {
+    // Saved at height 8; while down, the node moved to a shorter branch whose block 7 closes
+    // the channel.
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let f = fund(1, 2, 1_000_000);
+    let h = mine(&node, vec![f.clone()]);
+    mine_empty(&node, 7);
+    let id = scid(h, 1, 0);
+    let funded = node.block_at(h).unwrap();
+    let saved = node.block_at(8).unwrap().block_hash();
+    let v = store::Verified {
+        height: 8,
+        hash: saved,
+        channels: vec![store::Saved {
+            scid: id,
+            capacity: 1_000_000,
+            program: closes::program_of(&funding(1, 2)).unwrap(),
+            block: closes::BlockRef {
+                height: h,
+                hash: funded.block_hash(),
+                time: u64::from(funded.header.time),
+            },
+        }],
+    };
+    unmine(&node, 7);
+    let close = coop(
+        OutPoint::new(f.compute_txid(), 0),
+        1,
+        2,
+        vec![out(wpkh(), 999_000)],
+    );
+    mine(&node, vec![close]);
+    let config = config();
+    let (g, _, _) = gossip(&config, Replay::default());
+    g.lookup.restore(&v);
+    g.watch.resume(v.height, v.hash);
+    let pace = pace(&config);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), Arc::clone(&pace)));
+    tokio::spawn(closes::run(
+        Arc::clone(&g),
+        node.clone(),
+        pace,
+        config.tip_every,
+    ));
+    // The watcher has moved to the shorter branch; only then does gossip bring the channel.
+    let at_seven = || g.watch.status().height == Some(7);
+    wait_for("on the shorter branch", at_seven).await;
+    let _ = g.handle_channel_announcement(None, &channel(id, 1, 2));
+    wait_for("answered", || rejected(&g).spent == 1).await;
+    // Asked of the node, which says spent: never shown as open.
+    assert!(g.graph().read_only().channel(id).is_none());
+    assert_eq!(rejected(&g).spent, 1);
+}
+
+#[test]
+fn saved_answers_outlast_a_small_cache_and_a_full_queue() {
+    // More saved channels than the cache holds and the queue takes, and no node at all.
+    let config = quick(|c| {
+        c.cache_entries = 1;
+        c.max_pending = 10;
+    });
+    let ids: Vec<u64> = (1..=100).map(|i| scid(500, i, 0)).collect();
+    let graph = Graph::new(NET, sink());
+    for id in &ids {
+        graph
+            .update_channel_from_announcement_no_lookup(&channel(*id, 1, 2))
+            .unwrap();
+    }
+    let block = closes::BlockRef {
+        height: 500,
+        hash: BlockHash::from_byte_array([5; 32]),
+        time: 1_700_000_000,
+    };
+    let v = store::Verified {
+        height: 600,
+        hash: BlockHash::from_byte_array([6; 32]),
+        channels: ids
+            .iter()
+            .map(|id| store::Saved {
+                scid: *id,
+                capacity: 1_000_000,
+                program: closes::program_of(&funding(1, 2)).unwrap(),
+                block,
+            })
+            .collect(),
+    };
+    let mut replay = Replay::from_graph(&graph);
+    replay.prefer(&ids.iter().copied().collect());
+    let (g, _, _) = gossip(&config, replay);
+    g.lookup.restore(&v);
+    g.replay_tick(config.max_pending);
+    // Every one answered from the saved file: none waits for the node, none refused.
+    assert_eq!(g.graph().read_only().channels().len(), 100);
+    assert_eq!(g.saved_left(), 0);
+    assert_eq!(g.lookup.snapshot().pending, 0);
+    assert_eq!(rejected(&g).total(), 0);
 }

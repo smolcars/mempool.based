@@ -4,7 +4,7 @@
 use super::{
     DAY, Flow, HOUR, Interval, KEEP_HOURS, KEEP_MINUTES, Level, MINUTE, Point, Series, Totals,
 };
-use crate::store::{Error, Sql, SqlError, Store, params};
+use crate::store::{Error, Read, Sql, SqlError, Store, params};
 
 /// The value columns, in the order [`read`] and the inserts use them.
 macro_rules! columns {
@@ -183,7 +183,7 @@ fn read(r: &rusqlite::Row) -> Result<Point, SqlError> {
 /// sample, and how much of the period was sampled.
 pub async fn series(store: &Store, interval: Interval, now: u64) -> Result<Series, Error> {
     store
-        .read(move |sql| {
+        .read(Read::MempoolHistory, move |sql| {
             // Each level holds older times than the one below it, so the oldest row is in the
             // coarsest level that has any.
             let mut first = None;

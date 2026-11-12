@@ -117,6 +117,10 @@ pub(crate) struct Replay {
     channels: HashMap<u64, Stored>,
     /// Channel ids still to send, popped from the end.
     order: Vec<u64>,
+    /// Those of them the saved answers cover, sent before the rest ([`Replay::prefer`]).
+    saved: Vec<u64>,
+    /// Saved ones not yet through LDK: the close-watcher waits for none to be left.
+    saved_left: usize,
     nodes: HashMap<NodeId, UnsignedNodeAnnouncement>,
     /// Channel ids sent and not yet answered, early ones included.
     sent: Vec<u64>,
@@ -167,6 +171,15 @@ impl Replay {
         r.order.sort_unstable_by(|a, b| b.cmp(a));
         r.active = !r.order.is_empty();
         r
+    }
+
+    /// Moves the channels the saved answers cover ahead of the rest. Answered from the cache,
+    /// they never wait in the lookup queue, so they are all sent within a few ticks whatever the
+    /// node does, and the close-watcher can wait for them without a deadline.
+    pub(crate) fn prefer(&mut self, saved: &HashSet<u64>) {
+        let (first, rest) = self.order.iter().partition(|id| saved.contains(id));
+        (self.saved, self.order) = (first, rest);
+        self.saved_left = self.saved.len();
     }
 }
 
@@ -321,6 +334,11 @@ impl Gossip {
         self.replay.lock().map_or(0, |r| r.channels.len())
     }
 
+    /// Stored channels the saved answers cover that are not yet through LDK.
+    pub(crate) fn saved_left(&self) -> usize {
+        self.replay.lock().map_or(0, |r| r.saved_left)
+    }
+
     /// Stored channels are still to be sent or answered: the graph lacks some of the file's.
     pub(crate) fn replaying(&self) -> bool {
         self.replay.lock().is_ok_and(|r| r.active)
@@ -334,17 +352,23 @@ impl Gossip {
         let room = (max_pending / 2)
             .saturating_sub(self.lookup.waiting())
             .min(REPLAY_PER_TICK);
-        let batch: Vec<(u64, ChannelAnnouncement)> = {
+        let (batch, saved): (Vec<(u64, ChannelAnnouncement)>, usize) = {
             let Ok(mut r) = self.replay.lock() else {
                 return;
             };
-            let n = r.order.len().min(room);
+            // Saved ones first, without counting the queue's room: they never enter it.
+            let saved = r.saved.len().min(REPLAY_PER_TICK);
+            let at = r.saved.len() - saved;
+            let mut ids: Vec<u64> = r.saved.drain(at..).collect();
+            let n = r.order.len().min(room.saturating_sub(saved));
             let at = r.order.len() - n;
-            let ids: Vec<u64> = r.order.drain(at..).collect();
+            ids.extend(r.order.drain(at..));
             r.sent.extend(&ids);
-            ids.iter()
+            let batch = ids
+                .iter()
                 .filter_map(|id| Some((*id, r.channels.get(id)?.announcement.clone())))
-                .collect()
+                .collect();
+            (batch, saved)
         };
         for (id, announcement) in batch {
             // Still stored, so still counted against the ceiling, until LDK holds it.
@@ -362,6 +386,12 @@ impl Gossip {
                     self.changed(Change::Channel(u.contents.short_channel_id));
                 }
             }
+        }
+        // Counted down only once through LDK, so the watcher never reads on before they are in.
+        if saved > 0
+            && let Ok(mut r) = self.replay.lock()
+        {
+            r.saved_left -= saved;
         }
         // The replay lock is never held while the graph is read: gossip handlers take them the
         // other way round.

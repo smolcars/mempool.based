@@ -269,7 +269,7 @@ async fn run(
         stalled = report(&peer, events, &l, name) => stalled,
         () = store_ln::run(Arc::clone(&store), || statistics(&peer), sampler) => false,
         () = index::keep(Arc::clone(&peer), Arc::clone(&store), Arc::clone(&l), name) => false,
-        () = index::fill_funding(chain, Arc::clone(&store), Arc::clone(&l), name) => false,
+        () = index::fill_funding(chain, Arc::clone(&peer), Arc::clone(&store), Arc::clone(&l), name) => false,
         () = l.stop.notified() => false,
     };
     if stalled {
@@ -755,7 +755,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningLookupFailed {
                         network,
-                        error: short(&error),
+                        error,
                         failures,
                         pending,
                     });
@@ -765,7 +765,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningWatchFailed {
                         network,
-                        error: short(&error),
+                        error,
                         failures,
                     });
                 }

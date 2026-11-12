@@ -13,7 +13,7 @@
 //! may have closed in blocks never read (downtime, a long gap, the first start) are found by
 //! [`Watcher::check`] through the node's spend records instead, rate-limited like validation.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,11 +23,13 @@ use lightning::bitcoin::{BlockHash, OutPoint, Script, ScriptBuf, Transaction, Tx
 use lightning::ln::msgs::{ChannelUpdate, UnsignedNodeAnnouncement};
 use lightning::types::features::ChannelFeatures;
 use node::esplora::model::Block as Header;
-use node::esplora::{Error, MAX_OUT_POSITIONS, OutPositions};
+use node::esplora::{Error, OutPositions};
 use tokio::sync::broadcast;
 
-use crate::chain::{Chain, position};
+use crate::chain::{Chain, LOOKUP_BATCH, position};
 use crate::gossip::Gossip;
+use crate::pace::Pace;
+use crate::store::{Saved, Verified};
 use crate::{Change, Event, NodeId};
 
 /// New blocks read one by one, at most. Past this many the catch-up checks every watched output
@@ -492,6 +494,42 @@ impl Watch {
         }
     }
 
+    /// What a restart may take as answered: the newest block read, and every watched channel
+    /// not waiting to be checked again, each unspent up to that block. `None` before the first
+    /// block was read.
+    pub(crate) fn saved(&self) -> Option<Verified> {
+        let s = self.lock();
+        let last = s.seen.back()?;
+        let finding: HashSet<u64> = s.find.iter().map(|f| f.scid).collect();
+        let channels = s
+            .funding
+            .iter()
+            .filter(|(scid, _)| !s.recheck.contains(scid) && !finding.contains(scid))
+            .map(|(scid, f)| Saved {
+                scid: *scid,
+                capacity: f.capacity,
+                program: f.program,
+                block: f.block,
+            })
+            .collect();
+        Some(Verified {
+            height: last.height,
+            hash: last.hash,
+            channels,
+        })
+    }
+
+    /// Starts from the block a saved file names, as if it had just been read: the watcher reads
+    /// on from there, and the channels answered from the file are not checked again.
+    pub(crate) fn resume(&self, height: u32, hash: BlockHash) {
+        self.lock().seen.push_back(Seen {
+            height,
+            hash,
+            closes: Vec::new(),
+            penalties: Vec::new(),
+        });
+    }
+
     /// The graph file's channels were all answered: none is still to come.
     pub(crate) fn replay_done(&self) {
         let mut s = self.lock();
@@ -511,20 +549,31 @@ impl Watch {
     }
 }
 
-/// Follows the chain and runs the catch-up until the peer stops. One request at a time, at
-/// least `interval` apart; the tip is read every `tip_every`.
+/// Follows the chain and runs the catch-up until the peer stops. Requests go through the gate
+/// every Lightning request shares; the tip is read every `tip_every`.
 pub(crate) async fn run<C: Chain>(
     gossip: Arc<Gossip>,
     chain: C,
-    interval: Duration,
+    pace: Arc<Pace>,
     tip_every: Duration,
 ) {
     let w = Watcher {
         gossip,
         chain,
-        interval,
-        last: Mutex::new(None),
+        pace,
     };
+    // Resumed from the block it had read before a restart: the replay first hands back the
+    // channels the saved file answers, or the blocks read meanwhile would send them all to be
+    // checked again. No deadline: they are sent first, 2,000 a second, whatever the node does.
+    let resumed = w.watch().lock().seen.back().map(|b| b.hash);
+    while resumed.is_some() && w.gossip.saved_left() > 0 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // From here the saved block may be left behind, even for a shorter branch: a channel
+    // handed back later is asked of the node instead.
+    if resumed.is_some() {
+        w.gossip.lookup.unrestore();
+    }
     let mut next_tip = Instant::now();
     loop {
         if !w.gossip.replaying() {
@@ -570,17 +619,16 @@ pub(crate) async fn run<C: Chain>(
 struct Watcher<C> {
     gossip: Arc<Gossip>,
     chain: C,
-    interval: Duration,
-    /// When the last request started.
-    last: Mutex<Option<Instant>>,
+    pace: Arc<Pace>,
 }
 
 impl<C: Chain> Watcher<C> {
     /// One request to the node: paced, timed out and counted.
-    async fn ask<T>(&self, call: impl Future<Output = Result<T, Error>>) -> Result<T, String> {
-        self.ask_found(call)
-            .await?
-            .ok_or_else(|| Error::NotFound.to_string())
+    async fn ask<T>(
+        &self,
+        call: impl Future<Output = Result<T, Error>>,
+    ) -> Result<T, &'static str> {
+        self.ask_found(call).await?.ok_or(Error::NotFound.label())
     }
 
     /// [`Self::ask`], with what the node does not know as `None` rather than an error, for the
@@ -588,22 +636,18 @@ impl<C: Chain> Watcher<C> {
     async fn ask_found<T>(
         &self,
         call: impl Future<Output = Result<T, Error>>,
-    ) -> Result<Option<T>, String> {
-        let due = self
-            .last
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .map(|t| t + self.interval);
-        if let Some(due) = due {
-            tokio::time::sleep_until(due.into()).await;
-        }
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    ) -> Result<Option<T>, &'static str> {
         self.gossip.watch.lock().counts.requests += 1;
-        match tokio::time::timeout(REQUEST_TIMEOUT, call).await {
+        // The timeout starts once through the gate, not while waiting at it.
+        let r = self
+            .pace
+            .run(async { tokio::time::timeout(REQUEST_TIMEOUT, call).await })
+            .await;
+        match r {
             Ok(Ok(v)) => Ok(Some(v)),
             Ok(Err(Error::NotFound)) => Ok(None),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => Err("timeout".to_owned()),
+            Ok(Err(e)) => Err(e.label()),
+            Err(_) => Err("timeout"),
         }
     }
 
@@ -613,7 +657,7 @@ impl<C: Chain> Watcher<C> {
 
     /// Brings the block window in line with the node's best chain: undoes blocks that left it,
     /// reads new ones, or hands a gap too long to read to the catch-up.
-    async fn follow(&self) -> Result<(), String> {
+    async fn follow(&self) -> Result<(), &'static str> {
         let tip = self.ask(self.chain.tip_hash()).await?;
         let (last, low) = {
             let s = self.watch().lock();
@@ -634,14 +678,14 @@ impl<C: Chain> Watcher<C> {
         'walk: loop {
             let page = self.ask(self.chain.headers(top)).await?;
             if page.is_empty() {
-                return Err("no headers".to_owned());
+                return Err("malformed");
             }
             for h in page {
                 if new
                     .last()
                     .is_some_and(|n| n.previousblockhash != Some(h.id))
                 {
-                    return Err("the chain moved while it was read".to_owned());
+                    return Err("chain_moved");
                 }
                 first.get_or_insert_with(|| h.clone());
                 let (Some((last_height, _)), Some(low)) = (last, low) else {
@@ -667,7 +711,7 @@ impl<C: Chain> Watcher<C> {
             }
         }
         let Some(first) = first else {
-            return Err("no headers".to_owned());
+            return Err("malformed");
         };
         let Some((last_height, _)) = last else {
             // First look: start from here. Channels verified below it are checked again.
@@ -763,11 +807,11 @@ impl<C: Chain> Watcher<C> {
     }
 
     /// Reads one block on top of the window and applies the closes and penalties it holds.
-    async fn connect(&self, h: Header) -> Result<(), String> {
+    async fn connect(&self, h: Header) -> Result<(), &'static str> {
         let block = self.ask(self.chain.block(h.id)).await?;
         let last = self.watch().lock().seen.back().map(|b| b.hash);
         if block.block_hash() != h.id || Some(block.header.prev_blockhash) != last {
-            return Err("the chain moved while it was read".to_owned());
+            return Err("chain_moved");
         }
         let at = BlockRef {
             height: h.height,
@@ -880,7 +924,7 @@ impl<C: Chain> Watcher<C> {
 
     /// The closing transaction's fee: its outputs against the funding output when that is its
     /// only input, otherwise the node's word.
-    async fn fee(&self, tx: &Transaction, scid: u64) -> Result<Option<u64>, String> {
+    async fn fee(&self, tx: &Transaction, scid: u64) -> Result<Option<u64>, &'static str> {
         if tx.input.len() == 1 {
             let capacity = self.watch().lock().funding.get(&scid).map(|f| f.capacity);
             let out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
@@ -1047,25 +1091,19 @@ impl<C: Chain> Watcher<C> {
 
     /// One step of the catch-up: a batch of watched outputs checked for a spend, or one spent
     /// output's spend found.
-    async fn check(&self) -> Result<(), String> {
+    async fn check(&self) -> Result<(), &'static str> {
         // Items leave the queues once answered, so the status counts them until then. Only this
         // task takes from the front.
         let batch: Vec<u64> = {
             let s = self.watch().lock();
-            s.recheck.iter().take(MAX_OUT_POSITIONS).copied().collect()
+            s.recheck.iter().take(LOOKUP_BATCH).copied().collect()
         };
         if !batch.is_empty() {
             let positions = OutPositions::new(batch.iter().map(|s| position(*s)).collect())
                 .ok_or("too many positions")?;
             let r = self.ask(self.chain.outputs(positions)).await?.value;
             if r.len() != batch.len() {
-                return Err("answer of the wrong length".to_owned());
-            }
-            {
-                let mut s = self.watch().lock();
-                for scid in &batch {
-                    s.recheck.remove(scid);
-                }
+                return Err("malformed");
             }
             for (scid, slot) in batch.into_iter().zip(r) {
                 self.rechecked(scid, slot);
@@ -1084,6 +1122,9 @@ impl<C: Chain> Watcher<C> {
     /// another block at the same position after a reorg, gone, or spent.
     fn rechecked(&self, scid: u64, slot: Option<node::esplora::model::PositionedOutput>) {
         let mut s = self.watch().lock();
+        // Out of the queue only with its answer applied, under one lock: a save in between would
+        // otherwise record a spent channel as unspent.
+        s.recheck.remove(&scid);
         let Some(f) = s.funding.get(&scid).cloned() else {
             return;
         };
@@ -1142,7 +1183,7 @@ impl<C: Chain> Watcher<C> {
 
     /// Finds the spend of a spent funding output through the node's spend records: the funding
     /// txid from its position, its spender, and the spending transaction. Four or five requests.
-    async fn find(&self, item: &Find) -> Result<(), String> {
+    async fn find(&self, item: &Find) -> Result<(), &'static str> {
         // What the node no longer knows (a reorg since) is dropped, not retried.
         let p = position(item.scid);
         let Some(hash) = self.ask_found(self.chain.block_hash(p.height)).await? else {
@@ -1193,7 +1234,7 @@ impl<C: Chain> Watcher<C> {
             .iter()
             .position(|i| i.previous_output == OutPoint::new(txid, p.vout))
         else {
-            return Err("the spender does not spend the output".to_owned());
+            return Err("malformed");
         };
         let fee = if tx.input.len() == 1 {
             let out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
