@@ -2,7 +2,8 @@
 import { type Accessor, createSignal, onCleanup } from "solid-js";
 
 const nowSeconds = () => Date.now() / 1000;
-const [now, setNow] = createSignal(nowSeconds());
+// Written by the first reader as it mounts, so the clock is current from its first frame.
+const [now, setNow] = createSignal(nowSeconds(), { ownedWrite: true });
 let readers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
 

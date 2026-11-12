@@ -1,5 +1,5 @@
 import { useIsRouting, useLocation } from "@solidjs/router";
-import { type Accessor, onCleanup, onMount } from "solid-js";
+import { type Accessor, onSettled } from "solid-js";
 import { Link } from "../components/Link";
 import { SearchField } from "../components/SearchField";
 import { type Network, stripNetwork } from "../lib/network";
@@ -21,7 +21,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
   let search: HTMLInputElement | undefined;
 
   // "/" jumps to search from anywhere but a text field.
-  onMount(() => {
+  onSettled(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target;
@@ -35,7 +35,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
       search?.select();
     };
     document.addEventListener("keydown", onKey);
-    onCleanup(() => document.removeEventListener("keydown", onKey));
+    return () => document.removeEventListener("keydown", onKey);
   });
 
   return (

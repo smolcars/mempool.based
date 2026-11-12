@@ -13,15 +13,15 @@ function forced(): Scheme | null {
   return t === "light" || t === "dark" ? t : null;
 }
 
-const [scheme, setScheme] = createSignal<Scheme>("light");
+// boot.js has applied any stored choice before this module runs.
+const [scheme, setScheme] = createSignal<Scheme>(forced() ?? osScheme());
 
-/** The scheme on screen now. Call {@link watchTheme} once before reading it. */
+/** The scheme on screen now. It follows the OS while {@link watchTheme} runs. */
 export { scheme };
 
 /** Starts tracking the OS setting. Returns a function that stops. */
 export function watchTheme(): () => void {
   const sync = () => setScheme(forced() ?? osScheme());
-  sync();
   const q = osQuery();
   q.addEventListener("change", sync);
   return () => q.removeEventListener("change", sync);

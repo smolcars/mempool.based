@@ -1,15 +1,16 @@
-import { type RouteSectionProps, useLocation, useNavigate } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
+import type { JSX } from "@solidjs/web";
 import {
   createEffect,
-  createResource,
   createSignal,
-  ErrorBoundary,
-  on,
+  Errored,
+  Loading as Pending,
   onCleanup,
   Show,
-  Suspense,
+  untrack,
 } from "solid-js";
 import { Empty, ErrorState, Loading } from "../components/States";
+import { createRequest } from "../lib/api";
 import { CHUNK_ATTEMPTS, chunkDelay, isChunkError, retryStyles } from "../lib/chunks";
 import { fetchConfig } from "../lib/config";
 import { NETWORK_NAMES, type Network, onNetwork, stripNetwork } from "../lib/network";
@@ -19,11 +20,11 @@ import { Header } from "./Header";
 import "./Shell.css";
 
 /** The frame around every page: band, header, main and footer. The router's root component. */
-export function Shell(props: RouteSectionProps) {
+export function Shell(props: { children?: JSX.Element }) {
   const network = useNetwork();
   const location = useLocation();
   const navigate = useNavigate();
-  const [config] = createResource(fetchConfig);
+  const [config] = createRequest(() => true, fetchConfig);
   // Undefined until the server answers, so the switch keeps its full shape meanwhile.
   const networks = (): readonly Network[] | undefined => {
     if (config.loading) return undefined;
@@ -32,36 +33,37 @@ export function Shell(props: RouteSectionProps) {
   };
   let main: HTMLElement | undefined;
 
-  createEffect(() => {
-    document.documentElement.dataset["network"] = network();
+  createEffect(network, (n) => {
+    document.documentElement.dataset["network"] = n;
   });
 
   // A path on a network this server does not serve (mainnet at the root) moves to one it does.
-  createEffect(() => {
-    const enabled = config()?.networks;
-    const first = enabled?.[0];
-    if (first && !enabled.includes(network())) {
-      navigate(onNetwork(first, stripNetwork(location.pathname)), { replace: true });
-    }
-  });
+  createEffect(
+    () => {
+      const enabled = config()?.networks;
+      const first = enabled?.[0];
+      return first && !enabled.includes(network())
+        ? onNetwork(first, stripNetwork(location.pathname))
+        : undefined;
+    },
+    (to) => {
+      if (to !== undefined) navigate(to, { replace: true });
+    },
+  );
 
   // Each page gets its own automatic attempts at files that failed to download.
   createEffect(
-    on(
-      () => location.pathname,
-      () => {
-        chunkAttempts = 0;
-      },
-    ),
+    () => location.pathname,
+    () => {
+      chunkAttempts = 0;
+    },
   );
 
   // After a navigation, focus moves to the new page so screen readers start there.
   createEffect(
-    on(
-      () => location.pathname,
-      () => main?.focus({ preventScroll: true }),
-      { defer: true },
-    ),
+    () => location.pathname,
+    () => main?.focus({ preventScroll: true }),
+    { defer: true },
   );
 
   return (
@@ -79,17 +81,17 @@ export function Shell(props: RouteSectionProps) {
       </Show>
       <Header networks={networks} />
       <main id="main" class="site-main" tabindex="-1" ref={main}>
-        <ErrorBoundary
+        <Errored
           fallback={(error, reset) => {
-            createEffect(on(() => location.pathname, reset, { defer: true }));
+            createEffect(() => location.pathname, reset, { defer: true });
             return (
               <div class="wrap">
-                <PageFailure error={error} reset={reset} version={config()?.version} />
+                <PageFailure error={error()} reset={reset} version={config()?.version} />
               </div>
             );
           }}
         >
-          <Suspense
+          <Pending
             fallback={
               <div class="wrap">
                 <Loading />
@@ -97,8 +99,8 @@ export function Shell(props: RouteSectionProps) {
             }
           >
             {props.children}
-          </Suspense>
-        </ErrorBoundary>
+          </Pending>
+        </Errored>
       </main>
       <Footer version={() => config()?.version} />
     </>
@@ -115,10 +117,10 @@ let chunkAttempts = 0;
  * replaced by a deploy, so it says so and offers a reload instead.
  */
 function PageFailure(props: { error: unknown; reset: () => void; version: string | undefined }) {
-  const chunk = isChunkError(props.error);
-  const [state, setState] = createSignal<"waiting" | "updated" | "failed">(
-    chunk && chunkAttempts < CHUNK_ATTEMPTS ? "waiting" : "failed",
-  );
+  // The failure this fallback was made for: a new one makes a new fallback.
+  const chunk = isChunkError(untrack(() => props.error));
+  const first = chunk && chunkAttempts < CHUNK_ATTEMPTS ? "waiting" : "failed";
+  const [state, setState] = createSignal<"waiting" | "updated" | "failed">(first);
   let alive = true;
   onCleanup(() => {
     alive = false;
@@ -151,7 +153,7 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
     }
     if (alive) setState("failed");
   };
-  if (state() === "waiting") void recover();
+  if (first === "waiting") void recover();
 
   const tryAgain = async () => {
     chunkAttempts = CHUNK_ATTEMPTS;

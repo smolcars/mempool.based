@@ -1,4 +1,4 @@
-import { Router } from "@solidjs/router";
+import { createRouter } from "@solidjs/router";
 import { render } from "@solidjs/web";
 import "../../design/tokens.css";
 import "./styles/global.css";
@@ -31,6 +31,8 @@ if (root) {
   });
   void Promise.race([font, timeout]).then((faces) => {
     if (!faces.some((f) => f.status === "loaded")) useFallbackFonts();
-    render(() => <Router root={Shell}>{routes}</Router>, root);
+    // The browser restores scroll on back and forward, as it did before the router could.
+    const Router = createRouter({ routes, scrollRestoration: false });
+    render(() => <Router>{(page) => <Shell>{page.children}</Shell>}</Router>, root);
   });
 }

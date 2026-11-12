@@ -1,6 +1,6 @@
 // Typed HTTP client for the public API at /api (Esplora, per network prefix). docs/FRONTEND.md shows how to use it.
 import { useLocation } from "@solidjs/router";
-import { createMemo, createResource, onCleanup, type ResourceReturn } from "solid-js";
+import { createEffect, createMemo, createSignal } from "solid-js";
 import type { ChainTip } from "./blocks-topic";
 import { apiBase, type Network, networkFromPath, onNetwork } from "./network";
 
@@ -296,45 +296,121 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+/** Where a request stands: not asked yet, loading for the first time, answered, asking again, failed. */
+export type RequestState = "unresolved" | "pending" | "ready" | "refreshing" | "errored";
+
 /**
- * A Solid resource for one API path on the current page's network. Return a falsy path to wait.
- * Refetches when the path or network changes, cancels the request it replaces and the one in
- * flight when the page goes away, answers at once from the cache, and retries busy refusals.
+ * A request's answer and state, read in JSX or a memo like any signal. Calling it gives the answer
+ * (the last one while asking again, undefined before the first) and throws the error once the
+ * last attempt failed, so read `state` first where a failure is expected.
+ */
+export interface ApiResource<T> {
+  (): T | undefined;
+  readonly state: RequestState;
+  /** Pending or refreshing. */
+  readonly loading: boolean;
+  /** The last failure, while `state` is `errored`. */
+  readonly error: unknown;
+  /** The last answer, never throwing. */
+  readonly latest: T | undefined;
+}
+
+/** A request and the function that asks again; the request is aborted when its owner goes away. */
+export type ApiRequest<T> = [ApiResource<T>, { refetch: () => void }];
+
+/**
+ * Asks `fetcher` whenever `source` changes to a truthy value, and on `refetch`. Each new ask aborts
+ * the one it replaces, and the one in flight is aborted when the calling component unmounts. It
+ * never suspends: pages show their frame at once and read `state` to fill each part.
+ */
+export function createRequest<S, T>(
+  source: () => S | false | null | undefined,
+  fetcher: (source: S, signal: AbortSignal) => T | Promise<T>,
+): ApiRequest<T> {
+  const [value, setValue] = createSignal<T | undefined>(undefined);
+  const [error, setError] = createSignal<unknown>(undefined);
+  const [state, setState] = createSignal<RequestState>("unresolved");
+  const [asks, setAsks] = createSignal(0);
+  let answered = false;
+  createEffect(
+    () => {
+      asks();
+      return source();
+    },
+    (s) => {
+      // oxlint-disable-next-line typescript/strict-boolean-expressions -- every falsy source means "no request"
+      if (!s) {
+        setState(answered ? "ready" : "unresolved");
+        return undefined;
+      }
+      const controller = new AbortController();
+      const settle = (next: () => void) => {
+        if (!controller.signal.aborted) next();
+      };
+      setState(answered ? "refreshing" : "pending");
+      new Promise<T>((resolve) => {
+        resolve(fetcher(s, controller.signal));
+      }).then(
+        (v) =>
+          settle(() => {
+            answered = true;
+            setValue(() => v);
+            setError(undefined);
+            setState("ready");
+          }),
+        (e: unknown) =>
+          settle(() => {
+            setError(() => e);
+            setState("errored");
+          }),
+      );
+      return () => controller.abort();
+    },
+  );
+  const read = (() => {
+    if (state() === "errored") throw error();
+    return value();
+  }) as ApiResource<T>;
+  Object.defineProperties(read, {
+    state: { get: state },
+    loading: { get: () => state() === "pending" || state() === "refreshing" },
+    error: { get: error },
+    latest: { get: value },
+  });
+  return [read, { refetch: () => setAsks((n) => n + 1) }];
+}
+
+/**
+ * A request for one API path on the current page's network ({@link createRequest}). Return a falsy
+ * path to wait. Asks again when the path or network changes, answers from the cache without
+ * waiting, and retries busy refusals while staying loading.
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,
   options: { as?: ReplyKind; stamped: true },
-): ResourceReturn<Stamped<T>>;
+): ApiRequest<Stamped<T>>;
 export function createApi<T>(
   path: () => string | false | null | undefined,
   options?: { as?: ReplyKind },
-): ResourceReturn<T>;
+): ApiRequest<T>;
 /** With `stamped: true` the value comes with the chain tip it is as of, to compare across requests. */
 export function createApi<T>(
   path: () => string | false | null | undefined,
   options: { as?: ReplyKind; stamped?: boolean } = {},
-): ResourceReturn<T | Stamped<T>> {
+): ApiRequest<T | Stamped<T>> {
   const location = useLocation();
   const network = createMemo(() => networkFromPath(location.pathname));
-  let controller: AbortController | undefined;
-  onCleanup(() => controller?.abort());
-  return createResource(
+  return createRequest(
     () => {
       const p = path();
       // oxlint-disable-next-line typescript/strict-boolean-expressions -- every falsy path means "no request"
       return p ? `${apiBase(network())}${p}` : false;
     },
-    (url): T | Stamped<T> | Promise<T | Stamped<T>> => {
-      controller?.abort();
-      controller = undefined;
+    (url, signal): T | Stamped<T> | Promise<T | Stamped<T>> => {
       const unwrap = (r: Stamped<T>) => (options.stamped === true ? r : r.value);
       if (cache.has(url)) return unwrap({ value: cache.get(url) as T, tip: undefined });
-      const c = new AbortController();
-      controller = c;
-      // The resource stays loading while a busy refusal waits to be retried.
-      return withRetry(() => request<T>(url, options.as ?? "json", c.signal), c.signal).then(
-        unwrap,
-      );
+      // Stays loading while a busy refusal waits to be retried.
+      return withRetry(() => request<T>(url, options.as ?? "json", signal), signal).then(unwrap);
     },
   );
 }
