@@ -79,7 +79,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 - `route` is the matched route template (`/signet/api/{*rest}`, `/healthz`), or `frontend` for pages and static files.
 - `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
 - `duration_ms` runs until the response head is ready; streaming the body is not included. `bytes` is the body size when known up front.
-- `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), or `summary_busy` (the network's block summary queue is full). A `413` is an oversized body.
+- `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), or for a WebSocket upgrade `client_sockets` (`WS_CLIENT_MAX_SOCKETS`) and `server_sockets` (`WS_MAX_SOCKETS`). A `413` is an oversized body.
 - `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)) and for the block summary routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, or `cached` from the block summary cache), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
 - `client` only with `LOG_CLIENT_ADDR=true`.
 
@@ -105,7 +105,7 @@ The protocol and its close codes are in [`WS.md`](WS.md).
 | `ws_fanout` | info | `network`, `topic`, `kind`, `subscribers`, `open`, `bytes`, `dropped_slow`, `duration_ms`, `fanout_ms` | One message went to every subscriber of a topic: once per new block, block summary, reorg or resync per network, whatever the client count. `duration_ms` runs from the node's notification to the last subscriber's queue (the block fetch included); `fanout_ms` is the queueing part. `open` counts sockets on every network |
 | `ws_clients_dropped` | warn | `network`, `reason`, `total` | The server closed clients for breaking a limit: `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`, `protocol_error`, `binary` or `invalid_utf8`. At a total of 1, 2, 4, 8… per reason and network |
 | `ws_closed` | debug | `network`, `code`, `reason`, `duration_ms`, `open` | Every socket close: its close code (1006 when the connection dropped without one), the reason label (those above, or `client_closed`, `shutdown`, `connection_lost`), how long it was open, and the sockets still open |
-| `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
+| `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora within 3 seconds of retrying, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
 
 ### Block summaries
 
@@ -118,7 +118,7 @@ The routes are in [`FRONTEND.md`](FRONTEND.md#block-summaries). Each request is 
 | `block_summaries_recovered` | info | `network`, `failures` | A summary was computed after `failures` in a row |
 | `block_summaries_refused` | warn | `network`, `reason`, `total` | Requests for uncached blocks were refused: `summary_busy` (the network's queue was full) or `route_rate` (one client over its share). At a total of 1, 2, 4, 8… per reason and network |
 
-Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503`.
+Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503` and `refused` naming the cap.
 
 ### Derived data
 

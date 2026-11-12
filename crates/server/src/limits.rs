@@ -220,10 +220,8 @@ pub struct Client {
 
 impl Client {
     /// Holds one `kind` slot for this client if it has fewer than `max`. No rate token is taken.
-    pub fn hold(&self, kind: Held, max: u32) -> Result<Hold, ApiError> {
-        self.clients
-            .acquire(self.addr, kind, max, 0.0)
-            .map_err(|r| r.error)
+    pub fn hold(&self, kind: Held, max: u32) -> Result<Hold, Refused> {
+        self.clients.acquire(self.addr, kind, max, 0.0)
     }
 }
 

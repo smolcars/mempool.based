@@ -37,16 +37,25 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Block JSON the mock Esplora serves, by hash. Unknown hashes are a 404.
 type Blocks = Arc<Mutex<HashMap<String, Value>>>;
 
-async fn mock_esplora(blocks: Blocks) -> String {
-    async fn block(Path(hash): Path<String>, State(blocks): State<Blocks>) -> impl IntoResponse {
+/// How many times the mock Esplora answered 404, by hash.
+type Misses = Arc<Mutex<HashMap<String, u32>>>;
+
+async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
+    async fn block(
+        Path(hash): Path<String>,
+        State((blocks, misses)): State<(Blocks, Misses)>,
+    ) -> impl IntoResponse {
         match blocks.lock().unwrap().get(&hash) {
             Some(b) => (StatusCode::OK, b.to_string()).into_response(),
-            None => (StatusCode::NOT_FOUND, "Block not found").into_response(),
+            None => {
+                *misses.lock().unwrap().entry(hash).or_default() += 1;
+                (StatusCode::NOT_FOUND, "Block not found").into_response()
+            }
         }
     }
     let app = axum::Router::new()
         .route("/block/{hash}", get(block))
-        .with_state(blocks);
+        .with_state((blocks, misses));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await });
@@ -134,6 +143,7 @@ struct Harness {
     electrum: TcpListener,
     peer: Peer,
     blocks: Blocks,
+    misses: Misses,
     stop: Option<oneshot::Sender<()>>,
     served: tokio::task::JoinHandle<()>,
     sockets: Arc<mempool_based::ws::Sockets>,
@@ -147,7 +157,8 @@ impl Harness {
 
     async fn start_with(ws: WsLimits, request_timeout: Duration) -> Harness {
         let blocks = Blocks::default();
-        let esplora = mock_esplora(Arc::clone(&blocks)).await;
+        let misses = Misses::default();
+        let esplora = mock_esplora(Arc::clone(&blocks), Arc::clone(&misses)).await;
         let electrum = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let vars: HashMap<String, String> = [
             ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
@@ -209,6 +220,7 @@ impl Harness {
             electrum,
             peer,
             blocks,
+            misses,
             stop: Some(stop),
             served,
             sockets,
@@ -218,6 +230,11 @@ impl Harness {
 
     async fn connect(&self) -> Ws {
         Ws::connect(&self.addr, "/regtest/app/ws").await
+    }
+
+    fn misses(&self, header: &Header) -> u32 {
+        let hash = header.block_hash().to_string();
+        self.misses.lock().unwrap().get(&hash).copied().unwrap_or(0)
     }
 
     /// Pushes a new tip whose block the mock Esplora knows.
@@ -506,12 +523,19 @@ async fn reorg_resync_and_missing_blocks_are_announced() {
     assert_eq!(msg["type"], "block");
     assert_eq!(msg["block"]["id"], fork.block_hash().to_string());
 
-    // A block Esplora cannot serve: clients are told to resync instead.
+    // A block Esplora cannot serve: asked for every 25 ms for 3 s, then clients are told to
+    // resync instead.
     let unknown = chain(fork.block_hash(), 1, 8)[0];
+    let pushed = Instant::now();
     s.peer.push_tip(3, &unknown).await;
     let msg = ws.json().await;
+    let waited = pushed.elapsed();
     assert_eq!(msg["type"], "resync");
     assert_eq!(msg["tip"]["height"], 3);
+    assert!(waited >= Duration::from_secs(3), "{waited:?}");
+    // At most one request per 25 ms; a loaded machine may make fewer.
+    let misses = s.misses(&unknown);
+    assert!((2..=121).contains(&misses), "{misses} requests");
     // A later subscriber gets that resync as the snapshot, not the block before it.
     let mut late = s.connect().await;
     late.json().await;
@@ -526,6 +550,41 @@ async fn reorg_resync_and_missing_blocks_are_announced() {
         msg,
         json!({"topic": "blocks", "type": "resync",
             "tip": {"height": 3, "hash": unknown.block_hash().to_string()}})
+    );
+}
+
+#[tokio::test]
+async fn a_block_esplora_serves_late_still_arrives_as_a_block() {
+    let mut s = Harness::start(limits()).await;
+    let mut clients = Vec::new();
+    for _ in 0..3 {
+        let mut ws = s.connect().await;
+        ws.json().await;
+        ws.subscribe_blocks().await;
+        clients.push(ws);
+    }
+    // Electrum announces the tip before Esplora can serve it, as rbitcoin does.
+    let next = chain(s.h[2].block_hash(), 1, 9)[0];
+    let pushed = Instant::now();
+    s.peer.push_tip(3, &next).await;
+    let deadline = Instant::now() + WAIT;
+    while s.misses(&next) < 3 {
+        assert!(Instant::now() < deadline, "never asked for the block");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    add_block(&s.blocks, 3, &next);
+    for ws in &mut clients {
+        let msg = ws.json().await;
+        assert_eq!(msg["type"], "block");
+        assert_eq!(msg["block"]["id"], next.block_hash().to_string());
+    }
+    let elapsed = pushed.elapsed();
+    // One retry loop, whatever the number of clients: about one request per 25 ms.
+    let misses = s.misses(&next);
+    let most = u32::try_from(elapsed.as_millis() / 25).unwrap() + 1;
+    assert!(
+        (2..=most).contains(&misses),
+        "{misses} requests in {elapsed:?}"
     );
 }
 
@@ -620,6 +679,10 @@ async fn socket_caps_refuse_the_upgrade() {
         connect(s.addr.clone()).await.err().unwrap(),
         "HTTP/1.1 429 Too Many Requests"
     );
+    // The request log says which cap refused it, as for every other limit.
+    let refused = logged(|v| v["event"] == "http_request" && v["status"] == 429).await;
+    assert_eq!(refused["refused"], "client_sockets");
+    assert_eq!(refused["route"], "/regtest/app/ws");
     // Another address (127.0.0.2 is loopback on Linux; macOS needs an alias) has its own cap,
     // but the total of 3 still applies.
     let other = TcpSocket::new_v4().unwrap();
@@ -637,6 +700,8 @@ async fn socket_caps_refuse_the_upgrade() {
                 .unwrap(),
             "HTTP/1.1 503 Service Unavailable"
         );
+        let refused = logged(|v| v["event"] == "http_request" && v["status"] == 503).await;
+        assert_eq!(refused["refused"], "server_sockets");
     }
     // A closed socket frees its slot.
     drop(b);

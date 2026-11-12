@@ -35,7 +35,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use crate::NetworkContext;
 use crate::config::WsLimits;
 use crate::error::ApiError;
-use crate::limits::{self, Held, Hold};
+use crate::limits::{self, Held, Hold, Refused};
 
 pub use frame::Frame;
 pub use hub::{Fanout, Hub, Snapshot, feed};
@@ -212,13 +212,21 @@ pub async fn handle(
     State(ctx): State<Arc<NetworkContext>>,
     Extension(client): Extension<limits::Client>,
     mut req: Request,
-) -> Result<Response, ApiError> {
-    let accept = handshake(req.headers())?;
+) -> Response {
+    let accept = match handshake(req.headers()) {
+        Ok(accept) => accept,
+        Err(e) => return e.into_response(),
+    };
     let sockets = Arc::clone(&ctx.sockets);
-    let permit = Arc::clone(&sockets.permits)
-        .try_acquire_owned()
-        .map_err(|_| ApiError::OVERLOADED)?;
-    let hold = client.hold(Held::Socket, sockets.limits.client_max_sockets)?;
+    // Each cap names itself in the request log, as every other limit does.
+    let Ok(permit) = Arc::clone(&sockets.permits).try_acquire_owned() else {
+        return refused(ApiError::OVERLOADED, "server_sockets");
+    };
+    let hold = match client.hold(Held::Socket, sockets.limits.client_max_sockets) {
+        Ok(hold) => hold,
+        Err(r) if r.reason == "client_concurrency" => return refused(r.error, "client_sockets"),
+        Err(r) => return r.into_response(),
+    };
     let upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(async move {
         if let Ok(io) = upgrade.await {
@@ -230,7 +238,11 @@ pub async fn handle(
     h.insert(UPGRADE, HeaderValue::from_static("websocket"));
     h.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
     h.insert(SEC_WEBSOCKET_ACCEPT, accept);
-    Ok(res)
+    res
+}
+
+fn refused(error: ApiError, reason: &'static str) -> Response {
+    Refused { error, reason }.into_response()
 }
 
 /// Validates an opening handshake (RFC 6455 section 4.2.1) and returns the accept header.
@@ -272,7 +284,10 @@ where
         queue,
         closing,
     });
-    conn.send(hello(&ctx));
+    // The conformance suite expects a socket to stay silent until it is sent something.
+    if !cfg!(feature = "autobahn") {
+        conn.send(hello(&ctx));
+    }
 
     let (rd, mut wr) = tokio::io::split(io);
     // Milliseconds since `opened` of the last complete frame from the client.
@@ -413,10 +428,9 @@ async fn read_loop<R: AsyncRead>(
                 continue;
             }
             (frame::CONTINUATION, Some(buf)) => {
-                if buf.len() + f.payload.len() > limits.max_message_bytes {
-                    break Close::TOO_BIG;
+                if let Err(close) = append(buf, &f.payload, limits.max_message_bytes) {
+                    break close;
                 }
-                buf.extend_from_slice(&f.payload);
                 if !f.fin {
                     continue;
                 }
@@ -433,6 +447,20 @@ async fn read_loop<R: AsyncRead>(
         }
     };
     conn.close(reason);
+}
+
+/// Adds a fragment to a message being reassembled. The buffer grows by doubling, as a `Vec`
+/// does, but never past `max`, so a message's memory stays within the limit.
+fn append(buf: &mut Vec<u8>, more: &[u8], max: usize) -> Result<(), Close> {
+    let len = buf.len() + more.len();
+    if len > max {
+        return Err(Close::TOO_BIG);
+    }
+    if len > buf.capacity() {
+        buf.reserve_exact(buf.capacity().saturating_mul(2).max(len).min(max) - buf.len());
+    }
+    buf.extend_from_slice(more);
+    Ok(())
 }
 
 /// What to answer a client's close frame with: its status must be one an endpoint may send
@@ -463,6 +491,11 @@ struct Subscriptions<'a> {
 
 impl Subscriptions<'_> {
     fn handle(&mut self, text: &str, max: usize) -> Result<(), Close> {
+        // Echo for the conformance suite (dev/autobahn): its cases expect each message back.
+        if cfg!(feature = "autobahn") {
+            self.conn.send(Frame::text(text.as_bytes()));
+            return Ok(());
+        }
         let request: ClientMessage = serde_json::from_str(text).map_err(|_| Close::BAD_MESSAGE)?;
         match request {
             ClientMessage::Subscribe { topics } => {
