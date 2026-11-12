@@ -228,7 +228,6 @@
   .tile__strata { flex: 1; display: flex; align-items: flex-end; margin: var(--space-2) 0 var(--space-1); min-height: 0; }
   .tile__fill { width: 100%; height: 100%; display: flex; flex-direction: column-reverse; gap: 1px; transform: scaleY(var(--fill)); transform-origin: bottom; }
   .stratum { flex: var(--grow) 1 0; min-height: 2px; background: var(--c); border-radius: 1px; }
-  .tile--projected .stratum { opacity: 0.88; }
   .tile__foot { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--color-text-muted); gap: var(--space-1); white-space: nowrap; }
   .tile__pool { font-size: var(--text-xs); color: var(--color-text-muted); text-align: center; min-height: 1.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tile--leaving { position: absolute; top: 0; pointer-events: none; }

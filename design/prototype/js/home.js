@@ -1,4 +1,4 @@
-import { h, $, initChrome, params, FEE_BOUNDS, feeVar, fmtRate, feeChip, group, btc, bytes, hash, ago, cssVar, reducedMotion } from "./common.js";
+import { h, $, initChrome, params, FEE_BOUNDS, feeVar, fmtRate, feeChip, group, btc, bytes, hash, ago, cssVar, reducedMotion, page } from "./common.js";
 import { rand, reseed, tx, blockTxs, summarize, pool, TIP } from "./data.js";
 import { feeKey, tooltip } from "./parts.js";
 
@@ -44,7 +44,7 @@ function projectedLabel(i, s) {
 function tile(s, kind, i = 0) {
   const isMined = kind === "mined";
   const [title, sub] = isMined ? [group(s.height), null] : projectedLabel(i, s);
-  const body = h(isMined ? "a" : "div", { class: "tile__body", href: isMined ? `block.html?h=${s.height}` : null },
+  const body = h(isMined ? "a" : "div", { class: "tile__body", href: isMined ? page(`block.html?h=${s.height}`) : null },
     h("span", { class: "tile__title num" }, title),
     h("span", { class: "tile__fee" }, h("span", { class: "num" }, `~${fmtRate(s.median)}`), h("span", { class: "unit" }, " sat/vB")),
     h("span", { class: "tile__range num" }, `${fmtRate(s.min)} – ${fmtRate(s.max)}`),
@@ -94,7 +94,7 @@ function mineBlock() {
   leaving.classList.add("tile--leaving");
   leaving.style.setProperty("left", `${lr.left - laneRect.left}px`);
   const still = reducedMotion(); // reduced motion keeps the fades and drops every movement
-  leaving.animate([{ opacity: 1 }, { opacity: 0, transform: still ? "none" : "translateX(24px)" }], { duration: dSlow || ms("--dur-fade"), easing: "ease-out", fill: "forwards" })
+  const left = leaving.animate([{ opacity: 1 }, { opacity: 0, transform: still ? "none" : "translateX(24px)" }], { duration: dSlow || ms("--dur-fade"), easing: "ease-out", fill: "forwards" })
     .finished.then(() => leaving.remove());
 
   // The next projected block crosses the line and becomes the newest mined block.
@@ -157,11 +157,13 @@ function mineBlock() {
   drift();
   renderMempool();
   updateRecs();
-  setTimeout(() => {
+  // Stay busy until the old tile is gone too, or a quick second block would pick it again.
+  const settled = new Promise((r) => setTimeout(r, dBlock + 4 * stagger + dSlow * 0.5));
+  Promise.all([settled, left]).then(() => {
     minedTile.classList.remove("tile--landing");
     newTile.classList.remove("tile--forming");
     busy = false;
-  }, dBlock + 4 * stagger + dSlow * 0.5);
+  });
 }
 
 function relabel(li, i) {
@@ -288,7 +290,7 @@ new ResizeObserver(layoutLadder).observe(track);
 const recent = $("#recent");
 function row(t, fresh = false) {
   return h("tr", { class: fresh ? "row--new" : null },
-    h("td", {}, hash(t.txid, { href: "tx.html", copy: false })),
+    h("td", {}, hash(t.txid, { href: page("tx.html"), copy: false })),
     h("td", {}, feeChip(t.rate, false)),
     h("td", { class: "num-col num" }, group(t.vsize)),
     h("td", { class: "num-col" }, btc(t.value, { unit: false })));

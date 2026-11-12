@@ -25,7 +25,8 @@ export const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)"
 // Upper bounds (sat/vB) of fee bands 1–9; band 10 is everything at or above 10.
 export const FEE_BOUNDS = [0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5, 10];
 export const feeBand = (rate) => {
-  const i = FEE_BOUNDS.findIndex((b) => rate < b);
+  const shown = Number(fmtRate(rate)); // band the printed value, so 0.1996 shown as "0.20" is colored as 0.20
+  const i = FEE_BOUNDS.findIndex((b) => shown < b);
   return i === -1 ? 10 : i + 1;
 };
 export const feeVar = (rate) => `var(--fee-${feeBand(rate)})`;
@@ -124,6 +125,9 @@ export const params = new URLSearchParams(location.search);
 export const network = NETWORKS[params.get("network") ?? ""] ? params.get("network") : "mainnet";
 export const addrPrefix = NETWORKS[network].prefix;
 
+/** Internal link that keeps the selected network, as the routed app keeps it in the path prefix. */
+export const page = (path) => (network === "mainnet" ? path : `${path}${path.includes("?") ? "&" : "?"}network=${network}`);
+
 function storedTheme() {
   try { return localStorage.getItem("theme"); } catch { return null; }
 }
@@ -137,11 +141,7 @@ export function initChrome() {
   if (network !== "mainnet") document.title = `${net.name}: ${document.title}`;
 
   // Keep the network and theme on internal links so the prototype behaves like the routed app.
-  for (const a of document.querySelectorAll("a[data-nav]")) {
-    const u = new URL(a.getAttribute("href"), location.href);
-    if (network !== "mainnet") u.searchParams.set("network", network);
-    a.href = u.pathname + u.search;
-  }
+  for (const a of document.querySelectorAll("a[data-nav]")) a.href = page(a.getAttribute("href"));
 
   const band = $("#network-band");
   if (band && net.band) { band.hidden = false; $(".network-band__text", band).textContent = net.band; }

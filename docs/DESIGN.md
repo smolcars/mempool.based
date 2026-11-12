@@ -88,6 +88,8 @@ Ten bands. Band thresholds are in sat/vB, lower bound inclusive.
 | `--fee-10` | 10 and up | `#ab2721` | `#f54748` |
 
 - The thresholds are a frontend constant (`FEE_BOUNDS` in the prototype's `common.js`). If fee levels move, change the thresholds, not the colors.
+- Band the rate as printed, not the raw value: 0.1996 sat/vB prints as `0.20` and takes band 2, so the color never disagrees with the number next to it.
+- Internal links keep the selected network. In the app the network is the path prefix; the prototype carries it as `?network=`.
 - Every fee color reaches 3:1 against every surface in both themes, which WCAG requires for graphics. Most reach 4.5:1. Fee colors are fills: squares, strata, swatches and pins. They are never used as text color.
 - In light mode the scale is darker and more saturated so it holds contrast on white. In dark mode it brightens toward the hot end, so dear transactions glow.
 - The **fee key** (ten swatches with their lower bounds) appears next to every fee visual.

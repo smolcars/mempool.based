@@ -1,4 +1,4 @@
-import { h, $, initChrome, params, feeBand, fmtRate, feeChip, feeVar, group, btc, sats, hash, hashFull, utc, cssVar, reducedMotion } from "./common.js";
+import { h, $, initChrome, params, feeBand, fmtRate, feeChip, feeVar, group, btc, sats, hash, hashFull, utc, cssVar, reducedMotion, page } from "./common.js";
 import { reseed, hex, address, summarize, blockTxs, TIP } from "./data.js";
 
 initChrome();
@@ -45,7 +45,7 @@ function render() {
   notice.hidden = state !== "replaced";
   if (state === "replaced") {
     notice.replaceChildren(icon("negative"),
-      h("p", {}, "This version was replaced by ", hash(B.txid, { href: "tx.html?state=confirmed", copy: false }),
+      h("p", {}, "This version was replaced by ", hash(B.txid, { href: page("tx.html?state=confirmed"), copy: false }),
         ", which pays ", h("strong", {}, `${fmtRate(B.rate)} sat/vB`), "."));
   }
 

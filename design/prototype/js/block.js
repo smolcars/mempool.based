@@ -1,4 +1,4 @@
-import { h, $, initChrome, params, feeBand, fmtRate, feeChip, group, btc, bytes, hash, hashFull, utc, ago, cssVar, reducedMotion } from "./common.js";
+import { h, $, initChrome, params, feeBand, fmtRate, feeChip, group, btc, bytes, hash, hashFull, utc, ago, cssVar, reducedMotion, page } from "./common.js";
 import { reseed, hex, blockTxs, summarize, pool, TIP } from "./data.js";
 import { feeKey, showTip, hideTip } from "./parts.js";
 
@@ -19,9 +19,9 @@ const all = [coinbase, ...txs];
 $("#height").textContent = group(height);
 $("#block-hash").append(hashFull("00000000000000000000" + hex(44)));
 $("#prev-h").textContent = group(height - 1);
-$("#prev").href = `block.html?h=${height - 1}`;
+$("#prev").href = page(`block.html?h=${height - 1}`);
 if (height >= TIP) $("#next").hidden = true;
-else { $("#next-h").textContent = group(height + 1); $("#next").href = `block.html?h=${height + 1}`; }
+else { $("#next-h").textContent = group(height + 1); $("#next").href = page(`block.html?h=${height + 1}`); }
 
 const weight = Math.round(sum.vsize * 3.98);
 const facts = [
@@ -78,11 +78,11 @@ function colors() {
 }
 
 function draw() {
-  const box = canvas.parentElement.getBoundingClientRect();
+  const width = canvas.clientWidth; // the canvas content box, the same width txAt() maps pointers against
   const dpr = devicePixelRatio || 1;
-  const cell = box.width / COLS;
+  const cell = width / COLS;
   canvas.style.setProperty("height", `${rows * cell}px`);
-  canvas.width = Math.round(box.width * dpr);
+  canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(rows * cell * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const pal = colors();
@@ -134,7 +134,7 @@ canvas.addEventListener("pointermove", (ev) => {
     : [`${fmtRate(t.rate)} sat/vB`, hashShort(t.txid), `${group(t.vsize)} vB, fee ${group(t.fee)} sats`], ev.clientX, ev.clientY);
 });
 canvas.addEventListener("pointerleave", () => { highlight = -1; draw(); hideTip(); });
-canvas.addEventListener("click", (ev) => { if (txAt(ev) >= 0) location.href = "tx.html"; });
+canvas.addEventListener("click", (ev) => { if (txAt(ev) >= 0) location.href = page("tx.html"); });
 const hashShort = (s) => `${s.slice(0, 8)}…${s.slice(-8)}`;
 
 $("#feekey").append(feeKey());
@@ -148,7 +148,7 @@ function more() {
   tbody.append(...next.map((t, k) => {
     const i = listed + k;
     const tr = h("tr", { onpointerenter: () => { highlight = i; draw(); }, onpointerleave: () => { highlight = -1; draw(); } },
-      h("td", {}, hash(t.txid, { href: "tx.html" })),
+      h("td", {}, hash(t.txid, { href: page("tx.html") })),
       h("td", {}, t.coinbase ? h("span", { class: "muted" }, "Coinbase") : feeChip(t.rate, false)),
       h("td", { class: "num-col num" }, t.coinbase ? "" : group(t.fee)),
       h("td", { class: "num-col num" }, group(t.vsize)),
