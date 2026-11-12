@@ -41,7 +41,7 @@ Refined when M1 lands.
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | doing |
+| MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | done ([#20](https://github.com/smolcars/mempool.based/pull/20)) |
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | todo |
 | MP3 | Binary WebSocket deltas for projected blocks | MP2, S3 | todo |
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
