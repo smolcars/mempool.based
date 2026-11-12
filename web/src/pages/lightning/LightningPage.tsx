@@ -343,7 +343,9 @@ function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
             <Show when={dataFrom(props.s) !== undefined}>
               <span class="ln-coverage__swatch" aria-hidden="true" />
             </Show>
-            {text()}
+            {from() === undefined
+              ? text()
+              : `Everything recorded, since ${formatMoment(props.s.first ?? 0)}.`}
           </p>
         )}
       </Show>

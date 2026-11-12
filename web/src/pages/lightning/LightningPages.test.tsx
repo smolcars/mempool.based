@@ -161,7 +161,7 @@ describe("the overview", () => {
 
   it("draws ten minutes of history from where it starts, hatching before", async () => {
     const el = mount(() => <LightningPage />, "/lightning");
-    await shows(el, "This server has recorded the network since 12 Nov 2026, 18:30 UTC");
+    await shows(el, "Everything recorded, since 12 Nov 2026, 18:30 UTC");
     await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
     // Fitted to what is recorded: "Recorded" is the choice marked, never "1 w" for a narrower view.
     expect(el.querySelector(".ln-picker [aria-current=page]")?.textContent).toBe(

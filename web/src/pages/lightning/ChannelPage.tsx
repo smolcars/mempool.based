@@ -140,10 +140,7 @@ function Body(props: { channel: ChannelDetail }) {
                 fallback={
                   <>
                     Not looked up yet
-                    <span class="ln-fact__sub">
-                      This server asks the node for each channel's funding transaction in the
-                      background.
-                    </span>
+                    <span class="ln-fact__sub">Asked of the node in the background.</span>
                   </>
                 }
               >
@@ -168,10 +165,12 @@ function Body(props: { channel: ChannelDetail }) {
             <dt>Checked against the chain</dt>
             <dd>
               Yes
-              <span class="ln-fact__sub">
-                Its funding output pays the two keys the channel was announced with; the capacity is
-                that output's value.
-              </span>
+              <More label="What this checks">
+                <p>
+                  Its funding output pays the two keys the channel was announced with; the capacity
+                  is that output's value.
+                </p>
+              </More>
             </dd>
           </div>
         </dl>

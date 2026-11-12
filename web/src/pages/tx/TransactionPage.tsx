@@ -14,6 +14,7 @@ import { Amount, Sats } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Hash, HashFull } from "../../components/Hash";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
@@ -1031,10 +1032,12 @@ function Body(props: {
                     <Match when={confirmed()}>No: it is confirmed</Match>
                     <Match when={true}>
                       Yes, until it confirms
-                      <span class="tx-fact__sub">
-                        Nodes relay a replacement that pays more, whatever this transaction's
-                        sequence numbers say (full replace-by-fee).
-                      </span>
+                      <More label="Why">
+                        <p>
+                          Nodes relay a replacement that pays more, whatever this transaction's
+                          sequence numbers say (full replace-by-fee).
+                        </p>
+                      </More>
                     </Match>
                   </Switch>
                 </dd>
