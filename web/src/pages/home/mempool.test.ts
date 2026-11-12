@@ -69,32 +69,58 @@ describe("ladderPos", () => {
 });
 
 describe("stackLabels", () => {
-  it("puts close labels in separate rows and far ones in the first", () => {
+  it("lifts a label over the stem of a pin just to its right", () => {
+    // Close pins: the right one keeps the low row, the left one rises above its stem.
     const out = stackLabels(
       [
         { x: 0, width: 40 },
         { x: 30, width: 40 },
-        { x: 60, width: 40 },
+      ],
+      400,
+    );
+    expect(out).toEqual([
+      { row: 1, flip: false },
+      { row: 0, flip: false },
+    ]);
+  });
+
+  it("keeps far-apart labels in the first row", () => {
+    const out = stackLabels(
+      [
+        { x: 0, width: 40 },
+        { x: 100, width: 40 },
         { x: 200, width: 40 },
       ],
       400,
     );
-    expect(out.map((o) => o.row)).toEqual([0, 1, 0, 0]);
+    expect(out.map((o) => o.row)).toEqual([0, 0, 0]);
   });
 
-  it("flips a label that would run past the end", () => {
-    expect(stackLabels([{ x: 390, width: 40 }], 400)).toEqual([{ row: 0, flip: true }]);
-  });
-
-  it("works in order of position whatever order the pins come in", () => {
-    const out = stackLabels(
-      [
-        { x: 30, width: 40 },
-        { x: 0, width: 40 },
-      ],
-      400,
-    );
-    expect(out.map((o) => o.row)).toEqual([1, 0]);
+  it("never lets a label cover a stem that reaches its row, or a stem cross a label below its top", () => {
+    const pins = [
+      { x: 10, width: 40 },
+      { x: 25, width: 40 },
+      { x: 40, width: 40 },
+      { x: 380, width: 40 },
+    ];
+    const out = stackLabels(pins, 400);
+    const spans = pins.map((p, i) => {
+      const flip = out[i]?.flip;
+      return {
+        x: p.x,
+        row: out[i]?.row ?? 0,
+        from: flip ? p.x - 52 : p.x,
+        to: flip ? p.x : p.x + 52,
+      };
+    });
+    for (const a of spans) {
+      for (const b of spans) {
+        if (a === b) continue;
+        expect(a.row === b.row && a.from < b.to && b.from < a.to).toBe(false);
+        expect(b.row >= a.row && b.x > a.from && b.x < a.to).toBe(false);
+      }
+    }
+    expect(out[3]?.flip).toBe(true);
   });
 });
 

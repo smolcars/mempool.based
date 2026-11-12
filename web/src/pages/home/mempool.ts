@@ -123,27 +123,39 @@ export function ladderPos(rate: number): number {
 }
 
 /**
- * Stacks pin labels into rows so none overlap: each label is placed in the first row where it fits,
- * and flips to the left of its pin when it would run past the end. Positions and widths in px.
+ * Stacks pin labels into rows so nothing collides. A pin's stem rises from the scale to its label's
+ * row, so a label may not cover another label in its row, nor a stem that reaches its row, and a
+ * stem may not pass through a label below its top. Pins are placed right to left, each in the
+ * lowest row that works; a label flips to the left of its pin when it would run past the end.
+ * Positions and widths in px; rows count up from the scale.
  */
 export function stackLabels(
   pins: readonly { x: number; width: number }[],
   trackWidth: number,
   gap = 12,
 ): { row: number; flip: boolean }[] {
-  const rowEnds: number[] = [];
-  const placed: { row: number; flip: boolean }[] = pins.map(() => ({ row: 0, flip: false }));
-  // Left to right, so a row's end is always the rightmost label in it.
-  const order = pins.map((_, i) => i).sort((a, b) => (pins[a]?.x ?? 0) - (pins[b]?.x ?? 0));
+  const placed: { x: number; from: number; to: number; row: number }[] = [];
+  const out: { row: number; flip: boolean }[] = pins.map(() => ({ row: 0, flip: false }));
+  const order = pins.map((_, i) => i).sort((a, b) => (pins[b]?.x ?? 0) - (pins[a]?.x ?? 0));
   for (const i of order) {
     const { x, width } = pins[i] ?? { x: 0, width: 0 };
-    const w = width + gap;
-    const flip = x + w > trackWidth;
-    const [from, to] = flip ? [x - w, x] : [x, x + w];
-    let row = rowEnds.findIndex((end) => end < from);
-    if (row === -1) row = rowEnds.push(to) - 1;
-    else rowEnds[row] = to;
-    placed[i] = { row, flip };
+    const flip = x + width + gap > trackWidth;
+    const [from, to] = flip ? [x - width - gap, x] : [x, x + width + gap];
+    const fits = (row: number, strict: boolean) =>
+      placed.every(
+        (p) =>
+          !(p.row === row && p.from < to && from < p.to) &&
+          !(p.row >= row && p.x > from && p.x < to) &&
+          (!strict || !(p.row <= row && x > p.from && x < p.to)),
+      );
+    let row = 0;
+    while (row < pins.length && !fits(row, true)) row++;
+    if (row === pins.length) {
+      row = 0;
+      while (!fits(row, false)) row++;
+    }
+    placed.push({ x, from, to, row });
+    out[i] = { row, flip };
   }
-  return placed;
+  return out;
 }
