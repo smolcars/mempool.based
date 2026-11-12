@@ -163,7 +163,10 @@ describe("the overview", () => {
     const el = mount(() => <LightningPage />, "/lightning");
     await shows(el, "This server has recorded the network since 12 Nov 2026, 18:30 UTC");
     await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
-    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("1 w: the last week");
+    // Fitted to what is recorded: "Recorded" is the choice marked, never "1 w" for a narrower view.
+    expect(el.querySelector(".ln-picker [aria-current=page]")?.textContent).toBe(
+      "Recorded: since this server began recording",
+    );
   });
 
   it("draws a missing ten minutes as a gap, never a line across it", async () => {
@@ -371,7 +374,7 @@ describe("search and rankings", () => {
     replies["/app/lightning/rankings/age?limit=100"] = json({ by: "age", nodes: top });
     const el = mount(() => <RankingsPage />, "/lightning/rankings?by=age");
     await shows(el, "Binance");
-    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("Age");
+    expect(el.querySelector(".ln-picker [aria-current=page]")?.textContent).toBe("Age");
     expect(text(el)).toContain("27 Nov 2019");
   });
 });

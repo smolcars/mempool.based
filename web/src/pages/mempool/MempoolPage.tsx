@@ -90,7 +90,14 @@ function MempoolHistory(props: { network: Network }) {
     <div class="wrap mempool">
       <header class="mempool-head">
         <h1>Mempool history</h1>
-        <IntervalPicker interval={interval()} />
+        <IntervalPicker
+          interval={interval()}
+          fitted={
+            search["interval"] === undefined &&
+            answer() !== undefined &&
+            dataFrom(answer() as History) !== undefined
+          }
+        />
       </header>
       <Show
         when={request.state !== "errored"}
@@ -117,17 +124,29 @@ function MempoolHistory(props: { network: Network }) {
   );
 }
 
-function IntervalPicker(props: { interval: Interval }) {
+/**
+ * The periods. A view fitted to what is recorded has its own choice, "Recorded", and is the one
+ * marked current: a period's name always means its whole width, never a narrower view.
+ */
+function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
   return (
     <nav class="mempool-intervals" aria-label="Period">
       <ul>
+        <Show when={props.fitted}>
+          <li>
+            <Link class="mempool-intervals__item" href={paths.mempool()} aria-current="page">
+              Recorded
+              <span class="visually-hidden">: since this server began recording</span>
+            </Link>
+          </li>
+        </Show>
         <For each={INTERVALS}>
           {(p) => (
             <li>
               <Link
                 class="mempool-intervals__item"
                 href={paths.mempool(p.id)}
-                aria-current={p.id === props.interval.id ? "page" : undefined}
+                aria-current={!props.fitted && p.id === props.interval.id ? "page" : undefined}
               >
                 {p.label}
                 <span class="visually-hidden">: {p.words}</span>

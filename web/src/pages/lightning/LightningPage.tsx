@@ -38,17 +38,23 @@ import {
   LightningSearch,
   NodeName,
   nodeColumns,
+  LightningNav,
+  rememberList,
   Stat,
   VERIFIED_NOTE,
 } from "./parts";
 
 const Chart = lazy(() => import("../../components/chart/Chart"));
 
+/** Rows in each of the overview's lists: a preview; the rankings hold the rest. */
+const PREVIEW = 5;
+
 export default function LightningPage() {
   usePageTitle(() => "Lightning");
   const network = useNetwork();
   return (
     <div class="wrap ln">
+      <LightningNav here="overview" />
       <header class="ln-head">
         <h1>Lightning</h1>
         <LightningSearch />
@@ -66,6 +72,7 @@ export default function LightningPage() {
 }
 
 function Overview(props: { network: Network }) {
+  rememberList(paths.lightning(), "Lightning overview");
   const [overview, { refetch }] = createRequest(
     () => props.network,
     (n, signal) => ask(n, "/overview", isOverview, signal),
@@ -87,35 +94,31 @@ function Overview(props: { network: Network }) {
           {(o) => <Now stats={o().statistics} />}
         </Show>
       </Show>
+      <History network={props.network} />
       <Show when={overview.latest}>
         {(o) => (
           <>
             <div class="ln-pair">
               <section aria-labelledby="ln-top-capacity-title">
                 <SectionHeader title="Largest nodes" id="ln-top-capacity-title">
-                  By capacity
+                  <Link href={paths.lightningRankings("capacity")}>Top 100</Link>
                 </SectionHeader>
                 <TopTable
-                  rows={o().top_capacity}
-                  caption="The ten nodes with the most capacity"
+                  rows={o().top_capacity.slice(0, PREVIEW)}
+                  caption="The five nodes with the most capacity"
                   by="capacity"
                 />
-                <p class="ln-more">
-                  <Link href={paths.lightningRankings("capacity")}>The top 100 by capacity</Link>
-                </p>
               </section>
               <section aria-labelledby="ln-top-channels-title">
                 <SectionHeader title="Most connected nodes" id="ln-top-channels-title">
-                  By open channels
+                  <Link href={paths.lightningRankings("channels")}>Top 100</Link>
                 </SectionHeader>
                 <TopTable
-                  rows={o().top_channels}
-                  caption="The ten nodes with the most channels"
+                  rows={o().top_channels.slice(0, PREVIEW)}
+                  caption="The five nodes with the most channels"
                   by="channels"
                 />
                 <p class="ln-more">
-                  <Link href={paths.lightningRankings("channels")}>The top 100 by channels</Link>
-                  {" · "}
                   <Link href={paths.lightningRankings("age")}>The oldest nodes</Link>
                 </p>
               </section>
@@ -125,19 +128,18 @@ function Overview(props: { network: Network }) {
                 <SectionHeader title="Newest channels" id="ln-opened-title">
                   By funding block
                 </SectionHeader>
-                <ChannelTable rows={o().opened} kind="opened" />
+                <ChannelTable rows={o().opened.slice(0, PREVIEW)} kind="opened" />
               </section>
               <section aria-labelledby="ln-closed-title">
                 <SectionHeader title="Newest closes" id="ln-closed-title">
                   Seen on the chain
                 </SectionHeader>
-                <ChannelTable rows={o().closed} kind="closed" />
+                <ChannelTable rows={o().closed.slice(0, PREVIEW)} kind="closed" />
               </section>
             </div>
           </>
         )}
       </Show>
-      <History network={props.network} />
     </>
   );
 }
@@ -226,21 +228,34 @@ function History(props: { network: Network }) {
     (id, signal) => ask(props.network, `/statistics/${id}`, isSeries, signal),
   );
   const answer = () => series.latest;
+  const fitted = () => {
+    const a = answer();
+    return search["interval"] === undefined && a !== undefined && dataFrom(a) !== undefined;
+  };
   return (
     <section aria-labelledby="ln-history-title">
       <SectionHeader title="Over time" id="ln-history-title">
         Every ten minutes
       </SectionHeader>
       <div class="ln-section-head">
+        {/* A view fitted to what is recorded has its own choice: a period's name is its whole width. */}
         <nav class="ln-picker" aria-label="Period">
           <ul>
+            <Show when={fitted()}>
+              <li>
+                <Link class="ln-picker__item" href={paths.lightning()} aria-current="page">
+                  Recorded
+                  <span class="visually-hidden">: since this server began recording</span>
+                </Link>
+              </li>
+            </Show>
             <For each={INTERVALS}>
               {(p) => (
                 <li>
                   <Link
                     class="ln-picker__item"
                     href={paths.lightning(p.id)}
-                    aria-current={p.id === interval().id ? "page" : undefined}
+                    aria-current={!fitted() && p.id === interval().id ? "page" : undefined}
                   >
                     {p.label}
                     <span class="visually-hidden">: {p.words}</span>

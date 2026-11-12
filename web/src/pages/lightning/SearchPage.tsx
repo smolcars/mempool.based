@@ -4,14 +4,13 @@ import { useSearchParams } from "@solidjs/router";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
-import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { createRequest } from "../../lib/api";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isSearchResult, type SearchResult, searchProblem, STATE_WORDS } from "./lightning";
-import { ask, ChannelLink, Gate, LightningSearch, nodeColumns } from "./parts";
+import { ask, ChannelLink, Gate, LightningSearch, nodeColumns, LightningNav } from "./parts";
 
 export default function SearchPage() {
   const [search] = useSearchParams();
@@ -23,9 +22,7 @@ export default function SearchPage() {
   usePageTitle(() => "Lightning search");
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="search" />
       <header class="ln-head">
         <h1>Search Lightning</h1>
         <LightningSearch value={q()} />

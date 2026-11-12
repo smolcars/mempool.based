@@ -107,6 +107,10 @@ describe("mempool history page", () => {
     await drawn(el);
     expect(text(el)).toContain("The charts start there");
     expect(text(el)).not.toContain("No data stored");
+    // The choice marked is "Recorded", not "24 h", which means the whole day.
+    expect(el.querySelector(".mempool-intervals [aria-current=page]")?.textContent).toBe(
+      "Recorded: since this server began recording",
+    );
   });
 
   it("says when nothing has been recorded at all", async () => {

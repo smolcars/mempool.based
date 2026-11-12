@@ -1,6 +1,6 @@
 // The 100 largest, best-connected or oldest Lightning nodes (docs/API.md "Rankings").
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { formatDay } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
@@ -11,7 +11,7 @@ import { groupDigits } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isRankings, parseRanking, RANKINGS, type RankedNode } from "./lightning";
-import { ask, Gate, nodeColumns, VERIFIED_NOTE } from "./parts";
+import { ask, Gate, nodeColumns, VERIFIED_NOTE, LightningNav, rememberList } from "./parts";
 
 export default function RankingsPage() {
   const [search] = useSearchParams();
@@ -20,9 +20,7 @@ export default function RankingsPage() {
   usePageTitle(() => `Lightning nodes ${by().words}`);
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="rankings" />
       <header class="ln-head">
         <h1>Lightning nodes</h1>
         <nav class="ln-picker" aria-label="Ranked by">
@@ -55,6 +53,10 @@ export default function RankingsPage() {
 }
 
 function Ranked(props: { network: Network; by: string }) {
+  createEffect(
+    () => props.by,
+    (by) => rememberList(paths.lightningRankings(by), `Nodes ${parseRanking(by).words}`),
+  );
   const [ranked, { refetch }] = createRequest(
     () => props.by,
     (by, signal) => ask(props.network, `/rankings/${by}?limit=100`, isRankings, signal),

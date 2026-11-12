@@ -8,15 +8,27 @@ test("the home page links to the mempool's history, which switches interval in t
   await expect(page).toHaveURL(/\/regtest\/mempool$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mempool history");
   const periods = page.getByRole("navigation", { name: "Period" });
-  await expect(periods.getByRole("link", { name: /the last 24 hours/ })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
   // A young server has nothing yet or its first minutes: either is an answer, never an error.
   const answered = page
     .getByText("Nothing recorded yet")
     .or(page.getByRole("slider", { name: /The mempool's size by fee rate/ }));
   await expect(answered).toBeVisible();
+  // Its records begin inside the day, so the view starts where they do, and says so in the
+  // choice it marks: "24 h" is kept for the whole day.
+  const recorded = periods.getByRole("link", { name: /^Recorded/ });
+  await expect(recorded).toHaveAttribute("aria-current", "page");
+  await expect(periods.getByRole("link", { name: /the last 24 hours/ })).not.toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await periods.getByRole("link", { name: /the last 24 hours/ }).click();
+  await expect(page).toHaveURL(/\/regtest\/mempool\?interval=24h$/);
+  await expect(periods.getByRole("link", { name: /the last 24 hours/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(recorded).toHaveCount(0);
+  await expect(page.getByText("No data stored").first()).toBeVisible();
   await periods.getByRole("link", { name: /the last 2 hours/ }).click();
   await expect(page).toHaveURL(/\/regtest\/mempool\?interval=2h$/);
   await expect(periods.getByRole("link", { name: /the last 2 hours/ })).toHaveAttribute(

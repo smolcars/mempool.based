@@ -5,7 +5,6 @@ import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { HashFull } from "../../components/Hash";
-import { Link } from "../../components/Link";
 import { Pagination } from "../../components/Pagination";
 import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
@@ -29,7 +28,16 @@ import {
   type NodeDetail,
   STATE_WORDS,
 } from "./lightning";
-import { ask, BlockLink, ChannelLink, closesInWords, Gate, NodeName, Stat } from "./parts";
+import {
+  ask,
+  BlockLink,
+  ChannelLink,
+  closesInWords,
+  Gate,
+  NodeName,
+  Stat,
+  LightningNav,
+} from "./parts";
 
 export default function NodePage() {
   const params = useParams<{ key: string }>();
@@ -37,9 +45,7 @@ export default function NodePage() {
   const key = () => (params.key ?? "").toLowerCase();
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="detail" />
       <Show
         when={isPublicKey(key())}
         fallback={<NotFound title="Not a node's public key" text={BAD_KEY} />}

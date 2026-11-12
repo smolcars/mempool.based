@@ -297,3 +297,44 @@ export function closesInWords(c: {
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : "none";
 }
+
+/** The last Lightning list the reader looked at, so a node or channel can lead back to it. */
+let lastList: { href: string; label: string } | undefined;
+
+/** Remembers a list page as where the reader came from; call it when one is shown. */
+export function rememberList(href: string, label: string): void {
+  lastList = { href, label };
+}
+
+/**
+ * Lightning's own way around: its overview and its rankings, as a short row of links, and on a node
+ * or channel a way back to the list the reader came from. One line, never a tall band.
+ */
+export function LightningNav(props: { here: "overview" | "rankings" | "search" | "detail" }) {
+  const back = () => (props.here === "detail" ? lastList : undefined);
+  return (
+    <nav class="ln-nav" aria-label="Lightning">
+      <Show when={back()}>
+        {(b) => (
+          <Link class="ln-nav__back" href={b().href}>
+            ← {b().label}
+          </Link>
+        )}
+      </Show>
+      <Link
+        class="ln-nav__item"
+        href={paths.lightning()}
+        aria-current={props.here === "overview" ? "page" : undefined}
+      >
+        Overview
+      </Link>
+      <Link
+        class="ln-nav__item"
+        href={paths.lightningRankings()}
+        aria-current={props.here === "rankings" ? "page" : undefined}
+      >
+        Rankings
+      </Link>
+    </nav>
+  );
+}

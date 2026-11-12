@@ -456,3 +456,32 @@
     white-space: normal;
   }
 }
+
+@layer pages {
+  /* Lightning's own way around: one short row above the title. */
+  .ln-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--space-4);
+    margin-bottom: calc(var(--space-6) * -1 + var(--space-2));
+    font-size: var(--text-sm);
+  }
+  .ln-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+  .ln-nav a:hover {
+    color: var(--color-text);
+  }
+  .ln-nav__back {
+    margin-right: auto;
+  }
+  .ln-nav__item[aria-current="page"] {
+    color: var(--color-text);
+    box-shadow: inset 0 -2px 0 var(--color-accent);
+  }
+}

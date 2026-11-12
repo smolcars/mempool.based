@@ -5,7 +5,6 @@ import { For, Match, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
-import { Link } from "../../components/Link";
 import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
@@ -26,7 +25,7 @@ import {
   STATE_WHY,
   STATE_WORDS,
 } from "./lightning";
-import { ask, BlockLink, Gate, NodeName, Stat } from "./parts";
+import { ask, BlockLink, Gate, NodeName, Stat, LightningNav } from "./parts";
 
 export default function ChannelPage() {
   const params = useParams<{ id: string }>();
@@ -35,9 +34,7 @@ export default function ChannelPage() {
   usePageTitle(() => `Lightning channel ${id()}`);
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="detail" />
       <Show
         when={isChannelId(id())}
         fallback={
