@@ -139,7 +139,7 @@ function NetworkNow(props: { network: Network; hashrates: MiningData<Hashrates> 
               )}
             </Show>
           </Stat>
-          <Stat label="Difficulty" sub={h() ? "Times the minimum" : undefined}>
+          <Stat label="Difficulty">
             <Show when={h()}>
               {(a) => <span class="num">{difficultyFull(a().currentDifficulty)}</span>}
             </Show>
@@ -179,6 +179,7 @@ function HashrateChart(props: {
       <Section
         what="the hashrate"
         reserve={chartHeight(260)}
+        hold={(series()?.x.length ?? 0) > 0}
         ready={series() !== undefined}
         error={props.hashrates.error()}
         retry={props.hashrates.retry}
@@ -355,6 +356,7 @@ function Pools(props: {
                 <Section
                   what="the weekly shares"
                   reserve={chartHeight(260)}
+                  hold={(layers()?.x.length ?? 0) > 0}
                   ready={layers() !== undefined}
                   error={weeks.error()}
                   retry={weeks.retry}
@@ -483,6 +485,14 @@ function OverTime(props: { period: Period; network: Network }) {
   const feePoints = createMemo(() => byTime(fees.answer()?.value));
   const rewardPoints = createMemo(() => byTime(rewards.answer()?.value));
   const ratePoints = createMemo(() => byTime(rates.answer()?.value));
+  /** Points in the chart shown: none means its slot need not keep a chart's height. */
+  const points = () =>
+    ({
+      fees: feePoints()?.length,
+      rewards: rewardPoints()?.length,
+      rates: ratePoints()?.length,
+      sizes: sizePoints()?.sizes.length,
+    })[shown()] ?? 0;
   const sizePoints = createMemo(() => {
     const v = sizes.answer()?.value;
     return v ? { sizes: byTime(v.sizes) ?? [], weights: byTime(v.weights) ?? [] } : undefined;
@@ -523,6 +533,7 @@ function OverTime(props: { period: Period; network: Network }) {
       <Section
         what="the block figures"
         reserve={chartHeight(240)}
+        hold={points() > 0}
         ready={data().answer() !== undefined}
         error={data().error()}
         retry={data().retry}

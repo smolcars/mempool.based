@@ -69,7 +69,7 @@ export function Section(props: {
   busy: boolean;
   /** The height the content will take (a CSS length), held while it loads so nothing moves. */
   reserve: string;
-  /** Keep that height once loaded too: for charts, whose height is known. Default true. */
+  /** Keep that height once loaded too, as for a chart, whose height is known. Default true. */
   hold?: boolean;
   children: JSX.Element;
 }) {

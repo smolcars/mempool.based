@@ -190,6 +190,7 @@ function Pool(props: { network: Network; slug: string }) {
           <Section
             what="the pool's weeks"
             reserve={`calc(${chartHeight(240)} + 4.75rem)`}
+            hold={series().x.length > 0}
             ready={weeks.answer() !== undefined}
             error={weeks.error()}
             retry={weeks.retry}
