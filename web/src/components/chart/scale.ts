@@ -186,9 +186,9 @@ export function formatSi(v: number, unit: string, digits = 3): string {
   const sign = v < 0 ? "−" : "";
   let a = Math.abs(v);
   // So small that its zeros would run wider than a phone (regtest's difficulty, 0.00000000046565),
-  // or past the last prefix: the power of ten keeps it short.
+  // or past the last prefix: the power of ten keeps it short, and three digits say its size.
   if (a > 0 && (a < 0.001 || a >= 999.5e24)) {
-    return `${sign}${formatPowerOfTen(a, digits)}${unit ? `${NNBSP}${unit}` : ""}`;
+    return `${sign}${formatPowerOfTen(a, Math.min(digits, 3))}${unit ? `${NNBSP}${unit}` : ""}`;
   }
   let i = 0;
   while (a >= 999.5 && i < PREFIXES.length - 1) {

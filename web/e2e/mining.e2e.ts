@@ -32,9 +32,10 @@ test("regtest's mining page fits a phone without scrolling sideways", async ({ p
   // Regtest's difficulty, 0.00000000046565 written out, ran 10 to 19 px past a phone's width.
   for (const width of [320, 360]) {
     await page.setViewportSize({ width, height: 700 });
-    await page.goto("/regtest/mining");
-    await expect(page.getByText(/^4\.6565\s×\s10⁻¹⁰$/).first()).toBeVisible();
-    await expect(page.getByRole("slider", { name: /Hashrate and difficulty/ })).toBeVisible({
+    // All of history, so every section holds figures.
+    await page.goto("/regtest/mining?period=all");
+    await expect(page.getByText(/^4\.66\s×\s10⁻¹⁰$/)).toBeVisible();
+    await expect(page.getByRole("table", { name: /Pools ranked by blocks found/ })).toBeVisible({
       timeout: 30_000,
     });
     const scrolled = await page.evaluate(() => document.documentElement.scrollWidth);
