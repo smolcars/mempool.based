@@ -11,6 +11,10 @@
 //! Lookups go to rbitcoin's output-by-position routes through a [`Chain`], batched and
 //! rate-limited.
 //!
+//! **Closed channels leave the graph** when the block that spends their funding output arrives.
+//! Opens and closes, each close with how it happened ([`CloseKind`]), are kept as a history:
+//! [`Peer::history`] streams it and [`Peer::recent`] keeps the newest records.
+//!
 //! ```no_run
 //! # async fn f() -> std::io::Result<()> {
 //! use ln::{Config, Peer};
@@ -24,6 +28,7 @@
 //! ```
 
 mod chain;
+mod closes;
 mod gossip;
 mod log;
 mod peer;
@@ -48,6 +53,10 @@ pub use lightning::routing::gossip::{
 pub use lightning::util::logger::Level;
 
 pub use chain::Chain;
+pub use closes::{
+    BlockRef, CloseKind, Closed, Closes, History, Opened, Record, classify, funding_program,
+    revoked,
+};
 pub use log::LdkRecord;
 pub use peer::Peer;
 pub use store::GraphLoad;
@@ -207,6 +216,10 @@ pub struct Config {
     pub cache_entries: usize,
     /// How long a lookup result is kept.
     pub cache_ttl: Duration,
+    /// History records kept for [`Peer::recent`], and the room of [`Peer::history`]'s stream.
+    pub history: usize,
+    /// How often the close-watcher asks the node for its tip.
+    pub tip_every: Duration,
 }
 
 impl Config {
@@ -230,6 +243,8 @@ impl Config {
             max_early: 1_000,
             cache_entries: 100_000,
             cache_ttl: Duration::from_secs(3600),
+            history: 10_000,
+            tip_every: Duration::from_secs(10),
         }
     }
 }
@@ -246,6 +261,7 @@ pub enum Change {
 #[derive(Clone, Debug)]
 pub struct Status {
     pub validation: Validation,
+    pub closes: Closes,
     /// The graph is complete enough to show: validation is caught up, and the graph came from a
     /// recent file or every channel a peer listed was requested and no new channel has arrived for
     /// [`Config::sync_settle`].
@@ -362,5 +378,23 @@ pub enum Event {
         failures: u32,
         error: String,
         pending: usize,
+    },
+    /// A request of the close-watcher failed. It is retried after a backoff (1 s, doubling to
+    /// 60 s); nothing is lost meanwhile.
+    CloseWatchFailed {
+        failures: u32,
+        error: String,
+    },
+    /// Blocks the close-watcher had read left the best chain; what they did was undone.
+    Reorg {
+        fork: u32,
+        disconnected: u32,
+    },
+    /// The close-watcher did not read blocks `from` (exclusive) to `to`: more than ten new ones,
+    /// or a reorg deeper than its window. `rechecked` watched channels go to the catch-up.
+    CloseWatchReset {
+        from: u32,
+        to: u32,
+        rechecked: usize,
     },
 }

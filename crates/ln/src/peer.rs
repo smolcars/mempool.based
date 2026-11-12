@@ -16,12 +16,13 @@ use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::chain::{self, Chain};
+use crate::closes;
 use crate::gossip::{Gossip, Graph, Replay};
 use crate::log::LogSink;
 use crate::store::{self, GraphLoad};
 use crate::{
-    Change, Config, Event, PeerAddr, PeerStatus, PublicKey, ReadOnlyNetworkGraph, Stats, Status,
-    Totals, Validation,
+    Change, Closes, Config, Event, PeerAddr, PeerStatus, PublicKey, ReadOnlyNetworkGraph, Record,
+    Stats, Status, Totals, Validation,
 };
 
 type Pm = PeerManager<
@@ -121,8 +122,14 @@ impl Peer {
         ));
         let lookups = tokio::spawn(chain::run(
             Arc::clone(&gossip),
+            chain.clone(),
+            config.lookup_interval,
+        ));
+        let watcher = tokio::spawn(closes::run(
+            Arc::clone(&gossip),
             chain,
             config.lookup_interval,
+            config.tip_every,
         ));
 
         let keys = Arc::new(KeysManager::new(
@@ -146,6 +153,7 @@ impl Peer {
 
         let status = watch::channel(Status {
             validation: Validation::default(),
+            closes: Closes::default(),
             synced: false,
             nodes: 0,
             channels: 0,
@@ -167,7 +175,7 @@ impl Peer {
         let task = tokio::spawn(supervise(
             Arc::clone(&shared),
             Arc::clone(&stop),
-            lookups,
+            [lookups, watcher],
             fresh_on_disk,
             caught_up_at,
         ));
@@ -195,6 +203,17 @@ impl Peer {
     /// Graph changes from now on. Read the graph first, then apply changes.
     pub fn changes(&self) -> broadcast::Receiver<Change> {
         self.shared.changes.subscribe()
+    }
+
+    /// Opens and closes from now on. A receiver that lags misses records: read [`Peer::recent`]
+    /// after the last sequence number it saw, and rescan the graph if that does not reach back.
+    pub fn history(&self) -> broadcast::Receiver<Record> {
+        self.shared.gossip.watch.subscribe()
+    }
+
+    /// The newest [`Config::history`] records after sequence number `after` (0 for all kept).
+    pub fn recent(&self, after: u64) -> Vec<Record> {
+        self.shared.gossip.watch.recent(after)
     }
 
     /// Disconnects every peer and writes the graph. Returns the bytes written. Dropping the peer
@@ -379,9 +398,14 @@ fn prune(shared: &Shared) -> usize {
         .unwrap_or_default()
         .as_secs();
     let p = prune_graph(shared.gossip.graph(), now);
+    let ro = shared.gossip.graph().read_only();
     for c in &p.channels {
+        if ro.channel(*c).is_none() {
+            shared.gossip.watch.forget(*c);
+        }
         let _ = shared.changes.send(Change::Channel(*c));
     }
+    drop(ro);
     for n in &p.nodes {
         let _ = shared.changes.send(Change::Node(*n));
     }
@@ -398,7 +422,7 @@ fn prune(shared: &Shared) -> usize {
 async fn supervise(
     shared: Arc<Shared>,
     stop: Arc<Notify>,
-    lookups: JoinHandle<()>,
+    tasks: [JoinHandle<()>; 2],
     fresh_on_disk: bool,
     mut caught_up_at: SystemTime,
 ) -> io::Result<u64> {
@@ -535,6 +559,7 @@ async fn supervise(
 
                 shared.status.send_replace(Status {
                     validation,
+                    closes: shared.gossip.watch.status(),
                     synced,
                     nodes,
                     channels,
@@ -558,7 +583,9 @@ async fn supervise(
             let _ = task.await;
         }
     }
-    lookups.abort();
+    for t in tasks {
+        t.abort();
+    }
     shared.pm.disconnect_all_peers();
     if shared.gossip.replaying() {
         // Keep the file: it still holds the channels not yet checked again.

@@ -13,10 +13,10 @@ We do not run LND or Core Lightning (a second daemon with a wallet and channel d
 1. **Connect.** The peer connects out to a small set of well-connected public Lightning nodes. Channel requests from peers are refused.
 2. **Sync.** Peers send the full graph, then live updates. LDK verifies every signature and maintains the network graph.
 3. **Validate.** For each announced channel, LDK asks whether the funding output exists, is unspent, is six blocks deep and pays the announced script. We answer from rbitcoin's position routes ([`RBITCOIN.md`](RBITCOIN.md)), which also give the capacity. A channel enters the graph only once it passes ([Validation](#validation)).
-4. **Track closes.** *Not built yet.* Every new block's inputs are checked against the set of known funding outputs. A match is a channel close, and the spending transaction's shape classifies it: cooperative, forced or penalty.
+4. **Track opens and closes.** Every new block's inputs are checked against the set of verified channels' funding outputs. A match is a channel close: the channel leaves the graph, and the spending transaction's shape classifies it: cooperative, force or (later) penalty. Opens and closes are kept as a history ([Opens and closes](#opens-and-closes)).
 5. **Store.** *Not built yet.* Nodes, channels, open and close records and periodic network totals go to SQLite. LDK's own serialized graph is kept for fast restarts (built: see [Files](#files)).
 
-Steps 1 to 3 and the graph file are the `ln` crate (`crates/ln`). It is a library: it does not log and is not wired into the server yet.
+Steps 1 to 4 and the graph file are the `ln` crate (`crates/ln`). It is a library: it does not log and is not wired into the server yet.
 
 ## Pieces of LDK used
 
@@ -81,10 +81,12 @@ For the tasks that follow, coded against `ln::Peer`:
 
 | Call | Gives |
 |---|---|
-| `Peer::start(Config, impl Chain)` | The running peer and what was loaded (`GraphLoad`). `Chain` is where funding outputs are looked up: implemented for `node::esplora::Esplora` |
+| `Peer::start(Config, impl Chain)` | The running peer and what was loaded (`GraphLoad`). `Chain` is where funding outputs are looked up and blocks and spends are read: implemented for `node::esplora::Esplora` |
 | `read(\|graph\| …)` | LDK's `ReadOnlyNetworkGraph`: nodes with alias, colour, addresses, features, last update; channels with both policies, short channel id and capacity (`capacity_sats`, always `Some`: every channel in it was verified). Gossip waits while the closure runs |
 | `changes()` | A stream of `Change::Channel(scid)` and `Change::Node(id)`: read the entry again; a missing entry was removed. A receiver that lags rescans |
-| `status()` | A watch of `Status`: `Validation` ([below](#states)), synced, counts, ceiling, every peer's connection and failures |
+| `status()` | A watch of `Status`: `Validation` ([below](#states)), `Closes` ([below](#status-and-events)), synced, counts, ceiling, every peer's connection and failures |
+| `history()` | A stream of `Record`s: each channel opened, closed, swept as a penalty, or undone by a reorg ([Opens and closes](#history)) |
+| `recent(after)` | The newest `Config::history` (10,000) records after a sequence number |
 | `events()` | `Event`s as data: periodic `Stats` (counts, validation, messages and bytes per second, totals), sync, peer, ceiling, save, prune and failed-lookup events, and LDK's own log records |
 | `shutdown()` | Disconnects and writes the graph. Dropping the peer does the same in the background |
 
@@ -119,7 +121,7 @@ Refusal reasons (`Rejected`):
 | Reason | What it means |
 |---|---|
 | `missing` | No output at that position, also once an early one is deep enough: an invented channel |
-| `spent` | The output exists but is spent: a **closed channel still being gossiped**, counted apart from an invented one. It never enters the graph; recording closes from new blocks is the next task |
+| `spent` | The output exists but is spent: a **closed channel still being gossiped**, counted apart from an invented one. It never enters the graph. A channel from the graph file found spent closed while the peer was down; its close is looked up ([Catch-up](#catch-up)) |
 | `wrong_script` | The output does not pay the announced keys: someone announced a real output as theirs |
 | `wrong_chain` | Announced for another chain's genesis |
 | `shallow` | Early while `max_early` announcements already waited |
@@ -189,6 +191,108 @@ A restart stopped 4 s into the replay (1,800 channels checked again) wrote nothi
 
 **Capacity.** The verified graph holds 3,231.11 BTC in 36,226 channels. CoinPaprika, from mempool.emzy.de, gave 3,203 BTC in 28,939 channels for 4 November 2026; Coinglass 3,456 BTC for 27 October. Capacity agrees within 1 % of the first, though our channel count is higher for the reasons above. Five channels sampled across the graph (from block 611,038 to 975,065, 100,000 to 10,000,000 sats) were checked by hand against their funding outputs on the node: each is an unspent P2WSH output at the announced height whose value is the capacity shown.
 
+## Opens and closes
+
+A graph is a snapshot; gossip is slow and unreliable about saying a channel ended. The chain is not: a channel ends when its funding output is spent, and the spending transaction says how. The crate watches every verified channel's funding output, removes a channel from the graph in the block that spends it, and keeps a history of opens and closes. It is `crates/ln/src/closes.rs`.
+
+### How closes are found
+
+A funding output pays the P2WSH hash of `2 <key1> <key2> 2 OP_CHECKMULTISIG`, and spending it reveals that 71-byte script as the last witness item. So the watcher reads each new block once (the raw block, one request) and, for every input whose witness ends with a two-of-two of compressed keys, hashes the script and looks the hash up in the set of watched outputs. There is no work per channel: the cost is one block, whatever the number of channels.
+
+A match is checked once more: a script can be paid twice (a splice may keep the funding keys, and anyone can send coins to a funding address), so the spent transaction's position is asked of the node (`/tx/:txid/merkle-proof`, one small request per match) and must be the short channel id's block and index, and the input's output index its own.
+
+**Why the script and not the outpoint.** Matching inputs by outpoint needs each channel's funding txid, which a short channel id does not contain, and the position route validation uses answers with the output (script, value, spent, block) but not its txid. Learning the txid costs two requests per channel (`/block-height/:h`, then `/block/:hash/txid/:index`): 72,000 requests for mainnet's 36,000 channels at every start, an hour and more at validation's pace. The script needs nothing: validation already holds it, since it checked the output pays it. Taproot channels have no such script, but they are not announced through today's gossip, so none is ever in the graph.
+
+The alternative, asking the node about every channel's output at each block, costs 121 requests and 18 MB per block at mainnet's size; reading the block costs one request and 1.7 MB.
+
+The newest block is learned by asking the node's tip every `Config::tip_every` (10 s, 64 bytes). A new tip brings one page of headers (4.4 KB, ten headers), which also shows a reorg, then each new block in turn.
+
+### How a close is classified
+
+| Kind | Recognised by | How sure |
+|---|---|---|
+| `Force` | The spending transaction is a commitment: BOLT 3 sets the top byte of its locktime to `0x20` and of its input's sequence to `0x80` (the obscured commitment number fills the rest) | Certain. Every LN-penalty implementation builds commitments this way, and no other transaction of the protocol carries both markers. Anchor channels change the outputs (two 330-sat anchors, a delayed `to_remote`), not the markers |
+| `Penalty` | Later: an output of that commitment is spent through its revocation path. `to_local` with witness `<sig> 1 <script>` (the script starts `OP_IF <revocation key>`); an HTLC output with `<sig> <revocation key> <script>`, the key hashing to the one its script names | Certain once seen: only the victim holds the revocation key, and only for a revoked commitment. Recorded as a `Penalty` record in the sweep's block; until then the close reads `Force` |
+| `Cooperative` | Not a commitment, and its only input is the funding output | Certain that both sides signed a transaction that is not a commitment. Likely a mutual close (legacy `closing_signed`, sequence `0xffffffff`, locktime 0; or `option_simple_close`, sequence `0xfffffffd`). A splice that only takes funds out has the same shape; telling them apart needs the next channel's funding txid, which we do not learn |
+| `Other` | Not a commitment, and more inputs than the funding output | Certain that it is not a close by either protocol: closing transactions spend the funding output alone. Most likely a splice that adds funds. It ends the channel id all the same |
+
+**What the chain cannot say:** which side forced the close (the commitment's keys are per-commitment, not the node keys), why, or whether a cooperative close was a splice. A penalty is recognised only if its sweep confirms within 2,016 blocks of the force close (the longest `to_self_delay` implementations accept), while the peer runs: force closes found by the catch-up, and those older than the watcher's memory, are not watched. Sweeps of the second-level HTLC transactions are not watched; a breach almost always shows on `to_local` first.
+
+The fee is the funding value less the outputs when the funding output is the only input; otherwise the node's fee for the transaction (one more request).
+
+### History
+
+Records, in order, each with a sequence number that grows by one:
+
+| Record | Carries | When |
+|---|---|---|
+| `Opened` | Channel id, both nodes, capacity, funding block (height, hash, time) | A channel is verified: its first time in the graph since start, including every channel at start, with its real funding block time |
+| `Closed` | Channel id, both nodes, capacity, funding block, closing block, closing txid, kind, fee | Its funding output is spent in a block |
+| `Penalty` | Channel id, sweep txid, block | A force close turns out to be a breach |
+| `OpenUndone` | Channel id | The funding block left the chain. An `Opened` with the new block follows if the output is still at the same position |
+| `CloseUndone`, `PenaltyUndone` | Channel id | The closing or sweeping block left the chain |
+
+`Peer::history()` streams them; its room is `Config::history` records (rounded up to a power of two), so a receiver that falls further behind gets a lag error, then reads `Peer::recent(last_seq)` for the newest `Config::history` records, and rescans the graph if those do not reach back. At start the stream carries one `Opened` per channel as validation verifies it (36,000 on mainnet in about a minute).
+
+### Removal from the graph
+
+A closed channel leaves the graph in the block that spends it, once: the watched set is the gate, and a channel is removed from it before anything else happens. Its funding position is stored as spent in the lookup cache first, then LDK removes it (with nodes left without a channel), which also makes LDK refuse its announcement for a week. Gossip for it keeps arriving for days; an announcement is answered from the cache (spent) for an hour, then by the node (spent), and its updates are refused for an unknown channel, so it cannot come back. `Change::Channel` and `Change::Node` report the removal.
+
+### Catch-up
+
+Blocks are not read before the watcher's first tip or across a gap; the node's spend records are asked instead:
+
+- **After downtime.** The graph file's channels are all checked again at start ([Restart](#restart)). One found spent closed while the peer was down. Its spend is found in four requests: the funding block's hash and the txid at the channel's index (the funding txid), the output's spender (`/tx/:txid/outspend/:vout`, which gives the block), and the spending transaction. Its fee may need a fifth.
+- **A gap.** More than ten new blocks at once (the node was unreachable, or the server was suspended): reading them would cost more than checking every watched output by position (18 MB at mainnet's size, ten blocks' worth), so the watcher starts again from the tip and checks every watched output, 300 per request. Spent ones are looked up as above.
+- **A late answer.** A channel whose lookup was answered at a tip older than the newest block read (or the block being read), or at a tip on another branch than the block read at that height, is checked again the same way, so a close in a block read before the channel was watched is not missed.
+
+A spend the catch-up finds in a block the watcher has not read on its own branch (a newer block, or another branch at a height it read) is not recorded there: the channel is watched, and reading that block records the close, with what undoes it. On another branch, the channel is also checked again, in case the watcher's branch wins. A channel queued for checking is queued once.
+
+The catch-up shares the watcher's pacing: one request at a time, at least `Config::lookup_interval` (500 ms) apart, behind the tip check. A check that fails stays queued and is retried after a backoff. `Closes::catch_up` counts what waits.
+
+### Reorgs
+
+The watcher keeps the newest 100 blocks it read with what each changed (its closes, with what puts the channel back in the graph, and its penalties). At each new tip it walks headers down from the tip to the newest block it still holds on the node's best chain (the fork), undoes every block above it newest first, then reads the new blocks in order, as the block table does ([`STORE.md`](STORE.md#blocks)). A block whose parent is not the last one read stops the step, to be retried.
+
+- **A close undone:** the channel is watched again and put back in the graph with its capacity, policies and node announcements (through LDK's partial-announcement call, since LDK refuses an announcement of a channel it removed; the restored channel has no stored announcement, so after a restart it returns through gossip). `CloseUndone` is recorded; if the new chain spends it, it closes again, perhaps differently.
+- **An open undone:** every channel funded above the fork is checked again by position. Still at its position in another block: `OpenUndone`, then `Opened` with the new block. Gone: `OpenUndone`, and it leaves the graph. A funding output is six blocks deep before a channel is verified, so this takes a reorg of seven blocks or more.
+- **Deeper than the window**, or no common block at all: everything held is undone, the watcher starts again from the tip and checks every watched output, as after a gap. Closes found by the catch-up are undone only while their block is in the window.
+
+`Event::Reorg` reports the fork and how many blocks were undone; `Event::CloseWatchReset` a start from the tip after a gap.
+
+### Status and events
+
+`Status::closes` (`Closes`): the newest block read; `caught_up` (the node had no newer block at the last look, and nothing waits for the catch-up or the replay); funding outputs and force closes watched; the catch-up backlog; counts since start of opens, closes by kind, undone records and reorgs; blocks read, requests and failures in a row. `Event::CloseWatchFailed` reports a failed request (retried after 1 s, doubling to 60 s).
+
+### Bounds and cost
+
+Nothing gossip sends changes what the watcher asks of the node: a channel enters the watched set only once its funding output was found on the chain.
+
+| | Bound |
+|---|---|
+| Per block | The tip every 10 s (64 bytes), one page of headers, the raw block (about 1.7 MB on mainnet), one position request per input that spends a watched script, and one fee request per such input that is not alone in its transaction. Inputs that spend a watched script require that channel's keys, so this is one request per real close |
+| Rate | One request at a time, at least `Config::lookup_interval` apart: at most 2 a second, besides validation's 2 |
+| Catch-up | The same rate. Four or five requests per channel closed while down; 300 outputs per request when checking every watched output |
+| Watched outputs | One entry per verified channel, so bounded by the graph's ceiling: about 200 bytes each with the script index, 7 MB at 36,000 channels, 20 MB at the 100,000 ceiling |
+| Force closes watched for a penalty | At most 10,000, the oldest dropped first, for 2,016 blocks each |
+| Block window | 100 blocks with their closes (a few hundred bytes each) |
+| History | `Config::history` (10,000) records of about 250 bytes: 2.5 MB |
+
+### Closes measured on mainnet
+
+2026-11-12, `crates/ln/examples/ln_watch.rs`, release build, the default peers, a synced rbitcoin v0.9.2 mainnet node on the same private network. A first start from an empty directory ran 15 minutes; the peer was then stopped for 44 minutes (three blocks), and restarted from the graph file it saved for 75 minutes.
+
+| | |
+|---|---|
+| First start | The watcher started from the tip; every channel was verified at that tip, so nothing needed checking again. 36,222 channels watched, one `Opened` each |
+| Catch-up after 44 minutes down | The restart's replay found 2 stored channels spent; both closes (blocks 975,537 and 975,539) were found from spend records 72 and 74 s after start, 8 requests in all. The replay itself costs what [Validation measured on mainnet](#validation-measured-on-mainnet) says |
+| Closes seen | 27 in 13 blocks (975,537 to 975,549): 26 cooperative, 1 force (with anchors). 11 in one block (975,541). No penalty, no reorg |
+| Checked by hand | Four closes against the node: each spends the output at its channel id's position, in the block recorded, with the fee and capacity recorded. The three cooperative ones have the `closing_signed` shape (sequence `0xffffffff`, locktime 0); the force close carries both commitment markers and two 330-sat anchors |
+| Node cost per block | One page of headers (4.4 KB), the raw block (1.7 MB on average over 8 blocks) and one 0.3 KB position request per close; besides, the tip every 10 s. 388 requests and 13.6 MB in the last hour |
+| Memory | Peak 175 MB on the first start, 301 MB on the restart while the loaded graph and the new one coexist (234 MB before the watcher existed: macOS's figures on this busy machine vary by tens of MB) |
+
+**Across a day's blocks.** Every spend of a two-of-two in the 144 blocks before 975,536 (229 MB read): 209 commitments (206 with anchors), 1,720 single-input non-commitment spends and 3,070 multi-input ones, no revocation sweep. Commitments are Lightning's alone, so about 200 force closes a day, private channels included; the other two counts include ordinary two-of-two wallets (consolidations of up to 224 such inputs, sequence 0), which is why the watcher matches only announced channels' outputs. No public source gives a daily close count to compare: Glassnode charts only the net daily change in channels, mempool.space and Coinglass only totals.
+
 ## Bounds
 
 Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a channel cost an attacker a real funding output, but the graph is bounded anyway, and so is the validation itself.
@@ -199,12 +303,15 @@ Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a cha
 - **Disk.** Nothing gossip sends is written anywhere but the graph file, whose size follows from the ceiling.
 - **Range sync.** The channel ids wanted from peers are capped at the ceiling.
 - **Funding-output lookups** are deduplicated, cached, batched (up to 300 per request), queued in a bounded queue that pauses gossip when full, and rate-limited ([Settings and bounds](#settings-and-bounds)), so no amount of gossip can load the node beyond one request per `lookup_interval`.
+- **The close-watcher** asks the node for each block once, and for one small request per real close, whatever gossip says ([Bounds and cost](#bounds-and-cost)).
 - Aliases, colours and addresses are kept as LDK decoded them, never interpreted, and are served and rendered as plain text.
 - The peer makes outbound connections only, never listens, never announces itself and never relays.
 
 ## Limits
 
-- **History starts when the peer starts.** Channels that closed before then are not in gossip.
+- **History starts when the peer first runs.** Channels that closed before then are not in gossip, and a channel gossiped after it closed is refused as `spent` without a close record. After that, closes during downtime are found from the graph file ([Catch-up](#catch-up)), for channels the file held.
+- **A channel that closes before it is six blocks deep is never announced,** so it is never seen, like a private one.
+- **A channel LDK prunes** (no update in either direction for two weeks) is no longer watched, so its later close is not recorded. It comes back, watched again, if gossip announces it again.
 - **Private channels are invisible,** as on every explorer.
 - **Tor-only nodes cannot be peers.** Their gossip still arrives through clearnet peers.
 - **No world map.** That needs a GeoIP database and is out of scope.
