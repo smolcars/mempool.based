@@ -47,7 +47,8 @@ Refined when M1 lands.
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | todo |
 | MP6 | RBF history and CPFP or cluster view | MP1 | todo |
-| W7 | WebGL block renderer for projected and mined blocks | W1, MP3 | todo |
+| BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | todo |
+| W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | todo |
 | W8 | Mempool page: live flow, fee bands | W7 | todo |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | todo |
 | WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
