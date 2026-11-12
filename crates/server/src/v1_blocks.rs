@@ -59,6 +59,11 @@ impl Headers {
         self.lock().get(hash).cloned()
     }
 
+    /// The height of a block whose header is held.
+    pub(crate) fn height(&self, hash: &BlockHash) -> Option<u32> {
+        self.lock().get(hash).map(|h| h.height)
+    }
+
     fn insert(&self, headers: impl IntoIterator<Item = Header>) {
         let mut map = self.lock();
         for h in headers {
@@ -117,14 +122,17 @@ async fn from_height(ctx: &NetworkContext, start: Option<u32>) -> Response {
             if start <= tip {
                 return Err(NOT_READY);
             }
-            return Ok(reply(
+            let mut res = reply(
                 &Vec::<BlockJson>::new(),
                 CACHE,
                 top,
                 None,
                 "v1_blocks",
                 None,
-            ));
+            );
+            // Rests on the node's tip, not only the table: never kept (`crate::answers`).
+            res.extensions_mut().insert(crate::answers::Unkept);
+            return Ok(res);
         }
         let rows = blocks::page(store, Some(start.saturating_add(1)), LIST)
             .await

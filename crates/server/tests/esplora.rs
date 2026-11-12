@@ -86,6 +86,11 @@ fn answer(method: &Method, pq: &str, body: &[u8]) -> Response {
         }
         m
     }
+    if method == Method::GET
+        && let Some(r) = block_answer(pq)
+    {
+        return r;
+    }
     match (method.as_str(), pq) {
         ("GET", "/blocks/tip/height") => (with(&text, &stamp), "800001").into_response(),
         ("GET", "/fee-estimates") => (with(&json, &[]), r#"{"1":2.5,"6":1.0}"#).into_response(),
@@ -127,6 +132,55 @@ fn answer(method: &Method, pq: &str, body: &[u8]) -> Response {
         }
         _ => (StatusCode::NOT_FOUND, with(&text, &stamp), "Not Found").into_response(),
     }
+}
+
+/// Blocks the mock node no longer serves: they left its best chain.
+static GONE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const BLOCKS_FROM: u64 = 0xb10c_0000_0000;
+
+/// The hash the mock gives the block at `height`; the mock's tip is 800,001.
+fn block_at(height: u64) -> String {
+    format!("{:064x}", BLOCKS_FROM + height)
+}
+
+/// `/block/:hash`, `/header` and `/txids` for a [`block_at`] hash, stamped with the tip.
+fn block_answer(pq: &str) -> Option<Response> {
+    let rest = pq.strip_prefix("/block/")?;
+    let (hash, tail) = rest.split_at_checked(64)?;
+    let height = u64::from_str_radix(hash, 16)
+        .ok()?
+        .checked_sub(BLOCKS_FROM)?;
+    if height > 800_001 {
+        return None;
+    }
+    if GONE.lock().unwrap().iter().any(|g| g == hash) {
+        return Some((StatusCode::NOT_FOUND, "Block not found").into_response());
+    }
+    let mut h = HeaderMap::new();
+    h.insert("x-bitcoin-chain-tip", TIP.parse().unwrap());
+    h.insert("x-bitcoin-chain-tip-height", "800001".parse().unwrap());
+    let json = || "application/json".parse().unwrap();
+    let body = match tail {
+        "" => {
+            h.insert("content-type", json());
+            serde_json::json!({"id": hash, "height": height, "version": 536870912,
+                "timestamp": 1_700_000_000, "tx_count": 1, "size": 300, "weight": 1200,
+                "merkle_root": H, "previousblockhash": block_at(height - 1),
+                "mediantime": 1_699_999_000, "nonce": 7, "bits": 386_000_000,
+                "difficulty": 1.0})
+            .to_string()
+        }
+        "/header" => {
+            h.insert("content-type", "text/plain".parse().unwrap());
+            "00".repeat(80)
+        }
+        "/txids" => {
+            h.insert("content-type", json());
+            format!("[\"{H}\"]")
+        }
+        _ => return None,
+    };
+    Some((h, body).into_response())
 }
 
 fn config(esplora: &str, broadcast: bool) -> Config {
@@ -722,4 +776,119 @@ async fn a_heavy_call_outlives_its_first_request_without_being_repeated() {
     // With no request left, the call still runs and is still joined, not repeated.
     assert_eq!(heavy(3, 1).await.unwrap().status, 504);
     assert_eq!(calls(&seen), 1);
+}
+
+// Immutable answers kept in memory (`crate::answers`).
+
+fn calls(seen: &Seen, path: &str) -> usize {
+    hits(seen).iter().filter(|p| *p == path).count()
+}
+
+#[tokio::test]
+async fn a_buried_block_is_kept_and_a_recent_one_is_not() {
+    let (addr, seen) = start(Duration::ZERO, false).await;
+    let buried = block_at(700_000);
+    let mut bodies = Vec::new();
+    for _ in 0..3 {
+        let r = get(&addr, &format!("/api/block/{buried}")).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
+        assert_eq!(r.header("content-type"), Some("application/json"));
+        bodies.push(r.body);
+    }
+    assert!(bodies.iter().all(|b| *b == bodies[0]));
+    assert_eq!(calls(&seen, &format!("/block/{buried}")), 1);
+    // The block's other immutable routes: its height is known from its JSON.
+    for tail in ["/header", "/txids"] {
+        for _ in 0..3 {
+            assert_eq!(
+                get(&addr, &format!("/api/block/{buried}{tail}"))
+                    .await
+                    .status,
+                200
+            );
+        }
+        assert_eq!(calls(&seen, &format!("/block/{buried}{tail}")), 1, "{tail}");
+    }
+    // Within 100 blocks of the tip, the tip itself, and a block whose height we never learnt:
+    // every request asks the node, as before.
+    let unknown = block_at(600_000);
+    for path in [
+        format!("/block/{}", block_at(799_902)),
+        format!("/block/{}", block_at(800_001)),
+        format!("/block/{unknown}/header"),
+    ] {
+        for _ in 0..3 {
+            assert_eq!(get(&addr, &format!("/api{path}")).await.status, 200);
+        }
+        assert_eq!(calls(&seen, &path), 3, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_block_that_leaves_the_chain_before_it_is_buried_is_never_kept() {
+    let (addr, seen) = start(Duration::ZERO, false).await;
+    let recent = block_at(799_950);
+    let path = format!("/api/block/{recent}");
+    assert_eq!(get(&addr, &path).await.status, 200);
+    // A reorg: the node drops the block from its best chain and answers 404 for it.
+    GONE.lock().unwrap().push(recent.clone());
+    let r = get(&addr, &path).await;
+    assert_eq!(
+        (r.status, r.header("cache-control")),
+        (404, Some("no-store"))
+    );
+    assert_eq!(calls(&seen, &format!("/block/{recent}")), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_distinct_blocks_cost_one_call_each_and_stay_inside_the_budget() {
+    let (url, seen) = mock(Duration::ZERO).await;
+    let mut c = config(&url, false);
+    c.limits.answer_cache_bytes = 1 << 20;
+    let app = App::new(&c);
+    let ctx = app.network(rbitcoin_space::Network::Mainnet).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    // A block in use, asked for twice.
+    let hot = format!("/block/{}", block_at(1));
+    for _ in 0..2 {
+        assert_eq!(get(&addr, &format!("/api{hot}")).await.status, 200);
+    }
+    // A client walking 3,000 distinct buried blocks, about three times the budget.
+    let walk: Vec<u64> = (100..3_100).collect();
+    for chunk in walk.chunks(100) {
+        let asks = chunk.iter().map(|&h| {
+            let addr = addr.clone();
+            async move {
+                get(&addr, &format!("/api/block/{}", block_at(h)))
+                    .await
+                    .status
+            }
+        });
+        for status in futures_join(asks).await {
+            assert_eq!(status, 200);
+        }
+        assert!(ctx.answers.held().0 <= 1 << 20);
+    }
+    // One node call per distinct block, as without the cache; the block in use is still kept.
+    for h in [100, 1_600, 3_099] {
+        assert_eq!(calls(&seen, &format!("/block/{}", block_at(h))), 1);
+    }
+    assert_eq!(get(&addr, &format!("/api{hot}")).await.status, 200);
+    assert_eq!(calls(&seen, &hot), 1);
+    assert!(ctx.answers.held().1 < 3_000);
+}
+
+/// Runs the futures together, in order of their results.
+async fn futures_join<F: std::future::Future<Output = u16> + Send + 'static>(
+    fs: impl Iterator<Item = F>,
+) -> Vec<u16> {
+    let tasks: Vec<_> = fs.map(tokio::spawn).collect();
+    let mut out = Vec::new();
+    for t in tasks {
+        out.push(t.await.unwrap());
+    }
+    out
 }

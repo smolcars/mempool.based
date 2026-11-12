@@ -8,7 +8,7 @@ How fast the server and the site are, how that was measured, how they compare wi
 |---|---|---|
 | First-load JavaScript, home page: 100 KB gzipped | 65.7 KB gzipped (`bun run size`), in 10 files with the home page's styles (the check fails past 10); 62 KB on the wire with Brotli in Chromium | **Pass** |
 | New block, from the node's Electrum announcement to the `block` message on the WebSocket: 50 ms on a node with rbitcoin PR 1577 (on v0.9.2, from when the node can serve the block) | Regtest: 0.7 to 6.1 ms from the node's notification to the last subscriber's queue, 6.1 ms with 9,962 subscribers. Mainnet, here: 12 and 91 ms after the node's upgrade (the only two blocks); on rbitcoin v0.9.2, 13 ms to over 3 s, mostly waiting for the node's Esplora, which we could not separate from our own time. Measured since in [#67](https://github.com/smolcars/rbitcoin-space/pull/67) on upgraded nodes: our `block` message 16 to 44 ms after the node's announcement on mainnet (four blocks) and 6 to 25 ms on signet, the node's own serving included ([details](#the-new-block-on-mainnet)) | **Pass** on regtest and, by #67's measurement, on upgraded mainnet nodes. Of the two upgraded-node blocks in this run, on the code before #67, one took 91 ms |
-| Cached or immutable API response, server time: 10 ms at p99 | Answers from memory: p99 0.04 ms (1 client), 0.4 ms (100), 0.8 ms (1,000). Immutable `/api/block/:hash`, which we pass through to the node uncached: p99 1.8 ms (1 client), 16 ms (100), 49 ms (1,000) on regtest; 75 to 89 ms on mainnet over the network to the node (v0.9.2) | **Pass from memory; miss for immutable pass-through** under concurrency and whenever the node is a network hop away ([proposed task 1](#1-hold-immutable-node-answers-in-memory)) |
+| Cached or immutable API response, server time: 10 ms at p99 | Answers from memory: p99 0.04 ms (1 client), 0.4 ms (100), 0.8 ms (1,000). Since [the answers kept in memory](#answers-kept-in-memory), a buried block's `/api/block/:hash` and the store-backed routes are among them: p99 at most 0.04, 3.2 and 4.7 ms at 1, 100 and 1,000 clients, where they were 3.1, 156 and 132 ms. Blocks within 100 of the tip are still passed through to the node: p99 1.8 ms (1 client), 16 ms (100), 49 ms (1,000) on regtest; 75 to 89 ms on mainnet over the network to the node (v0.9.2) | **Pass** for answers from memory, store-backed answers and buried blocks. **Miss** for the newest 100 blocks' immutable answers under concurrency or with the node a network hop away, which only a CDN in front absorbs |
 | Frame rate during block and mempool animations: 60 fps on a mid-range laptop | No frame interval over 16.8 ms (every frame of a 60 Hz display) through a new block on the home page and through a 601-transaction grid loading, on the machine's GPU. At 4× CPU slowdown: the block the same; the grid load had 1 or 2 intervals of 33 ms or more per run, and one run of three a 224 ms long task that four profiled runs did not reproduce. A slower CPU is not a slower GPU, so this does not stand in for a mid-range laptop | **Pass on this machine; not established on a mid-range laptop** |
 
 | Comparison | In one line |
@@ -18,13 +18,13 @@ How fast the server and the site are, how that was measured, how they compare wi
 
 The three results that matter most:
 
-1. **Answers from memory hold up; answers that touch the store or the node do not stay under 10 ms with many clients.** One process served 70,000 requests a second from memory at 100 concurrent clients with server time under 0.5 ms at p99. Routes that read the store (`/api/v1/blocks`, a block's summary) cost 8 ms of server time at 100 clients and 46 ms at 1,000, almost all of it building and serializing the same answer again for every request ([proposed task 2](#2-build-store-answers-once-per-tip)).
+1. **Answers from memory hold up; answers that touch the store or the node did not stay under 10 ms with many clients.** One process served 70,000 requests a second from memory at 100 concurrent clients with server time under 0.5 ms at p99. Routes that read the store (`/api/v1/blocks`, a block's summary) cost 8 ms of server time at 100 clients and 46 ms at 1,000, almost all of it building and serializing the same answer again for every request ([proposed task 2](#2-build-store-answers-once-per-tip)). Since then those answers, and a buried block's immutable ones, are kept in memory until they can change: 0.01 ms median at every load, and 80,000 to 130,000 requests a second at 1,000 clients where 11,000 to 28,000 were answered before ([Answers kept in memory](#answers-kept-in-memory)).
 2. **Up to 8,000 sockets every update reached every reader: a block within 57 ms of being queued, mempool and projected-block updates within 69 and 83 ms of their first reader. At 10,000 on this machine delivery broke down, and the cause is not pinned.** The server still queued each block to all 10,000 sockets in 2.3 to 5.8 ms on under a sixth of a core, but in both 10,000-socket runs many readers had not received messages by the end of the run (one block reached only 2 of 9,962). Kernel network buffers climbed from 10,900 to 80,000 of 89,450 in use with both ends of 20,000 connections on one machine, so buffer pressure is the likely cause; a delay in the server's per-socket writers is not ruled out ([proposed task 5](#5-find-what-stops-websocket-delivery-past-8000-sockets)).
 3. **A single client that floods the API costs us about 28 µs of CPU and one log line per refusal.** The limits work: the flood's 103,000 to 126,000 requests a second were refused in 0.005 ms of server time each, and ordinary clients beside it were never refused. But that is 3.4 to 3.8 cores, and the log grew by 772 to 911 MB in 30 s ([proposed task 3](#3-count-refusals-instead-of-logging-each)).
 
 ## Where we miss, and what to do
 
-No budget miss had a fix small and clear enough to make in this change: the one budget miss needs a new cache in the Esplora pass-through, and the other findings are not budgets. Each is a proposed task with its evidence. The first is a bug the mainnet run found, fixed since by [#67](https://github.com/smolcars/rbitcoin-space/pull/67); it stays here as the evidence.
+No budget miss had a fix small and clear enough to make in this change: the one budget miss needs a new cache in the Esplora pass-through, and the other findings are not budgets. Tasks 1 and 2 have been done since ([Answers kept in memory](#answers-kept-in-memory)). Each is a proposed task with its evidence. The first is a bug the mainnet run found, fixed since by [#67](https://github.com/smolcars/rbitcoin-space/pull/67); it stays here as the evidence.
 
 ### 0. Follow the block table when a new block's JSON comes late (done in #67)
 
@@ -37,12 +37,14 @@ No budget miss had a fix small and clear enough to make in this change: the one 
 - **Evidence.** `/api/block/:hash` is immutable (served `immutable`, [`API.md`](API.md#cache-headers)) but every request is a node call. Server p99 on regtest: 1.8 ms at 1 client, 16 ms at 100, 49 ms at 1,000. On mainnet (node on v0.9.2), paced at 5 a second: median 9.2 ms and p99 75 ms, where the same block from memory would be 0.2 ms. The `v1` block routes already keep these headers by hash (`v1_blocks::Headers`, 4,096 of them).
 - **Expected gain.** Immutable answers at memory speed: p99 under 1 ms at 100 clients, and no node round trip. The design leaves immutable answers to a CDN in front ([`ARCHITECTURE.md`](ARCHITECTURE.md#http-surface)); without one, the budget is missed.
 - **Touches.** `crates/server/src/esplora.rs` (a bounded cache for the routes it marks immutable, keyed by path), its tests, [`API.md`](API.md#protection-for-the-node).
+- **Done since,** for blocks at least 100 under the tip, the block table's follow zone: a block within it may still leave the chain, so it is not kept. A buried block's `/api/block/:hash` went from p99 0.7, 4.3 and 36 ms at 1, 100 and 1,000 clients to 0.04, 3.2 and 0.3 ms, with no node call after the first ([Answers kept in memory](#answers-kept-in-memory)).
 
 ### 2. Build store answers once per tip
 
 - **Evidence.** `/api/v1/blocks` and `/api/v1/block/:hash` make four store reads each (the table's top, the page, the audits, the top again) and serialize 15 blocks (19 KB) per request; a block's summary makes two. At 100 concurrent clients their server median was 8 ms against 0.01 ms for routes answered from memory, and the server spent 4 cores for 22,000 requests a second. A sample of the process under that load shows the time in `serde_json` and hex formatting of hashes, with the runtime threads mostly idle. Giving the store 10 reader connections instead of 4 changed nothing at 100 clients and gained 30% throughput at 1,000 (35 against 46 ms median), so the pool is not the cause.
 - **Expected gain.** These routes at memory speed between blocks: the answer for the tip list changes once a block, like the mining answers, which are already computed once and served from memory (0.01 ms).
 - **Touches.** `crates/server/src/v1_blocks.rs` and `summary.rs` (keep the serialized answer keyed by the table's top), [`API.md`](API.md#blocks).
+- **Done since,** keyed by a version the store keeps per table rather than by the top, so a backfilled row or a new audit counts too: `/api/v1/blocks` went from a median of 8.8 and 49 ms at 100 and 1,000 clients to 0.01 ms, and the store class from 21,000 to 114,000 requests a second at 100 clients ([Answers kept in memory](#answers-kept-in-memory)).
 
 ### 3. Count refusals instead of logging each
 
@@ -92,7 +94,7 @@ Each run is 15 s of closed-loop clients, each on its own connection, cycling thr
 | Class | Routes |
 |---|---|
 | memory | `/api/v1/fees/mempool-blocks`, `/api/v1/difficulty-adjustment`, `/api/blocks/tip/height` (held for 1 s), `/app/block/:hash/summary` (the summary is cached in memory, but the route reads the store twice) |
-| immutable | `/api/block/:hash` |
+| immutable | `/api/block/:hash` (block 106 in the runs below; `bench.sh` now asks for block 1, which is buried, [Answers kept in memory](#answers-kept-in-memory)) |
 | store | `/api/v1/blocks`, `/api/v1/mining/pools/1w`, `/api/v1/statistics/24h`, `/api/v1/block/:hash` |
 | node | `/api/tx/:txid`, `/api/block/:hash/txs`, `/api/tx/:txid/outspends`, `/api/address/:address` |
 
@@ -184,6 +186,42 @@ On mainnet the engine read 103 to 230 MB a minute from the node (25 to 54 tracke
 ### The new block on mainnet
 
 The server's `ws_fanout` event times a block from the node's Electrum notification to the last subscriber's queue. After the node's upgrade two blocks arrived, at 12 and 91 ms. Before it, on rbitcoin v0.9.2 (five blocks over the two runs), 13 ms, then 0.40, 1.10 and 1.61 s, and once over 3 s (the blocks already there when the server started are not counted). The hub asks the node's Esplora for the block every 25 ms until it is served, and one fetch costs about a round trip to the node (9 to 10 ms from here), so the long times are almost all waiting for the node. But the server does not record how many fetches a block took or when the node first could have served it, so the budget's own measure (from that moment to the send) cannot be taken from these runs: the 12 and 13 ms blocks are within it, the 91 ms block may or may not be, and the verdict on mainnet is open. Recording the fetch count in `ws_fanout` would settle it. [#67](https://github.com/smolcars/rbitcoin-space/pull/67), which changed how the hub waits for a late block, measured upgraded nodes with a probe of its own: every block served at the first request (11 to 25 ms after the announcement), and our `block` message out 16 to 44 ms after the announcement on mainnet and 6 to 25 ms on signet. That is within the budget, which on an upgraded node runs from the announcement ([`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets)); the 91 ms block above, on the code before #67, was not. The v0.9.2 waits of up to 1.6 s, and the one over 3 s, are longer than the 320 to 470 ms [`RBITCOIN.md`](RBITCOIN.md#rules-that-follow) records for signet; that is the stall the upgrade fixes.
+
+### Answers kept in memory
+
+Store-backed answers are computed once per write to the tables they read, and a buried block's immutable answers from the node once, then served from memory ([`API.md`](API.md#answers-kept-in-memory)). Measured with the same `bench.sh OUT http` on 2026-11-12, release builds of `master` at `3aa0afe` and of the change, one straight after the other (18:37 to 18:52 UTC) on the same regtest image, the machine shared as above (load average 7 to 15). The `immutable` class now asks for block 1, about 130 under the tip, so that it is buried; on `master` that makes no difference, since every request goes to the node (a first `master` run with block 106 gave p99 0.6, 1.7 and 33 ms). Server time, p50 / p99 ms:
+
+| Route | Clients | Before | After |
+|---|---|---|---|
+| `/api/v1/blocks` (15 blocks, the heaviest) | 1 | 0.17 / 2.9 | 0.00 / 0.01 |
+| | 100 | 8.8 / 64 | 0.01 / 0.45 |
+| | 1,000 | 49 / 132 | 0.01 / 4.7 |
+| `/api/v1/block/:hash` | 1 | 0.09 / 3.1 | 0.00 / 0.01 |
+| | 100 | 8.1 / 67 | 0.01 / 0.39 |
+| | 1,000 | 49 / 132 | 0.01 / 1.6 |
+| `/app/block/:hash/summary` (two small reads) | 1 | 0.04 / 1.1 | 0.00 / 0.03 |
+| | 100 | 3.3 / 156 | 0.01 / 0.43 |
+| | 1,000 | 24 / 84 | 0.01 / 0.26 |
+| `/api/block/:hash`, a buried block | 1 | 0.17 / 0.72 | 0.00 / 0.04 |
+| | 100 | 0.63 / 4.3 | 0.01 / 3.2 |
+| | 1,000 | 7.8 / 36 | 0.01 / 0.34 |
+| `/api/v1/difficulty-adjustment` (from memory before and after: the control) | 1 | 0.00 / 0.04 | 0.00 / 0.04 |
+| | 100 | 0.01 / 0.33 | 0.01 / 0.36 |
+| | 1,000 | 0.01 / 1.8 | 0.01 / 0.27 |
+
+| Class, answered per second (refused) | 1 client | 100 | 1,000 |
+|---|---|---|---|
+| memory, before | 17,961 | 76,103 | 40,095 (63%) |
+| memory, after | 31,816 | 123,743 | 127,013 (0%) |
+| immutable, before | 4,674 | 88,405 | 28,306 (77%) |
+| immutable, after | 27,905 | 79,719 | 129,701 (0%) |
+| store, before | 6,537 | 20,881 | 10,901 (90%) |
+| store, after | 30,768 | 114,325 | 80,251 (0%) |
+
+- **At 1,000 clients nothing was refused any more.** Before, a request held one of the 256 slots (`MAX_CONCURRENT_REQUESTS`) for tens of milliseconds and three in four were refused; now each slot is free again in microseconds. The memory class gained too because it holds `/app/block/:hash/summary`.
+- **Memory.** Resident memory across the twelve steps was 14 to 51 MB before and 12 to 45 MB after: the kept answers here are a handful, a few tens of KB. The bound is `ANSWER_CACHE_MB` per network (32 MB, about 25,000 blocks' JSON at mainnet's sizes, [`CONFIG.md`](CONFIG.md#answers-kept-in-memory)).
+- **Not changed:** the `node` class (0.3 to 0.4 ms median at one client, as before), and the newest 100 blocks' immutable answers, still one node call per request.
+- **Noise.** The `immutable` class at 100 clients answered fewer requests after than before (79,700 against 88,400), with a p99 of 3.2 ms where the other kept routes had under 0.5: one run each on a shared machine, not a slower path.
 
 ## The site in a browser
 

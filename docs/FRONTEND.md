@@ -235,7 +235,7 @@ The totals, the same object as the facts' `audit` (which leaves out `id`, `heigh
 
 **Caching.** An audit is fixed once written: success is immutable, and a `404` is `no-store` but final in practice.
 
-**Cost.** One indexed read, no node call; at most about 60 KB of JSON for a capped list.
+**Cost.** One indexed read, no node call, kept in memory until the next write to the audits or the block table ([`API.md`](API.md#answers-kept-in-memory)); at most about 60 KB of JSON for a capped list.
 
 #### A transaction's relatives and replacements
 

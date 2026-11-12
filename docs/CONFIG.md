@@ -152,6 +152,14 @@ The block summary routes ([`FRONTEND.md`](FRONTEND.md#block-summaries)) keep com
 |---|---|---|
 | `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 56 bytes per transaction (its record, txid and weight) plus about 0.5 KB: 110 to 390 KB for today's mainnet blocks, so the default holds 80 to 290 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a block listing: about 0.3 MB on a node with `/block/:hash/txs/summary`, a `getblock` of up to 10 MB on one without ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)). At most 1,048,576 |
 
+### Answers kept in memory
+
+Answers the server computes once and keeps until they can change ([`API.md`](API.md#answers-kept-in-memory)): the store-backed block and audit routes, and a buried block's immutable answers from the node.
+
+| Variable | Default | Protects against |
+|---|---|---|
+| `ANSWER_CACHE_MB` | `32` | Memory held by kept answers, per network: the least recently used go first once it is reached, and one larger than a 64th of it is never kept. At mainnet's sizes 32 MB holds about 25,000 blocks' JSON (about 1.3 KB each as counted), or 1,600 lists of 15 blocks (about 20 KB each). Lower it on a small machine; raise it when no CDN sits in front and clients walk old blocks. A request for an answer not kept costs what it did before. At most 1,048,576 |
+
 ### Block table
 
 The block table ([`STORE.md`](STORE.md#blocks)) needs `DATA_DIR`. Its newest 100 rows follow the tip whatever these say; the backfill fills the rest. The backfill has its own RPC client with one call in flight, outside the four the rest of the server shares, and a 30 s timeout.
