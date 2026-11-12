@@ -1,0 +1,424 @@
+import { createRouter, memoryHistory } from "@solidjs/router";
+import { render } from "@solidjs/web";
+import { flush } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mount } from "../../components/test-utils";
+import { clearApiCache } from "../../lib/api";
+import ChannelPage from "./ChannelPage";
+import LightningPage from "./LightningPage";
+import NodePage from "./NodePage";
+import RankingsPage from "./RankingsPage";
+import SearchPage from "./SearchPage";
+import { TxLightning } from "./TxLightning";
+import {
+  ACINQ,
+  acinq,
+  at,
+  BFX,
+  channel,
+  CLOSING,
+  closedOf,
+  FUNDING,
+  opened,
+  overview,
+  series,
+  SWEEP,
+  synced,
+  syncing,
+  T0,
+  top,
+} from "./testdata";
+
+type Reply = () => Response;
+let replies: Record<string, Reply>;
+let requests: string[];
+
+const json =
+  (v: unknown, status = 200) =>
+  () =>
+    Response.json(v, { status });
+
+beforeEach(() => {
+  clearApiCache();
+  requests = [];
+  replies = { "/app/lightning/status": json(synced) };
+  vi.stubGlobal("fetch", async (url: string) => {
+    requests.push(url);
+    const reply = replies[url.replace(/^\/(regtest|signet|testnet4)/, "")];
+    return reply ? reply() : Response.json({ error: "not found" }, { status: 404 });
+  });
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  for (const d of disposers.splice(0)) d();
+});
+
+const disposers: (() => void)[] = [];
+
+/** Renders the section's routes at `url`, so pages read their parameters as in the app. */
+function open(url: string): HTMLElement {
+  const pages = [
+    { path: "/lightning/node/:key", component: NodePage },
+    { path: "/lightning/channel/:id", component: ChannelPage },
+  ];
+  const Router = createRouter({
+    routes: [{ path: ["/", "/signet", "/testnet4", "/regtest"], children: pages }],
+    history: memoryHistory(url),
+  });
+  const el = document.createElement("div");
+  document.body.append(el);
+  disposers.push(render(() => <Router>{(page) => page.children}</Router>, el));
+  return el;
+}
+
+// Figures group digits with a narrow no-break space; the tests write a plain one.
+const text = (el: HTMLElement) => (el.textContent ?? "").replaceAll("\u202F", " ");
+const shows = async (el: HTMLElement, s: string) => vi.waitFor(() => expect(text(el)).toContain(s));
+const links = (el: HTMLElement) => [...el.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+
+describe("the Lightning section's states", () => {
+  it("says Lightning is switched off, and asks for nothing more", async () => {
+    replies["/app/lightning/status"] = json({ state: "off" });
+    const el = mount(() => <LightningPage />, "/regtest/lightning");
+    await shows(el, "Lightning is switched off on Regtest");
+    expect(requests).toStrictEqual(["/regtest/app/lightning/status"]);
+    expect(el.querySelector("[role=slider]")).toBeNull();
+  });
+
+  it("asks each network's own server: signet's status under /signet", async () => {
+    replies["/app/lightning/status"] = json({ state: "off" });
+    const el = mount(() => <LightningPage />, "/signet/lightning");
+    await shows(el, "switched off on Signet");
+    expect(requests).toStrictEqual(["/signet/app/lightning/status"]);
+  });
+
+  it("shows how far a sync has come, then the pages once it is done, without a reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    replies["/app/lightning/status"] = json(syncing);
+    replies["/app/lightning/overview"] = json(overview());
+    replies["/app/lightning/statistics/1w"] = json(series());
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "Syncing the Lightning network");
+    expect(text(el)).toContain("Channels checked26 704");
+    expect(text(el)).toContain("Waiting to be checked5 000");
+    expect(text(el)).toContain("Peers connected3 of 6");
+    expect(requests).not.toContain("/app/lightning/overview");
+    replies["/app/lightning/status"] = json(synced);
+    await vi.advanceTimersByTimeAsync(5000);
+    await shows(el, "The network now");
+    expect(text(el)).not.toContain("Syncing");
+  });
+
+  it("says a failed peer is not running", async () => {
+    replies["/app/lightning/status"] = json({ state: "failed" });
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "This server's Lightning peer is not running");
+    expect(requests).not.toContain("/app/lightning/overview");
+  });
+});
+
+describe("the overview", () => {
+  beforeEach(() => {
+    replies["/app/lightning/overview"] = json(overview());
+    replies["/app/lightning/statistics/1w"] = json(series());
+  });
+
+  it("shows the network now, with the snapshot's figures", async () => {
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "Channels36 228");
+    expect(text(el)).toContain("Nodes13 639");
+    expect(text(el)).toContain("3 220.85363482 BTC");
+    expect(text(el)).toContain("Median fee rate130 ppm");
+    expect(text(el)).toContain("Median base fee484 msat");
+    expect(text(el)).toContain("As of 12 Nov 2026, 18:30 UTC");
+    expect(text(el)).toContain("Only channels whose funding output this server found on the chain");
+  });
+
+  it("lists the newest opens and closes with their kinds, linked to channel, node and block", async () => {
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "Newest closes");
+    const closes = el.querySelector("[aria-labelledby=ln-closed-title]") as HTMLElement;
+    expect(text(closes)).toContain("Force");
+    expect(text(closes)).toContain("Cooperative");
+    expect(links(el)).toContain(`/lightning/channel/${opened.id}`);
+    expect(links(el)).toContain(`/lightning/node/${opened.node_one.id}`);
+    expect(links(el)).toContain(`/block/${opened.opened?.hash ?? ""}`);
+    expect(links(el)).toContain("/lightning/rankings?by=age");
+  });
+
+  it("says so when no close was seen and no snapshot is stored yet", async () => {
+    replies["/app/lightning/overview"] = json(overview({ statistics: null, closed: [] }));
+    replies["/app/lightning/statistics/1w"] = json(series({ first: null, points: [] }));
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "No close seen yet");
+    await shows(el, "No snapshot yet");
+    await shows(el, "Nothing recorded yet");
+    expect(el.querySelector("[role=slider]")).toBeNull();
+  });
+
+  it("draws ten minutes of history from where it starts, hatching before", async () => {
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "This server has recorded the network since 12 Nov 2026, 18:30 UTC");
+    await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
+    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("1 w: the last week");
+  });
+
+  it("draws a missing ten minutes as a gap, never a line across it", async () => {
+    replies["/app/lightning/statistics/24h"] = json(
+      series({
+        interval: "24h",
+        first: T0 - 3600,
+        from: T0 - 86_400,
+        points: [-3600, -3000, -1200, -600].map((d) => at(T0 + d)),
+      }),
+    );
+    const el = mount(() => <LightningPage />, "/lightning?interval=24h");
+    await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
+    const line = el.querySelector("[role=slider] .chart__line")?.getAttribute("d") ?? "";
+    expect(line.match(/M/g)).toHaveLength(2);
+    expect(requests).toContain("/app/lightning/statistics/24h");
+  });
+});
+
+describe("a node", () => {
+  it("shows its name, key, figures, announcements and first page of channels", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq());
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Open channels1 807");
+    expect(el.querySelector("h1")?.textContent).toBe("ACINQ");
+    expect(text(el)).toContain("03864ef0");
+    expect(text(el)).toContain("The public key above is the node's identity");
+    expect(text(el)).toContain("First seen26 Feb 2019");
+    expect(text(el)).toContain(
+      "of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735",
+    );
+    expect(text(el)).toContain("data-loss-protect (required)");
+    expect(text(el)).toContain("Bit 37");
+    // Addresses are text, never links.
+    expect(links(el).some((h) => (h ?? "").includes("9735"))).toBe(false);
+    expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
+    expect(text(el)).toContain("Page 1 of 73");
+  });
+
+  it("asks for later pages and closed channels, and says when it has no closed one", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq());
+    replies[`/app/lightning/nodes/${ACINQ}/channels?status=open&page=1`] = json({
+      ...acinq().open_channels,
+      page: 1,
+      channels: [{ ...acinq().open_channels.channels[0], id: "900000x1x1" }],
+    });
+    replies[`/app/lightning/nodes/${ACINQ}/channels?status=closed&page=0`] = json({
+      status: "closed",
+      page: 0,
+      per_page: 25,
+      total: 0,
+      channels: [],
+    });
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Page 1 of 73");
+    [...el.querySelectorAll("button")].find((b) => b.textContent === "Next")?.click();
+    flush();
+    await shows(el, "900000x1x1");
+    [...el.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Closed"))?.click();
+    flush();
+    await shows(el, "No close seen");
+    expect(requests).toContain(`/app/lightning/nodes/${ACINQ}/channels?status=closed&page=0`);
+  });
+
+  it("says when this server knows no such node, or the key is not one", async () => {
+    const el = open(`/lightning/node/${"02".padEnd(66, "0")}`);
+    await shows(el, "This server knows no such node");
+    const bad = open("/lightning/node/not-a-key");
+    await shows(bad, "Not a node's public key");
+    expect(requests.filter((r) => r.includes("not-a-key"))).toStrictEqual([]);
+  });
+});
+
+describe("a channel", () => {
+  it("shows both ends, their policies and the funding transaction and block", async () => {
+    replies["/app/lightning/channels/811984x2037x0"] = json(channel());
+    const el = open("/lightning/channel/811984x2037x0");
+    await shows(el, "Its two ends");
+    expect(text(el)).toContain("Active");
+    expect(text(el)).toContain("5.00000000 BTC");
+    expect(text(el)).toContain("2 499 ppm");
+    expect(text(el)).toContain("144 blocks");
+    expect(links(el)).toContain(`/tx/${FUNDING}`);
+    expect(links(el)).toContain(`/lightning/node/${BFX}`);
+    expect(text(el)).not.toContain("Close");
+  });
+
+  it("says when the funding transaction is not looked up yet", async () => {
+    replies["/app/lightning/channels/811984x2037x0"] = json(
+      channel({ funding: { ...channel().funding, txid: null } }),
+    );
+    const el = open("/lightning/channel/811984x2037x0");
+    await shows(el, "Not looked up yet");
+    expect(links(el).some((h) => (h ?? "").startsWith("/tx/"))).toBe(false);
+  });
+
+  it.each([
+    ["cooperative", "Cooperative close", "Likely", "splice"],
+    ["force", "Force close", "Certain", "commitment transaction"],
+    ["penalty", "Penalty", "Certain", "revocation key"],
+    ["other", "Other", "Certain it is not a plain close", "splice that added funds"],
+  ] as const)("says a %s close plainly, and how sure that is", async (kind, name, sure, why) => {
+    const c = closedOf(kind);
+    replies[`/app/lightning/channels/${c.id}`] = json(
+      channel({ id: c.id, state: "closed", closed: c.closed, penalty: c.penalty }),
+    );
+    const el = open(`/lightning/channel/${c.id}`);
+    await shows(el, name);
+    const close = el.querySelector(".ln-close") as HTMLElement;
+    expect(text(close)).toContain(`${name} · ${sure}`);
+    expect(text(close)).toContain(why);
+    expect(links(el)).toContain(`/tx/${CLOSING}`);
+    expect(text(el)).toContain("Closing fee1 234 sats");
+    expect(links(el).includes(`/tx/${SWEEP}`)).toBe(kind === "penalty");
+  });
+
+  it("says when this server knows no such channel, or the id is not one", async () => {
+    const el = open("/lightning/channel/1x2x3");
+    await shows(el, "This server knows no such channel");
+    const bad = open("/lightning/channel/abc");
+    await shows(bad, "Not a channel id");
+    expect(requests.filter((r) => r.includes("/abc"))).toStrictEqual([]);
+  });
+});
+
+describe("search and rankings", () => {
+  it("lists matching nodes with their keys, and a channel by id", async () => {
+    replies["/app/lightning/search?q=811984x2037x0"] = json({
+      nodes: [],
+      channels: [{ id: "811984x2037x0", scid: "1", capacity: 500_000_000, state: "closed" }],
+    });
+    const el = mount(() => <SearchPage />, "/lightning/search?q=811984x2037x0");
+    await shows(el, "Closed");
+    expect(links(el)).toContain("/lightning/channel/811984x2037x0");
+  });
+
+  it("says when nothing matches, and refuses a search too short to ask", async () => {
+    replies["/app/lightning/search?q=zzzz"] = json({ nodes: [], channels: [] });
+    const el = mount(() => <SearchPage />, "/lightning/search?q=zzzz");
+    await shows(el, "Nothing matches");
+    const short = mount(() => <SearchPage />, "/lightning/search?q=ab");
+    await shows(short, "Type at least 3 characters");
+    expect(requests.filter((r) => r.includes("q=ab"))).toStrictEqual([]);
+  });
+
+  it("ranks the top nodes by what the address asks", async () => {
+    replies["/app/lightning/rankings/age?limit=100"] = json({ by: "age", nodes: top });
+    const el = mount(() => <RankingsPage />, "/lightning/rankings?by=age");
+    await shows(el, "Binance");
+    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("Age");
+    expect(text(el)).toContain("27 Nov 2019");
+  });
+});
+
+describe("hostile names", () => {
+  const impostor = (alias: string) => ({ ...top[0], id: ACINQ, alias });
+  const searchFor = async (alias: string) => {
+    replies["/app/lightning/search?q=acinq"] = json({ nodes: [impostor(alias)], channels: [] });
+    const el = mount(() => <SearchPage />, "/lightning/search?q=acinq");
+    await vi.waitFor(() => expect(el.querySelector(".ln-alias")).not.toBeNull());
+    return el;
+  };
+
+  it("shows markup as text and builds no element from it", async () => {
+    const el = await searchFor("<b>ACINQ</b><img src=x>");
+    const name = el.querySelector(".ln-alias") as HTMLElement;
+    expect(name.textContent).toBe("<b>ACINQ</b><img src=x>");
+    expect(el.querySelector("img, b, script")).toBeNull();
+    // The key, which the name cannot fake, is beside it.
+    expect(text(el)).toContain("03864ef0");
+  });
+
+  it("isolates a name and shows a right-to-left override as a mark", async () => {
+    const el = await searchFor("‮QNICA");
+    const name = el.querySelector(".ln-alias") as HTMLElement;
+    expect(name.tagName).toBe("BDI");
+    expect(name.textContent).toBe("�QNICA");
+  });
+
+  it("cuts a name of 10 000 characters, with the rest a click away", async () => {
+    const long = "W".repeat(10_000);
+    const el = await searchFor(long);
+    const name = el.querySelector(".ln-alias") as HTMLElement;
+    expect(name.textContent).toBe(`${"W".repeat(32)}…`);
+    expect(name.getAttribute("title")?.length).toBeLessThan(600);
+
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq({ alias: long }));
+    const page = open(`/lightning/node/${ACINQ}`);
+    await shows(page, "Show the whole name");
+    expect(page.querySelector("h1")?.textContent).toBe(`${"W".repeat(64)}…`);
+    [...page.querySelectorAll("button")]
+      .find((b) => b.textContent === "Show the whole name")
+      ?.click();
+    flush();
+    expect(page.querySelector(".ln-name-full")?.textContent).toBe(long);
+  });
+
+  it("never lets a node's colour reach the page", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json({
+      ...acinq(),
+      color: "red;background:url(javascript:alert(1))",
+    });
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Open channels");
+    expect(el.innerHTML).not.toContain("javascript");
+    expect(el.innerHTML).not.toContain("red;");
+  });
+});
+
+describe("the transaction page's note", () => {
+  const Note = (p: { confirmed?: boolean; txid?: string }) => (
+    <TxLightning txid={p.txid ?? CLOSING} confirmed={p.confirmed ?? true} />
+  );
+
+  it("says a transaction closed a channel, how, and links to it", async () => {
+    replies[`/app/lightning/tx/${CLOSING}`] = json({ opened: [], closed: [closedOf("force")] });
+    const el = mount(() => <Note />, `/tx/${CLOSING}`);
+    await shows(el, "This transaction closed Lightning channel");
+    expect(text(el)).toContain("Force close (certain)");
+    expect(links(el)).toContain("/lightning/channel/811984x2037x1");
+  });
+
+  it("says a transaction opened a channel", async () => {
+    replies[`/app/lightning/tx/${FUNDING}`] = json({ opened: [opened], closed: [] });
+    const el = mount(() => <Note txid={FUNDING} />, `/tx/${FUNDING}`);
+    await shows(el, "This transaction opened Lightning channel");
+    expect(links(el)).toContain(`/lightning/channel/${opened.id}`);
+  });
+
+  it("shows nothing for an ordinary transaction", async () => {
+    replies[`/app/lightning/tx/${CLOSING}`] = json({ opened: [], closed: [] });
+    const el = mount(() => <Note />, `/tx/${CLOSING}`);
+    await vi.waitFor(() => expect(requests).toContain(`/app/lightning/tx/${CLOSING}`));
+    flush();
+    expect(text(el)).toBe("");
+  });
+
+  it("asks nothing for an unconfirmed transaction", async () => {
+    const el = mount(() => <Note confirmed={false} />, `/tx/${CLOSING}`);
+    await Promise.resolve();
+    flush();
+    expect(requests).toStrictEqual([]);
+    expect(text(el)).toBe("");
+  });
+
+  it("asks only the status where Lightning is off, and only once a tab", async () => {
+    replies["/app/lightning/status"] = json({ state: "off" });
+    mount(() => <Note />, `/testnet4/tx/${CLOSING}`);
+    await vi.waitFor(() => expect(requests).toStrictEqual(["/testnet4/app/lightning/status"]));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    mount(() => <Note txid={FUNDING} />, `/testnet4/tx/${FUNDING}`);
+    await Promise.resolve();
+    flush();
+    expect(requests).toStrictEqual(["/testnet4/app/lightning/status"]);
+  });
+});

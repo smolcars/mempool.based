@@ -1,0 +1,212 @@
+// Answers for the Lightning pages' tests, taken from the mainnet examples in docs/API.md and from
+// a mainnet server on 2026-11-12, trimmed. Closes of each kind are those answers' shape.
+import type {
+  ChannelDetail,
+  ListedChannel,
+  NodeDetail,
+  Overview,
+  RankedNode,
+  Series,
+  Stats,
+  Status,
+} from "./lightning";
+
+export const ACINQ = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
+export const BFX = "033d8656219478701227199cbd6f670335c8d408a92ae88b962c49d4dc0e83e025";
+export const BINANCE = "03a1f3afd646d77bdaf545cceaf079bab6057eae52c6319b63b5803d0989d6a72f";
+export const PENUMBRA = "0294cd6f26d81abaada088a6adee7900095fdfa03617950f2f8428f8bebba2475d";
+export const LNFI = "02cbdcbf587ad07f5fa938434ad16955239a5dea0b5c5187c7817cafb962a16d0f";
+export const FUNDING = "a7f10c2558d1b6c2d0e9a4a3b8f1e2c7d6b5a4f3e2d1c0b9a8f7e6d5c4b3d4f5";
+export const CLOSING = "5c1ab2f43e2d9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b";
+export const SWEEP = "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d";
+
+export const T0 = 1_794_508_200;
+
+export const synced: Status = {
+  state: "synced",
+  peers_configured: 6,
+  peers_connected: 3,
+  channels: 36_228,
+  nodes: 13_639,
+  validation: { verified: 36_228, unchecked: 0, pending: 0, early: 0 },
+};
+
+export const syncing: Status = {
+  state: "syncing",
+  peers_configured: 6,
+  peers_connected: 3,
+  channels: 26_704,
+  nodes: 11_316,
+  validation: { verified: 26_704, unchecked: 0, pending: 5000, early: 0 },
+};
+
+export const stats: Stats = {
+  time: T0,
+  samples: 1,
+  channels: 36_228,
+  nodes: 13_639,
+  capacity: 322_085_363_482,
+  avg_capacity: 8_890_509,
+  med_capacity: 1_000_000,
+  tor_nodes: 4553,
+  clearnet_nodes: 1345,
+  clearnet_tor_nodes: 1050,
+  unannounced_nodes: 6691,
+  policies: 47_983,
+  avg_fee_rate: 974,
+  avg_base_fee_msat: 1481,
+  med_fee_rate: 130,
+  med_base_fee_msat: 484,
+};
+
+/** The snapshot above, taken at another time. */
+export const at = (time: number): Stats => ({ ...stats, time });
+
+const block = (height: number, time: number) => ({
+  height,
+  hash: `0000000000000000000${String(height).padStart(6, "0")}${"ab".repeat(19)}c`,
+  time,
+});
+
+export const opened: ListedChannel = {
+  id: "975574x1256x1",
+  scid: "1072654956838256641",
+  node_one: { id: PENUMBRA, alias: "Penumbra" },
+  node_two: { id: LNFI, alias: "lnd.lnfi.network" },
+  capacity: 10_000_000,
+  opened: block(975_574, 1_794_502_645),
+  closed: null,
+  penalty: null,
+};
+
+/** A closed channel of a kind, closed in block 975 590. */
+export function closedOf(kind: "cooperative" | "force" | "penalty" | "other"): ListedChannel {
+  return {
+    ...opened,
+    id: `811984x2037x${["cooperative", "force", "penalty", "other"].indexOf(kind)}`,
+    closed: { block: block(975_590, T0 + 600), txid: CLOSING, kind, fee: 1_234 },
+    penalty: kind === "penalty" ? { block: block(975_592, T0 + 1800), txid: SWEEP } : null,
+  };
+}
+
+const bfxNode: RankedNode = {
+  id: BFX,
+  alias: "bfx-lnd0",
+  capacity: 32_461_828_251,
+  channels: 544,
+  first_seen: 1_574_813_156,
+  last_update: 1_794_504_476,
+};
+const binanceNode: RankedNode = {
+  id: BINANCE,
+  alias: "Binance",
+  capacity: 32_315_912_432,
+  channels: 130,
+  first_seen: 1_705_383_088,
+  last_update: 1_794_504_053,
+};
+export const top: RankedNode[] = [bfxNode, binanceNode];
+
+export const overview = (o: Partial<Overview> = {}): Overview => ({
+  statistics: stats,
+  top_capacity: top,
+  top_channels: [binanceNode, bfxNode],
+  opened: [opened],
+  closed: [closedOf("force"), closedOf("cooperative")],
+  ...o,
+});
+
+export const series = (s: Partial<Series> = {}): Series => ({
+  interval: "1w",
+  from: T0 - 7 * 86_400,
+  to: T0 + 60,
+  step: 600,
+  first: T0,
+  slots: 1007,
+  sampled: 0,
+  complete: false,
+  points: [stats],
+  ...s,
+});
+
+const channelOfAcinq = (n: number) => ({
+  id: `81${String(n).padStart(4, "0")}x2037x0`,
+  scid: "892785849701564416",
+  capacity: 500_000_000 - n,
+  state: "active" as const,
+  peer: { id: BFX, alias: "bfx-lnd0" },
+  fee_rate: 2499,
+  closed: null,
+});
+
+export const acinq = (n: Partial<NodeDetail> = {}): NodeDetail => ({
+  id: ACINQ,
+  alias: "ACINQ",
+  addresses: [
+    "3.33.236.230:9735",
+    "of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735",
+  ],
+  features: [
+    { bit: 0, name: "data-loss-protect", required: true },
+    { bit: 7, name: "gossip-queries", required: false },
+    { bit: 37, name: null, required: false },
+  ],
+  last_update: 1_794_051_404,
+  first_seen: 1_551_152_144,
+  capacity: 27_383_219_285,
+  channels: {
+    open: 1807,
+    active: 1729,
+    closed: 0,
+    cooperative: 0,
+    force: 0,
+    penalty: 0,
+    other: 0,
+  },
+  open_channels: {
+    status: "open",
+    page: 0,
+    per_page: 25,
+    total: 1807,
+    channels: Array.from({ length: 25 }, (_, i) => channelOfAcinq(i)),
+  },
+  ...n,
+});
+
+export const channel = (c: Partial<ChannelDetail> = {}): ChannelDetail => ({
+  id: "811984x2037x0",
+  scid: "892785849701564416",
+  capacity: 500_000_000,
+  state: "active",
+  last_update: 1_794_496_008,
+  node_one: {
+    id: BFX,
+    alias: "bfx-lnd0",
+    policy: {
+      fee_rate: 1,
+      base_fee_msat: 1000,
+      cltv_delta: 80,
+      min_htlc_msat: 1000,
+      max_htlc_msat: 20_000_000_000,
+      enabled: true,
+      last_update: 1_794_456_478,
+    },
+  },
+  node_two: {
+    id: ACINQ,
+    alias: "ACINQ",
+    policy: {
+      fee_rate: 2499,
+      base_fee_msat: 1000,
+      cltv_delta: 144,
+      min_htlc_msat: 1,
+      max_htlc_msat: 20_000_000_000,
+      enabled: true,
+      last_update: 1_794_496_008,
+    },
+  },
+  funding: { txid: FUNDING, vout: 0, block: block(811_984, 1_697_189_564) },
+  closed: null,
+  penalty: null,
+  ...c,
+});
