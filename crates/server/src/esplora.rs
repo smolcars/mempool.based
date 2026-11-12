@@ -407,6 +407,17 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
     })
     .await
     {
+        // Refused by a verdict learned while it waited: counted as a refusal, like one refused on
+        // arrival. The node never refuses a page for size, and a page it timed out on took the
+        // whole history timeout, so neither answer is taken for the other.
+        Ok((Err(Error::TooLarge), _)) if verdicts::history_page(&route).is_some() => {
+            refused_early(Verdict::TooLarge)
+        }
+        Ok((Err(Error::Timeout), Source::Upstream(took)))
+            if took < ctx.api.heavy.history_timeout && verdicts::history_page(&route).is_some() =>
+        {
+            refused_early(Verdict::Slow)
+        }
         Ok((result, source)) => respond(&route, result, source),
         Err(refused) => *refused,
     }

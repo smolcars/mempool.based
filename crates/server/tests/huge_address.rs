@@ -81,13 +81,21 @@ async fn mock() -> (String, Seen) {
 /// The server against a fresh mock node, its requests naming their client in `X-Real-IP`.
 async fn start() -> (String, Seen) {
     let (url, seen) = mock().await;
+    let app = App::new(&config(&url));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    (addr, seen)
+}
+
+fn config(url: &str) -> Config {
     let mut vars = HashMap::new();
     for (k, v) in [
         ("RPC_HOST", "127.0.0.1"),
         ("RPC_PORT", "1"),
         ("RPC_USER", "u"),
         ("RPC_PASSWORD", "p"),
-        ("ESPLORA_URL", url.as_str()),
+        ("ESPLORA_URL", url),
         ("ELECTRUM_ADDR", "127.0.0.1:1"),
     ] {
         vars.insert(format!("MAINNET_{k}"), v.to_owned());
@@ -107,11 +115,7 @@ async fn start() -> (String, Seen) {
         }),
         ..Limits::default()
     };
-    let app = App::new(&c);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(app.serve(listener, std::future::pending()));
-    (addr, seen)
+    c
 }
 
 struct Reply {
@@ -230,32 +234,41 @@ async fn a_size_refusal_is_remembered_when_its_client_has_hung_up() {
 
 #[tokio::test]
 async fn a_page_waiting_for_a_slot_is_refused_by_a_verdict_learned_meanwhile() {
+    use axum::extract::ConnectInfo;
     use rbitcoin_space::esplora::HEAVY_RUNNING;
-    let (addr, seen) = start().await;
-    let spawn = |client: u8, path: String| {
-        let addr = addr.clone();
-        tokio::spawn(async move { get_as(&addr, client, &path).await })
+    use rbitcoin_space::limits::Refused;
+    use tower::ServiceExt;
+    let (url, seen) = mock().await;
+    // Driven without a socket, so the response's extensions show how it is logged.
+    let router = App::new(&config(&url)).router();
+    let spawn = |path: String| {
+        let mut req = axum::http::Request::get(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 9))));
+        tokio::spawn(router.clone().oneshot(req))
     };
     // Slow pages take all slots but one; the last goes to totals the node refuses after 500 ms.
     let busy: Vec<_> = (0..HEAVY_RUNNING - 1)
-        .map(|n| {
-            spawn(
-                u8::try_from(n + 10).unwrap(),
-                format!("/api/address/{SLOW}/txs?asof={n:064x}"),
-            )
-        })
+        .map(|n| spawn(format!("/api/address/{SLOW}/txs?asof={n:064x}")))
         .collect();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let totals = spawn(20, format!("/api/address/{LATE}"));
+    let totals = spawn(format!("/api/address/{LATE}"));
     tokio::time::sleep(Duration::from_millis(100)).await;
     // Its history arrives before that answer, so it passes the first check and waits for a slot.
-    let history = spawn(21, format!("/api/address/{LATE}/txs"));
-    assert_eq!(totals.await.unwrap().status, 503);
-    let r = history.await.unwrap();
-    assert_eq!((r.status, r.error.as_str()), TOO_LARGE);
+    let history = spawn(format!("/api/address/{LATE}/txs"));
+    assert_eq!(totals.await.unwrap().unwrap().status(), 503);
+    let r = history.await.unwrap().unwrap();
+    assert_eq!(r.status(), 503);
+    // Counted as a refusal, not logged as a request the node served.
+    assert_eq!(
+        r.extensions().get::<Refused>().map(|r| r.reason),
+        Some("history_too_large")
+    );
     assert_eq!(calls(&seen, &format!("{LATE}/txs")), 0);
     for b in busy {
-        assert_eq!(b.await.unwrap().status, 504);
+        assert_eq!(b.await.unwrap().unwrap().status(), 504);
     }
 }
 
