@@ -975,8 +975,7 @@ function CoreSample(props: {
           </Show>
         </span>
         <span class={["block-core__text", { "block-core__text--off": !drawn() }]}>
-          {filled()} full. Each rectangle is a transaction, its area its virtual size, shaded by its
-          fee rate, the dearest at the top left; any space above them was left unused.{" "}
+          {filled()} full: one rectangle a transaction, by size and fee rate.{" "}
           {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
           <a href="#block-txs-title" rel="external">
             Every transaction is in the list below.

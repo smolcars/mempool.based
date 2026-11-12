@@ -280,8 +280,12 @@ describe("time", () => {
     expect(formatRelative(t, t + 13 * 60 + 59)).toBe("13 min ago");
     expect(formatRelative(t, t + 3600)).toBe("1 h ago");
     expect(formatRelative(t, t + 2 * 3600 + 5 * 60)).toBe("2 h 5 min ago");
-    expect(formatRelative(t, t + 47 * 3600 + 59 * 60)).toBe("47 h 59 min ago");
+    expect(formatRelative(t, t + 23 * 3600 + 59 * 60)).toBe("23 h 59 min ago");
+    // From a day on, days lead, never "47 h 54 min".
+    expect(formatRelative(t, t + 24 * 3600 + 23 * 60)).toBe("1 day ago");
+    expect(formatRelative(t, t + 47 * 3600 + 54 * 60)).toBe("1 day 23 h ago");
     expect(formatRelative(t, t + 48 * 3600)).toBe("2 days ago");
+    expect(formatRelative(t, t + 9 * 86_400 + 5 * 3600)).toBe("9 days ago");
   });
 
   it("drops the suffix on request and never goes negative", () => {

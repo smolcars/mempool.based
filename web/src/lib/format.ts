@@ -216,6 +216,10 @@ export function formatRelative(
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min${ago}`;
   const h = Math.floor(m / 60);
-  if (h < 48) return m % 60 === 0 ? `${h} h${ago}` : `${h} h ${m % 60} min${ago}`;
-  return `${Math.floor(h / 24)} days${ago}`;
+  if (h < 24) return m % 60 === 0 ? `${h} h${ago}` : `${h} h ${m % 60} min${ago}`;
+  // From a day on, days lead: "1 day 23 h", and from a week, days alone.
+  const d = Math.floor(h / 24);
+  const days = `${d} ${d === 1 ? "day" : "days"}`;
+  if (d >= 7 || h % 24 === 0) return `${days}${ago}`;
+  return `${days} ${h % 24} h${ago}`;
 }

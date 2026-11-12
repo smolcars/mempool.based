@@ -1015,7 +1015,9 @@ describe("the fee panel", () => {
     const { el, ws } = await open(true);
     // Signet's usual answer: 0.100 on every level.
     ws.receive(feesMsg("projected", [100, 100, 100, 100]));
-    expect(feeList(el)).toStrictEqual(["Any waitnext block0.10 sat/vB"]);
+    expect(feeList(el)).toStrictEqual([
+      "Any waitnext block0.10 sat/vBEvery wait pays the same: the next block has room at this rate.",
+    ]);
     // Low and Medium alone stay apart: merged, they would straddle the panel's two rows.
     ws.receive(feesMsg("projected", [1500, 1000, 1000, 120]));
     expect(feeList(el)).toStrictEqual([

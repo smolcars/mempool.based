@@ -4,6 +4,7 @@ import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { formatDay } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
 import { createRequest } from "../../lib/api";
@@ -83,7 +84,7 @@ function Ranked(props: { network: Network; by: string }) {
       </Match>
       <Match when={ranked.latest}>
         {(r) => (
-          <section>
+          <section class="panel">
             <div class="ln-busy" aria-busy={r().by === props.by ? "false" : "true"}>
               <DataTable
                 caption={`The 100 nodes ${parseRanking(r().by).words}`}
@@ -92,10 +93,12 @@ function Ranked(props: { network: Network; by: string }) {
                 rowHref={(n) => paths.lightningNode(n.id)}
               />
             </div>
-            <p class="ln-aside">
-              {VERIFIED_NOTE} First seen is the oldest funding block among a node's channels this
-              server has seen.
-            </p>
+            <More>
+              <p>
+                {VERIFIED_NOTE} First seen is the oldest funding block among a node's channels this
+                server has seen.
+              </p>
+            </More>
           </section>
         )}
       </Match>

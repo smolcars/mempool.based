@@ -431,7 +431,7 @@
       display: none;
     }
     .pool-stats {
-      min-height: 42rem;
+      min-height: 20rem;
     }
     /* Stacked, so a long name arriving cannot push its neighbour onto a new line. */
     .mining-head {

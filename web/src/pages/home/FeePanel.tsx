@@ -46,6 +46,11 @@ export function FeePanel(props: { answer: () => FeeAnswer | null | undefined }) 
                       <>
                         <span class="num">{formatFeeRateUp(r())}</span>
                         <span class="unit"> sat/vB</span>
+                        <Show when={g.span === 4}>
+                          <span class="home-fees__same">
+                            Every wait pays the same: the next block has room at this rate.
+                          </span>
+                        </Show>
                       </>
                     )}
                   </Show>
