@@ -33,10 +33,10 @@ import {
   ask,
   BlockLink,
   ChannelLink,
-  Ends,
   Gate,
   LightningSearch,
   NodeName,
+  nodeColumns,
   Stat,
   VERIFIED_NOTE,
 } from "./parts";
@@ -109,7 +109,11 @@ function Overview(props: { network: Network }) {
                 <SectionHeader title="Largest nodes" id="ln-top-capacity-title">
                   By capacity
                 </SectionHeader>
-                <TopTable rows={o().top_capacity} caption="The ten nodes with the most capacity" />
+                <TopTable
+                  rows={o().top_capacity}
+                  caption="The ten nodes with the most capacity"
+                  by="capacity"
+                />
                 <p class="ln-more">
                   <Link href={paths.lightningRankings("capacity")}>The top 100 by capacity</Link>
                 </p>
@@ -118,7 +122,11 @@ function Overview(props: { network: Network }) {
                 <SectionHeader title="Most connected nodes" id="ln-top-channels-title">
                   By open channels
                 </SectionHeader>
-                <TopTable rows={o().top_channels} caption="The ten nodes with the most channels" />
+                <TopTable
+                  rows={o().top_channels}
+                  caption="The ten nodes with the most channels"
+                  by="channels"
+                />
                 <p class="ln-more">
                   <Link href={paths.lightningRankings("channels")}>The top 100 by channels</Link>
                   {" · "}
@@ -347,27 +355,26 @@ function HistoryChart(props: { s: Series; interval: Interval }) {
 }
 
 function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" }) {
+  // One cell holds the channel, when, its kind and both ends, so the table fits a phone.
   const columns = (): Column<ListedChannel>[] => [
     {
-      header: "Channel",
+      header: props.kind === "closed" ? "Channel, kind and ends" : "Channel and ends",
       cell: (c) => (
         <span class="ln-ends">
-          <ChannelLink id={c.id} />
-          <Show when={props.kind === "closed" ? c.closed?.block : c.opened}>
-            {(b) => <TimeAgo time={b().time} />}
-          </Show>
+          <span class="ln-row-head">
+            <ChannelLink id={c.id} />
+            <span class="ln-row-when">
+              <Show when={c.closed}>{(x) => `${KIND_SHORT[x().kind]} · `}</Show>
+              <Show when={props.kind === "closed" ? c.closed?.block : c.opened}>
+                {(b) => <TimeAgo time={b().time} />}
+              </Show>
+            </span>
+          </span>
+          <NodeName node={c.node_one} />
+          <NodeName node={c.node_two} />
         </span>
       ),
     },
-    ...(props.kind === "closed"
-      ? [
-          {
-            header: "Kind",
-            cell: (c: ListedChannel) => (c.closed ? KIND_SHORT[c.closed.kind] : "–"),
-          },
-        ]
-      : []),
-    { header: "Between", cell: (c) => <Ends one={c.node_one} two={c.node_two} /> },
     {
       header: "Capacity, BTC",
       numeric: true,
@@ -403,15 +410,6 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
   );
 }
 
-function TopTable(props: { rows: RankedNode[]; caption: string }) {
-  const columns: Column<RankedNode>[] = [
-    { header: "Node", cell: (n) => <NodeName node={n} /> },
-    {
-      header: "Capacity, BTC",
-      numeric: true,
-      cell: (n) => <Amount sats={n.capacity} unit={false} />,
-    },
-    { header: "Channels", numeric: true, cell: (n) => groupDigits(n.channels) },
-  ];
-  return <DataTable caption={props.caption} columns={columns} rows={props.rows} />;
+function TopTable(props: { rows: RankedNode[]; caption: string; by: "capacity" | "channels" }) {
+  return <DataTable caption={props.caption} columns={nodeColumns(props.by)} rows={props.rows} />;
 }

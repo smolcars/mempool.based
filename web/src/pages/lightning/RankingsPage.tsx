@@ -1,7 +1,6 @@
 // The 100 largest, best-connected or oldest Lightning nodes (docs/API.md "Rankings").
 import { useSearchParams } from "@solidjs/router";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
-import { Amount } from "../../components/Amount";
 import { formatDay } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
@@ -12,7 +11,7 @@ import { groupDigits } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isRankings, parseRanking, RANKINGS, type RankedNode } from "./lightning";
-import { ask, Gate, NodeName, VERIFIED_NOTE } from "./parts";
+import { ask, Gate, nodeColumns, VERIFIED_NOTE } from "./parts";
 
 export default function RankingsPage() {
   const [search] = useSearchParams();
@@ -61,17 +60,11 @@ function Ranked(props: { network: Network; by: string }) {
     (by, signal) => ask(props.network, `/rankings/${by}?limit=100`, isRankings, signal),
   );
   const columns: Column<RankedNode>[] = [
-    { header: "Rank", numeric: true, cell: (_, i) => groupDigits(i + 1) },
-    { header: "Node", cell: (n) => <NodeName node={n} /> },
-    {
-      header: "Capacity, BTC",
-      numeric: true,
-      cell: (n) => <Amount sats={n.capacity} unit={false} />,
-    },
-    { header: "Channels", numeric: true, cell: (n) => groupDigits(n.channels) },
+    { header: "Rank", numeric: true, optional: true, cell: (_, i) => groupDigits(i + 1) },
+    ...nodeColumns(props.by === "channels" ? "channels" : "capacity"),
     {
       header: "First seen",
-      optional: true,
+      optional: props.by !== "age",
       cell: (n) => (typeof n.first_seen === "number" ? formatDay(n.first_seen) : "–"),
     },
     {

@@ -3,6 +3,8 @@
 import { useNavigate } from "@solidjs/router";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
+import { Amount } from "../../components/Amount";
+import type { Column } from "../../components/DataTable";
 import { Link } from "../../components/Link";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { ApiError, createRequest, fetchApp } from "../../lib/api";
@@ -17,6 +19,7 @@ import {
   isStatus,
   NAME_IN_LIST,
   type NodeRef,
+  type RankedNode,
   searchProblem,
   type Status,
 } from "./lightning";
@@ -199,6 +202,28 @@ export function Ends(props: { one: NodeRef; two: NodeRef }) {
       <NodeName node={props.two} />
     </span>
   );
+}
+
+/**
+ * A node table's columns: the node, then its capacity and channels. The one a list is not
+ * ranked by is dropped on phones, so the table fits their width.
+ */
+export function nodeColumns(by: "capacity" | "channels" | "age"): Column<RankedNode>[] {
+  return [
+    { header: "Node", cell: (n) => <NodeName node={n} /> },
+    {
+      header: "Capacity, BTC",
+      numeric: true,
+      optional: by === "channels",
+      cell: (n) => <Amount sats={n.capacity} unit={false} />,
+    },
+    {
+      header: "Channels",
+      numeric: true,
+      optional: by !== "channels",
+      cell: (n) => groupDigits(n.channels),
+    },
+  ];
 }
 
 /**

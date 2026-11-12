@@ -138,3 +138,31 @@ test("a transaction page links the channel its transaction opened", async ({ pag
     page.getByRole("link", { name: overview.opened[0]?.id ?? "missing" }),
   ).toHaveAttribute("href", `/regtest/lightning/channel/${overview.opened[0]?.id ?? ""}`);
 });
+
+for (const width of [320, 360]) {
+  test(`every Lightning table fits at ${width} px`, async ({ page }) => {
+    await serve(page, mainnet());
+    await page.setViewportSize({ width, height: 800 });
+    for (const path of [
+      "/regtest/lightning",
+      `/regtest/lightning/node/${ACINQ}`,
+      "/regtest/lightning/search?q=acinq",
+      "/regtest/lightning/rankings",
+      "/regtest/lightning/channel/811984x2037x0",
+    ]) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      // Every page here links a node once its answer is drawn.
+      await expect(page.locator('main a[href*="/lightning/node/"]').first()).toBeVisible();
+      for (const t of await page.getByRole("table").all()) {
+        const box = await t.evaluate((el) => ({
+          table: el.scrollWidth,
+          room: (el.parentElement as HTMLElement).clientWidth,
+        }));
+        expect(box.table, `${path}: table width`).toBeLessThanOrEqual(box.room);
+      }
+      const scrolled = await page.evaluate(() => document.documentElement.scrollWidth);
+      expect(scrolled, `${path}: page width`).toBeLessThanOrEqual(width);
+    }
+  });
+}

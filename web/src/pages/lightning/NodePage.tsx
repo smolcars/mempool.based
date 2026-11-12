@@ -286,8 +286,16 @@ function Channels(props: { node: NodeDetail; network: Network }) {
 
 function ChannelList(props: { rows: NodeChannel[]; closed: boolean }) {
   const columns = (): Column<NodeChannel>[] => [
-    { header: "Channel", cell: (c) => <ChannelLink id={c.id} /> },
-    { header: "With", cell: (c) => <NodeName node={c.peer} /> },
+    // The channel and who it is with share a cell, so the table fits a phone.
+    {
+      header: "Channel and peer",
+      cell: (c) => (
+        <span class="ln-ends">
+          <ChannelLink id={c.id} />
+          <NodeName node={c.peer} />
+        </span>
+      ),
+    },
     {
       header: "Capacity, BTC",
       numeric: true,

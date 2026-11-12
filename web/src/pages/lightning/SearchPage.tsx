@@ -3,22 +3,15 @@
 import { useSearchParams } from "@solidjs/router";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
-import { type Column, DataTable } from "../../components/DataTable";
+import { DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { createRequest } from "../../lib/api";
-import { groupDigits } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
-import {
-  isSearchResult,
-  type RankedNode,
-  type SearchResult,
-  searchProblem,
-  STATE_WORDS,
-} from "./lightning";
-import { ask, ChannelLink, Gate, LightningSearch, NodeName } from "./parts";
+import { isSearchResult, type SearchResult, searchProblem, STATE_WORDS } from "./lightning";
+import { ask, ChannelLink, Gate, LightningSearch, nodeColumns } from "./parts";
 
 export default function SearchPage() {
   const [search] = useSearchParams();
@@ -72,15 +65,6 @@ function Results(props: { network: Network; q: string }) {
 }
 
 function Found(props: { r: SearchResult; q: string }) {
-  const columns: Column<RankedNode>[] = [
-    { header: "Node", cell: (n) => <NodeName node={n} /> },
-    {
-      header: "Capacity, BTC",
-      numeric: true,
-      cell: (n) => <Amount sats={n.capacity} unit={false} />,
-    },
-    { header: "Channels", numeric: true, cell: (n) => groupDigits(n.channels) },
-  ];
   return (
     <Show
       when={props.r.nodes.length > 0 || props.r.channels.length > 0}
@@ -114,7 +98,11 @@ function Found(props: { r: SearchResult; q: string }) {
           <SectionHeader title="Nodes" id="ln-found-nodes-title">
             {props.r.nodes.length === 10 ? "The 10 largest matches" : "Largest first"}
           </SectionHeader>
-          <DataTable caption="Nodes that match" columns={columns} rows={props.r.nodes} />
+          <DataTable
+            caption="Nodes that match"
+            columns={nodeColumns("capacity")}
+            rows={props.r.nodes}
+          />
           <p class="ln-aside">
             Any node can announce any name, so a famous name can appear more than once: the public
             key under each is what tells them apart.
