@@ -32,12 +32,22 @@ export function Empty(props: { title: string; children?: JSX.Element }) {
   );
 }
 
-/** What went wrong and how to recover. `title` names what failed: "Could not load this block". */
-export function ErrorState(props: { title: string; error?: unknown; retry?: () => void }) {
+/**
+ * What went wrong and how to recover. `title` names what failed: "Could not load this block".
+ * `message` replaces the error's own; `action` names the button ("Try again").
+ */
+export function ErrorState(props: {
+  title: string;
+  error?: unknown;
+  message?: string;
+  retry?: () => void;
+  action?: string;
+}) {
   const message = () =>
-    props.error instanceof ApiError
+    props.message ??
+    (props.error instanceof ApiError
       ? props.error.message
-      : "Something went wrong while showing this.";
+      : "Something went wrong while showing this.");
   return (
     <div class="state state--error" role="alert">
       <p class="state__title">
@@ -51,7 +61,7 @@ export function ErrorState(props: { title: string; error?: unknown; retry?: () =
       <Show when={props.retry}>
         {(retry) => (
           <button class="btn" type="button" onClick={() => retry()()}>
-            Try again
+            {props.action ?? "Try again"}
           </button>
         )}
       </Show>

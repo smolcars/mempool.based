@@ -320,6 +320,13 @@ function Body(props: {
     );
     const target = coinbase() ? MATURE : SETTLED;
     const third: Step = (() => {
+      if (coinbase() && s?.block_height === 0) {
+        return {
+          title: "Never spendable",
+          detail: "The genesis block's reward was never added to the coins that can be spent.",
+          state: "done",
+        };
+      }
       const title = coinbase() ? "Spendable" : "Six confirmations";
       if (props.live === "removed") return { title, detail: "", state: "dead" };
       if (!s?.confirmed)

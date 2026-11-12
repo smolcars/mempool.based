@@ -4,6 +4,8 @@ import "./Amount.css";
 
 /**
  * An amount in BTC with all eight decimals, trailing zeros dimmed; the title shows sats.
+ * `unit={false}` hides the unit from sight only (a table names it in its header): screen readers
+ * still read it.
  * `signed` adds a `+` to positive amounts and colors incoming ones (address history).
  */
 export function Amount(props: { sats: number; unit?: boolean; signed?: boolean }) {
@@ -20,9 +22,7 @@ export function Amount(props: { sats: number; unit?: boolean; signed?: boolean }
           {direction() === "in" ? "+" : p().sign}
           {p().whole}.{p().significant}
           <span class="amount__zeros">{p().zeros}</span>
-          <Show when={props.unit !== false}>
-            <span class="unit"> BTC</span>
-          </Show>
+          <span classList={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>
         </span>
       )}
     </Show>
@@ -34,9 +34,7 @@ export function Sats(props: { sats: number; unit?: boolean }) {
   return (
     <span class="amount num">
       {formatSats(props.sats)}
-      <Show when={props.unit !== false}>
-        <span class="unit"> sats</span>
-      </Show>
+      <span classList={{ unit: true, "visually-hidden": props.unit === false }}> sats</span>
     </span>
   );
 }

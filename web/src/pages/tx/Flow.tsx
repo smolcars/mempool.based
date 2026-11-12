@@ -17,7 +17,16 @@ import type { Outspend, Transaction, Vout } from "../../lib/esplora";
 import { feeColor, groupDigits } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { classify, isText, opReturnData, printable } from "./script";
-import { cssMs, isCoinbase, MORE_STEP, shownCount, totalIn, totalOut, vsize } from "./tx";
+import {
+  cssMs,
+  isCoinbase,
+  MORE_STEP,
+  shownCount,
+  totalIn,
+  totalOut,
+  vsize,
+  whyUnspendable,
+} from "./tx";
 
 export type Side = "in" | "out";
 export interface Selection {
@@ -313,7 +322,10 @@ export function Flow(props: {
                 <Show when={out.scriptpubkey_address}>
                   <span>{classify(out.scriptpubkey).label}</span>
                 </Show>
-                <Spent out={out} spend={props.outspends()?.[i()]} txid={props.tx.txid} />
+                <Spent
+                  unspendable={whyUnspendable(props.tx, out) !== null}
+                  spend={props.outspends()?.[i()]}
+                />
               </span>
             </li>
           )}
@@ -346,12 +358,9 @@ export function Flow(props: {
 }
 
 /** Whether an output has been spent, and by which transaction. Nothing until the answer arrives. */
-function Spent(props: { out: Vout; spend: Outspend | undefined; txid: string }) {
+function Spent(props: { unspendable: boolean; spend: Outspend | undefined }) {
   return (
-    <Show
-      when={classify(props.out.scriptpubkey).kind !== "op_return"}
-      fallback={<span>Unspendable</span>}
-    >
+    <Show when={!props.unspendable} fallback={<span>Unspendable</span>}>
       <Show when={props.spend}>
         {(s) => (
           <Show when={s().spent && s().txid} fallback={<span>Unspent</span>}>

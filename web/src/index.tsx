@@ -2,6 +2,7 @@ import { Router } from "@solidjs/router";
 import { render } from "solid-js/web";
 import "../../design/tokens.css";
 import "./styles/global.css";
+import { watchStyles } from "./lib/chunks";
 import { routes } from "./routes";
 import { Shell } from "./shell/Shell";
 
@@ -22,6 +23,7 @@ function useFallbackFonts() {
 
 const root = document.getElementById("root");
 if (root) {
+  watchStyles();
   // Lay text out once: in the preloaded font if it is here in time, otherwise in the fallbacks for good.
   const font = document.fonts.load("1em Recursive").catch(() => []);
   const timeout = new Promise<[]>((resolve) => {

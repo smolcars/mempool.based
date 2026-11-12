@@ -110,7 +110,12 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
     });
   } catch (e) {
     if (signal?.aborted) throw e;
-    throw new ApiError(0, "The server cannot be reached. Check your connection.");
+    throw new ApiError(
+      0,
+      navigator.onLine
+        ? "The server cannot be reached. Check your connection."
+        : "You are offline. Reconnect, then try again.",
+    );
   }
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null);
@@ -133,9 +138,10 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   return { value: value as T, tip: chainTip(res.headers) };
 }
 
+/** Every request is a GET, safe to repeat, so a busy refusal is retried as it says ({@link withRetry}). */
 function cachedOrFetch<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
   if (cache.has(url)) return Promise.resolve({ value: cache.get(url) as T, tip: undefined });
-  return request<T>(url, kind, signal);
+  return withRetry(() => request<T>(url, kind, signal), signal);
 }
 
 /**
@@ -174,10 +180,12 @@ export function fetchApp<T>(
 /** Retries after a refusal that says to (503, 429), this many times before giving up. */
 export const RETRY_ATTEMPTS = 6;
 const RETRY_MAX_MS = 30_000;
+/** Refusals a retry loop already gave up on, so a loop around another never retries them again. */
+const exhausted = new WeakSet();
 
 /**
  * How long to wait before retry `attempt` (0-based) of a failed call, or undefined when it should
- * not be retried: only 503 and 429 are, never sooner than their `Retry-After`, backing off
+ * not be retried: only 503 and 429 are (not the permanent 503s), never sooner than their `Retry-After`, backing off
  * exponentially from 1 s to 30 s, with up to a quarter more at random so clients spread out.
  */
 export function retryDelay(
@@ -185,7 +193,14 @@ export function retryDelay(
   attempt: number,
   random: () => number = Math.random,
 ): number | undefined {
-  if (!(error instanceof ApiError) || (error.status !== 503 && error.status !== 429)) {
+  if (
+    !(error instanceof ApiError) ||
+    (error.status !== 503 && error.status !== 429) ||
+    exhausted.has(error) ||
+    // Every 503 carries Retry-After, but these two refusals are about the address and the server's
+    // setup, which a retry cannot change (docs/API.md, "Error bodies").
+    /too large|index is disabled/i.test(error.message)
+  ) {
     return undefined;
   }
   if (attempt >= RETRY_ATTEMPTS) return undefined;
@@ -201,7 +216,8 @@ const abortReason = (signal: AbortSignal): Error => {
 
 /**
  * Runs `call` until it succeeds, retrying refusals as {@link retryDelay} says. Rejects with the
- * last error, or with the abort reason when `signal` aborts while waiting.
+ * last error, or with the abort reason when `signal` aborts while waiting. Every fetch in this
+ * file already runs inside it; only wrap a call that is safe to repeat.
  */
 export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -211,7 +227,10 @@ export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal)
     } catch (e) {
       if (signal?.aborted) throw abortReason(signal);
       const wait = retryDelay(e, attempt);
-      if (wait === undefined) throw e;
+      if (wait === undefined) {
+        if (e instanceof ApiError) exhausted.add(e);
+        throw e;
+      }
       // oxlint-disable-next-line no-await-in-loop -- the wait is the point
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, wait);
@@ -231,7 +250,7 @@ export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal)
 /**
  * A Solid resource for one API path on the current page's network. Return a falsy path to wait.
  * Refetches when the path or network changes, cancels the request it replaces and the one in
- * flight when the page goes away, and answers at once from the cache.
+ * flight when the page goes away, answers at once from the cache, and retries busy refusals.
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,
@@ -261,8 +280,12 @@ export function createApi<T>(
       controller = undefined;
       const unwrap = (r: Stamped<T>) => (options.stamped === true ? r : r.value);
       if (cache.has(url)) return unwrap({ value: cache.get(url) as T, tip: undefined });
-      controller = new AbortController();
-      return request<T>(url, options.as ?? "json", controller.signal).then(unwrap);
+      const c = new AbortController();
+      controller = c;
+      // The resource stays loading while a busy refusal waits to be retried.
+      return withRetry(() => request<T>(url, options.as ?? "json", c.signal), c.signal).then(
+        unwrap,
+      );
     },
   );
 }

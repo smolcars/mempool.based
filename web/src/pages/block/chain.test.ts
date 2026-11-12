@@ -64,20 +64,18 @@ const coinbase = (values: number[], scriptsig = "03"): Transaction => ({
 });
 
 describe("blockReward", () => {
-  it("sums every output and takes the subsidy off for fees", () => {
+  it("sums every output, beside the subsidy the block could claim", () => {
     expect(blockReward(coinbase([312_000_000, 2_059_121, 0]), 975_516, MAIN)).toStrictEqual({
       reward: 314_059_121,
       subsidy: 312_500_000,
-      fees: 1_559_121,
     });
   });
 
-  it("gives zero fees for the genesis block", () => {
-    expect(blockReward(coinbase([5_000_000_000]), 0, MAIN)?.fees).toBe(0);
-  });
-
-  it("does not invent fees when the miner claimed less than the subsidy", () => {
-    expect(blockReward(coinbase([100]), 975_516, MAIN)?.fees).toBeNull();
+  it("keeps a reward below the subsidy as claimed", () => {
+    expect(blockReward(coinbase([100]), 975_516, MAIN)).toStrictEqual({
+      reward: 100,
+      subsidy: 312_500_000,
+    });
   });
 
   it("refuses transactions that are not a coinbase or carry broken amounts", () => {

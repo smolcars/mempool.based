@@ -14,6 +14,7 @@ import {
   sequenceMeaning,
   shownCount,
   totalIn,
+  whyUnspendable,
 } from "./tx";
 
 const vin = (sequence: number, extra: Partial<Vin> = {}): Vin => ({
@@ -150,5 +151,32 @@ describe("cssMs", () => {
     expect(cssMs(" 45ms")).toBe(45);
     expect(cssMs("0s")).toBe(0);
     expect(cssMs("")).toBe(0);
+  });
+});
+
+describe("whyUnspendable", () => {
+  const output = (scriptpubkey: string) => ({
+    scriptpubkey,
+    scriptpubkey_asm: "",
+    scriptpubkey_type: "unknown" as const,
+    value: 0,
+  });
+  const mined = (height: number, coinbase: boolean): Transaction => ({
+    txid: "00".repeat(32),
+    version: 1,
+    locktime: 0,
+    vin: [vin(0, { is_coinbase: coinbase })],
+    vout: [],
+    status: { confirmed: true, block_height: height },
+  });
+
+  it("names outputs no one can ever spend, and only those", () => {
+    const p2pk = output(`41${"04".repeat(65)}ac`);
+    expect(whyUnspendable(mined(0, true), p2pk)).toContain("genesis");
+    expect(whyUnspendable(mined(1, true), p2pk)).toBeNull();
+    expect(whyUnspendable(mined(0, false), p2pk)).toBeNull();
+    expect(whyUnspendable(mined(5, false), output("6a"))).toContain("OP_RETURN");
+    expect(whyUnspendable(mined(5, false), output("51".repeat(10_001)))).toContain("longer");
+    expect(whyUnspendable(mined(5, false), output("51".repeat(10_000)))).toBeNull();
   });
 });

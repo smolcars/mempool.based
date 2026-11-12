@@ -84,7 +84,8 @@ test("unconfirmed payments are marked and agree with the node's own figures", as
   await expect(rows.filter({ hasText: "Unconfirmed" })).toHaveCount(stats.mempool_stats.tx_count);
   for (const s of summary) {
     const row = rows.filter({ has: page.locator(`a[href$="${s.txid}"]`) });
-    await expect(row.locator("td").nth(2)).toHaveText(`+${(s.value / 1e8).toFixed(8)}`);
+    // The unit is hidden from sight, in the header, but read out with the number.
+    await expect(row.locator("td").nth(2)).toHaveText(`+${(s.value / 1e8).toFixed(8)} BTC`);
   }
 });
 

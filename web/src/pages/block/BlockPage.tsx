@@ -15,7 +15,7 @@ import {
   Suspense,
   Switch,
 } from "solid-js";
-import { Amount } from "../../components/Amount";
+import { Amount, Sats } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { Hash, HashFull } from "../../components/Hash";
@@ -27,12 +27,11 @@ import { TimeAgo, TimeUtc } from "../../components/Time";
 import type { GridState } from "../../components/txgrid/TxGrid";
 import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
 import type { GridTx } from "../../components/txgrid/layout";
-import { createApi, fetchApi, fetchApp, isNotFound, withRetry } from "../../lib/api";
+import { createApi, fetchApi, fetchApp, isNotFound } from "../../lib/api";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
   formatFeeRate,
-  formatSats,
   formatSize,
   groupDigits,
   MISSING,
@@ -243,11 +242,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
       const c = new AbortController();
       gridController = c;
       const path = `/block/${hash}/txs`;
-      const reply = await withRetry(
-        () => fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal: c.signal }),
-        c.signal,
-      );
-      return decodeTxs(reply);
+      return decodeTxs(await fetchApp<ArrayBuffer>(n, path, { as: "bytes", signal: c.signal }));
     },
   );
   // The renderer's code downloads while the data does.
@@ -334,6 +329,20 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
     if (!blk || ready(first) === undefined) return undefined;
     return blockReward(coinbase(), blk.height, HALVING_INTERVAL[network()]);
   };
+  // A miner may claim less than the subsidy and fees allow; what it left out was never created.
+  const unclaimed = () => {
+    const r = reward();
+    const f = sum()?.fees;
+    return r && f !== undefined ? Math.max(0, r.subsidy + f - r.reward) : 0;
+  };
+  const summaryRetry = () => (
+    <span class="block-fact__pending">
+      Could not load.{" "}
+      <button type="button" class="block-fact__retry" onClick={() => void summaryCtl.refetch()}>
+        Try again
+      </button>
+    </span>
+  );
   const tag = () => {
     const blk = b();
     const vin = coinbase()?.vin?.[0];
@@ -509,16 +518,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                       </Show>
                     )
                   ) : (
-                    <span class="block-fact__pending">
-                      Could not load.{" "}
-                      <button
-                        type="button"
-                        class="block-fact__retry"
-                        onClick={() => void summaryCtl.refetch()}
-                      >
-                        Try again
-                      </button>
-                    </span>
+                    summaryRetry()
                   )
                 }
                 sub={sum() && !rates() ? "Only the coinbase, which pays none" : undefined}
@@ -546,19 +546,17 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 label="Total fees"
                 wide="phone"
                 value={
-                  reward() === undefined ? undefined : (
-                    <Show when={typeof reward()?.fees === "number"} fallback={MISSING}>
-                      <Amount sats={reward()?.fees ?? 0} />
-                    </Show>
+                  failed(summary) === undefined ? (
+                    sum() === undefined ? undefined : (
+                      <Show when={sum()} fallback={MISSING}>
+                        {(f) => <Amount sats={f().fees} />}
+                      </Show>
+                    )
+                  ) : (
+                    summaryRetry()
                   )
                 }
-                sub={
-                  reward() === null
-                    ? "Not available for this block"
-                    : reward()?.fees === null
-                      ? "The miner claimed less than the subsidy"
-                      : reward() && `${formatSats(reward()?.fees ?? 0)} sats`
-                }
+                sub={sum() && <Sats sats={sum()?.fees ?? 0} />}
               />
               <Fact
                 label="Reward"
@@ -571,11 +569,16 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                   )
                 }
                 sub={
-                  reward() && (
+                  reward() &&
+                  (unclaimed() > 0 ? (
+                    <>
+                      <Amount sats={unclaimed()} /> less than the subsidy and fees allowed
+                    </>
+                  ) : (
                     <>
                       <Amount sats={reward()?.subsidy ?? 0} /> subsidy
                     </>
-                  )
+                  ))
                 }
               />
               <Fact
@@ -589,7 +592,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                         <Show
                           when={t().readable}
                           fallback={
-                            <span class="block-tag block-tag--hex">{t().hex || MISSING}</span>
+                            <Show when={t().hex} fallback="None">
+                              {(hex) => <span class="block-tag block-tag--hex">{hex()}</span>}
+                            </Show>
                           }
                         >
                           <span class="block-tag">
@@ -616,7 +621,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 sub={
                   ready(first) !== undefined &&
                   (tag()?.readable === false
-                    ? "No readable text; shown as hex"
+                    ? tag()?.hex
+                      ? "No readable text; shown as hex"
+                      : "The miner wrote nothing after the height"
                     : tag() && "Written by the miner. Dots stand for bytes that are not text")
                 }
               />
@@ -729,32 +736,51 @@ const vsize = (tx: Transaction) =>
   tx.weight === undefined ? undefined : vsizeFromWeight(tx.weight);
 const isCoinbase = (tx: Transaction) => tx.vin?.[0]?.is_coinbase === true;
 
+/** A row's fee rate, or what stands in for one. */
+function RateCell(props: { tx: Transaction; unit: boolean }) {
+  const rate = () => {
+    const v = vsize(props.tx);
+    return props.tx.fee === undefined || v === undefined ? null : feeRate(props.tx.fee, v);
+  };
+  return (
+    <Show when={!isCoinbase(props.tx)} fallback={<span class="muted">Coinbase</span>}>
+      <Show when={rate()} fallback={MISSING}>
+        {(r) => <FeeRate rate={r()} unit={props.unit} />}
+      </Show>
+    </Show>
+  );
+}
+
 const columns = [
   {
     header: "Transaction",
     cell: (tx: Transaction | null) =>
       tx ? (
-        <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+        <span class="block-txcell">
+          <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+          {/* Phones drop the fee rate column, so the rate moves under the txid. */}
+          <span class="block-txcell__rate">
+            <RateCell tx={tx} unit />
+          </span>
+        </span>
       ) : (
         <Skel />
       ),
   },
   {
     header: "Fee rate, sat/vB",
-    cell: (tx: Transaction | null) => {
-      if (!tx) return <Skel size="s" />;
-      if (isCoinbase(tx)) return <span class="muted">Coinbase</span>;
-      const v = vsize(tx);
-      const rate = tx.fee === undefined || v === undefined ? null : feeRate(tx.fee, v);
-      return rate === null ? MISSING : <FeeRate rate={rate} unit={false} />;
-    },
+    optional: true,
+    cell: (tx: Transaction | null) => (tx ? <RateCell tx={tx} unit={false} /> : <Skel size="s" />),
   },
   {
     header: "Fee, sats",
     numeric: true,
     optional: true,
-    cell: (tx: Transaction | null) =>
-      tx ? isCoinbase(tx) ? "" : formatSats(tx.fee ?? Number.NaN) : <Skel size="s" />,
+    cell: (tx: Transaction | null) => {
+      if (!tx) return <Skel size="s" />;
+      if (isCoinbase(tx)) return "";
+      return tx.fee === undefined ? MISSING : <Sats sats={tx.fee} unit={false} />;
+    },
   },
   {
     header: "Size, vB",
@@ -763,7 +789,14 @@ const columns = [
     cell: (tx: Transaction | null) => {
       if (!tx) return <Skel size="s" />;
       const v = vsize(tx);
-      return v === undefined ? MISSING : groupDigits(v);
+      return v === undefined ? (
+        MISSING
+      ) : (
+        <>
+          {groupDigits(v)}
+          <span class="visually-hidden"> vB</span>
+        </>
+      );
     },
   },
   {

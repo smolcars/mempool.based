@@ -15,7 +15,9 @@ test("a confirmed transaction names every output type and links where the money 
   for (const type of ["P2PKH", "P2SH", "P2WPKH", "P2WSH", "P2TR", "Pay to anchor"]) {
     await expect(outputs.getByText(type, { exact: true }).first()).toBeVisible();
   }
-  await expect(outputs).toContainText("OP_RETURN “mempool.based regtest”");
+  await expect(outputs).toContainText("OP_RETURN “mempool.based regtest”Unspendable");
+  // Amounts keep their unit for screen readers, though the cards show bare numbers.
+  await expect(outputs.getByText("1.00000000 BTC", { exact: true }).first()).toBeAttached();
   // spend_p2sh_p2a spent the P2SH and P2A outputs.
   await expect(
     outputs.getByRole("link", { name: `Spent in transaction ${chain.txs.spend_p2sh_p2a}` }),
@@ -37,6 +39,17 @@ test("a coinbase shows as new coins and pays no fee", async ({ page, request }) 
   await expect(page.getByRole("list", { name: "Inputs" })).toContainText("Coinbase");
   await expect(page.getByText("None: a coinbase pays no fee")).toBeVisible();
   await expect(page.getByText("Spendable")).toBeVisible();
+});
+
+test("the genesis coinbase is never called spendable or unspent", async ({ page, request }) => {
+  const genesis = await request.get("/regtest/api/block-height/0");
+  const txid = await (
+    await request.get(`/regtest/api/block/${await genesis.text()}/txid/0`)
+  ).text();
+  await page.goto(`/regtest/tx/${txid}`);
+  await expect(page.getByText("Never spendable")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Outputs" })).toContainText("Unspendable");
+  await expect(page.getByRole("list", { name: "Outputs" })).not.toContainText("Unspent");
 });
 
 // Two versions of one payment, built by hand like the harness's own: block 9's coinbase (the

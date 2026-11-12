@@ -446,7 +446,7 @@ describe("BlockPage", () => {
   });
 
   it("offers a retry when the node is unavailable", async () => {
-    const down = { status: 503, body: { error: "node unavailable" } };
+    const down = { status: 502, body: { error: "node unavailable" } };
     serve({ ...normal(), [`/block/${HASH}`]: (n) => (n === 1 ? down : { body: block }) });
     const el = open(`/block/${HASH}`);
     const retry = await until(() => {
@@ -457,6 +457,31 @@ describe("BlockPage", () => {
     expect(text(el)).toContain("Node unavailable.");
     retry.click();
     await until(() => expect(text(el.querySelector("h1") as Element)).toBe("Block 975 411"));
+  });
+
+  it("takes the fees from the summary and says when the miner claimed less than it could", async () => {
+    // Block 124 724 on mainnet did this: the coinbase pays less than the subsidy alone.
+    const short = {
+      ...coinbase,
+      vin: [{ txid: "00".repeat(32), vout: 0xffffffff, is_coinbase: true, scriptsig: "0333e20e" }],
+      vout: [{ ...coinbase.vout[0], value: 312_000_000 }] as Transaction["vout"],
+    };
+    serve({
+      ...normal(),
+      [`/block/${HASH}/txs/0`]: {
+        body: [short, ...Array.from({ length: 24 }, (_, i) => tx(i + 1))],
+      },
+    });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Total fees")).toContain("0.00500000 BTC"));
+    expect(fact(el, "Total fees")).toContain("500 000 sats");
+    await until(() =>
+      expect(fact(el, "Reward")).toContain(
+        "3.12000000 BTC0.01000000 BTC less than the subsidy and fees allowed",
+      ),
+    );
+    // A tag with nothing after the height says so, rather than "shown as hex" over a dash.
+    expect(fact(el, "Coinbase tag")).toBe("NoneThe miner wrote nothing after the height");
   });
 
   it("uses the network's halving interval", async () => {

@@ -15,7 +15,14 @@ import {
   opReturnData,
   printable,
 } from "./script";
-import { coinbaseHeight, formatSequence, MORE_STEP, SHOW_ALL_MAX, sequenceMeaning } from "./tx";
+import {
+  coinbaseHeight,
+  formatSequence,
+  MORE_STEP,
+  SHOW_ALL_MAX,
+  sequenceMeaning,
+  whyUnspendable,
+} from "./tx";
 
 /** Witness items listed at first; each "Show more" adds MORE_STEP. */
 const WITNESS_SHOWN = 24;
@@ -85,6 +92,7 @@ export function Inspector(props: {
               vout={vout()}
               spend={props.outspends()?.[props.selected.index]}
               failed={props.outspends() === null}
+              unspendable={whyUnspendable(props.tx, vout())}
             />
           )}
         </Match>
@@ -214,7 +222,12 @@ function InputDetails(props: { vin: Vin; version: number }) {
   );
 }
 
-function OutputDetails(props: { vout: Vout; spend: Outspend | undefined; failed: boolean }) {
+function OutputDetails(props: {
+  vout: Vout;
+  spend: Outspend | undefined;
+  failed: boolean;
+  unspendable: string | null;
+}) {
   const kind = () => classify(props.vout.scriptpubkey);
   const data = createMemo(() =>
     kind().kind === "op_return" ? opReturnData(props.vout.scriptpubkey) : null,
@@ -241,9 +254,7 @@ function OutputDetails(props: { vout: Vout; spend: Outspend | undefined; failed:
         <Fact label="Script type">{kind().label}</Fact>
         <Fact label="Spent">
           <Switch fallback="Checking…">
-            <Match when={kind().kind === "op_return"}>
-              No: an OP_RETURN output can never be spent
-            </Match>
+            <Match when={props.unspendable}>{(why) => `Unspendable: ${why()}`}</Match>
             <Match when={props.failed}>
               Could not check right now. Reload the page to try again.
             </Match>

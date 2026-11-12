@@ -9,7 +9,7 @@ import { ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
 import { createApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
-import { groupDigits, MISSING, NNBSP, truncateMiddle } from "../../lib/format";
+import { formatSize, groupDigits, MISSING, NNBSP, truncateMiddle } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
@@ -21,13 +21,6 @@ import "./BlocksPage.css";
 const PAGE = 10;
 /** Summary requests in flight at once on this page. */
 const IN_FLIGHT = 2;
-
-/** Thousands with two decimals, for table cells whose unit is in the header: 1 607 007 → `1 607.01`. */
-export function formatThousands(n: number): string {
-  if (!Number.isFinite(n) || n < 0) return "–";
-  const hundredths = Math.round(n / 10);
-  return `${groupDigits(Math.floor(hundredths / 100))}.${String(hundredths % 100).padStart(2, "0")}`;
-}
 
 /** A row's fee facts: here, still loading, or given up on. */
 type RowFacts = BlockSummary | "failed" | undefined;
@@ -63,6 +56,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
   {
     header: "Transactions",
     numeric: true,
+    optional: true,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
   },
   {
@@ -84,14 +78,15 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       return f === "failed" ? MISSING : <Amount sats={f.fees} unit={false} />;
     },
   },
+  // Sizes carry their unit in the cell, as on the block page: they span B to MB (docs/DESIGN.md).
   {
-    header: "Size, kB",
+    header: "Size",
     numeric: true,
     optional: true,
-    cell: (b: Block | null) => (b ? formatThousands(b.size) : <Skel size="s" />),
+    cell: (b: Block | null) => (b ? formatSize(b.size, "B") : <Skel size="s" />),
   },
   {
-    header: "Weight, kWU",
+    header: "Weight",
     numeric: true,
     optional: true,
     cell: (b: Block | null) =>
@@ -100,7 +95,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
           <span class="blocks-weight__bar" aria-hidden="true">
             <span class="blocks-weight__fill" style={{ "--fill": String(fullness(b.weight)) }} />
           </span>
-          {formatThousands(b.weight)}
+          {formatSize(b.weight, "WU")}
         </span>
       ) : (
         <Skel size="s" />

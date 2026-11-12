@@ -137,9 +137,46 @@ describe("retries", () => {
     expect(retryDelay(busy(503, 1), RETRY_ATTEMPTS)).toBeUndefined();
   });
 
-  it("keeps the Retry-After of a refusal on the error", async () => {
-    vi.stubGlobal("fetch", async () => reply(503, '{"error":"busy"}', { "retry-after": "1" }));
-    await expect(fetchApi("mainnet", "/x")).rejects.toMatchObject({ status: 503, retryAfter: 1 });
+  it("waits as a busy refusal says, then answers", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(reply(429, '{"error":"slow down"}', { "retry-after": "2" }))
+      .mockResolvedValue(reply(200, "7"));
+    vi.stubGlobal("fetch", fetch);
+    const settled = Promise.allSettled([fetchApi("mainnet", "/x")]);
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(700);
+    await expect(settled).resolves.toStrictEqual([{ status: "fulfilled", value: 7 }]);
+    vi.useRealTimers();
+  });
+
+  it("gives up with the last refusal, which a retry around it does not retry again", async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn<() => Promise<Response>>(async () =>
+      reply(503, '{"error":"busy"}', { "retry-after": "1" }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const settled = Promise.allSettled([withRetry(() => fetchApi("mainnet", "/x"))]);
+    await vi.advanceTimersByTimeAsync(300_000);
+    await expect(settled).resolves.toMatchObject([
+      { status: "rejected", reason: { status: 503, retryAfter: 1 } },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(RETRY_ATTEMPTS + 1);
+    vi.useRealTimers();
+  });
+
+  it("says when the reader is offline rather than blaming the server", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    await expect(fetchApi("mainnet", "/x")).rejects.toMatchObject({
+      status: 0,
+      message: "You are offline. Reconnect, then try again.",
+    });
+    vi.restoreAllMocks();
   });
 
   it("calls again after the wait, and gives up on the first other failure", async () => {

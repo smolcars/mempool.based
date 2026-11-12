@@ -48,6 +48,15 @@ P2TR = b"\x51\x20" + tag("p2tr")
 NOTE = b"mempool.based regtest"
 OP_RETURN = b"\x6a" + bytes([len(NOTE)]) + NOTE
 UNLOCK = {MINER: (b"", [OP_TRUE]), P2SH_TRUE: (b"\x01" + OP_TRUE, []), P2A: (b"", [])}
+# Text an attacker can put on chain, for the browser test that pages show it as inert text.
+HOSTILE_NOTES = [
+    b"<img src=x onerror=alert(1)>",
+    b"javascript:alert(document.domain)",
+    "\u202eevil\u202c \u2066rtl\u2069 \u200bzero-width".encode(),
+    b"</title><script>alert(1)</script>",
+    b"line1\nline2\r\n\x1b[31mANSI\x1b[0m\x00NUL",
+]
+HOSTILE_TAG = "<script>alert('cb')</script>\u202e <b>pool</b>".encode()
 
 
 # --- docker -----------------------------------------------------------------
@@ -206,6 +215,45 @@ def mine_at_fixed_times(n):
     return hashes
 
 
+def submit_tagged_block(tag_bytes, short_by):
+    """Mines an empty block by hand whose coinbase carries tag_bytes after the height, and claims
+    short_by sats less than the subsidy. Returns (block hash, coinbase txid)."""
+    prev = rpc("getbestblockhash")
+    head = rpc("getblockheader", prev)
+    height = head["height"] + 1
+    bip34 = height.to_bytes((height.bit_length() + 8) // 8, "little")
+    script_sig = bytes([len(bip34)]) + bip34 + bytes([len(tag_bytes)]) + tag_bytes
+    reward = (50 * 100_000_000 >> (height // 150)) - short_by  # regtest halves every 150 blocks
+    coinbase = (struct.pack("<i", 2) + b"\x01" + b"\x00" * 32 + b"\xff\xff\xff\xff" + varint(len(script_sig))
+                + script_sig + b"\xff\xff\xff\xff" + b"\x01" + struct.pack("<q", reward) + varint(len(MINER))
+                + MINER + b"\x00\x00\x00\x00")
+    txid = sha256(sha256(coinbase))  # one transaction: it is the merkle root
+    bits = int(head["bits"], 16)
+    target = (bits & 0xFFFFFF) << (8 * ((bits >> 24) - 3))
+    when = max(int(time.time()), head["mediantime"] + 1)
+    for nonce in range(1 << 32):
+        header = (struct.pack("<i", 0x20000000) + bytes.fromhex(prev)[::-1] + txid
+                  + struct.pack("<III", when, bits, nonce))
+        block_hash = sha256(sha256(header))[::-1]
+        if int.from_bytes(block_hash, "big") <= target:
+            break
+    result = rpc("submitblock", (header + b"\x01" + coinbase).hex())
+    if result is not None:
+        sys.exit(f"regtest: submitblock refused the tagged block: {result}")
+    return block_hash.hex(), txid[::-1].hex()
+
+
+def hostile():
+    """A mined transaction with hostile OP_RETURN text and a payment to the P2WPKH address, then a
+    block whose coinbase tag is markup with a right-to-left override and claims less than it may."""
+    [coin] = take_coins()
+    outs = [(b"\x6a" + bytes([len(n)]) + n, 0) for n in HOSTILE_NOTES] + [(P2WPKH, 10_000)]
+    txid = broadcast([coin], outs, 2)
+    mine(1)
+    block, coinbase = submit_tagged_block(HOSTILE_TAG, 1_000)
+    return {"tx": txid, "block": block, "coinbase": coinbase}
+
+
 def rbf():
     [coin] = take_coins()
     outs = [(P2TR, 25_000_000)]
@@ -313,6 +361,8 @@ def main():
     sub.add_parser("cpfp", help="broadcast a low-fee parent and a high-fee child").set_defaults(
         f=lambda _: print(json.dumps(cpfp(), indent=2)))
     sub.add_parser("scenario", help="reset, build the known chain, print its manifest").set_defaults(f=cmd_scenario)
+    sub.add_parser("hostile", help="mine hostile OP_RETURN text and a hostile coinbase tag").set_defaults(
+        f=lambda _: print(json.dumps(hostile(), indent=2)))
     args = p.parse_args()
     try:
         args.f(args)
