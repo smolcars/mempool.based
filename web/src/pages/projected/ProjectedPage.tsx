@@ -314,15 +314,7 @@ function ProjectedView(props: { index: number }) {
 
       <Show when={!off()} fallback={<Off />}>
         <div class="projected-layout">
-          <CoreSample
-            index={index}
-            block={block()}
-            txs={hasMap ? txs() : undefined}
-            highlight={highlight()}
-            found={told()?.at}
-            lastChange={lastChange()}
-          />
-          <dl class="projected-facts">
+          <dl class="projected-facts panel">
             <Fact
               label="Transactions"
               value={block() && <span class="num">{groupDigits(block()?.txs ?? 0)}</span>}
@@ -361,6 +353,14 @@ function ProjectedView(props: { index: number }) {
             />
             <Fact label="Expected" wide value={expected()} />
           </dl>
+          <CoreSample
+            index={index}
+            block={block()}
+            txs={hasMap ? txs() : undefined}
+            highlight={highlight()}
+            found={told()?.at}
+            lastChange={lastChange()}
+          />
         </div>
 
         <Show when={hasMap}>
@@ -370,7 +370,7 @@ function ProjectedView(props: { index: number }) {
                 <span class="num">{groupDigits(sorted().length)}, highest fee rate first</span>
               </Show>
             </SectionHeader>
-            {/* A row under the pointer or focus rings its square in the map above. */}
+            {/* A row under the pointer or focus rings its rectangle in the map. */}
             <div
               class="projected-txs__table"
               onPointerOver={rowAt}
@@ -649,10 +649,10 @@ function CoreSample(props: {
   const where = positionName(props.index, true);
   const label = () => {
     const n = props.txs?.length ?? 0;
-    return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
+    return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one rectangle each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
   };
   return (
-    <figure class={["projected-core", { "projected-core--grid": drawn() }]}>
+    <figure class={["projected-core panel", { "projected-core--grid": drawn() }]}>
       <div class={["projected-core__frame", { "projected-core__frame--empty": empty() }]}>
         <span class="projected-core__limit" aria-hidden="true">
           {isRest ? "One block's limit" : "Weight limit"}
@@ -732,9 +732,9 @@ function CoreSample(props: {
           <Show when={fill() !== undefined && !empty()}>
             It would fill ~{percent(fill() ?? 0)} of the weight limit.{" "}
           </Show>
-          Each square is a transaction, as large as its virtual size and colored by the rate it
-          would be mined at, the highest at the top left. Newcomers drop in; what is outbid or
-          leaves fades where it stood.{" "}
+          Each rectangle is a transaction, its area its virtual size, shaded by the rate it would be
+          mined at, the dearest at the top left. Newcomers drop in; what is outbid or leaves fades
+          where it stood.{" "}
           {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
           <a href="#projected-txs-title" rel="external">
             Every transaction is in the list below.

@@ -73,7 +73,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
             </Show>
           </Stat>
           <Stat label="Fees waiting">
-            <Show when={m()}>{(s) => <Amount sats={s().fees} />}</Show>
+            <Show when={m()}>{(s) => <Amount sats={s().fees} short />}</Show>
           </Stat>
           <Stat label="Lowest accepted">
             <Show when={m()}>

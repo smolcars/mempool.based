@@ -199,10 +199,11 @@
   }
 
   /* ---- Core sample and facts ---- */
+  /* The facts first, the map beside them; on narrow screens, the facts above it. */
   .projected-layout {
     display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    gap: var(--space-7);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: var(--space-5);
     align-items: start;
   }
 
@@ -422,7 +423,7 @@
   @media (max-width: 1040px) {
     .projected-layout {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--space-6);
+      gap: var(--space-4);
     }
   }
   @media (max-width: 640px) {
