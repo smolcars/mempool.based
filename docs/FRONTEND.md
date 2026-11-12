@@ -175,7 +175,7 @@ Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUin
 
 **Caching.** A summary is fixed by its hash, so success is `Cache-Control: public, max-age=31536000, immutable`, and `api.ts`-style in-memory caching is right. Errors are `no-store`.
 
-**Cost and limits.** A block in the block table with its fee rates ([`STORE.md`](STORE.md#blocks)) costs nothing: once backfilled, the facts of the last year's blocks come from there. `/txs` always needs the node. An uncached block costs the node a heavy call (about 0.7 s and 10 MB on mainnet), so:
+**Cost and limits.** A block in the block table with its fee rates ([`STORE.md`](STORE.md#blocks)) costs nothing: once backfilled, the facts of the last year's blocks come from there. `/txs` always needs the node. An uncached block costs the node a block listing: about 60 ms and 0.3 MB on mainnet where the node has the listing route, a heavy call (about 0.7 s and 10 MB) where it does not ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)), so:
 
 - Concurrent requests for one block share one computation, and the facts and the records come from the same one.
 - The newest ten blocks are computed as they arrive, so the home page's tiles are always cached. A new block's facts are also pushed on the WebSocket as a `summary` message; use that rather than fetching.

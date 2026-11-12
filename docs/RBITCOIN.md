@@ -39,6 +39,27 @@ RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `
 - **Output lookup by position:** `GET /block-height/:height/tx/:index/out/:vout`, and a batch form `POST /block-heights/txs/outs` taking up to 300. Built for Lightning gossip validation and needs no address index.
 - **Chain-tip stamps.** Block, transaction and tip routes carry `X-Bitcoin-Chain-Tip` and `X-Bitcoin-Chain-Tip-Height`. If two sequential fetches disagree, the tip moved between them: discard and retry. Address and scripthash routes are stamped with the address index's position, which can trail the tip. Mempool, fee-estimate and broadcast routes carry no stamp (the paged `/mempool/txids/page` does). `?asof=<blockhash>` pins a read to an ancestor.
 
+## Listing a block's transactions
+
+The block summaries, the block audit and the fee-rate backfill need each transaction of a block with its txid, fee, weight and output value. `crates/engine/src/blocks/listing.rs` gets them from one of two sources and gives the same value from either.
+
+| Source | Node | Calls | A recent full mainnet block |
+|---|---|---|---|
+| `GET /block/:hash/txs/summary` ([rbitcoin PR 1578](https://github.com/rbitcoin-org/rbitcoin/pull/1578)), with `/block/:hash` for the height, times, size and parent, and `/tx/:coinbase/raw` for who mined it | after v0.9.2 | three Esplora | 61 ms and 322 KB |
+| `getblock` at verbosity 2 | every version | one JSON-RPC | 1,315 ms and 10.3 MB |
+
+Both measured on mainnet the same afternoon, read-only, paced at 50%, while the node also ran another server's full backfill: the route over 1,000 consecutive blocks, `getblock` over 50 (it is too heavy for more on a shared node). The route answers one `[txid, fee, weight, value]` row per transaction in block order, coinbase first with fee 0; fee and value in sats, BIP141 weight. Its virtual size is `ceil(weight / 4)`, the same as `getblock`'s `vsize`, which is not sigop-adjusted either.
+
+**Which one.** Each network asks its node once Electrum connects, at startup and after every reconnect, since a node can be upgraded or downgraded under us: it lists the genesis block through the route. A `200`, or a `404` (the route's own answer for a block it cannot list, such as a pruned one), means the node has it. v0.9.2 refuses the path itself with ``400 Invalid URL: Cannot parse value at index 1 with value `summary` to a `u32` ``, because it falls through to `/block/:hash/txs/:start_index`; any `4xx` but `404` means `getblock`. No answer leaves it open, and the next block listed tries the route. The answer is logged as `block_txs_source` ([`LOGGING.md`](LOGGING.md#block-summaries)). No setting chooses it.
+
+**When the route fails mid-run.** A refusal (a `4xx` other than `404`) switches the network to `getblock` until the next reconnect asks again. Anything else, a `404` for a block off the best chain, a timeout, a malformed answer, or a row count or coinbase that disagrees with the block's header, lists that one block through `getblock` and keeps the route for the next (`block_txs_fell_back`). A malformed answer is an error value, never a panic: the rows are parsed into typed values, an answer over 4 MiB or over 20,000 rows (a block holds at most 16,666 transactions) is refused, and the header and coinbase must match the rows.
+
+**Identical results.** `cargo run --release -p engine --example listing_equality` lists blocks through both and compares what we derive from them byte for byte: the fee-rate percentiles, the ten fee bands, the miner, the block view's binary records, the `/api/v1` summary rows' txids and weights, and the audit's fees and sizes. On 2026-11-12 it found no difference in 203 mainnet blocks (spread over the whole chain and the newest 20; 31 holding only their coinbase; genesis, block 170, the BIP30 duplicate coinbases at 91,812 and 91,842, a coinbase short of its reward at 124,724 and one claiming nothing at 501,726, the SegWit and Taproot activation blocks, 774,628 with its near-4 MB transaction, the 2024 halving; 326,157 transactions), 50 signet blocks (10 empty, 9,738 transactions) and 50 testnet4 blocks (25 empty, 1,657 transactions).
+
+**What the route does not give.** The coinbase's script and outputs, for who mined the block, and the block's height, times, size and parent: those come from the two small Esplora calls beside it (about 1 KB). Every input's previous output, which the `/api/v1` summary's `flags` would need: neither source gives it ([`API.md`](API.md#blocks)).
+
+When a release contains the route, raising the pin and deleting the `getblock` fallback (marked `shortcut:` in `listing.rs`) is a task of its own.
+
 ## What it does not give us
 
 | Missing | Consequence |
@@ -70,6 +91,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 | `getmempoolfeeratediagram` | 330 ms | 309 KB, 9,441 chunks |
 | `getblocktemplate` | 390 ms | 4.9 MB, 7,501 transactions |
 | `getblock` verbosity 2 | 550–860 ms | 10.4 MB, 4,200 transactions |
+| `/block/:hash/txs/summary` (newer than v0.9.2) | 55 ms | 234 KB, 2,792 transactions (measured later, at the tip; [above](#listing-a-blocks-transactions) for both under the same load) |
 | `getrawmempool` verbose | 5.7 s | 39.5 MB |
 
 ## Rules that follow
@@ -77,14 +99,14 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Never poll verbose `getrawmempool`.** Use it at most once at startup. Diff txids and fetch details for new ones.
 - **Batch RPC calls.** A JSON-RPC array is one HTTP request and one work-queue slot, and answers in order. 1,000 `getrawtransaction` calls in one array take about 300 ms ([`MEMPOOL.md`](MEMPOOL.md)).
 - **Ask `getblockstats` for the stats you need.** With no list it also computes its UTXO statistics, about a second per recent block; any short list of totals costs 20 to 30 ms.
-- **Compute fee-rate percentiles ourselves.** `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
+- **Compute fee-rate percentiles ourselves,** from the block listing. `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
 - **Expect 503 on huge addresses.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused. Use the paged routes and surface the limit to the user.
 - **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
 - **A malformed entry in `/internal/txs/outspends/by-outpoint` is answered as unspent,** not as an error (200 with `{"spent":false}`). Build the entries from typed values only, so a bad one cannot be sent.
 - **`getmempoolfeeratediagram` returns one point per chunk,** in mining order, not Core's running total.
-- **`getblock` verbosity 2 carries every transaction's fee** (the coinbase has none). Its `vsize` is the plain BIP141 size, not adjusted for sigops.
+- **`getblock` verbosity 2 carries every transaction's fee** (the coinbase has none). Its `vsize` is the plain BIP141 size, not adjusted for sigops. `/block/:hash/txs/summary` gives the coinbase a fee of 0 and weight instead of vsize; the listing turns both into `getblock`'s shape.
 - **`getmininginfo.networkhashps` does not fit a `u64`** on mainnet.
 - **`getblocktemplate` on signet needs the `signet` rule;** mainnet and testnet4 accept it too, so we always send it.
 - **v0.9.2 can announce a tip over Electrum before Esplora serves the block, and not to every subscriber at once.** Right after a new block its async workers, which also serve Electrum and Esplora, are busy deciding how to announce the tip to each peer, rebuilding whole blocks to read one header field ([rbitcoin PR 1577](https://github.com/rbitcoin-org/rbitcoin/pull/1577)). On signet (five blocks, three subscribers each), one subscriber heard of each block 320–470 ms before another, and a request for the block made in that window was held, not refused, for 357–475 ms. On mainnet (2026-11-12, three blocks) our `block` message left 118, 206 and 1,486 ms after the announcement, and one block (975,560) was not served for over 3 s. Testnet4 and regtest showed no gap. A build with PR 1577 (merged after v0.9.2, in no release yet) removes it: Esplora served each new block at the first request, 11–25 ms after our own Electrum subscription heard of it, over three mainnet and five signet blocks, and our `block` message left 11–43 ms after the server's announcement. What we do either way: the hub asks for a new block every 25 ms at first and less often as the wait grows, for up to `WS_BLOCK_WAIT_SECS` (60 s), and the block table keeps looking after that ([`WS.md`](WS.md#blocks)), so a late block costs time, never the block.
@@ -99,7 +121,7 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A mempool event stream (added, removed with reason, sequence number) | Removes the polling lag of up to one interval and the 260 ms diff |
 | `/internal/*` over an authenticated TCP listener | Bulk fetches when the server is not on the node's host |
 | Sub-sat precision in `getblockstats` percentiles | We could stop recomputing them |
-| A compact per-block transaction listing (txid, fee, vsize and value for each transaction) | Today each block's picture and fee rates cost a `getblock` at verbosity 2: about 10 MB and 550 to 860 ms. The same facts fit in about 0.2 MB, which would also shrink a year of fee-rate backfill from about 550 GB to about 11 GB (estimated, not measured) |
+| A compact per-block transaction listing (txid, fee, weight and value for each transaction) | Delivered upstream by [rbitcoin PR 1578](https://github.com/rbitcoin-org/rbitcoin/pull/1578), in no release yet, as `GET /block/:hash/txs/summary`, and used where the node has it ([above](#listing-a-blocks-transactions)). A year of fee-rate backfill went from about 550 GB read to about 17 GB, measured ([`STORE.md`](STORE.md#backfill)) |
 | A new tip announced only once the block can be served | Delivered upstream by [rbitcoin PR 1577](https://github.com/rbitcoin-org/rbitcoin/pull/1577), in no release yet: a just-announced block is served at the first request instead of being held 0.3 to 1.5 s |
 | Outpoint pushes for mempool spends | A transaction page could show an output being spent as it happens, without polling |
 | A paged or capped address-totals route | Addresses above `--max-sh-creates` get no totals or unspent list today, only paged history |
