@@ -61,6 +61,16 @@ if (total > BUDGET) {
   process.exit(1);
 }
 
+// Cascade layers are ordered by where each first appears, so the first stylesheet the shell links
+// must open with global.css's order (reset first), or every component would lose to the reset.
+const firstStyles = /<link rel="stylesheet"[^>]*href="\/assets\/([\w-]+\.css)"/.exec(html)?.[1];
+const firstLayer =
+  firstStyles && /@layer\s+(\w+)/.exec(readFileSync(new URL(firstStyles, assets), "utf8"));
+if (firstLayer?.[1] !== "reset") {
+  console.error(`The first stylesheet, ${firstStyles}, does not open with the reset layer.`);
+  process.exit(1);
+}
+
 // Every file a cold home page asks for before it shows data: the document, what it links to, and
 // the home route's dependencies as the entry's preload list names them (`__vite__mapDeps`).
 const linked = [...html.matchAll(/(?:src|href)="\/([\w./-]+)"/g)].flatMap((m) =>

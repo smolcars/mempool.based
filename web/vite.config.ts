@@ -50,7 +50,7 @@ export default defineConfig({
           groups: [
             {
               name: "app",
-              test: /\/src\/(lib\/(live|blocks-topic|projected-topic|clock)\.ts|components\/(Amount|DataTable|FeeRate|Hash|SectionHeader|Strata|Time)\.tsx)$/,
+              test: /(\/design\/tokens\.css|\/src\/styles\/global\.css|\/src\/(lib\/(live|blocks-topic|projected-topic|clock)\.ts|components\/(Amount|DataTable|FeeRate|Hash|SectionHeader|Strata|Time)\.tsx))$/,
             },
           ],
         },
