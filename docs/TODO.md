@@ -119,7 +119,7 @@ Refined when M4 lands.
 | C1c | Replacement trees: keep the figures of a root that a miner confirmed after we saw it replaced, and unmark a replacement whose block is reorged away | C1b | done ([#76](https://github.com/smolcars/rbitcoin-space/pull/76)) for the confirmed root; the reorg half is C1d |
 | C1d | Unmark a replacement whose confirming block is reorged away, correctly: it needs the mined height in the record and the store (a migration), a reorg path into the record, and a check of the new chain, since in the usual reorg the replacement is in the competing block too | C1c | todo |
 | WS2 | Follow-ups on the compatible WebSocket: send the first `mempool-blocks` with the block instead of about 4 s later, and decide on the bounded `track-mempool-txids` its PR proposes | WS1 | todo; its first half, `mempool-blocks` arriving with the block, was done by [#67](https://github.com/smolcars/rbitcoin-space/pull/67); what remains is the decision on a bounded `track-mempool-txids` |
-| C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
+| C1 | Audit the four compatibility inventories against what is built (many rows still say planned for pages and routes that are live), recount, and list what is really left with a recommendation for each | M4 | doing |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | done ([#70](https://github.com/smolcars/rbitcoin-space/pull/70)); results in `docs/PERFORMANCE.md`; its PR took 3 min 4 s of CI on a partly cold cache, so check the next Rust PR against the budget |
