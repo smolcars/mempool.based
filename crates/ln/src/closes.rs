@@ -402,6 +402,24 @@ impl Watch {
             .collect()
     }
 
+    /// Every watched channel as an [`Opened`] record, and the sequence number of the last record
+    /// sent: the open channels as of that record, for a consumer that fell too far behind.
+    pub(crate) fn open(&self) -> (u64, Vec<Opened>) {
+        let s = self.lock();
+        let open = s
+            .funding
+            .iter()
+            .map(|(scid, f)| Opened {
+                scid: *scid,
+                node_one: f.nodes.0,
+                node_two: f.nodes.1,
+                capacity_sats: f.capacity,
+                block: f.block,
+            })
+            .collect();
+        (s.seq, open)
+    }
+
     pub(crate) fn status(&self) -> Closes {
         let s = self.lock();
         let catch_up = s.recheck.len() + s.find.len();

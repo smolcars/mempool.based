@@ -137,6 +137,8 @@ pub fn readyz(networks: &[Arc<NetworkContext>]) -> Response {
             "tip_height": tip.as_ref().map(|t| t.height),
             // How old the newest block we know of is, by its own timestamp.
             "tip_age_secs": tip.map(|t| unix_now.saturating_sub(u64::from(t.header.time))),
+            // Informational only: the explorer is ready whatever the Lightning peer is doing.
+            "lightning": ctx.lightning.as_ref().map_or("off", |l| l.state()),
         });
         out.insert(ctx.config.network.name().to_owned(), n);
     }

@@ -87,8 +87,8 @@ The reference backend runs with Lightning off, so shapes here were observed on m
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `GET /v1/lightning/statistics/latest` | Network totals: nodes by network type, channels, capacity, fee-rate and base-fee averages and medians | Lightning store | planned | M4 | pub | |
-| `GET /v1/lightning/statistics/:interval` | Network totals over time | Lightning store | planned | M4 | pub | History starts when our peer starts. Empty on the public site at probe time, whose `latest` was dated 2026-08-30 |
+| `GET /v1/lightning/statistics/latest` | Network totals: nodes by network type, channels, capacity, fee-rate and base-fee averages and medians | Lightning store (a snapshot of the verified graph every ten minutes) | served | M4 | pub | Same fields, order and types. Counts only channels whose funding output we verified; `id` is the snapshot's ten-minute slot ([`API.md`](../API.md#lightning)) |
+| `GET /v1/lightning/statistics/:interval` | Network totals over time | Lightning store | served | M4 | pub | Same seven fields, newest first. The reference sends a point a day; ours have the interval's step, never under ten minutes. History starts when our peer first ran; `X-Data-*` headers say how far it reaches |
 | `GET /v1/lightning/search?searchText=` | Matching nodes and channels | Lightning store | planned | M4 | pub | Alias substring and exact pubkey or channel id |
 | `GET /v1/lightning/nodes/rankings` | Top nodes by capacity and by channel count | Lightning store | planned | M4 | pub | |
 | `GET /v1/lightning/nodes/rankings/liquidity` | Top 100 by capacity | Lightning store | planned | M4 | pub | Location columns come back empty without GeoIP |

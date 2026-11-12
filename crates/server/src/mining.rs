@@ -818,7 +818,7 @@ fn whole(h: f64) -> u128 {
 }
 
 /// `2025-11-11T22:22:28.000Z`.
-fn iso8601(t: u64) -> String {
+pub(crate) fn iso8601(t: u64) -> String {
     // Days to civil date (Howard Hinnant's algorithm), for dates after 1970.
     let days = t / DAY;
     let secs = t % DAY;

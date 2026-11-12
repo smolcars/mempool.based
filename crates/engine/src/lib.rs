@@ -5,6 +5,7 @@ pub mod blocks;
 pub mod difficulty;
 pub mod fees;
 pub mod history;
+pub mod lightning;
 pub mod mempool;
 pub mod mining;
 pub mod projected;

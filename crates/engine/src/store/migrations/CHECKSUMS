@@ -5,3 +5,4 @@
 0003_audits.sql 6773cea5c9d0e61e
 0004_mempool_history.sql 9b354fdd095d1d8e
 0005_replacements.sql 0e87255c1d716782
+0006_lightning.sql 05fb9643d94fbac2

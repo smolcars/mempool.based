@@ -25,7 +25,9 @@ It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`,
 | Route | Answers | Use it for |
 |---|---|---|
 | `/healthz` | `200` `{"status":"ok","version":…}` while the process serves HTTP. Never asks the node | Liveness: restart the container if it fails. The image's health check |
-| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp; and `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`), which does not count towards `ready` | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+
+Lightning is left out of readiness on purpose: the explorer serves blocks, transactions and the mempool whatever the Lightning peer does, and a first sync takes minutes. Watch `lightning` (or `/app/lightning/status`) to know when the Lightning pages have data.
 
 `/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds whatever the traffic. The startup check is also how a wrong RPC password shows up: as an `rpc_auth_failed` event at once, not as an `unavailable` request later ([`LOGGING.md`](LOGGING.md#node-clients)). Neither route is logged when it passes.
 
@@ -89,6 +91,12 @@ The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). 
 | Credentials in `.env` and `rpc.cookie` | both | Nothing secret is in an image or in `compose.yml`. The image carries no configuration beyond `LISTEN_ADDR` and `WEB_DIR` |
 | `stop_grace_period: 5m` | node | rbitcoin flushes its store on SIGTERM |
 | Images pinned by digest | node | The tag cannot be moved under a running deployment |
+
+### Lightning
+
+Off unless `MAINNET_LIGHTNING_ENABLED=true` is in `.env` ([`CONFIG.md`](CONFIG.md#lightning)). Switched on, the server **connects out to public Lightning nodes** (the defaults on TCP port 9735, at addresses in [`LIGHTNING.md`](LIGHTNING.md#peers)) and keeps three connections open. Nothing is published or listened on: the compose file needs no change, and the default bridge network lets the container connect out. Behind a firewall that filters outbound traffic, allow TCP to the peers' addresses, or list peers you can reach in `MAINNET_LIGHTNING_PEERS`. The peer does not speak Tor: under a Tor-only egress policy, leave it off or point it at a clearnet node of your own.
+
+It keeps a 32-byte node key and its graph (about 33 MB on mainnet) in `/data/lightning/mainnet/` on the `server-data` volume, beside the SQLite file that holds its history. The key is created on first start, readable by the server's user only; it identifies the peer to the nodes it dials and holds no funds. Deleting the directory costs a fresh sync (about 4 minutes and 50 MB of download on mainnet); deleting the SQLite file loses the record of closed channels ([`STORE.md`](STORE.md#ln_channels)). Memory: plan for about 300 MB more with Lightning on (measured in [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server)).
 
 ### TLS and the reverse proxy
 

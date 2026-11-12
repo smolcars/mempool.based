@@ -68,6 +68,8 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
 | [`mempool_history`](#mempool_history) | `0004_mempool_history.sql` | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
 | [`replacements`](#replacements) | `0005_replacements.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
+| [`ln_channels`](#ln_channels) | `0006_lightning.sql` | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
+| [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
 
 ### Adding a table
 
@@ -293,6 +295,74 @@ The replacement record ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)), so 
 **Size.** At most `REPLACEMENTS_KEPT` rows (10,000 by default). Measured with `cargo test --release -p engine -- --ignored --nocapture replacements_benchmark` (20,000 links written 20 at a time, so the bound had pruned half): 10,000 rows, 2.06 MB for the table and its two indexes, 205 bytes a row; reading them back took 3.6 ms.
 
 **Rebuildable:** no. The node does not keep replaced transactions; deleting the file forgets every replacement seen before.
+### ln_channels
+
+Every public channel the Lightning peer verified, and how it ended: what a node's channel list, a channel's page and the tx page need once gossip has forgotten a closed channel ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)). The code is `crates/engine/src/lightning/`; the server feeds it from `crates/server/src/lightning.rs`.
+
+| Column | Type | Why |
+|---|---|---|
+| `scid` | integer key | The short channel id: funding height, transaction index and output index. Ordering by it orders channels by where they were funded, so the newest opens are a walk down the key |
+| `node_one`, `node_two` | 33-byte blobs | The nodes' public keys, as announced: a node's channels, open or closed |
+| `capacity` | integer, sats | The funding output's value, as the node reported it |
+| `open_hash`, `open_time` | blob, integer | The funding block (its height is the scid's) and its header time: a channel's age |
+| `close_height`, `close_hash`, `close_time`, `close_txid` | nullable | The block and transaction that spent the funding output. Null while open. Indexed by height (partial index) for the newest closes |
+| `close_kind` | integer, nullable | 0 cooperative, 1 force, 2 penalty, 3 other ([`LIGHTNING.md`](LIGHTNING.md#how-a-close-is-classified)) |
+| `close_fee` | integer, nullable | The closing transaction's fee, when the node said |
+| `penalty_txid`, `penalty_height`, `penalty_hash`, `penalty_time` | nullable | A force close found to be a breach: the revocation sweep. The close keeps its kind; the penalty columns say it was a breach |
+
+**Kept as the peer's history says.** The peer streams numbered records ([`LIGHTNING.md`](LIGHTNING.md#history)); each is applied in order, in writes of up to 2,000:
+
+| Record | Applied as |
+|---|---|
+| `Opened` | Insert, or make the row match and clear any close: the chain says the output is unspent, so a stored close left it. A row that already matches is not written |
+| `Closed` | Insert or overwrite the open and close columns. A stored penalty stays when the close is the same transaction (the close found again after a restart) |
+| `Penalty` | Fill the penalty columns of a closed row |
+| `OpenUndone` | Delete the row: as if the open had never been seen. An `Opened` with the new block follows if the output is still at its position |
+| `CloseUndone`, `PenaltyUndone` | Clear the close and penalty columns, or the penalty columns |
+
+So a reorg leaves the table as if the undone record had never arrived, and applying a record twice changes nothing.
+
+**Resuming.** Sequence numbers start at 1 in each process, so nothing about them is stored. The consumer subscribes to the stream before reading the peer's memory of recent records (`Peer::recent`), takes each record once (skipping numbers it has taken), and after a lag reads the memory again from the last number it took. After a restart the new peer sends `Opened` for every channel it verifies, which changes nothing for rows already stored, and finds closes that happened while it was down from the node's spend records ([`LIGHTNING.md`](LIGHTNING.md#catch-up)); those are applied like any other. A failed write is retried, the same records, after 1 s doubling to 32 s, until it lands; records leave memory only once committed, and at shutdown, once the peer has stopped, whatever is left is stored before the server exits. The tests feed one script of records live, as a backlog, through a lagging receiver, across a restart and past a gap, and require the same table each time.
+
+**A gap.** If the consumer falls further behind than the peer's memory (10,000 records, five times the largest write; at the start-up burst of about 600 records a second that is a store stalled for 16 s), the records in between are lost. The consumer then stores every channel the peer holds open, as of a sequence number, and goes on from there (`lightning_history_gap`). Opens are whole again; a close among the lost records is not recorded, and its row reads open, like a channel the peer stopped watching ([`LIGHTNING.md`](LIGHTNING.md#limits)).
+
+**Writes and size.** Through `try_write`: a full write queue makes the consumer wait and retry rather than take a slot, so the block table's and the mempool history's writes never queue behind it. Measured on mainnet: the first start writes one row per channel, 36,000 in about a minute in writes of up to 2,000 records (0.1 to 0.4 s of the writer each, which the start-up burst only produces while validation runs); a restart writes the same records again and changes no row. After that, a few hundred rows a day: the opens and about 200 closes. About 190 bytes a row with the index: 7 MB at 36,000 channels. The table grows with the channels ever seen, not with time: each row stands for a funding output on the chain, and the graph's ceiling bounds how many are open at once.
+
+**Not rebuildable.** Nodes, capacity and the funding block of a closed channel come from gossip that stops once it closes. Deleting the file loses every closed channel; open ones come back at the next start.
+
+#### Reading
+
+`crates/engine/src/lightning/db.rs`:
+
+| Call | Returns |
+|---|---|
+| `opened(store, limit)` | Up to `limit` rows, newest funding first, with their closes |
+| `closed(store, limit)` | Up to `limit` closed rows, newest close first, through the partial index |
+| `apply(store, changes)` | Stores records in order, in one write; fails with `Error::Full` rather than wait |
+
+### ln_statistics
+
+The Lightning network's totals over time: channels, nodes, capacity, fee policies, for `/app/lightning/statistics/…` and `/api/v1/lightning/statistics/…` ([`API.md`](API.md#lightning)). Same shape and roll-up as [`mempool_history`](#mempool_history), at a ten-minute cadence.
+
+**Sampling.** At every whole ten minutes of the wall clock the server reads the verified graph and stores one row (`crates/engine/src/lightning/sampler.rs`). A slot is left out, never stored as a guess, when the graph is not synced (`syncing`: a graph still downloading would undercount), when the server woke more than a minute after the slot (`late`), or when the write queue was full or the write failed (`store_busy`, `store_failed`). Reading the graph takes a few milliseconds (gossip waits meanwhile); the node is not asked anything.
+
+| Column | Why |
+|---|---|
+| `level`, `time` | 0 a ten-minute snapshot, 1 an hour, 2 a UTC day; the slot, or the period's start |
+| `samples` | Snapshots in the row |
+| `channels`, `nodes`, `capacity` | Verified channels, nodes with a channel, and the channels' capacity in sats |
+| `tor_nodes`, `clearnet_nodes`, `clearnet_tor_nodes`, `unannounced_nodes` | Nodes by the addresses they announce: onion only, clearnet only, both, none (or no announcement) |
+| `med_capacity` | The median channel capacity |
+| `policies`, `fee_rate`, `base_fee` | Directional channel policies counted in the averages, and their fee rates (ppm) and base fees (msat) summed. A policy over 1,000,000 ppm (a fee above the amount) or 1,000,000 msat (1,000 sats) refuses to route rather than prices it and is left out: on mainnet 118 of 48,247 policies were over the rate cap, up to 2³¹ − 1 ppm, and with them the average fee rate read 4,990,804 ppm; without, 1,168 |
+| `med_fee_rate`, `med_base_fee` | The median fee rate and base fee over every policy, the outliers included |
+
+**Rolling up does not lie.** Every value is a sum over the row's snapshots, so hours and days add rows together with nothing lost. A mean over any period is a sum over `samples`; the average capacity is `capacity / channels` and the average fee rate `fee_rate / policies`, both exact over the period's snapshots. A median cannot be rolled up, so the median columns hold the snapshots' medians summed: a period's value is **the mean of its snapshots' medians**, and the routes say so. A median is the lower of the two middle values for an even count.
+
+**Retention, roll-up and bound** as `mempool_history`: ten-minute rows for 8 days, hours to 400 days, days after that, rolled in the same write as each snapshot, all or nothing (a failed write leaves the rows as they were, tested with a failing roll-up). 1,152 snapshot rows and 9,408 hour rows, plus one a day beyond 400 days: about 60 bytes a row, under 1 MB in all after a year and 22 KB a year after that. One write every ten minutes, a few milliseconds.
+
+**Reading.** `lightning::series(store, interval, now)`: the intervals of `history::Interval`, with no step finer than ten minutes, so `2h` has 12 points and `24h` 144; the coverage counts ten-minute slots. `lightning::latest(store)`: the newest row.
+
+**Rebuildable:** no. It was observed live.
 
 ## Pragmas
 
@@ -321,7 +391,7 @@ sqlite3 data/mainnet.sqlite "VACUUM INTO 'backup/mainnet.sqlite'"
 
 To restore, stop the server and put the copy in place, removing any old `-wal` and `-shm` files. To recover from a corrupt file, restore a backup or delete it.
 
-**Deleting the file** loses only what was observed live: mempool history, first-seen times, block audits, and any other history a later feature records as it happens. Everything derived from the chain, such as block summaries, is rebuilt from the node by backfill. Each feature's doc says which of its tables are which.
+**Deleting the file** loses only what was observed live: mempool history, first-seen times, block audits, Lightning channel history and statistics, and any other history a later feature records as it happens. Everything derived from the chain, such as block summaries, is rebuilt from the node by backfill. Each feature's doc says which of its tables are which.
 
 ## Measurements
 

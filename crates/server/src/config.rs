@@ -46,6 +46,16 @@ impl Network {
             Self::Regtest => "REGTEST",
         }
     }
+
+    /// The network as LDK names it.
+    pub fn ln(self) -> ln::Network {
+        match self {
+            Self::Mainnet => ln::Network::Bitcoin,
+            Self::Signet => ln::Network::Signet,
+            Self::Testnet4 => ln::Network::Testnet4,
+            Self::Regtest => ln::Network::Regtest,
+        }
+    }
 }
 
 /// A value that must never reach a log line, error or response. `Debug` prints a placeholder and
@@ -94,7 +104,25 @@ pub struct NetworkConfig {
     /// Whether the mempool tracker and projected blocks run (`{NET}_MEMPOOL_ENABLED`). They poll
     /// the node about once a second.
     pub mempool: bool,
+    /// The Lightning gossip peer, when `{NET}_LIGHTNING_ENABLED` is `true`.
+    pub lightning: Option<LightningConfig>,
 }
+
+/// The network's Lightning gossip peer (docs/LIGHTNING.md). Its files live in
+/// `<DATA_DIR>/lightning/<network>/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LightningConfig {
+    /// `{NET}_LIGHTNING_PEERS`: whom to dial, in order of preference. Mainnet has defaults.
+    pub peers: Vec<ln::PeerAddr>,
+    /// `{NET}_LIGHTNING_MAX_PEERS`: connections kept open at once.
+    pub max_peers: usize,
+    /// `{NET}_LIGHTNING_MAX_CHANNELS`: the graph's ceiling, which bounds its memory.
+    pub max_channels: usize,
+}
+
+/// Most peers `{NET}_LIGHTNING_PEERS` takes, and the highest `{NET}_LIGHTNING_MAX_CHANNELS`.
+const MAX_LIGHTNING_PEERS: usize = 64;
+const MAX_LIGHTNING_CHANNELS: usize = 1_000_000;
 
 /// Bounds on what clients can make the server do (SECURITY.md rules 6 and 7).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -356,6 +384,12 @@ impl Config {
         let mut networks = Vec::new();
         for network in Network::ALL {
             if let Some(n) = network_config(network, &var)? {
+                if n.lightning.is_some() && data_dir.is_none() {
+                    return Err(format!(
+                        "{}_LIGHTNING_ENABLED needs DATA_DIR: the peer keeps its graph and history there",
+                        network.env_prefix()
+                    ));
+                }
                 networks.push(n);
             }
         }
@@ -624,6 +658,11 @@ fn network_config(
         Some("false") => false,
         Some(_) => return Err(format!("{p}_MEMPOOL_ENABLED must be true or false")),
     };
+    let lightning = match var(&format!("{p}_LIGHTNING_ENABLED")).as_deref() {
+        None | Some("false") => None,
+        Some("true") => Some(lightning_config(network, var)?),
+        Some(_) => return Err(format!("{p}_LIGHTNING_ENABLED must be true or false")),
+    };
 
     Ok(Some(NetworkConfig {
         network,
@@ -636,7 +675,42 @@ fn network_config(
         esplora,
         electrum,
         mempool,
+        lightning,
     }))
+}
+
+fn lightning_config(
+    network: Network,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<LightningConfig, String> {
+    let p = network.env_prefix();
+    let d = ln::Config::new(network.ln(), PathBuf::new());
+    let peers = match var(&format!("{p}_LIGHTNING_PEERS")) {
+        None => d.peers,
+        Some(list) => list
+            .split(',')
+            .map(|s| s.trim().parse::<ln::PeerAddr>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{p}_LIGHTNING_PEERS: {e}"))?,
+    };
+    if peers.is_empty() || peers.len() > MAX_LIGHTNING_PEERS {
+        return Err(format!(
+            "{p}_LIGHTNING_PEERS must list 1 to 64 peers as <pubkey>@<ip>:<port>, comma-separated \
+             (only mainnet has defaults)"
+        ));
+    }
+    let max_peers = positive(var, &format!("{p}_LIGHTNING_MAX_PEERS"), d.max_peers)?;
+    let max_channels = positive(var, &format!("{p}_LIGHTNING_MAX_CHANNELS"), d.max_channels)?;
+    if max_peers > MAX_LIGHTNING_PEERS || max_channels > MAX_LIGHTNING_CHANNELS {
+        return Err(format!(
+            "{p}_LIGHTNING_MAX_PEERS must be at most 64 and {p}_LIGHTNING_MAX_CHANNELS at most 1000000"
+        ));
+    }
+    Ok(LightningConfig {
+        peers,
+        max_peers,
+        max_channels,
+    })
 }
 
 fn parse_port(s: &str) -> Option<u16> {
@@ -750,6 +824,50 @@ mod tests {
         v.pop();
         v.push(("SIGNET_MEMPOOL_ENABLED", "off"));
         assert!(parse(&v).unwrap_err().contains("SIGNET_MEMPOOL_ENABLED"));
+    }
+
+    #[test]
+    fn lightning_is_off_unless_switched_on_and_needs_a_data_dir_and_peers() {
+        assert_eq!(parse(&signet()).unwrap().networks[0].lightning, None);
+        let peer = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut v = signet();
+        v.push(("SIGNET_LIGHTNING_ENABLED", "true"));
+        assert!(parse(&v).unwrap_err().contains("SIGNET_LIGHTNING_PEERS"));
+        let peers = format!("{peer}@203.0.113.1:9735, {peer}@[2001:db8::1]:9735");
+        let mut with_peers = v.clone();
+        with_peers.push(("SIGNET_LIGHTNING_PEERS", &peers));
+        assert!(parse(&with_peers).unwrap_err().contains("DATA_DIR"));
+        with_peers.push(("DATA_DIR", "/var/lib/x"));
+        let l = parse(&with_peers).unwrap().networks[0]
+            .lightning
+            .clone()
+            .unwrap();
+        assert_eq!(l.peers.len(), 2);
+        assert_eq!((l.max_peers, l.max_channels), (3, 100_000));
+        for bad in [
+            ("SIGNET_LIGHTNING_ENABLED", "yes"),
+            ("SIGNET_LIGHTNING_PEERS", "02aa@203.0.113.1:9735"),
+            ("SIGNET_LIGHTNING_PEERS", "node.example:9735"),
+            ("SIGNET_LIGHTNING_MAX_PEERS", "0"),
+            ("SIGNET_LIGHTNING_MAX_PEERS", "65"),
+            ("SIGNET_LIGHTNING_MAX_CHANNELS", "1000001"),
+        ] {
+            let mut v = with_peers.clone();
+            v.push(bad);
+            assert!(parse(&v).unwrap_err().contains(bad.0), "{bad:?}");
+        }
+        // Mainnet dials its default peers when none are named.
+        let mainnet: Vec<(String, &str)> = signet()
+            .into_iter()
+            .map(|(k, v)| (k.replace("SIGNET", "MAINNET"), v))
+            .chain([
+                ("MAINNET_LIGHTNING_ENABLED".to_owned(), "true"),
+                ("DATA_DIR".to_owned(), "/var/lib/x"),
+            ])
+            .collect();
+        let refs: Vec<(&str, &str)> = mainnet.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let l = parse(&refs).unwrap().networks[0].lightning.clone().unwrap();
+        assert_eq!(l.peers, ln::default_peers(ln::Network::Bitcoin));
     }
 
     #[test]

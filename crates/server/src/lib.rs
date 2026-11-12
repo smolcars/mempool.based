@@ -13,6 +13,7 @@ pub mod difficulty;
 pub mod error;
 pub mod esplora;
 pub mod health;
+pub mod lightning;
 pub mod limits;
 pub mod mining;
 pub mod relatives;
@@ -110,6 +111,8 @@ pub struct NetworkContext {
     pub block_headers: v1_blocks::Headers,
     /// `/api/v1/replacements` and `/api/v1/fullrbf/replacements`, built once per change.
     pub trees: transactions::Trees,
+    /// The Lightning gossip peer, when `{NET}_LIGHTNING_ENABLED` (`lightning`).
+    pub lightning: Option<Arc<lightning::Lightning>>,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -163,6 +166,11 @@ impl NetworkContext {
             v1: Arc::new(ws::v1::Compat::new(Some(&url))),
             block_headers: v1_blocks::Headers::default(),
             trees: transactions::Trees::default(),
+            lightning: config
+                .lightning
+                .as_ref()
+                .zip(all.data_dir.as_deref())
+                .map(|(l, dir)| Arc::new(lightning::Lightning::new(l, dir, config.network))),
         })
     }
 }
@@ -182,6 +190,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .merge(api_v1::routes())
         .merge(audits::routes())
         .merge(transactions::routes())
+        .merge(lightning::routes())
 }
 
 /// The whole application, ready to serve.
@@ -190,6 +199,8 @@ pub struct App {
     router: Router,
     limiter: Limiter,
     sockets: Arc<ws::Sockets>,
+    /// Stopped after the last request, so each peer writes its graph.
+    lightning: Vec<Arc<lightning::Lightning>>,
 }
 
 impl App {
@@ -204,6 +215,7 @@ impl App {
             .merge(app_config::routes(config));
         let sockets = ws::Sockets::new(&config.ws, config.limits.request_timeout);
         let mut enabled_networks = Vec::new();
+        let mut peers = Vec::new();
         for network in Network::ALL {
             let prefix = network.path_prefix();
             let context = config
@@ -232,6 +244,8 @@ impl App {
                         ctx.electrum.health(),
                     ));
                     report::report_electrum(network, &ctx.electrum);
+                    lightning::spawn(&ctx);
+                    peers.extend(ctx.lightning.clone());
                     routes
                         .clone()
                         .route("/api/{*rest}", any(esplora::handle))
@@ -313,6 +327,7 @@ impl App {
             router,
             limiter,
             sockets,
+            lightning: peers,
         }
     }
 
@@ -337,6 +352,9 @@ impl App {
         };
         serve::serve(listener, self.router, self.limiter, signal).await;
         sockets.drain().await;
+        for l in &self.lightning {
+            l.stop().await;
+        }
     }
 }
 
