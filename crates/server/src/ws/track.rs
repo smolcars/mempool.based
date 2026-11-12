@@ -494,11 +494,20 @@ impl Tracking {
 
     /// Blocks above `fork_height` left the best chain: a confirmation in one of them no longer
     /// holds. The tracker re-adds what the node takes back into its mempool; the rest is unknown.
+    /// `0` when the chain's continuity was lost (a reconnect, a reorg deeper than Electrum
+    /// follows, a lost event): no remembered confirmation can be vouched for.
     fn reorged(&self, fork_height: u32) {
+        let mut forgot = false;
         for e in lock(&self.state).txs.values_mut() {
             if matches!(e.gone, Some(Removal::Confirmed { height, .. }) if height > fork_height) {
                 e.gone = None;
+                // Said again by the feed's next pass for new entries, whatever else moves.
+                e.sent = None;
+                forgot = true;
             }
+        }
+        if forgot {
+            self.wake.notify_one();
         }
     }
 
@@ -618,14 +627,17 @@ impl Tracking {
                 (Some(sub), _) => {
                     let next = match sub.status() {
                         Some(Status::ScriptHash(s)) => AddrState::Watching(s),
-                        // The node no longer watches it (it refused a re-subscribe).
-                        _ => AddrState::Unavailable,
+                        // The node no longer watches it (it refused a re-subscribe): ask again,
+                        // whatever was said meanwhile, so its answer reaches the client.
+                        _ => {
+                            if !e.pending {
+                                e.sub = None;
+                                retry.push((*sh, e.epoch));
+                            }
+                            AddrState::Unavailable
+                        }
                     };
                     if e.state.as_ref() != Some(&next) {
-                        if next == AddrState::Unavailable && !e.pending {
-                            e.sub = None;
-                            retry.push((*sh, e.epoch));
-                        }
                         e.state = Some(next);
                         changed.push(*sh);
                     }
@@ -882,7 +894,12 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration) {
     };
     loop {
         let (seq, mut deltas) = tracker.subscribe(|m| m.seq());
-        let (_, mut projections) = projector.subscribe();
+        // Its lock is held through a pack: take it on a blocking thread.
+        let p = projector.clone();
+        let Ok((_, mut projections)) = tokio::task::spawn_blocking(move || p.subscribe()).await
+        else {
+            return;
+        };
         track.lost_place(seq);
         let (mut dirty, mut next) = (true, Instant::now());
         loop {
@@ -931,6 +948,9 @@ pub async fn follow_addresses(
                 }) => track.address_status(sh, s),
                 Ok(electrum::Event::Resynced | electrum::Event::Block(_))
                 | Err(RecvError::Lagged(_)) => {
+                    if !matches!(e, Ok(electrum::Event::Block(_))) {
+                        track.reorged(0);
+                    }
                     // Read now: a reconnect's `Resynced` can come before its health change.
                     if health.borrow().ready {
                         track.refresh_addresses();
@@ -945,8 +965,11 @@ pub async fn follow_addresses(
                     return;
                 }
                 let now = health.borrow_and_update().ready;
-                if ready && !now {
-                    track.addresses_down();
+                match (ready, now) {
+                    (true, false) => track.addresses_down(),
+                    // The first connection sends no `Resynced`: ask for what could not be.
+                    (false, true) => track.refresh_addresses(),
+                    _ => {}
                 }
                 ready = now;
             }

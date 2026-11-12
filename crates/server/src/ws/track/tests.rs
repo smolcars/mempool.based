@@ -1682,9 +1682,47 @@ async fn a_confirmation_above_a_fork_is_forgotten() {
         state(v) == "confirmed" && v["height"] == json!(1)
     })
     .await;
-    // Electrum reports blocks above 0 gone; the transaction does not return to the mempool.
+    // Electrum reports blocks above 0 gone; the transaction does not return to the mempool. The
+    // topic says so at once, without waiting for the mempool to move.
     s.track().reorged(0);
-    mock.mine(&[]);
-    s.settle().await;
     c.wait(&tx_topic(a), |v| state(v) == "unknown").await;
+}
+
+/// Electrum outages around addresses: one that was never reachable is watched on the first
+/// connection, and one the node refuses to restore after a reconnect says why.
+#[tokio::test]
+async fn addresses_recover_from_outages_honestly() {
+    let electrum = Electrum::start().await;
+    electrum.paused.store(true, Ordering::Relaxed);
+    let ctx = context(&electrum.addr, true, |_| {});
+    let follow = tokio::spawn(follow_addresses(
+        Arc::clone(&ctx.track),
+        ctx.electrum.events(),
+        ctx.electrum.health(),
+    ));
+    let s = Server::on(ctx, &Mock::new());
+    let name = |n: u8| format!("address:{}", crate::ws::tests::address(n));
+    let mut c = Client::new(64);
+
+    // Never connected yet: unavailable, then watching once the node is reachable.
+    c.sub(&s, &name(1)).unwrap();
+    c.wait(&name(1), |v| state(v) == "unavailable").await;
+    electrum.paused.store(false, Ordering::Relaxed);
+    c.wait(&name(1), |v| state(v) == "watching").await;
+
+    // Down, then back with a node that refuses to watch it again: refused, with the reason.
+    electrum.paused.store(true, Ordering::Relaxed);
+    let _ = electrum.kill.send(());
+    c.wait(&name(1), |v| state(v) == "unavailable").await;
+    let Topic::Address(sh) = parse(&name(1), Network::Regtest).unwrap().0 else {
+        panic!()
+    };
+    electrum.answer(
+        sh,
+        Answer::Error("scripthash join exceeds --max-sh-creates (20000 creates, cap 10000)"),
+    );
+    electrum.paused.store(false, Ordering::Relaxed);
+    let v = c.wait(&name(1), |v| state(v) == "refused").await;
+    assert_eq!(v["reason"], json!("too_large"));
+    follow.abort();
 }
