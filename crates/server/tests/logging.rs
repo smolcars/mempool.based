@@ -527,12 +527,23 @@ async fn a_proxy_missing_from_trusted_proxies_is_told_apart() {
         .iter()
         .filter(|v| v["event"] == "proxy_header_ignored" && v["trusted_proxies_set"] == true)
         .collect();
-    let first = ignored.iter().find(|v| v["total"] == 1).expect("said at once");
+    let first = ignored
+        .iter()
+        .find(|v| v["total"] == 1)
+        .expect("said at once");
     assert_eq!(
-        (first["level"].as_str(), first["header"].as_str(), first["peer"].as_str()),
+        (
+            first["level"].as_str(),
+            first["header"].as_str(),
+            first["peer"].as_str()
+        ),
         (Some("warn"), Some("x-forwarded-for"), Some("127.0.0.1"))
     );
-    assert_eq!(ignored.len(), 6, "at 1, 2, 4, 8, 16 and 32 of 50: {ignored:?}");
+    assert_eq!(
+        ignored.len(),
+        6,
+        "at 1, 2, 4, 8, 16 and 32 of 50: {ignored:?}"
+    );
 }
 
 #[tokio::test]

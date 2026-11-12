@@ -551,7 +551,14 @@ mod tests {
 
     #[test]
     fn only_a_proxy_like_peer_is_named_when_its_header_is_ignored() {
-        for p in ["127.0.0.1", "172.18.0.1", "10.0.0.2", "::1", "fd00::1", "::ffff:192.168.1.1"] {
+        for p in [
+            "127.0.0.1",
+            "172.18.0.1",
+            "10.0.0.2",
+            "::1",
+            "fd00::1",
+            "::ffff:192.168.1.1",
+        ] {
             assert!(proxy_like(ip(p)), "{p}");
         }
         for v in ["203.0.113.9", "2001:db8::1", "::ffff:198.51.100.1"] {

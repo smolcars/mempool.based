@@ -86,9 +86,11 @@ with `server.env` holding the six `MAINNET_*` variables ([`CONFIG.md`](CONFIG.md
 
 ### Try it on regtest first
 
-The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In `.env`, in place of the mainnet lines:
+The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In the shell where you made `$pass` above, replace the node's lines and **every** `MAINNET_*` line in `.env` with regtest ones. A `MAINNET_*` line left behind points the explorer's mainnet at the regtest node, which the server reports as `rpc_wrong_network` ([below](#when-it-goes-wrong)):
 
 ```sh
+sed -i.bak -E '/^(NETWORK|P2P_PORT|MAINNET_[A-Z_]+)=/d' .env && rm .env.bak
+cat >> .env <<EOF
 NETWORK=regtest
 P2P_PORT=18444
 P2P_PUBLISH=127.0.0.1:0
@@ -96,12 +98,13 @@ HTTP_PUBLISH=127.0.0.1:0
 REGTEST_RPC_HOST=node
 REGTEST_RPC_PORT=8332
 REGTEST_RPC_USER=rbitcoin-space
-REGTEST_RPC_PASSWORD=…                    # the password in rpc.cookie
+REGTEST_RPC_PASSWORD=$pass
 REGTEST_ESPLORA_URL=/run/esplora/esplora.sock
 REGTEST_ELECTRUM_ADDR=node:50001
+EOF
 ```
 
-`127.0.0.1:0` lets Docker choose free host ports; `docker compose port server 8080` prints the server's. The app is at `/regtest/`. Mine blocks with JSON-RPC from a container on the compose network:
+`127.0.0.1:0` lets Docker choose free host ports; `docker compose port server 8080` prints the server's, which a proxy in front then uses in place of `127.0.0.1:8080`. The app is at `/regtest/`. Mine blocks with JSON-RPC from a container on the compose network:
 
 ```sh
 docker run --rm --network rbitcoin-space_default curlimages/curl:8.11.1 -su "rbitcoin-space:$pass" \
@@ -115,7 +118,7 @@ docker run --rm --network rbitcoin-space_default curlimages/curl:8.11.1 -su "rbi
 | Route | Answers | Use it for |
 |---|---|---|
 | `/healthz` | `200` `{"status":"ok","version":"0.1.0","revision":…}` while the process serves HTTP. `revision` is the commit the binary was built from, or `unknown` for a build without one (below). Never asks the node | Liveness. It is the image's own health check, so `docker compose ps` shows `healthy`. And which build is running: after an upgrade, `revision` must be the new release's commit |
-| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp. Then four that do not count towards `ready`: `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`); `address_index` (`on`, `off`, or `unknown` until the node has answered); `store` (`ok`, `failing` while SQLite refuses writes, `open_failed`, or `off` without `DATA_DIR`); and `store_written_secs_ago`, since a write last committed (`null` before the first) | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs`. Alert on `address_index` `off` and `store` other than `ok` too |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `wrong_network` when the node is on another chain, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp. Then four that do not count towards `ready`: `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`); `address_index` (`on`, `off`, or `unknown` until the node has answered); `store` (`ok`, `failing` while SQLite refuses writes, `open_failed`, or `off` without `DATA_DIR`); and `store_written_secs_ago`, since a write last committed (`null` before the first) | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs`. Alert on `address_index` `off` and `store` other than `ok` too |
 
 ```sh
 curl -s http://127.0.0.1:8080/readyz
@@ -201,11 +204,12 @@ and apply it with `docker compose up -d`. Now load the site from your own machin
 docker compose logs --no-log-prefix server | grep '"http_request"' | tail -n 3
 ```
 
-It must be your own address. If it is the gateway, the server is not reading the header: check both settings. Then remove `LOG_CLIENT_ADDR` and run `docker compose up -d` again.
+It must be your own address. If it is the gateway, the server is not reading the header: check both settings. The server says so too, without `LOG_CLIENT_ADDR`: a `proxy_header_ignored` warning at the first request whose header it ignored, with `peer`, the address `TRUSTED_PROXIES` is missing. Then remove `LOG_CLIENT_ADDR` and run `docker compose up -d` again.
 
 How the address is found, `X-Forwarded-For` and chains of proxies are in [`CONFIG.md`](CONFIG.md#client-addresses). Two cautions:
 
-- Docker may give the network another subnet when it is recreated, after `docker compose down`. Check the gateway again after one.
+- Docker may give the network another subnet when it is recreated, after `docker compose down`, and then every visitor shares the new gateway's allowance. Check the gateway again after one, and watch for `proxy_header_ignored`.
+- A proxy in a container on the compose network arrives from its own container address, not the gateway, and that address can change when the container is recreated. This guide covers a proxy on the host.
 - Anything on the host that connects to the published port comes from the same gateway and is trusted like the proxy. That is why the port stays on loopback: the host is part of the proxy's trust. Never trust a range that clients can connect from.
 
 ### Check it
@@ -286,13 +290,14 @@ docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 
 | Event or check | Means |
 |---|---|
-| Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `store_open_failed`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
+| Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `rpc_wrong_network`, `store_open_failed`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
 | `store_write_failed`, or `/readyz` `store` not `ok` | SQLite refuses writes; `error` says why (`disk_full`, `read_only`, `corrupt`, `busy`, `io`). History is not being recorded |
 | `address_index_off`, or `/readyz` `address_index` `off` | The node runs without `--sh-index`: address pages are down |
 | `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
 | `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
 | `rpc_unreachable`, `electrum_unreachable`, `mempool_poll_failed`, `block_rows_failed` repeating | The node is failing or overloaded. They are logged at the 1st, 2nd, 4th, 8th… in a row, so a rising count is a long outage |
 | `store_slow_write`, `store_read_timed_out`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full, or the machine is overloaded: the read limit is wall-clock time, so a host that stalls for two seconds trips it even on a read that takes milliseconds ([`STORE.md`](STORE.md#using-it)) |
+| `proxy_header_ignored` | Behind a proxy: the server does not trust it, so every visitor shares one allowance ([client addresses](#client-addresses)) |
 | `connections_refused` | One address is holding many connections |
 | `requests_refused` every minute | Something is being refused: one address flooding, or a proxy set up wrong. Its fields tell which ([`LOGGING.md`](LOGGING.md#refusals)) |
 | `log_events_dropped` | Request lines were dropped: `queue_full`, the output (a disk, a pipe) cannot keep up; `over_budget`, the site served more than the log's ceiling ([`LOGGING.md`](LOGGING.md#for-operators)) |
@@ -324,7 +329,7 @@ docker compose logs --no-log-prefix server | grep store_migration_applied
 
 Run them from `deploy/`. If the server then stops with `config_invalid`, the new release refuses a setting the old one accepted: the line names it, and the release notes say what changed. It stops before it opens the store, so nothing is migrated until the setting is fixed. Checking out the tag also brings that release's compose file, which may pin a newer rbitcoin; compose then recreates the node too, and the node flushes its state on the way down (it has five minutes).
 
-**Rolling back** is the same with the old version, then [restoring](#the-data-directory) the backup you took before the upgrade if the new release migrated the store. What the server observed between the backup and the rollback (audits, mempool history, replacements) is lost. Without a backup, delete `mainnet.sqlite` instead: the old release starts empty and backfills again.
+**Rolling back:** if the new release logged `store_migration_applied`, the old one cannot open the store. Started on it, it logs `store_open_failed` (`database schema version … is newer than this build supports …`) and serves without a store: `/readyz` stays `200` with `store` `open_failed`, and the mining pages and history answer `503`. So stop the server, [restore](#the-data-directory) the backup you took before the upgrade, then set the old version and run `docker compose up -d` as above. What the server observed between the backup and the rollback (audits, mempool history, replacements) is lost. Without a backup, delete `mainnet.sqlite` instead: the old release starts empty and backfills again. Without a migration, only the image changes.
 
 ## Switching features
 
@@ -408,16 +413,18 @@ Read the log as [above](#the-log) and `/readyz`.
 |---|---|---|
 | The server stops at once | `config_invalid` with the variable's name (never its value) | Fix that variable. A network needs all six of its variables or none ([`CONFIG.md`](CONFIG.md#networks)) |
 | Pages load but nothing from the chain; `/readyz` `503` with `rpc` `unreachable` | `rpc_unreachable`, `electrum_unreachable` and `mempool_poll_failed` with `unavailable`, repeating | The node is down or its address is wrong: `docker compose ps`, `docker compose logs node`, then the `*_HOST`, `*_PORT` and `*_ADDR` settings |
+| `/readyz` `503` with `rpc` `wrong_network`; pages show another chain's blocks | `rpc_wrong_network` (an `error`) with `network`, the one configured, and `node_chain`, the node's (`main`, `testnet4`, `signet`, `regtest`) | The `{NET}_*` variables point at another network's node, often a `MAINNET_*` line left in `.env` beside a test network's. Fix them, then delete that network's `<network>.sqlite` with the server stopped ([restore](#the-data-directory) shows how to reach the volume): it recorded the other chain's blocks |
 | `/readyz` `503` with `rpc` `auth_failed` | `rpc_auth_failed` (an `error`), then `mempool_poll_failed` with `auth` | The password in `.env` and the one in `rpc.cookie` differ. Make them equal and `docker compose up -d --force-recreate` |
 | Address pages show an error; everything else works; `/readyz` `address_index` `off` | `address_index_off` (a `warn`) once Electrum connects, and `http_request` with `status` `503` and `endpoint` `script_stats` or `script_txs` | The node runs without `--sh-index`, which rbitcoin leaves off by default. Turn it on, as the compose file does, and restart the node: the server asks again when it reconnects and logs `address_index_on` |
-| Visitors get `429`, on pages they barely used | `requests_refused` every minute with `untrusted_forwarded` or `proxy_keyed` close to `total` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up (`untrusted_forwarded`: `TRUSTED_PROXIES` is not the address the proxy arrives from; `proxy_keyed`: the proxy does not send the header named in `TRUSTED_PROXY_HEADER`). Check with `LOG_CLIENT_ADDR=true` |
+| Visitors get `429`, on pages they barely used | `proxy_header_ignored` from the first request on; `requests_refused` every minute with `untrusted_forwarded` or `proxy_keyed` close to `total` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up (`untrusted_forwarded`: `TRUSTED_PROXIES` is not the address the proxy arrives from; `proxy_keyed`: the proxy does not send the header named in `TRUSTED_PROXY_HEADER`). Check with `LOG_CLIENT_ADDR=true` |
 | The disk filled while the server ran: no new mining rows, audits or mempool chart; `/readyz` `store` `failing` | `store_write_failed` with `error` `disk_full` and SQLite's own message, at the 1st, 2nd, 4th… failed write; `block_rows_failed` with `store` beside it | Free space. Nothing needs a restart: the next write that commits logs `store_write_recovered` and `store` is `ok` again. Block rows are retried and filled in; the minutes of mempool history missed meanwhile are a gap |
 | The store will not take writes for another reason; `/readyz` `store` `failing` | `store_write_failed` with `read_only` (the volume is mounted read-only or not owned by uid 65532), `corrupt`, `busy` (another process holds the file's lock, such as a long backup) or `io` | `read_only`: fix the mount or ownership, then `docker compose restart server`. `corrupt`: [restore a backup](#the-data-directory) or delete the file. `busy`: let the other process finish |
-| The store did not open; `/readyz` `store` `open_failed` | `store_open_failed` with the reason, `database or disk is full` among them | Fix what it names, then `docker compose restart server` |
+| The store did not open; `/readyz` `store` `open_failed` | `store_open_failed` with the reason: `database or disk is full`; `unable to open database file`, when uid 65532 cannot write the directory (no volume at `/data`, or a volume another user owns); `cannot create`, when `DATA_DIR` is outside the volume | Fix what it names, then `docker compose restart server`. Docker gives a new, empty volume the image's owner, but a volume that already holds files keeps its own: `docker run --rm -v rbitcoin-space_server-data:/data alpine:3 chown -R 65532:65532 /data` |
 | The store stopped after a rollback | `store_open_failed` with `database schema version 5 is newer than this build supports (2)` | An older release cannot open a store a newer one migrated. [Restore the backup](#upgrading) or delete the file |
 | Live updates never arrive; the home page does not move | `ws_origin_refused` with the `origin` and `host` it compared | The proxy changes `Host`. Pass it through as the browser sent it, port included |
-| Same, but nothing about the WebSocket in the server's log | No `http_request` with route `/app/ws` | The proxy does not forward the upgrade. See [any other proxy](#any-other-proxy) |
+| Same, but no `ws_origin_refused` | `http_request` with a route ending `/app/ws` and `status` `400`: the request reached the server without its `Upgrade` header | The proxy does not forward the upgrade. See [any other proxy](#any-other-proxy) |
 | `docker compose up` or a pull hangs on a host nobody is logged in to | | A Docker credential helper (`credsStore` in `~/.docker/config.json`: a keychain, `pass`, `secretservice`) is waiting for an unlock prompt. The release image needs no login: pull with `DOCKER_CONFIG` pointing at a directory whose `config.json` sets no `credsStore` |
+| `docker compose up` fails: `failed to bind host port 127.0.0.1:8080/tcp: address already in use` | Nothing: the server never started | Another program holds the port. Set `HTTP_PUBLISH` to a free one, and point the proxy at it |
 | The disk fills with logs | | Logs rotate under the compose file's `local` driver (100 MB a container). A container started another way uses Docker's default `json-file`, which does not rotate |
 
 ## Reference: the image

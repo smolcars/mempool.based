@@ -160,7 +160,11 @@ async fn a_node_on_another_chain_is_an_error_and_not_ready() {
     let addr = start(port).await;
     let e = logged(|v| v["event"] == "rpc_wrong_network").await;
     assert_eq!(
-        (e["level"].as_str(), e["network"].as_str(), e["node_chain"].as_str()),
+        (
+            e["level"].as_str(),
+            e["network"].as_str(),
+            e["node_chain"].as_str()
+        ),
         (Some("error"), Some("regtest"), Some("main"))
     );
     let (status, body) = get(&addr, "/readyz").await;
