@@ -217,16 +217,38 @@ describe("TransactionPage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("offers a retry when the node is unavailable", async () => {
-    replies = { [api(`/tx/${TXID}`)]: { status: 503, body: { error: "node unavailable" } } };
+  it("offers a retry when the node is unavailable, and retries every request that failed", async () => {
+    const down = { status: 503, body: { error: "node unavailable" } };
+    replies = {
+      [api(`/tx/${TXID}`)]: down,
+      [api(`/tx/${TXID}/outspends`)]: down,
+      [api("/blocks/tip/height")]: down,
+    };
     const el = page(`/tx/${TXID}`);
     await settle();
     expect(text(el)).toContain("Could not load this transaction");
     expect(text(el)).toContain("Node unavailable.");
-    serve(payment(confirmed));
+    serve(payment(confirmed), [
+      { spent: true, txid: SPENDER, vin: 0, status: confirmed },
+      { spent: false },
+    ]);
     el.querySelector<HTMLButtonElement>(".state--error .btn")?.click();
     await settle();
     expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+    expect(el.querySelector("a.tx-flow__spent")?.getAttribute("href")).toBe(`/tx/${SPENDER}`);
+    expect(text(el)).toContain("3 confirmations of 6 so far.");
+  });
+
+  it("says when spending could not be checked instead of waiting forever", async () => {
+    serve(payment(confirmed));
+    replies[api(`/tx/${TXID}/outspends`)] = { status: 503, body: { error: "node unavailable" } };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    el.querySelector<HTMLButtonElement>(".tx-flow__col--out .tx-flow__open")?.click();
+    await settle();
+    expect(text(el.querySelector("#tx-inspector") as Element)).toContain(
+      "Could not check right now",
+    );
   });
 
   it("shows ten outputs of a big transaction, then a hundred more per press", async () => {

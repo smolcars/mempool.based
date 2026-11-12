@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, on, Show } from "solid-js";
 import { CopyButton } from "../../components/CopyButton";
 import { formatSize } from "../../lib/format";
 import { PREVIEW_CHARS, SHOW_ALL_MAX } from "./tx";
@@ -19,7 +19,16 @@ export function Code(props: {
 }) {
   const [all, setAll] = createSignal(false);
   const long = () => props.value.length > PREVIEW_CHARS;
-  const shown = () => (all() || !long() ? props.value : `${props.value.slice(0, PREVIEW_CHARS)}…`);
+  // A new value starts collapsed again, and nothing past SHOW_ALL_MAX is ever laid out.
+  createEffect(
+    on(
+      () => props.value,
+      () => setAll(false),
+      { defer: true },
+    ),
+  );
+  const full = () => !long() || (all() && props.value.length <= SHOW_ALL_MAX);
+  const shown = () => (full() ? props.value : `${props.value.slice(0, PREVIEW_CHARS)}…`);
   const size = () => (props.bytes === undefined ? undefined : formatSize(props.bytes, "B"));
   return (
     <div class="tx-code">

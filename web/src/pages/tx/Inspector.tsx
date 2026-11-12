@@ -59,7 +59,7 @@ function DataText(props: { label: string; bytes: Uint8Array }) {
 export function Inspector(props: {
   tx: Transaction;
   selected: Selection;
-  outspends: () => Outspend[] | undefined;
+  outspends: () => Outspend[] | null | undefined;
   onClose: () => void;
   ref: (el: HTMLHeadingElement) => void;
 }) {
@@ -81,7 +81,11 @@ export function Inspector(props: {
         </Match>
         <Match when={props.selected.side === "out" && props.tx.vout[props.selected.index]}>
           {(vout) => (
-            <OutputDetails vout={vout()} spend={props.outspends()?.[props.selected.index]} />
+            <OutputDetails
+              vout={vout()}
+              spend={props.outspends()?.[props.selected.index]}
+              failed={props.outspends() === null}
+            />
           )}
         </Match>
       </Switch>
@@ -205,7 +209,7 @@ function InputDetails(props: { vin: Vin; version: number }) {
   );
 }
 
-function OutputDetails(props: { vout: Vout; spend: Outspend | undefined }) {
+function OutputDetails(props: { vout: Vout; spend: Outspend | undefined; failed: boolean }) {
   const kind = () => classify(props.vout.scriptpubkey);
   const data = createMemo(() =>
     kind().kind === "op_return" ? opReturnData(props.vout.scriptpubkey) : null,
@@ -234,6 +238,9 @@ function OutputDetails(props: { vout: Vout; spend: Outspend | undefined }) {
           <Switch fallback="Checking…">
             <Match when={kind().kind === "op_return"}>
               No: an OP_RETURN output can never be spent
+            </Match>
+            <Match when={props.failed}>
+              Could not check right now. Reload the page to try again.
             </Match>
             <Match when={props.spend?.spent === false}>No</Match>
             <Match when={props.spend?.spent && props.spend.txid}>

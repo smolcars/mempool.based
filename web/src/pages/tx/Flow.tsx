@@ -54,7 +54,7 @@ const tokenMs = (name: string) =>
  */
 export function Flow(props: {
   tx: Transaction;
-  outspends: () => Outspend[] | undefined;
+  outspends: () => Outspend[] | null | undefined;
   selected: Selection | null;
   onSelect: (s: Selection) => void;
 }) {

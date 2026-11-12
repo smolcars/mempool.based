@@ -85,11 +85,22 @@ function TransactionView(props: { txid: string }) {
   const network = useNetwork();
   const [tx, { refetch }] = createApi<Transaction>(() => `/tx/${props.txid}`);
   // Fetched alongside the transaction rather than after it, so neither waits on the other.
-  const [outspends] = createApi<Outspend[]>(() => `/tx/${props.txid}/outspends`);
-  const [tipText] = createApi<string>(() => "/blocks/tip/height", { as: "text" });
+  const [outspends, { refetch: refetchSpends }] = createApi<Outspend[]>(
+    () => `/tx/${props.txid}/outspends`,
+  );
+  const [tipText, { refetch: refetchTip }] = createApi<string>(() => "/blocks/tip/height", {
+    as: "text",
+  });
+  const retry = () => {
+    refetch();
+    refetchSpends();
+    refetchTip();
+  };
 
   const ready = () => (tx.state === "ready" ? tx() : undefined);
-  const spends = () => (outspends.state === "ready" ? outspends() : undefined);
+  // undefined while loading; null when it failed, so the page can say so instead of waiting.
+  const spends = () =>
+    outspends.state === "ready" ? outspends() : outspends.state === "errored" ? null : undefined;
 
   const [live, setLive] = createSignal<Live>();
   const [polledTip, setPolledTip] = createSignal<number>();
@@ -191,11 +202,7 @@ function TransactionView(props: { txid: string }) {
           <Show
             when={isNotFound(tx.error)}
             fallback={
-              <ErrorState
-                title="Could not load this transaction"
-                error={tx.error}
-                retry={refetch}
-              />
+              <ErrorState title="Could not load this transaction" error={tx.error} retry={retry} />
             }
           >
             <Empty title="Transaction not found">
@@ -261,7 +268,7 @@ function Body(props: {
   live: Live;
   tip: number | undefined;
   confs: number | undefined;
-  spends: () => Outspend[] | undefined;
+  spends: () => Outspend[] | null | undefined;
   justConfirmed: boolean;
 }) {
   const network = useNetwork();
@@ -417,11 +424,12 @@ function Body(props: {
             </p>
           </Show>
           <Flow tx={props.tx} outspends={props.spends} selected={selected()} onSelect={select} />
-          <Show when={selected()}>
+          {/* Keyed: each selection mounts fresh, so no "Show all" carries over to another item. */}
+          <Show when={selected()} keyed>
             {(s) => (
               <Inspector
                 tx={props.tx}
-                selected={s()}
+                selected={s}
                 outspends={props.spends}
                 onClose={() => setSelected(null)}
                 ref={(el) => {
