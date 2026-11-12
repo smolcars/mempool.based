@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+<title>Transaction | mempool.based</title>
+<link rel="icon" href="../logo.svg" type="image/svg+xml">
+<link rel="preload" href="../fonts/recursive.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../tokens.css">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="js/tx.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div id="network-band" class="network-band" hidden><span class="network-band__text"></span></div>
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="index.html" data-nav>
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect class="brand__tile" x="1" y="1" width="30" height="30" rx="7"/>
+        <rect class="brand__layer" x="6" y="20" width="20" height="5" rx="1.5"/>
+        <rect class="brand__layer brand__layer--mid" x="6" y="13.5" width="20" height="5" rx="1.5"/>
+        <rect class="brand__layer brand__layer--top" x="12" y="7" width="14" height="5" rx="1.5"/>
+      </svg>
+      <span class="brand__word">mempool.based</span>
+    </a>
+    <label class="network">
+      <span class="visually-hidden">Network</span>
+      <span class="network__dot" aria-hidden="true"></span>
+      <select id="network-select">
+        <option value="mainnet">Mainnet</option>
+        <option value="signet">Signet</option>
+        <option value="testnet4">Testnet4</option>
+      </select>
+    </label>
+    <form class="search" role="search" action="#">
+      <label class="visually-hidden" for="q">Search</label>
+      <svg class="search__icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input id="q" type="search" placeholder="Transaction, address or block" autocomplete="off" spellcheck="false">
+    </form>
+    <nav class="nav" aria-label="Main">
+      <a href="index.html" data-nav>Blocks</a>
+      <a href="#" title="Not part of the prototype">Mining</a>
+      <a href="#" title="Not part of the prototype">Lightning</a>
+    </nav>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch between light and dark theme">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path class="theme-half" d="M10 3.5a6.5 6.5 0 0 1 0 13z"/></svg>
+    </button>
+  </div>
+</header>
+<main id="main" class="page page--detail wrap">
+  <div class="proto-switch" role="group" aria-label="Prototype: show the transaction as">
+    <span class="proto-switch__label">Prototype state</span>
+    <button class="seg" type="button" data-state="unconfirmed">Unconfirmed</button>
+    <button class="seg" type="button" data-state="replaced">Replaced</button>
+    <button class="seg" type="button" data-state="confirmed">Confirmed</button>
+  </div>
+  <header class="detail-head">
+    <div class="detail-head__row">
+      <h1>Transaction</h1>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="detail-head__hash" id="txid"></div>
+  </header>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <ol class="timeline" id="timeline" aria-label="Status history"></ol>
+
+  <div class="tx-layout">
+    <section class="section flow-section" aria-labelledby="flow-title">
+      <div class="section__head">
+        <h2 id="flow-title">Inputs and outputs</h2>
+        <span class="section__meta" id="flow-meta"></span>
+      </div>
+      <div class="flow" id="flow">
+        <ul class="flow__col flow__col--in" id="flow-in" aria-label="Inputs"></ul>
+        <svg class="flow__ribbons" id="flow-svg" aria-hidden="true"></svg>
+        <ul class="flow__col flow__col--out" id="flow-out" aria-label="Outputs"></ul>
+      </div>
+    </section>
+    <section class="section fee-facts" aria-labelledby="fee-title">
+      <div class="section__head"><h2 id="fee-title">Fee</h2></div>
+      <dl class="facts facts--single" id="fee-facts"></dl>
+      <div class="position" id="position"></div>
+    </section>
+  </div>
+</main>
+</body>
+</html>
