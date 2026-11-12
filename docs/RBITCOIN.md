@@ -82,6 +82,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **`getblock` verbosity 2 carries every transaction's fee** (the coinbase has none). Its `vsize` is the plain BIP141 size, not adjusted for sigops.
 - **`getmininginfo.networkhashps` does not fit a `u64`** on mainnet.
 - **`getblocktemplate` on signet needs the `signet` rule;** mainnet and testnet4 accept it too, so we always send it.
+- **Electrum can announce a tip before Esplora serves the block, and not to every subscriber at once.** On signet (v0.9.2, five blocks, three subscribers each), one subscriber heard of each block 320–470 ms before another. A request for the block made in that window was held, not refused, and answered after 357–475 ms, against 13–33 ms for a subscriber told later. Testnet4 (three blocks) and regtest (116 blocks) showed no gap, and no request was ever answered 404. So a reaction to a new tip can take half a second, whatever we do; the hub still retries a refused block every 25 ms for up to 3 s ([`WS.md`](WS.md)).
 - **P2P is BIP324 v2 only.** Irrelevant to us unless something tries to peer with the node.
 
 ## Upstream wishlist
