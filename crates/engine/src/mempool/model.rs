@@ -68,6 +68,9 @@ pub struct Delta {
     pub added: Vec<(Txid, TxInfo)>,
     /// Sorted by txid.
     pub removed: Vec<(Txid, Removal)>,
+    /// The records of the removed transactions that were replaced, as they were held: what a
+    /// replacement replaced, after it has left. Sorted by txid.
+    pub replaced: Vec<(Txid, TxInfo)>,
 }
 
 /// The tracked mempool. Read it through [`super::Tracker`].
@@ -202,6 +205,34 @@ impl Mempool {
 
     pub fn fees(&self) -> Amount {
         self.fees
+    }
+
+    /// Which of `txids` spends an output of which, from the inputs held for each: `(parent,
+    /// child)` index pairs into `txids`, each once. Exact but for a collision of the keyed 64-bit
+    /// input fingerprints. Costs one hash per output of the transactions given.
+    pub fn links(&self, txids: &[Txid]) -> Vec<(usize, usize)> {
+        let mut outputs = HashMap::new();
+        for (i, t) in txids.iter().enumerate() {
+            let n = self.txs.get(t).map_or(0, |info| info.outputs);
+            for vout in 0..n {
+                outputs.insert(self.keys.key(&OutPoint::new(*t, vout)), i);
+            }
+        }
+        let mut links = Vec::new();
+        for (child, t) in txids.iter().enumerate() {
+            let Some(info) = self.txs.get(t) else {
+                continue;
+            };
+            for k in &info.spends {
+                if let Some(&parent) = outputs.get(k)
+                    && parent != child
+                    && !links.contains(&(parent, child))
+                {
+                    links.push((parent, child));
+                }
+            }
+        }
+        links
     }
 
     pub(crate) fn keys(&self) -> &Keys {

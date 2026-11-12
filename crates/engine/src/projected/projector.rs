@@ -15,7 +15,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use super::model::{Delta, Model, Packing, Position, ProjectedBlock, Projection};
+use super::model::{Delta, Group, Model, Packing, Position, ProjectedBlock, Projection};
 use crate::mempool::{self, SourceError, Tracker};
 
 /// Where cluster chunks come from. [`Rpc`] is the real one; tests mock it.
@@ -230,6 +230,11 @@ impl Projector {
     /// Which projected block a transaction is in and what is ahead of it.
     pub fn position(&self, txid: &Txid) -> Option<Position> {
         self.read().model.position(txid)
+    }
+
+    /// The cluster holding a transaction, as the node last told it, chunk by chunk.
+    pub fn group(&self, txid: &Txid) -> Option<Group> {
+        self.read().model.group(txid)
     }
 
     /// The first projected block as it stood just before a block on top of `parent` arrived.

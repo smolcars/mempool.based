@@ -228,6 +228,19 @@ pub struct WsLimits {
     pub mempool_interval: Duration,
     /// Transactions in the `transactions` topic's list.
     pub latest_txs: usize,
+    /// `tx:<txid>` topics one socket may hold, counted inside `max_subscriptions`.
+    pub max_tracked_txs: usize,
+    /// `address:<address>` topics one socket may hold, counted inside `max_subscriptions`.
+    pub max_tracked_addresses: usize,
+    /// Distinct transactions followed at once, per network.
+    pub tracked_txs_total: usize,
+    /// Distinct addresses followed at once, per network: each is one Electrum subscription.
+    pub tracked_addresses_total: usize,
+    /// Least time between two messages of a followed transaction that only moved inside its
+    /// projected block.
+    pub position_interval: Duration,
+    /// Replacements remembered per network, oldest out first.
+    pub replacements_kept: usize,
 }
 
 impl Default for WsLimits {
@@ -243,6 +256,12 @@ impl Default for WsLimits {
             max_block_subscriptions: 2,
             mempool_interval: Duration::from_secs(2),
             latest_txs: 10,
+            max_tracked_txs: 4,
+            max_tracked_addresses: 2,
+            tracked_txs_total: 10_000,
+            tracked_addresses_total: 1_000,
+            position_interval: Duration::from_secs(10),
+            replacements_kept: 10_000,
         }
     }
 }
@@ -387,7 +406,35 @@ impl Config {
                 u64::try_from(w.mempool_interval.as_millis()).unwrap_or(u64::MAX),
             )?),
             latest_txs: positive(&var, "WS_LATEST_TXS", w.latest_txs)?,
+            max_tracked_txs: positive(&var, "WS_MAX_TRACKED_TXS", w.max_tracked_txs)?,
+            max_tracked_addresses: positive(
+                &var,
+                "WS_MAX_TRACKED_ADDRESSES",
+                w.max_tracked_addresses,
+            )?,
+            tracked_txs_total: positive(&var, "WS_TRACKED_TXS_TOTAL", w.tracked_txs_total)?,
+            tracked_addresses_total: positive(
+                &var,
+                "WS_TRACKED_ADDRESSES_TOTAL",
+                w.tracked_addresses_total,
+            )?,
+            position_interval: Duration::from_millis(positive(
+                &var,
+                "WS_POSITION_INTERVAL_MS",
+                u64::try_from(w.position_interval.as_millis()).unwrap_or(u64::MAX),
+            )?),
+            replacements_kept: positive(&var, "REPLACEMENTS_KEPT", w.replacements_kept)?,
         };
+        // Each address is one of the Electrum client's 10,000 subscriptions.
+        if ws.tracked_txs_total > 1 << 20
+            || ws.tracked_addresses_total > 10_000
+            || ws.replacements_kept > 1 << 20
+            || !(1_000..=600_000).contains(&ws.position_interval.as_millis())
+        {
+            return Err("WS_TRACKED_TXS_TOTAL and REPLACEMENTS_KEPT must be at most 1048576, \
+                 WS_TRACKED_ADDRESSES_TOTAL at most 10000 and WS_POSITION_INTERVAL_MS 1000 to 600000"
+                .into());
+        }
         if !(100..=60_000).contains(&ws.mempool_interval.as_millis()) || ws.latest_txs > 100 {
             return Err(
                 "WS_MEMPOOL_INTERVAL_MS must be 100 to 60000 and WS_LATEST_TXS at most 100".into(),
@@ -808,6 +855,36 @@ mod tests {
             assert!(parse(&[(k, bad)]).is_err(), "{k}={bad}");
         }
         assert!(parse(&[("WS_SEND_QUEUE", "99999999")]).is_err());
+        let c = parse(&[
+            ("WS_MAX_TRACKED_TXS", "2"),
+            ("WS_MAX_TRACKED_ADDRESSES", "1"),
+            ("WS_TRACKED_TXS_TOTAL", "50"),
+            ("WS_TRACKED_ADDRESSES_TOTAL", "5"),
+            ("WS_POSITION_INTERVAL_MS", "3000"),
+            ("REPLACEMENTS_KEPT", "7"),
+        ])
+        .unwrap();
+        assert_eq!(
+            (
+                c.ws.max_tracked_txs,
+                c.ws.max_tracked_addresses,
+                c.ws.tracked_txs_total,
+                c.ws.tracked_addresses_total,
+                c.ws.position_interval,
+                c.ws.replacements_kept
+            ),
+            (2, 1, 50, 5, Duration::from_secs(3), 7)
+        );
+        for (k, bad) in [
+            ("WS_MAX_TRACKED_TXS", "0"),
+            ("WS_TRACKED_ADDRESSES_TOTAL", "10001"),
+            ("WS_TRACKED_TXS_TOTAL", "2000000"),
+            ("REPLACEMENTS_KEPT", "0"),
+            ("WS_POSITION_INTERVAL_MS", "999"),
+            ("WS_POSITION_INTERVAL_MS", "600001"),
+        ] {
+            assert!(parse(&[(k, bad)]).is_err(), "{k}={bad}");
+        }
         assert_eq!(parse(&[]).unwrap().limits.summary_cache_bytes, 32 << 20);
         let c = parse(&[("BLOCK_SUMMARY_CACHE_MB", "64")]).unwrap();
         assert_eq!(c.limits.summary_cache_bytes, 64 << 20);

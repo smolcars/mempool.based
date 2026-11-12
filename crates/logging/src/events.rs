@@ -56,6 +56,12 @@ pub struct ServerStarting<'a> {
     pub ws_max_block_subscriptions: usize,
     pub ws_mempool_interval_ms: u64,
     pub ws_latest_txs: usize,
+    pub ws_max_tracked_txs: usize,
+    pub ws_max_tracked_addresses: usize,
+    pub ws_tracked_txs_total: usize,
+    pub ws_tracked_addresses_total: usize,
+    pub ws_position_interval_ms: u64,
+    pub replacements_kept: usize,
     pub block_summary_cache_mb: usize,
     /// Left out when `DATA_DIR` is unset and the server runs without a store.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -705,6 +711,43 @@ pub struct MiningFailed {
 }
 event!(MiningFailed, "mining_failed", Warn);
 
+// Following transactions and addresses. Never a txid or an address: the log must not record
+// what people look at.
+
+/// One minute of the `tx:` and `address:` topics on one network, written while anything is
+/// followed or happened.
+#[derive(Debug, Serialize)]
+pub struct TrackingSummary {
+    pub network: &'static str,
+    /// Followed now.
+    pub txs: usize,
+    pub addresses: usize,
+    /// New transactions and addresses followed in the minute, refused for a full server, the
+    /// messages sent and their bytes (encoded once), and addresses the node would not watch.
+    pub subscribed: u64,
+    pub refused: u64,
+    pub messages: u64,
+    pub bytes: u64,
+    pub address_errors: u64,
+    /// The replacement record's size now, and replacements recorded in the minute.
+    pub replacements: usize,
+    pub replaced: u64,
+}
+event!(TrackingSummary, "tracking_summary", Info);
+
+/// A socket was refused a transaction or address because the network follows its total already.
+/// At a total of 1, 2, 4, 8… per kind and network.
+#[derive(Debug, Serialize)]
+pub struct TrackingRefused {
+    pub network: &'static str,
+    /// `tx` or `address`.
+    pub kind: &'static str,
+    /// `server_full`.
+    pub reason: &'static str,
+    pub total: u64,
+}
+event!(TrackingRefused, "tracking_refused", Warn);
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -758,6 +801,12 @@ mod tests {
                 ws_max_block_subscriptions: 1,
                 ws_mempool_interval_ms: 1,
                 ws_latest_txs: 1,
+                ws_max_tracked_txs: 1,
+                ws_max_tracked_addresses: 1,
+                ws_tracked_txs_total: 1,
+                ws_tracked_addresses_total: 1,
+                ws_position_interval_ms: 1,
+                replacements_kept: 1,
                 block_summary_cache_mb: 1,
                 data_dir: Some("data".into()),
                 backfill_enabled: true,
@@ -1053,6 +1102,24 @@ mod tests {
                 task: "refresh",
                 error: "timed_out",
                 failures: 1,
+            }),
+            both(&TrackingSummary {
+                network: n,
+                txs: 12,
+                addresses: 2,
+                subscribed: 30,
+                refused: 0,
+                messages: 410,
+                bytes: 120_000,
+                address_errors: 0,
+                replacements: 812,
+                replaced: 9,
+            }),
+            both(&TrackingRefused {
+                network: n,
+                kind: "tx",
+                reason: "server_full",
+                total: 1,
             }),
         ]
     }

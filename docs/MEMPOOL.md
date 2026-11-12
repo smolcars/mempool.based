@@ -20,6 +20,7 @@ let (snapshot, mut sub) = tracker.subscribe(|m: &Mempool| /* copy what you need 
 while let Ok(delta) = sub.recv().await { /* delta.seq == previous + 1 */ }
 tracker.tip_changed();          // from the Electrum header subscription; optional
 tracker.read(|m| m.get(&txid)); // a point lookup
+tracker.read(|m| m.links(&txids)); // which of these spends which, from the inputs held
 tracker.events();               // statistics and abnormal conditions, for logging
 task.abort();                   // stop polling
 ```
@@ -132,7 +133,7 @@ Every delta has a `seq` that counts up by one from 1. `Tracker::subscribe` runs 
 
 Subscribers share one bounded ring of 64 deltas. One that falls further behind receives `Lagged`, never a growing queue; it takes a new snapshot. A large delta, such as the initial sync's, is held only until every subscriber has read it or it is pushed out of the ring.
 
-A delta carries the added transactions with their records, the removed txids with their reasons (both sorted by txid), the node's `mempool_sequence` for the listing, and the chain tip read after it. A cycle that changes nothing publishes nothing.
+A delta carries the added transactions with their records, the removed txids with their reasons (both sorted by txid), the records the replaced ones had (so a reader can say what a replacement replaced after it has left), the node's `mempool_sequence` for the listing, and the chain tip read after it. A cycle that changes nothing publishes nothing.
 
 ## Failures
 
@@ -180,6 +181,7 @@ let (projector, task) = Projector::start(tracker.clone(), rpc, Config::default()
 let (projection, mut sub) = projector.subscribe(); // Arc<Projection>: blocks, records, totals
 while let Ok(delta) = sub.recv().await { /* delta.seq == previous + 1 */ }
 projector.position(&txid);   // its block, and the vsize and transactions ahead of it
+projector.group(&txid);      // its cluster as the node last told it: chunks, fees, members
 projector.expected(&parent); // our first block as it stood on `parent`, for auditing the block mined on it
 projector.events();          // statistics and abnormal conditions, for logging
 task.abort();
@@ -314,8 +316,18 @@ The projector logs nothing itself. `Projector::events()` yields:
 - **The tip hint.** A task follows the network's Electrum events and calls `tip_changed` on every new block or reorg, so a block's removals are seen at once instead of at the next cycle.
 - **A node down at boot.** Nothing special: the tracker retries with its backoff (2 s doubling to 30 s), the projector waits for it, and the topics publish nothing until the first complete cycle. When the node comes back the initial sync runs and the topics start. A node lost later leaves the last projection in place, marked `stale`.
 - **Shutdown.** When shutdown starts, the engines and their tasks are aborted, so no polling continues while sockets drain.
-- **The topics** (`mempool`, `projected`, `projected-txs:N`, `transactions`, in [`WS.md`](WS.md#mempool-topics)) are fed by one task per network from the latest projection and the tracker's change stream. No subscription asks the node for anything.
+- **The topics** (`mempool`, `projected`, `projected-txs:N`, `transactions`, in [`WS.md`](WS.md#mempool-topics), and `tx:<txid>`, below) are fed by one task per network each from the latest projection and the tracker's change stream. No subscription asks the node for anything.
 - **The log.** The engines' events become typed lines ([`LOGGING.md`](LOGGING.md#the-live-mempool)): `mempool_synced` once, one `mempool_summary` a minute with the minute's totals, and a line for each abnormal condition, repeats summarised at powers of two.
+
+### Following a transaction
+
+`crates/server/src/ws/track.rs` serves the `tx:<txid>` topic and `crates/server/src/relatives.rs` the relatives route ([`WS.md`](WS.md#following-a-transaction-or-an-address), [`FRONTEND.md`](FRONTEND.md#a-transactions-relatives-and-replacements)). Neither asks the node anything:
+
+- **Where it is** is the tracker's record (accept time, fee, size) and the projected blocks' `position`.
+- **Why it left** is the tracker's removal reason, taken from the change stream by one task per network while anyone follows the transaction, with the honesty of [Why a transaction left](#why-a-transaction-left): `evicted` also covers the cases where a replacement could not be seen. A transaction that left before anyone followed it, or while the task had fallen more than 64 deltas behind, reads `unknown` unless the replacement record knows it.
+- **What it will be mined with** is the projected blocks' copy of its cluster (`Projector::group`), the node's own chunks, and which member spends which from the inputs the tracker holds (`Mempool::links`): one keyed hash per output of the cluster's members, at most 64 transactions.
+
+**The replacement record** (`crates/server/src/replacements.rs`) keeps every replacement the tracker reports, whether anyone follows it or not: the replaced txid, its replacement, when it was seen, and both sides' fee and size as the tracker held them (the replacement's are missing when it was confirmed in the block that removed the original). It is bounded by `REPLACEMENTS_KEPT` (10,000 by default, about 3 MB): the oldest replacement goes first. On mainnet the tracker counted 45 replacements in 15 minutes on one run and 197 in 13 minutes on another (2026-11-12, children included, mostly in a burst), so the default reaches back between about half a day and two days; a burst shortens that. It lives in memory only and is lost on restart, so a transaction replaced before the server started reads `unknown`. A later task may keep it in the store.
 
 The mempool totals' `min_fee_rate` is the node's `mempoolminfee` from the tracker's own `getmempoolinfo` probe, which `Tracker::node_info` exposes; no extra call is made for it.
 

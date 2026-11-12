@@ -165,6 +165,43 @@ Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUin
 - Each client may start ten computations at once, then one every 2 s; past that `429` with `Retry-After: 2`. Cached blocks never count. A page walking back through history should fetch tiles lazily, as they scroll into view.
 - `404` is an unknown block, `400` a malformed hash or query, `502` and `504` the node failing. All are worth a "Try again".
 
+#### A transaction's relatives and replacements
+
+For the transaction page: who it will be mined with, and what replaced what. Per network, under its `/app` (`crates/server/src/relatives.rs`, `crates/server/src/replacements.rs`). Both answer from the server's memory and never ask the node, so they are cheap and need no caps beyond the ordinary request limits. Both are `Cache-Control: no-store`: the mempool moves.
+
+| Route | Answer |
+|---|---|
+| `GET /app/tx/:txid/relatives` | A mempool transaction's cluster, its chunks and its parents and children (below) |
+| `GET /app/tx/:txid/replacements` | What this transaction replaced and what replaced it, as far as the server remembers (below) |
+
+**Relatives.** The cluster is the node's own (`getmempoolcluster`), as the projected blocks last asked for it: at most one mempool update behind. Which member spends which is read from the transactions' inputs.
+
+```json
+{"txid":"<parent>","stale":false,"chunk":0,
+ "parents":[],"children":["<child>"],
+ "chunks":[{"fee":3314,"vsize":265,"rate":12505,"txs":["<parent>","<child>"]}],
+ "txs":[{"txid":"<parent>","chunk":0,"time":1794467650,"fee":139,"vsize":139,"block":0,"parents":[]},
+        {"txid":"<child>","chunk":0,"time":1794467650,"fee":3175,"vsize":126,"block":0,"parents":["<parent>"]}]}
+```
+
+- `chunks` are the cluster's mining chunks in the node's order, best first; `chunk` is the index of the one holding this transaction. A chunk is mined whole, at its `rate`: that is the "effective fee rate" (CPFP). `fee` is the node's chunk fee, `prioritisetransaction` included; `vsize` is the chunk's sigop-adjusted size. A chunk can count a member the server has not seen yet, in the moment after it arrived, so `fee` and `vsize` can exceed the sum of `txs`.
+- `txs` are the members in mining order with their own figures, the chunk they are in, their projected block (`null` before the projection places them) and their parents inside the cluster. `time`, `fee` and `vsize` are `null` for a member that left a moment ago.
+- `parents` and `children` are this transaction's own unconfirmed ones. Their parents and children are in `txs`: draw the graph from there. A cluster holds at most 64 transactions.
+- `404` `{"error":"not in the mempool"}`; `503` with `Retry-After: 1` for `mempool is syncing` (the server just started), `not placed yet` (it arrived a moment ago) or `mempool is switched off` (no retry will help); `400` for a malformed txid.
+
+**Replacements.** A bounded record kept in memory per network: the most recent `REPLACEMENTS_KEPT` (10,000) replacements, oldest out first, lost when the server restarts ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)). Someone who opens a replaced transaction's page later still learns what replaced it.
+
+```json
+{"txid":"<B>","truncated":false,
+ "replaced_by":[{"txid":"<B>","by":"<C>","seen":1794467700,"fee":695,"vsize":139,"rate":5000,"by_fee":2000,"by_vsize":139,"by_rate":14388}],
+ "replaces":[{"txid":"<A>","by":"<B>","seen":1794467643,"fee":139,"vsize":139,"rate":1000,"by_fee":695,"by_vsize":139,"by_rate":5000}]}
+```
+
+- `replaced_by` follows this transaction forward to the newest replacement known, oldest link first. The last link's `by` is the one to show.
+- `replaces` walks backward: what this one replaced, and what those replaced, newest first. A replacement can replace several transactions at once (a transaction and its children: a child leaves with its replaced parent and carries the same replacement).
+- Each link: `seen` is when the server saw it (Unix seconds); `fee`, `vsize` and `rate` are the replaced transaction's own, `by_*` the replacement's, `null` when the replacement was confirmed in the block that removed the original. At most 32 links each way; `truncated` says there were more.
+- Empty lists mean the server saw no replacement since it started, not that there was none. `503` with the mempool engine switched off; `400` for a malformed txid.
+
 ### Live data
 
 `lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms (unsubscribes before it subscribes, so switching between capped topics never holds one too many), and ignores message types it does not know. Binary frames are read as `ArrayBuffer`s and offered to every subscribed topic that has a `binary` reader; the others never see them. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.
@@ -193,6 +230,7 @@ const status = useLiveStatus(); // "connecting" | "live" | "reconnecting" | "off
 - **The mempool topics** exist now ([`WS.md`](WS.md#mempool-topics)): `mempool` for the mempool panel and bar, `projected` for the projected tiles, `transactions` for the latest transactions, and `projected-txs:N` for one projected block's grid. The first three are JSON and each message is the whole state, so a page keeps the last one; `projectedTopic` in `lib/projected-topic.ts` reads `projected`, with rates turned into sat/vB. `lib/mempool-topics.ts` reads `mempool` and `transactions` the same way. On a server with the mempool switched off each topic sends `{"type":"off"}` once. Rates on the wire are in sat per 1,000 vB.
 - **A projected block's transactions** (`lib/projected-txs.ts`). `projectedTxsTopic(n)` reads block `n`'s frames with `decodeFrame`, which never throws: a frame of another kind is ignored, one in a newer format version comes back as `version` (ask for a reload), and one that is cut short, too long, has nonzero padding or a fee beyond 2^53 comes back as `malformed`. `BlockTxs` keeps the block as a `Map` from txid to a `GridTx`-shaped record (`{ id, vsize, fee, rate }`, rate in sat/vB), the same object until its record changes. `apply(frame)` answers `changed` (with the txids that came in and went out), `lost`, `ignored` or `version`. On `lost`, call the function `useTopic` returns: it unsubscribes and subscribes again in the next batch (`LiveConnection.restart`), and the snapshot that follows starts the block over. Until it comes the model keeps the last picture and ignores the old subscription's deltas still in flight, so one gap never becomes a loop. Call `expectSnapshot()` from the topic's `resync` handler: a reconnect subscribes afresh. A page holds at most two of these topics at once, and leaving the page unsubscribes. `fakes.ts` builds frames for tests (`snapshotFrame`, `deltaFrame`, `fakeTxid`).
 - **The home page's mempool** (`pages/home/live-mempool.ts`) takes the panels and the strip from those topics and asks `/api` for nothing they send. It polls `/mempool` and `/mempool/recent` instead only when the server says `off`, while the socket is down, or when the topics have said nothing 5 s after the page opened (a server still making its first mempool cycle). `stale: true` keeps the last state on screen and turns the live indicator to "Node not answering".
+- **Following one transaction or address:** `tx:<txid>` says where a transaction is and what happened to it (in the mempool with its projected block, replaced with the whole chain of replacements, confirmed, evicted, or unknown), and `address:<address>` sends a token that changes whenever the address's history does, so the page refetches. Each message is the whole state. The messages, what each state means for the page, how to phrase the position without false precision, and the bounds (four transactions and two addresses per socket) are in [`WS.md`](WS.md#following-a-transaction-or-an-address). On `unknown`, ask `GET /api/tx/:txid/status`: the topic never asks the node. On `refused` with `server_full`, fall back to polling the HTTP status and try the topic again later.
 - **Say when it is not live.** While `status()` is not `live`, poll what the socket would have sent, no faster than every few seconds, and tell the reader (the home page's indicator).
 - In tests, stub the global `WebSocket` with `FakeSocket` from `lib/fakes.ts` and play the server: `FakeSocket.last().hello()`, `.receive({...})`, `.drop(1006)`.
 
