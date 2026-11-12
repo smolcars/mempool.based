@@ -237,6 +237,18 @@ Decided while building it, where the rest of this document left it open:
 - **Captions.** The fee-layer caption and the grid's sit in the same cell, so the taller sets the height and swapping one for the other moves nothing.
 - **Fallbacks.** The fee layers stay in the frame until the grid has drawn, and come back if the WebGL context is lost, until it is restored. A browser without WebGL2 keeps the layers and the caption says the map needs WebGL2. If the data fails, the caption offers "Try again".
 
+### The projected-block page
+
+Decided while building it (`/block/next`, `/block/next/:n`), where the rest of this document left it open:
+
+- **The address is a place in the queue,** not a height. `/block/next` is whatever block comes next, so the link keeps meaning "the next block" after one is mined, and the block that was mined gets its own `/block/:hash`. Positions run from 1 (the next block) to 8 (the rest of the mempool), as the projected tiles do.
+- **Provisional, in the same frame.** The map sits in the box a mined block's map gets, with the same scale (the frame is the weight limit), but the frame is dashed and open, the level line is dashed, and the title carries a dashed "Projected" badge. Figures that are estimates carry `~` (median rate, range, fullness); counts and fees of the projection itself are exact.
+- **Motion for live changes is the grid's own** and nothing more: a square that moves travels with `--ease-in-out` over `--dur-slow`, leaders first; a newcomer drops in with `--ease-settle`; one that is outbid, replaced or mined shrinks and fades where it stood over `--dur-base`. An update's motion is over in about 0.7 s of each 2 s interval, so the picture is still more than half the time and a change reads as one event. Squares whose place did not change do not move. Nothing else on the page animates per update: rows that came in get the row flash once, the "last change" line says how many came in and left, and no live region reads updates out.
+- **A block found is the one orchestrated moment.** The dashed frame sets solid in the accent for `--dur-block` while the mined squares fade and what is left moves up; a notice in the accent says which block was found, when, and links to it, and a polite live region says it once. The next block's page then carries on with the new next block. A later block's page stays at its place in the queue, since its address names the place, and the notice says that every projected block moved up, linking to where what it showed went (or saying it was the guess at one of the blocks found, in a burst deeper than it). Blocks found in a burst are one notice ("Blocks 101 to 103 were found"); a shorter or equal chain with a new tip is a reorg and says so. The notice stays until dismissed.
+- **Empty is a state, not a failure.** On test networks the next block is often empty: the frame stays, and its open middle says "Nothing waiting here" and what that means, fading in after the last squares have gone.
+- **The rest of the mempool has no map.** It has no size bound, so it gets its strata (squeezed into one frame when it holds more than a block, and labelled so) and a sentence on why there is no map.
+- **Not live, not current, not on.** The connection state sits beside the badge as an icon and a word. While the server has lost its node the page keeps its last picture with a caution notice saying since when. With the mempool switched off on a network, the page says so and points to the mined blocks.
+
 ## Components
 
 | Component | What it is |

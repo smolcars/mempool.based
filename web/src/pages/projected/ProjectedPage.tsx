@@ -397,6 +397,7 @@ function ProjectedView(props: { index: number }) {
 function sizeNote(b: ProjectedBlock, isRest: boolean): string {
   if (!isRest) return `${percent(Math.min(1, b.weight / MAX_WEIGHT))} of a block's limit`;
   const blocks = b.weight / MAX_WEIGHT;
+  if (b.txs === 0) return "";
   return blocks < 1
     ? "Less than a block's worth"
     : `≈ ${groupDigits(Math.ceil(blocks))} blocks' worth`;
@@ -640,7 +641,14 @@ function CoreSample(props: {
             </span>
           </div>
         </Show>
-        <Show when={props.txs && props.txs.length > 0 && grid() !== "unsupported"}>
+        {/* Kept once drawn, even when the block empties, so what leaves fades where it stood. */}
+        <Show
+          when={
+            props.txs &&
+            (props.txs.length > 0 || grid() === "drawn" || grid() === "lost") &&
+            grid() !== "unsupported"
+          }
+        >
           <div class="projected-core__grid">
             <Suspense>
               <TxGrid

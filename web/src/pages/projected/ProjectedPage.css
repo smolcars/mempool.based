@@ -266,22 +266,31 @@
     opacity: 0;
   }
 
-  /* Nothing waiting: an empty frame on a dashed floor, said in words. Normal on test networks. */
+  /* Nothing waiting: said in words in the open middle of the frame, clear of the floor where the
+     last squares fade. Normal on test networks, so it reads as a state, not a failure. */
   .projected-core__empty,
   .projected-core__wait {
     position: absolute;
-    inset: auto var(--space-5) var(--space-5);
+    inset: 30% var(--space-6) auto;
     display: grid;
+    justify-items: start;
     gap: var(--space-1);
-    padding-bottom: var(--space-3);
-    border-bottom: 2px dashed var(--color-line-strong);
+    max-width: 44ch;
+    margin-inline: auto;
+  }
+  .projected-core__empty {
+    animation: projected-appear var(--dur-fade) var(--ease-out) var(--dur-base) both;
+  }
+  @keyframes projected-appear {
+    from {
+      opacity: 0;
+    }
   }
   .projected-core__empty-title {
     font-weight: var(--weight-bold);
   }
   .projected-core__empty-text,
   .projected-core__wait {
-    max-width: 42ch;
     font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
@@ -427,9 +436,13 @@
     .projected-txs .copy {
       display: none;
     }
+    /* The chunk's rate and the transaction's own stack, so the size column keeps its room. */
+    .projected-rate {
+      flex-direction: column;
+    }
     .projected-core__empty,
     .projected-core__wait {
-      inset: auto var(--space-3) var(--space-3);
+      inset: 22% var(--space-4) auto;
     }
   }
 }
