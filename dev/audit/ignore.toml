@@ -1,0 +1,8 @@
+# Advisories accepted on purpose, skipped by dev/audit/audit.py (docs/CI.md#dependency-audit).
+# Each entry needs all three fields; the audit fails on an entry without them. Ids are RustSec
+# (RUSTSEC-YYYY-NNNN) for Cargo.lock and GitHub (GHSA-xxxx-xxxx-xxxx) for web/bun.lock.
+#
+# [[ignore]]
+# id = "RUSTSEC-2023-0001"
+# reason = "Only the Windows named pipe server is affected, and we never build for Windows."
+# reviewed = 2026-11-12
