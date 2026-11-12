@@ -182,4 +182,23 @@ describe("mempool history page", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(requests).toHaveLength(3);
   });
+
+  it("lets an ask still in flight finish rather than starting it again each minute", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(T0 * 1000);
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+      requests.push(url);
+      signal = init.signal ?? undefined;
+      // A server that never answers.
+      return new Promise<Response>(() => {
+        signal?.throwIfAborted();
+      });
+    });
+    mount(() => <MempoolPage />, "/mempool?interval=2h");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(130_000);
+    expect(requests).toHaveLength(1);
+    expect(signal?.aborted).toBe(false);
+  });
 });

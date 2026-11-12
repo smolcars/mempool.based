@@ -78,7 +78,8 @@ function MempoolHistory(props: { network: Network }) {
     const schedule = () => {
       const ms = 60_000 - (Date.now() % 60_000) + REFRESH_OFFSET_MS;
       timer = setTimeout(() => {
-        if (request.state !== "errored") refetch();
+        // Never cut short an ask still in flight (or retrying a busy server): it would never finish.
+        if (request.state !== "errored" && !request.loading) refetch();
         schedule();
       }, ms);
     };
