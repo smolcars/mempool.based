@@ -1189,6 +1189,21 @@ struct FakeNode {
     stale_once: AtomicBool,
     /// Every request of the close-watcher, by route.
     asked: Mutex<Vec<&'static str>>,
+    /// How long every request takes; requests running now, the most ever at once, and when each
+    /// started.
+    delay: Mutex<Duration>,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+    starts: Mutex<Vec<std::time::Instant>>,
+}
+
+/// A request being answered: counted in flight until dropped.
+struct Busy<'a>(&'a FakeNode);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl FakeChain {
@@ -1216,6 +1231,16 @@ impl FakeChain {
             },
         };
         self.0.outputs.lock().unwrap().insert(position(scid), out);
+    }
+
+    async fn busy(&self) -> Busy<'_> {
+        let n = &self.0;
+        let now = n.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        n.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        n.starts.lock().unwrap().push(std::time::Instant::now());
+        let delay = *n.delay.lock().unwrap();
+        tokio::time::sleep(delay).await;
+        Busy(n)
     }
 
     fn batches(&self) -> Vec<(std::time::Instant, usize)> {
@@ -1317,6 +1342,7 @@ impl crate::Chain for FakeChain {
         &self,
         positions: OutPositions,
     ) -> Result<Stamped<Vec<Option<PositionedOutput>>>, NodeError> {
+        let _busy = self.busy().await;
         let n = &self.0;
         if n.down.load(Ordering::Relaxed) {
             return Err(NodeError::Unavailable("down".to_owned()));
@@ -1348,6 +1374,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn tip_height(&self) -> Result<u32, NodeError> {
+        let _busy = self.busy().await;
         if self.0.down.load(Ordering::Relaxed) {
             return Err(NodeError::Unavailable("down".to_owned()));
         }
@@ -1356,6 +1383,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn tip_hash(&self) -> Result<BlockHash, NodeError> {
+        let _busy = self.busy().await;
         self.ask("tip_hash")?;
         let blocks = self.0.blocks.lock().unwrap();
         blocks
@@ -1368,6 +1396,7 @@ impl crate::Chain for FakeChain {
         &self,
         top: Option<u32>,
     ) -> Result<Vec<node::esplora::model::Block>, NodeError> {
+        let _busy = self.busy().await;
         self.ask("headers")?;
         let len = self.0.blocks.lock().unwrap().len() as u32;
         let top = top.unwrap_or(u32::MAX).min(len.saturating_sub(1));
@@ -1379,6 +1408,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn block(&self, hash: BlockHash) -> Result<lightning::bitcoin::Block, NodeError> {
+        let _busy = self.busy().await;
         self.ask("block")?;
         let blocks = self.0.blocks.lock().unwrap();
         blocks
@@ -1389,6 +1419,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn block_hash(&self, height: u32) -> Result<BlockHash, NodeError> {
+        let _busy = self.busy().await;
         self.ask("block_hash")?;
         self.block_at(height)
             .map(|b| b.block_hash())
@@ -1400,6 +1431,7 @@ impl crate::Chain for FakeChain {
         hash: BlockHash,
         index: u32,
     ) -> Result<lightning::bitcoin::Txid, NodeError> {
+        let _busy = self.busy().await;
         self.ask("block_txid")?;
         let blocks = self.0.blocks.lock().unwrap();
         let b = blocks
@@ -1413,6 +1445,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn tx_position(&self, txid: lightning::bitcoin::Txid) -> Result<(u32, u32), NodeError> {
+        let _busy = self.busy().await;
         self.ask("tx_position")?;
         self.find_tx(txid)
             .map(|(h, i, _)| (h, i))
@@ -1424,6 +1457,7 @@ impl crate::Chain for FakeChain {
         txid: lightning::bitcoin::Txid,
         vout: u32,
     ) -> Result<node::esplora::model::Outspend, NodeError> {
+        let _busy = self.busy().await;
         self.ask("outspend")?;
         let s = self.spender(lightning::bitcoin::OutPoint::new(txid, vout));
         Ok(node::esplora::model::Outspend {
@@ -1438,6 +1472,7 @@ impl crate::Chain for FakeChain {
         &self,
         txid: lightning::bitcoin::Txid,
     ) -> Result<lightning::bitcoin::Transaction, NodeError> {
+        let _busy = self.busy().await;
         self.ask("tx")?;
         self.find_tx(txid)
             .map(|(_, _, t)| t)
@@ -1445,6 +1480,7 @@ impl crate::Chain for FakeChain {
     }
 
     async fn tx_fee(&self, txid: lightning::bitcoin::Txid) -> Result<Option<u64>, NodeError> {
+        let _busy = self.busy().await;
         self.ask("tx_fee")?;
         let Some((_, _, tx)) = self.find_tx(txid) else {
             return Err(NodeError::NotFound);
@@ -1486,11 +1522,7 @@ fn quick(f: impl FnOnce(&mut Config)) -> Config {
 /// A handler checking announcements against `node`, with the lookup task running.
 fn checked(config: &Config, node: &FakeChain) -> (Arc<Gossip>, broadcast::Receiver<Event>) {
     let (g, events, _) = gossip(config, Replay::default());
-    tokio::spawn(chain::run(
-        Arc::clone(&g),
-        node.clone(),
-        pace(config),
-    ));
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), pace(config)));
     (g, events)
 }
 
@@ -1725,7 +1757,9 @@ async fn the_node_down_then_back_loses_nothing() {
     }
     let failed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(Event::LookupFailed { pending, .. }) = events.recv().await {
+            if let Ok(Event::LookupFailed { pending, error, .. }) = events.recv().await {
+                // A fixed label, not the node's own text ("down").
+                assert_eq!(error, "unavailable");
                 return pending;
             }
         }
@@ -1910,11 +1944,7 @@ async fn a_stored_channel_found_early_keeps_the_replay_open_until_it_is_deep() {
     node.add(id, &funding(1, 2), 5_000_000, false);
     let config = quick(|_| {});
     let (g, _, _) = gossip(&config, Replay::from_graph(&stored_graph(id)));
-    tokio::spawn(chain::run(
-        Arc::clone(&g),
-        node.clone(),
-        pace(&config),
-    ));
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), pace(&config)));
     g.replay_tick(config.max_pending);
     wait_for("early", || g.lookup.snapshot().early == 1).await;
     g.replay_tick(config.max_pending);

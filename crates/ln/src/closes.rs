@@ -559,7 +559,11 @@ pub(crate) async fn run<C: Chain>(
     pace: Arc<Pace>,
     tip_every: Duration,
 ) {
-    let w = Watcher { gossip, chain, pace };
+    let w = Watcher {
+        gossip,
+        chain,
+        pace,
+    };
     // Resumed from the block it had read before a restart: the replay first hands back the
     // channels the saved file answers, or the blocks read meanwhile would send them all to be
     // checked again. Bounded, since a channel handed back later is only checked again.

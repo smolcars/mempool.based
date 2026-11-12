@@ -41,6 +41,7 @@ impl Pace {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -89,12 +90,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_slow_node_is_left_three_times_as_long_as_it_took() {
         let took = Duration::from_secs(2);
-        let starts = three_loops(
-            Arc::new(Pace::new(Duration::from_millis(250))),
-            took,
-            4,
-        )
-        .await;
+        let starts = three_loops(Arc::new(Pace::new(Duration::from_millis(250))), took, 4).await;
         // Two seconds busy, then six idle: a request every eight seconds, a quarter busy.
         for w in starts.windows(2) {
             assert!(w[1] - w[0] >= took * (1 + IDLE), "{:?}", w[1] - w[0]);
