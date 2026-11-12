@@ -33,6 +33,7 @@ web/
       config.ts         Reads `/app/config`
       theme.ts          Theme toggle state
     components/         Shared components, one CSS file each
+      txgrid/           The transaction grid: decoder, layout, animation, WebGL2 renderer (see "Transaction grid")
     shell/              Header, network switch, theme toggle, band, footer, the frame around pages
     search/             What a query is (query.ts) and where it leads (search.ts); loaded on first use
     pages/<page>/       One directory per page: its routes, component, CSS and tests
@@ -98,7 +99,7 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 - `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops. `fetchApp<T>` is the same for the app's own API under the network's `/app`.
 - **Chain-tip stamps.** `createApi<T>(path, { stamped: true })` and `fetchStamped<T>(network, path)` give `{ value, tip }`, where `tip` is the `X-Bitcoin-Chain-Tip` and its height that the reply is as of (undefined for an unstamped or cached reply). Take every figure that depends on the tip from one stamped reply, or compare the stamps of two: the block page counts confirmations from its status reply's stamp, and the home page's difficulty panel asks again while its answer's stamp trails the strip's tip.
 - **Busy servers.** `withRetry(call, signal)` retries a 503 or 429 no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. Show a loading state, not an error, while it waits. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
-- `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`). The default is JSON.
+- `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`), and `as: "bytes"` binary ones as an `ArrayBuffer` (`fetchApp(n, "/block/<hash>/txs", { as: "bytes" })`). The default is JSON.
 - Failures are `ApiError` with `status` (0 when the server cannot be reached) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
 - Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
 - Reading a resource inside the shell's `<Suspense>` holds the whole page until it loads. To show the page frame first and fill sections as they arrive, give each section its own `<Suspense>` or test `resource.loading`.
@@ -148,7 +149,7 @@ What the public API cannot give cheaply: a mined block's fee facts and every tra
 
 Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUint64(o, true))` is exact. A record has no txid: when a square is hovered or clicked, ask `/api/block/:hash/txid/:index`, which is cached for good. Mainnet block 975 511, 4,198 transactions, is 83,968 bytes: 16.6 KB gzipped and 12.7 KB with brotli, if the proxy in front compresses (the server itself does not). The facts are about 400 bytes. Check the version before reading; a different one means a newer server and a page that needs a reload.
 
-**In the frontend.** `lib/summary.ts` has the type, `isSummary`, and `fetchSummaries(network, hashes, signal)`, which asks for up to ten at a time with `withRetry` and keeps every summary it sees, fetched or pushed, for the life of the page (`knownSummary`). The home page asks for its ten tiles in one batch on first paint and then takes each new block's from the WebSocket, asking over HTTP only if the push has not come within 4 s. The blocks list asks per row, two at a time, so an old page fills in row by row. Draw the bands with `Strata`.
+**In the frontend.** `lib/summary.ts` has the type, `isSummary`, and `fetchSummaries(network, hashes, signal)`, which asks for up to ten at a time with `withRetry` and keeps every summary it sees, fetched or pushed, for the life of the page (`knownSummary`). The home page asks for its ten tiles in one batch on first paint and then takes each new block's from the WebSocket, asking over HTTP only if the push has not come within 4 s. The blocks list asks per row, two at a time, so an old page fills in row by row. Draw the bands with `Strata`, and the records with the transaction grid below.
 
 **Caching.** A summary is fixed by its hash, so success is `Cache-Control: public, max-age=31536000, immutable`, and `api.ts`-style in-memory caching is right. Errors are `no-store`.
 
@@ -200,6 +201,7 @@ Import from `components/`. All of them render chain data as text only.
 | `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~` |
 | `FeeKey` | The ten bands with their lower bounds. Put it next to every fee visual |
 | `Strata layers settle?` | A block's fee bands as stacked layers, cheapest at the bottom, filling the box it is put in. Compute `layers` with `strataLayers(fee_bands, fill, min)`: `fill` is how full the block is, `min` the thinnest layer as a share of the box (about 2 px). `settle` drops the layers in, cheapest first; reduced motion fades them. Decorative: give the figures, or `describeBands(fee_bands)`, as text beside it |
+| `TxGrid txs capacity label txid highlight? onState?` | Transactions as packed squares in WebGL2, in `components/txgrid/`. Load it with `lazy()`; see "Transaction grid" |
 | `Hash value href? head? tail? copy? copyLabel?` | Hash or address, shortened in the middle, linked when given a `paths` result, with copy |
 | `HashFull value copyLabel?` | A page subject's hash in full, grouped by eight, with copy |
 | `CopyButton value label?` | The copy button on its own |
@@ -217,6 +219,46 @@ Import from `components/`. All of them render chain data as text only.
 Buttons are `<button class="btn">` (or `btn btn--accent`) with `components/Button.css`; toggles add `aria-pressed`.
 
 For a figure without a component, use `lib/format.ts` directly: `formatBtc`, `formatSats`, `formatFeeRate`, `feeBand` and `feeColor`, `formatSize`, `groupDigits`, `truncateMiddle`, `formatUtc`, `formatRelative`. They never throw and print `–` for a value that is missing or malformed. Fee bands always come from `feeBand`, which bands the rate as printed.
+
+## Transaction grid
+
+`components/txgrid/` draws transactions as packed squares in WebGL2: area by virtual size, color by fee band, the highest fee rate at the top left, resting on the floor of the frame like sediment ([`DESIGN.md`](DESIGN.md#the-transaction-grid)). The block page uses it; a projected block will too.
+
+| File | Holds |
+|---|---|
+| `TxGrid.tsx` | The component (default export, so `lazy()` can load it) |
+| `decode.ts` | `decodeTxs(buffer)`: the `/txs` records as `GridTx[]`. Throws `TxsFormatError` (`kind: "version"` asks for a reload) |
+| `layout.ts` | `GridTx`, `layout(txs, aspect, capacity)` and `hitTest`. Pure |
+| `scene.ts` | Where each square comes from and goes to, and when. Pure |
+| `gl.ts` | The WebGL2 program: one instanced draw call, animated in the vertex shader |
+
+**Load it lazily.** It is about 7 KB gzipped and only pages that draw it should fetch it. Import types with `import type`, which costs nothing, and the component with `lazy()` inside its own `<Suspense>`, so it never holds the page. Call `.preload()` when the page mounts, so the code downloads while the data does. `decode.ts` is small and may be imported statically.
+
+```tsx
+const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
+
+<div class="my-frame">{/* position: relative, with a size: the grid fills it */}
+  <Suspense>
+    <TxGrid
+      txs={txs()}                       // GridTx[]: { id, vsize, fee, value?, rate?, coinbase? }
+      capacity={1_000_000}              // vB the frame stands for; more than that shrinks to fit
+      label="Map of the block's 4 198 transactions, …"   // the canvas's text alternative
+      txid={(tx) => fetchApi(network(), `/block/${hash}/txid/${tx.id}`, { as: "text" })}
+      highlight={rowHovered()}          // an id to ring, or undefined
+      onState={setGridState}            // "drawn" | "lost" | "unsupported"
+    />
+  </Suspense>
+</div>
+```
+
+**A whole block** is one array. **Changes** are a new array: the grid matches it to the last by `id`, so keep ids stable (the block index for a mined block, the txid for a projected one) and keep each unchanged transaction the same object (the grid caches its band per object). Squares that stay travel to their new places, new ones drop in, gone ones fade out where they stood, and a change that arrives mid-animation starts from where each square is. For a projected block (`projected-txs:N`, [`WS.md`](WS.md#binary-frames)), make each record `{ id: txid, vsize, fee, rate: effectiveRate / 1000 }`: `rate`, in sat/vB, orders and colors the square by the chunk it is mined in rather than by its own fee, and `value` is left out because the record does not carry it. Keep a `Map<txid, GridTx>`, apply the snapshot and each delta to it, and pass `[...map.values()]`; order does not matter, because the layout sorts. A transaction whose fee rate changed is a new object with the same id: it moves. Changes that arrive while the tab is hidden are applied without animation.
+
+- **Layout.** Every square's side is its exact side (√(vsize ÷ vB per cell)) rounded to whole cells, at least 2; squares are placed first fit, row by row from the top left in fee order, then every square drops until it rests on the floor or another. The grid has about 160 000 cells, shaped to the frame in 4% steps, so a frame that changes size by a pixel keeps its picture and is only rescaled. If the squares overflow, they all shrink a little and are packed again. A full mainnet block (4 198 transactions) lays out in 5 to 8 ms in Chrome on an Apple M4, on the main thread.
+- **Hit testing** is a lookup in the cell map, exact to the cell. It answers for where squares are going, not where an animation has them.
+- **Colors and motion come from the tokens** at run time: `--fee-1` to `--fee-10`, `--color-text-muted` for the coinbase, the durations and curves. A theme switch repaints; reduced motion leaves only fades.
+- **States.** `onState("drawn")` after the first frame; `"lost"` when the WebGL context is lost (the canvas hides; show your stand-in until `"drawn"` comes again on restore); `"unsupported"` when the browser has no WebGL2 (keep your stand-in and say why). Keep a stand-in in the frame until `"drawn"`.
+- **Accessibility.** The canvas is `role="img"` with `label` as its name, and is not focusable. Put the same transactions in a list beside it and pass the hovered or focused row's id as `highlight`.
+- **Measures.** It records `txgrid layout` and `txgrid first frame` with `performance.measure`, for profiling and browser tests.
 
 ## CSS
 

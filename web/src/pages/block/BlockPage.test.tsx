@@ -71,7 +71,7 @@ function serve(table: typeof replies) {
     const headers = /^\/block\/[0-9a-f]{64}$/.test(path)
       ? { "cache-control": "public, max-age=31536000, immutable" }
       : (reply.headers ?? {});
-    return typeof reply.body === "string"
+    return typeof reply.body === "string" || reply.body instanceof ArrayBuffer
       ? new Response(reply.body, { status, headers })
       : Response.json(reply.body, { status, headers });
   });
@@ -110,6 +110,19 @@ const COINBASE_ONLY: BlockSummary = {
   fee_rate: null,
   fee_bands: Array.from({ length: 10 }, () => 0),
 };
+/** The block's transaction records, as the server encodes them: the coinbase and 29 others. */
+function records(version = 1): ArrayBuffer {
+  const view = new DataView(new ArrayBuffer(8 + 30 * 20));
+  view.setUint32(0, version, true);
+  view.setUint32(4, 30, true);
+  for (let i = 0; i < 30; i++) {
+    view.setUint32(8 + i * 20, 200, true);
+    view.setBigUint64(12 + i * 20, BigInt(i === 0 ? 0 : 1000), true);
+    view.setBigUint64(20 + i * 20, 5000n, true);
+  }
+  return view.buffer;
+}
+const txsPath = `/app/block/${HASH}/txs`;
 const summaryPath = (...hashes: string[]) => `/app/blocks/summary?hashes=${hashes.join(",")}`;
 const normal = () => ({
   [`/block/${HASH}`]: { body: block },
@@ -121,6 +134,7 @@ const normal = () => ({
   "/blocks/tip/height": { body: "975420" },
   "/block-height/975411": { body: HASH },
   [summaryPath(HASH)]: { body: [SUMMARY] },
+  [txsPath]: { body: records() },
 });
 
 afterEach(() => {
@@ -263,6 +277,52 @@ describe("BlockPage", () => {
     expect(fact(el, "Fee range")).toBe("–");
     retry.click();
     await until(() => expect(fact(el, "Median fee rate")).toContain("1.09 sat/vB"));
+  });
+
+  it("keeps the fee layers while the map's data loads", () => {
+    serve(normal());
+    // At once, before any reply.
+    const el = open(`/block/${HASH}`);
+    expect(el.querySelector(".block-core--grid")).toBeNull();
+    const [layers, map] = el.querySelectorAll(".block-core__text");
+    expect(layers?.classList.contains("block-core__text--off")).toBe(false);
+    expect(map?.classList.contains("block-core__text--off")).toBe(true);
+  });
+
+  it("keeps the fee layers and says so where the browser has no WebGL2", async () => {
+    // The test document, like a browser without WebGL2, gives no webgl2 context.
+    serve(normal());
+    const el = open(`/block/${HASH}`);
+    await until(() =>
+      expect(text(el)).toContain("needs WebGL2, which this browser does not offer"),
+    );
+    expect(el.querySelector(".block-core--grid")).toBeNull();
+    expect(el.querySelector(".block-core__grid")).toBeNull();
+    await until(() => expect(el.querySelectorAll(".block-core .strata__layer")).toHaveLength(10));
+  });
+
+  it("offers to load the map again when its data fails, keeping the layers meanwhile", async () => {
+    serve({
+      ...normal(),
+      [txsPath]: (n) =>
+        n === 1 ? { status: 502, body: { error: "node failed" } } : { body: records() },
+    });
+    const el = open(`/block/${HASH}`);
+    const retry = await until(() => {
+      const b = el.querySelector<HTMLButtonElement>(".block-core__retry");
+      expect(b).not.toBeNull();
+      return b as HTMLButtonElement;
+    });
+    expect(text(el)).toContain("The map of each transaction could not load.");
+    retry.click();
+    await until(() => expect(el.querySelector(".block-core__retry")).toBeNull());
+    expect(calls.filter((c) => c === txsPath)).toHaveLength(2);
+  });
+
+  it("asks for a reload when the server sends a newer record format", async () => {
+    serve({ ...normal(), [txsPath]: { body: records(2) } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(text(el)).toContain("The server is newer than this page."));
   });
 
   it("asks for the fee facts again when the network changes under the same hash", async () => {

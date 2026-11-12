@@ -224,6 +224,19 @@ When a block is found, in 900 ms:
 
 The sequence uses FLIP: measure every tile, change the DOM, then animate each tile from its old place to its new one with `transform`.
 
+### The transaction grid
+
+Decided while building it, where the rest of this document left it open:
+
+- **It is a core sample too.** The frame is the weight limit, so a full block fills it and an old block of 20 kvB is a thin layer on the floor. The squares are packed from the top left in fee order, then each drops until it rests on the floor or on another square: the floor is flat, the surface is ragged, the dearest transactions sit on top and the cheapest at the bottom, as in the strata. Settling can sink a square a few rows into a hole below it, so "highest at the top left" is where the dearest start, not a strict rule.
+- **Honest scale.** A square's area is its virtual size, its side rounded to whole cells (about 6.5 vB per cell for a block, so the median transaction is 4 or 5 cells across and its area is right to within about 25%). The smallest side is 2 cells: anything smaller is drawn at that size, its area overstated, so it can be seen and pointed at. No mainnet transaction is that small at a block's scale. A block holding only its coinbase is one small square on the floor; the caption gives its fullness in words.
+- **The coinbase** is the first square, at the top left, in `--color-text-muted`: it pays no fee rate, and color carries only fee.
+- **Pour in, cheapest first.** On load the squares drop into place from a little above, the cheapest first and the dearest last, each with `--ease-settle` over `--dur-slow`, the whole pour lasting `--dur-block`, like the strata settling. Under reduced motion they fade in where they lie over `--dur-fade`. Live changes: a square that moves travels with `--ease-in-out`, leaders first; a new one drops in; a gone one shrinks and fades where it stood.
+- **Hover** rings the square in `--color-text` and opens a tooltip above it (below when there is no room), inside the frame: fee rate with its swatch, txid, fee, size and value; the coinbase says "Coinbase" and what it pays. Click opens the transaction. On touch the first tap shows the tooltip ("Tap again to open"), the second opens it.
+- **No keyboard stops in the grid.** Thousands of squares in a packing have no order an arrow key could follow, and a screen reader cannot see them. The list of transactions below is the keyboard and screen-reader path to the same facts and links; focusing or hovering a row rings its square, and the caption links to the list.
+- **Captions.** The fee-layer caption and the grid's sit in the same cell, so the taller sets the height and swapping one for the other moves nothing.
+- **Fallbacks.** The fee layers stay in the frame until the grid has drawn, and come back if the WebGL context is lost, until it is restored. A browser without WebGL2 keeps the layers and the caption says the map needs WebGL2. If the data fails, the caption offers "Try again".
+
 ## Components
 
 | Component | What it is |
@@ -243,7 +256,7 @@ The sequence uses FLIP: measure every tile, change the DOM, then animate each ti
 | Stat | Label above a large figure, optional muted sub-line |
 | Fact list | `dl` of label and value pairs, two columns or one |
 | Table | Units in headers, bare numbers in cells, right-aligned numeric columns, row rules. Phones drop the least important column |
-| Packed grid | Squares sized by vsize and colored by fee band, highest fee rate at top left. Tooltip on hover, click opens the transaction, rows in the table below highlight their square. Comes with a caption and the fee key; the table is its text alternative |
+| Packed grid | Squares sized by vsize and colored by fee band, highest fee rate at top left, resting on the floor of the frame ([The transaction grid](#the-transaction-grid)). Tooltip on hover, click opens the transaction, rows in the table below highlight their square. Comes with a caption and the fee key; the table is its text alternative |
 | Flow diagram | Inputs on the left, outputs on the right, ribbons as thick as the value they carry, meeting at a bar that is the transaction. The fee leaves as its own ribbon in its fee color |
 | Status badge | Pill with icon and word: Confirmed (check), Unconfirmed (dashed circle), Replaced (cross) |
 | Timeline | Numbered steps: first seen, replaced or replacing, waiting or confirmed. Horizontal on wide screens, vertical on phones. A version that can no longer confirm is struck through with a dashed marker |
