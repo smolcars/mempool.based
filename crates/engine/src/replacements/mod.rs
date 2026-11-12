@@ -378,8 +378,7 @@ impl Replacements {
     }
 
     /// Follows the best chain to the tracker's window `blocks` (tip first), as each delta
-    /// carries it. Returns the replaced transactions found confirmed themselves: the original
-    /// won after all.
+    /// carries it. Returns the window's blocks new since the last, for [`Self::originals`].
     ///
     /// A window that only extends the chain followed costs a hash comparison and a lookup per
     /// transaction of each new block. Any other (a reorg, a start, a gap longer than the
@@ -388,13 +387,12 @@ impl Replacements {
     /// where the chains part, else is [`Mined::Unknown`] until [`Self::asks`] finds it; one
     /// below a window that does not show where the chains part is left as it is until the
     /// walk down proves its block.
-    pub fn follow(&mut self, blocks: &[Arc<BlockSpends>]) -> Vec<(Txid, u32, BlockHash)> {
-        let mut won = Vec::new();
+    pub fn follow(&mut self, blocks: &[Arc<BlockSpends>]) -> Vec<Arc<BlockSpends>> {
         let Some(tip) = blocks.first() else {
-            return won;
+            return Vec::new();
         };
         if self.chain.first().is_some_and(|(_, h)| *h == tip.hash) {
-            return won;
+            return Vec::new();
         }
         let mut chain: Vec<(u32, BlockHash)> = blocks.iter().map(|b| (b.height, b.hash)).collect();
         if let Some(b) = blocks.last()
@@ -403,18 +401,37 @@ impl Replacements {
             chain.push((h, b.prev));
         }
         let old = std::mem::replace(&mut self.chain, chain);
-        let new: Vec<&Arc<BlockSpends>> = blocks
+        let new: Vec<Arc<BlockSpends>> = blocks
             .iter()
             .filter(|b| !old.iter().any(|(_, h)| *h == b.hash))
+            .cloned()
             .collect();
         if !old.first().is_some_and(|o| self.chain.contains(o)) {
-            self.reorged(blocks, &old, &mut won);
+            self.reorged(blocks, &old);
         }
         // Whatever a new block holds is mined there, whether we saw it leave the mempool or not.
-        for b in new {
+        for b in &new {
             for t in b.txids() {
                 if self.replaced.contains_key(t) {
                     self.set_mined(*t, Mined::In(Some((b.height, b.hash))));
+                }
+            }
+        }
+        new
+    }
+
+    /// Replaced transactions that the `new` blocks ([`Self::follow`]) confirm themselves: the
+    /// original won, after a reorg or from a miner that never saw the replacement. Each no longer
+    /// stands replaced; returned with its block. Called after a delta's replacements are
+    /// recorded, so one the tracker saw replace its own replacement keeps its figures
+    /// ([`Self::restore`]).
+    pub fn originals(&mut self, new: &[Arc<BlockSpends>]) -> Vec<(Txid, u32, BlockHash)> {
+        let mut won = Vec::new();
+        for b in new {
+            for t in b.txids() {
+                if self.links.contains_key(t) {
+                    self.returned(t);
+                    won.push((*t, b.height, b.hash));
                 }
             }
         }
@@ -422,12 +439,7 @@ impl Replacements {
     }
 
     /// The window no longer extends the chain followed: see [`Self::follow`].
-    fn reorged(
-        &mut self,
-        blocks: &[Arc<BlockSpends>],
-        old: &[(u32, BlockHash)],
-        won: &mut Vec<(Txid, u32, BlockHash)>,
-    ) {
+    fn reorged(&mut self, blocks: &[Arc<BlockSpends>], old: &[(u32, BlockHash)]) {
         self.epoch += 1;
         self.budget = CHECKS;
         let chain = self.chain.clone();
@@ -473,12 +485,6 @@ impl Replacements {
             // Unknown since an earlier reorg: it may be below this window, so the check decides.
             if m == Mined::Unknown {
                 continue;
-            }
-            for t in self.replaced_by(&by).to_vec() {
-                if let Some((h, x)) = held(&t) {
-                    self.returned(&t);
-                    won.push((t, h, x));
-                }
             }
             // Every best-chain block above the fork is in the window.
             if fork.is_some() {

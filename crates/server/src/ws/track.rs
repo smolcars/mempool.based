@@ -495,16 +495,9 @@ impl Tracking {
         st.applied = d.seq;
         let seen = unix_now();
         let version = st.replacements.version();
-        let won = st.replacements.follow(&d.blocks);
+        let new = st.replacements.follow(&d.blocks);
         // A reorg moved the record: said at once, like a confirmation.
         let mut moved = st.replacements.version() != version;
-        // The original won the reorg: it is confirmed, no longer replaced.
-        for (txid, height, block) in won {
-            if let Some(e) = st.txs.get_mut(&txid) {
-                e.gone = Some(Removal::Confirmed { height, block });
-                moved = true;
-            }
-        }
         for (txid, info) in &d.replaced {
             let Ok(i) = d.removed.binary_search_by_key(txid, |(t, _)| *t) else {
                 continue;
@@ -549,6 +542,13 @@ impl Tracking {
             st.replacements.returned(txid);
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = None;
+                moved = true;
+            }
+        }
+        // The original won: it is confirmed, no longer replaced.
+        for (txid, height, block) in st.replacements.originals(&new) {
+            if let Some(e) = st.txs.get_mut(&txid) {
+                e.gone = Some(Removal::Confirmed { height, block });
                 moved = true;
             }
         }

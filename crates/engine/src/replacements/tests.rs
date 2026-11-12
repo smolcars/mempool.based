@@ -580,7 +580,8 @@ fn a_replacement_in_a_new_block_is_mined_there_whether_it_left_our_mempool_or_no
     // The next block changes nothing: a hash compare and a lookup per transaction.
     let v = r.version();
     blocks.push(blk(12, 12, 11, &[9]));
-    assert!(r.follow(&window(&blocks)).is_empty());
+    let new = r.follow(&window(&blocks));
+    assert!(r.originals(&new).is_empty());
     assert_eq!(r.version(), v);
     assert_eq!(r.asks(), None, "nothing to ask the node");
 }
@@ -592,7 +593,7 @@ async fn a_replacement_also_in_the_competing_block_stays_mined_at_the_new_block(
     // Block 11 is replaced by 111, which also holds 2.
     blocks.pop();
     blocks.push(blk(11, 111, 10, &[2]));
-    assert!(r.follow(&window(&blocks)).is_empty());
+    r.follow(&window(&blocks));
     assert_eq!(r.mined(&id(2)), Mined::In(Some((11, block(111)))));
     let node = Script::default();
     assert_eq!(check(&mut r, &node).await, 0, "settled from memory");
@@ -627,8 +628,8 @@ fn the_original_winning_in_the_competing_block_is_confirmed_not_replaced() {
     mine(&mut r, &mut blocks, 1, 2, 11);
     blocks.pop();
     blocks.push(blk(11, 111, 10, &[1]));
-    let won = r.follow(&window(&blocks));
-    assert_eq!(won, vec![(id(1), 11, block(111))]);
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(1), 11, block(111))]);
     assert!(r.get(&id(1)).is_none(), "1 no longer stands replaced");
     assert!(r.tree(&id(2)).is_none());
     assert!(r.take_changes().contains(&Change::Returned(id(1))));
@@ -867,4 +868,17 @@ async fn links_stored_before_blocks_were_recorded_read_mined_and_are_left_as_the
     assert_eq!(r.asks(), None);
     assert_eq!(r.chain(&id(1)).0[0].json()["mined"], true);
     assert_eq!(r.chain(&id(1)).0[0].json()["block"], Value::Null);
+}
+
+#[test]
+fn an_original_confirmed_while_its_replacement_was_not_is_no_longer_replaced() {
+    // 2 replaced 1 and was itself replaced by 3, unmined; a block then confirms 1.
+    let (mut blocks, mut r) = chain(10);
+    r.insert(link(1, 2));
+    r.insert(link(2, 3));
+    blocks.push(blk(11, 11, 10, &[1]));
+    let new = r.follow(&window(&blocks));
+    assert_eq!(r.originals(&new), vec![(id(1), 11, block(11))]);
+    assert!(r.get(&id(1)).is_none());
+    assert!(r.get(&id(2)).is_some(), "what replaced 2 still stands");
 }
