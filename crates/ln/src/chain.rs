@@ -142,6 +142,7 @@ pub(crate) fn position(scid: u64) -> OutPosition {
 pub(crate) struct Funded {
     pub(crate) block: BlockRef,
     pub(crate) tip: u32,
+    pub(crate) tip_hash: BlockHash,
 }
 
 /// What the node said about a funding position.
@@ -158,7 +159,11 @@ pub(crate) enum Outcome {
     Early { ready_at: u32 },
 }
 
-pub(crate) fn classify(scid: u64, tip: u32, slot: Option<PositionedOutput>) -> Outcome {
+pub(crate) fn classify(
+    scid: u64,
+    (tip, tip_hash): (u32, BlockHash),
+    slot: Option<PositionedOutput>,
+) -> Outcome {
     let p = position(scid);
     let ready_at = p.height.saturating_add(CONFIRMATIONS - 1);
     match slot {
@@ -178,6 +183,7 @@ pub(crate) fn classify(scid: u64, tip: u32, slot: Option<PositionedOutput>) -> O
                 Funded {
                     block: block_of(p.height, &o),
                     tip,
+                    tip_hash,
                 },
             ),
             Err(_) => Outcome::Missing,
@@ -601,12 +607,12 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
             Ok(Ok(Stamped {
                 value,
                 tip: Some(tip),
-            })) if value.len() == batch.len() => Ok((tip.height, value)),
+            })) if value.len() == batch.len() => Ok((tip.height, tip.hash, value)),
             Ok(Ok(_)) => Err("answer without a tip stamp or of the wrong length".to_owned()),
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => Err("timeout".to_owned()),
         };
-        let (tip, slots) = match answer {
+        let (tip, tip_hash, slots) = match answer {
             Ok(a) => a,
             Err(e) => {
                 {
@@ -626,7 +632,7 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
             s.tip = Some(s.tip.map_or(tip, |t| t.max(tip)));
             for (scid, slot) in batch.iter().zip(slots) {
                 let spent = spent_output(*scid, slot.as_ref());
-                let outcome = classify(*scid, tip, slot);
+                let outcome = classify(*scid, (tip, tip_hash), slot);
                 answered.push((*scid, matches!(outcome, Outcome::Early { .. }), spent));
                 lookup.settle(&mut s, *scid, outcome, &mut settled, &mut verified);
             }

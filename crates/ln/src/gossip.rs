@@ -312,6 +312,7 @@ impl Gossip {
                 block: funded.block,
                 verified_at: funded.tip,
             },
+            funded.tip_hash,
         );
     }
 

@@ -283,14 +283,14 @@ struct State {
     /// Channels from the graph file not yet answered, with their nodes.
     stored: HashMap<u64, (NodeId, NodeId)>,
     /// Watched channels to check: is the output spent?
-    recheck: VecDeque<u64>,
+    recheck: BTreeSet<u64>,
     find: VecDeque<Find>,
     sweeps: HashMap<u64, Sweeps>,
     swept: HashMap<OutPoint, u64>,
     seen: VecDeque<Seen>,
     /// The block being read, once its inputs were matched: a channel verified below it was not
     /// among them, and is checked again.
-    reading: Option<u32>,
+    reading: Option<(u32, BlockHash)>,
     /// Whether the last look at the node found no newer block.
     at_tip: bool,
     history: VecDeque<Record>,
@@ -416,15 +416,20 @@ impl Watch {
     }
 
     /// A channel entered the graph verified: watch its output, and record the open once. If
-    /// blocks after its lookup's tip were already read without it, check it again.
-    pub(crate) fn opened(&self, scid: u64, f: Funding) {
+    /// blocks after its lookup's tip were already read without it, or its lookup's tip
+    /// (`tip_hash` at `verified_at`) is not the block read at that height, check it again.
+    pub(crate) fn opened(&self, scid: u64, f: Funding, tip_hash: BlockHash) {
         let mut s = self.lock();
         if s.funding.contains_key(&scid) {
             return;
         }
-        let read = s.seen.back().map(|b| b.height).max(s.reading);
-        if read.is_some_and(|h| h > f.verified_at) {
-            s.recheck.push_back(scid);
+        let reading = s.reading;
+        let read = s.seen.back().map(|b| b.height).max(reading.map(|r| r.0));
+        let here = s
+            .hash_at(f.verified_at)
+            .or(reading.filter(|r| r.0 == f.verified_at).map(|r| r.1));
+        if read.is_some_and(|h| h > f.verified_at) || here.is_some_and(|h| h != tip_hash) {
+            s.recheck.insert(scid);
         }
         let open = Opened {
             scid,
@@ -765,7 +770,7 @@ impl<C: Chain> Watcher<C> {
                 }
             }
             // Channels verified from now on at a lower tip were not matched above.
-            s.reading = Some(at.height);
+            s.reading = Some((at.height, at.hash));
         }
         // Each candidate's spent output must be a channel's own: the channel id its position
         // makes, watched, with this script.
@@ -1039,8 +1044,9 @@ impl<C: Chain> Watcher<C> {
             }
             {
                 let mut s = self.watch().lock();
-                let n = batch.len().min(s.recheck.len());
-                s.recheck.drain(..n);
+                for scid in &batch {
+                    s.recheck.remove(scid);
+                }
             }
             for (scid, slot) in batch.into_iter().zip(r) {
                 self.rechecked(scid, slot);
@@ -1138,16 +1144,21 @@ impl<C: Chain> Watcher<C> {
             // In the mempool: the block that confirms it closes the channel.
             return Ok(());
         };
-        if item.in_graph
-            && self
-                .watch()
-                .lock()
-                .seen
-                .back()
-                .is_none_or(|b| height > b.height)
         {
-            // A block not read yet: reading it closes the channel.
-            return Ok(());
+            // A block the watcher has not read on its branch (not yet, or the node switched
+            // branches since): the channel is watched, and reading the block closes it, with what
+            // undoes it. Below the window the block cannot be compared, and is taken as it is.
+            let mut s = self.watch().lock();
+            let (low, last) = (
+                s.seen.front().map_or(0, |b| b.height),
+                s.seen.back().map_or(0, |b| b.height),
+            );
+            if height > last || (height >= low && s.hash_at(height) != Some(hash)) {
+                if !item.in_graph && !s.funding.contains_key(&item.scid) {
+                    s.watch(item.scid, item.funding.clone());
+                }
+                return Ok(());
+            }
         }
         let Some(tx) = self.ask_found(self.chain.tx(spender)).await? else {
             return Ok(());
@@ -1192,7 +1203,7 @@ mod tests {
             penalties: Vec::new(),
         });
         // Block 101's inputs were matched; a lookup answered at tip 100 registers a channel.
-        w.lock().reading = Some(101);
+        w.lock().reading = Some((101, BlockHash::all_zeros()));
         let n = NodeId::from_slice(&[2; 33]).unwrap();
         let f = |verified_at| Funding {
             nodes: (n, n),
@@ -1205,9 +1216,12 @@ mod tests {
             },
             verified_at,
         };
-        w.opened(1, f(100));
-        w.opened(2, f(101));
-        assert_eq!(w.lock().recheck, [1]);
+        let zero = BlockHash::all_zeros();
+        w.opened(1, f(100), zero);
+        w.opened(2, f(101), zero);
+        // Answered at the height being read, but on another branch than the block read there.
+        w.opened(4, f(101), BlockHash::from_byte_array([1; 32]));
+        assert_eq!(w.lock().recheck.iter().copied().collect::<Vec<_>>(), [1, 4]);
     }
 
     #[test]

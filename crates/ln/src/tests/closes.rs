@@ -720,3 +720,40 @@ async fn a_close_found_while_down_and_undone_by_a_reorg_is_watched_again() {
     assert_eq!(kinds, [CloseKind::Cooperative, CloseKind::Force]);
     assert_eq!(n.g.watch.status().watched, 0);
 }
+
+#[tokio::test]
+async fn a_close_found_ahead_of_the_watcher_is_left_to_the_block_read() {
+    // The watcher has read up to 7 and looks again only after a second. The replay finds the
+    // channel spent in block 8 meanwhile: it is watched, not recorded, and reading block 8
+    // records the close with what undoes it.
+    let node = FakeChain::default();
+    mine_empty(&node, 1);
+    let fa = fund(1, 2, 1_000_000);
+    let h = mine(&node, vec![fa.clone()]);
+    mine_empty(&node, 6);
+    let a = scid(h, 1, 0);
+    let graph = Graph::new(NET, sink());
+    graph
+        .update_channel_from_announcement_no_lookup(&channel(a, 1, 2))
+        .unwrap();
+    let config = quick(|c| c.tip_every = Duration::from_secs(1));
+    let n = net(&node, &config, Replay::from_graph(&graph));
+    // Not caught up: the graph file is not replayed yet.
+    wait_for("first look", || n.g.watch.status().height == Some(7)).await;
+    let fid = OutPoint::new(fa.compute_txid(), 0);
+    let ch = mine(&node, vec![coop(fid, 1, 2, vec![out(wpkh(), 999_000)])]);
+    wait_for("replayed", || {
+        n.g.replay_tick(5000);
+        !n.g.replaying()
+    })
+    .await;
+    n.at(ch).await;
+    assert_eq!(n.closed().len(), 1);
+    assert_eq!(n.g.watch.status().blocks, 1, "recorded by reading the block");
+    // That block leaves the chain: the close is undone.
+    unmine(&node, ch);
+    mine_empty(&node, 2);
+    n.at(ch + 1).await;
+    assert!(n.history().contains(&History::CloseUndone { scid: a }));
+    assert_eq!(n.g.watch.status().watched, 1);
+}

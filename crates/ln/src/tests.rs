@@ -1339,7 +1339,9 @@ impl crate::Chain for FakeChain {
                 .map(|p| map.get(p).cloned().or_else(|| self.derived(p)))
                 .collect(),
             tip: Some(ChainTip {
-                hash: BlockHash::all_zeros(),
+                hash: self
+                    .block_at(tip)
+                    .map_or(BlockHash::all_zeros(), |b| b.block_hash()),
                 height: tip,
             }),
         })

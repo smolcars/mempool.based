@@ -244,7 +244,9 @@ Blocks are not read before the watcher's first tip or across a gap; the node's s
 
 - **After downtime.** The graph file's channels are all checked again at start ([Restart](#restart)). One found spent closed while the peer was down. Its spend is found in four requests: the funding block's hash and the txid at the channel's index (the funding txid), the output's spender (`/tx/:txid/outspend/:vout`, which gives the block), and the spending transaction. Its fee may need a fifth.
 - **A gap.** More than ten new blocks at once (the node was unreachable, or the server was suspended): reading them would cost more than checking every watched output by position (18 MB at mainnet's size, ten blocks' worth), so the watcher starts again from the tip and checks every watched output, 300 per request. Spent ones are looked up as above.
-- **A late answer.** A channel whose lookup was answered at a tip older than the newest block read is checked again the same way, so a close in a block read before the channel was watched is not missed.
+- **A late answer.** A channel whose lookup was answered at a tip older than the newest block read (or the block being read), or at a tip on another branch than the block read at that height, is checked again the same way, so a close in a block read before the channel was watched is not missed.
+
+A spend the catch-up finds in a block the watcher has not read on its own branch (a newer block, or another branch at a height it read) is not recorded there: the channel is watched, and reading that block records the close, with what undoes it. A channel queued for checking is queued once.
 
 The catch-up shares the watcher's pacing: one request at a time, at least `Config::lookup_interval` (500 ms) apart, behind the tip check. A check that fails stays queued and is retried after a backoff. `Closes::catch_up` counts what waits.
 
