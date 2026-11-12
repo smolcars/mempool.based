@@ -25,10 +25,11 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | done ([#22](https://github.com/smolcars/mempool.based/pull/22)) |
 | W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | done ([#11](https://github.com/smolcars/mempool.based/pull/11)) |
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | doing |
-| W3 | Block page: header details, paged transaction list | W1, S2 | doing |
+| W3 | Block page: header details, paged transaction list | W1, S2 | done ([#23](https://github.com/smolcars/mempool.based/pull/23)) |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | doing |
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | doing |
-| W6 | Search: txid, block hash, height, address (exact match) | W1, S2 | todo |
+| W6 | Search: txid, block hash, height, address (exact match) | W1, S2, LX1 | todo |
+| FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
