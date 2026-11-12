@@ -39,8 +39,11 @@ export interface TopicHandlers<M> {
 /** The part of the browser's WebSocket the client uses, so tests can hand it a fake. */
 export type SocketLike = Pick<
   WebSocket,
-  "onopen" | "onmessage" | "onclose" | "onerror" | "send" | "close" | "binaryType"
+  "onopen" | "onmessage" | "onclose" | "onerror" | "send" | "close" | "binaryType" | "readyState"
 >;
+
+/** `WebSocket.CONNECTING`, written out: tests replace the global `WebSocket` with a fake. */
+const CONNECTING = 0;
 
 /** Close codes after which reconnecting cannot help: the client sent something wrong (docs/WS.md). */
 const FATAL_CLOSE = new Set([1002, 1003, 1007, 1009, 4000, 4001, 4002]);
@@ -361,10 +364,17 @@ export class LiveConnection {
     this.clearTimers();
     this.waiting = false;
     this.everGreeted = false;
-    try {
-      ws?.close(1000);
-    } catch {
-      // Already closed.
+    // Leaving a page often comes before its socket opens; WebKit and Firefox log closing a socket
+    // that is still connecting as a failed connection, so it is closed once open instead.
+    if (ws?.readyState === CONNECTING) {
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- the socket is forgotten; nothing else listens
+      ws.onopen = () => ws.close(1000);
+    } else {
+      try {
+        ws?.close(1000);
+      } catch {
+        // Already closed.
+      }
     }
     if (!this.stopped) this.setStatus("connecting");
   }

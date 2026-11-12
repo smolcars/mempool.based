@@ -15,6 +15,27 @@ const regtestRpc: RegtestRpc | null = env["REGTEST_RPC_PORT"]
     }
   : null;
 
+// The engine and width the suite runs in: `E2E_ENGINE=webkit|firefox` and `E2E_PHONE=1`
+// (docs/FRONTEND.md "Other engines"). Pull requests run the default, Chromium at desktop width.
+const engine = env["E2E_ENGINE"] ?? "chromium";
+const phone = env["E2E_PHONE"] === "1";
+const DEVICES: Record<string, { desktop: string; phone: string }> = {
+  chromium: { desktop: "Desktop Chrome", phone: "Pixel 7" },
+  webkit: { desktop: "Desktop Safari", phone: "iPhone 15" },
+  // Firefox has no mobile emulation (`isMobile`), so its phone is a phone-sized touch window at a
+  // phone's pixel density.
+  firefox: { desktop: "Desktop Firefox", phone: "Desktop Firefox" },
+};
+const names = DEVICES[engine];
+if (!names) throw new Error(`E2E_ENGINE is ${engine}: use chromium, webkit or firefox`);
+const device = devices[phone ? names.phone : names.desktop];
+if (!device) throw new Error(`Playwright has no device named for ${engine}`);
+const use =
+  phone && engine === "firefox"
+    ? { ...device, viewport: { width: 393, height: 659 }, deviceScaleFactor: 3, hasTouch: true }
+    : device;
+const project = phone ? `${engine}-phone` : engine;
+
 export default defineConfig<{ regtestRpc: RegtestRpc | null }>({
   testDir: "e2e",
   testMatch: "*.e2e.ts",
@@ -25,13 +46,13 @@ export default defineConfig<{ regtestRpc: RegtestRpc | null }>({
   use: { baseURL, trace: "retain-on-failure" },
   projects: [
     // Tests share one node and run in parallel, so they never change its chain.
-    { name: "chromium", use: devices["Desktop Chrome"], testIgnore: "*.mine.e2e.ts" },
+    { name: project, use, testIgnore: "*.mine.e2e.ts" },
     // Tests that mine run after every other test has finished, one at a time (docs/FRONTEND.md).
     {
       name: "mines",
-      use: { ...devices["Desktop Chrome"], regtestRpc },
+      use: { ...use, regtestRpc },
       testMatch: "*.mine.e2e.ts",
-      dependencies: ["chromium"],
+      dependencies: [project],
       fullyParallel: false,
       workers: 1,
     },

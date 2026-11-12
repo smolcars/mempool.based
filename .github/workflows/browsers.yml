@@ -1,0 +1,60 @@
+name: Browsers
+
+# The browser tests in Playwright's WebKit and Firefox, at desktop and phone width
+# (docs/CI.md#other-browsers). Weekly and by hand, never on pull requests: the PR budget has no
+# room for it, and a pull request's own e2e job runs Chromium.
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browsers
+  cancel-in-progress: true
+
+jobs:
+  # Named as ci.yml's job, with its environment, so rust-cache restores the cache that job saves.
+  e2e:
+    name: ${{ matrix.engine }} ${{ matrix.phone == '1' && 'phone' || 'desktop' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [webkit, firefox]
+        phone: ["0", "1"]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: web/package.json
+          no-cache: true
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      # The browser build, kept per engine and Playwright version; its system libraries come from apt.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ matrix.engine }}-${{ hashFiles('web/bun.lock') }}
+      - run: node_modules/.bin/playwright install-deps "$E2E_ENGINE"
+        working-directory: web
+        env:
+          E2E_ENGINE: ${{ matrix.engine }}
+      - run: bun run e2e
+        working-directory: web
+        env:
+          E2E_ENGINE: ${{ matrix.engine }}
+          E2E_PHONE: ${{ matrix.phone }}

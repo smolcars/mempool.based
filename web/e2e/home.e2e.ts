@@ -72,7 +72,11 @@ test("the unconfirmed scenario transactions wait in the projected next block", a
   await expect(next).toHaveAccessibleName(/^Next block, projected: \d+ transactions, median fee/);
   const label = (await next.getAttribute("aria-label")) ?? "";
   expect(Number(/projected: (\d+)/.exec(label)?.[1])).toBeGreaterThanOrEqual(4);
-  await expect(page.getByText("Everything waiting fits in the next block.")).toBeVisible();
+  // A phone hides the note to give the tiles room (HomePage.css).
+  const note = page.getByText("Everything waiting fits in the next block.");
+  await ((page.viewportSize()?.width ?? 0) > 640
+    ? expect(note).toBeVisible()
+    : expect(note).toBeAttached());
   // It opens that block's page.
   await next.click();
   await expect(page).toHaveURL(/\/regtest\/block\/next$/);

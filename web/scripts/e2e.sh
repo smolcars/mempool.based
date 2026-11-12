@@ -34,7 +34,13 @@ node_pid=$!
 
 cd "$web"
 [ -d node_modules ] || bun install --frozen-lockfile
-node_modules/.bin/playwright install --only-shell chromium &
+# E2E_ENGINE picks the browser (playwright.config.ts); Chromium needs only its headless shell.
+engine=${E2E_ENGINE:-chromium}
+if [ "$engine" = chromium ]; then
+  node_modules/.bin/playwright install --only-shell chromium &
+else
+  node_modules/.bin/playwright install "$engine" &
+fi
 browser_pid=$!
 bun run build --outDir "$run/dist" --emptyOutDir --logLevel warn
 (cd "$root" && cargo build --locked --quiet -p rbitcoin-space &&
