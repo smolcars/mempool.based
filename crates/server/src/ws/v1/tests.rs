@@ -22,9 +22,7 @@ use super::*;
 use crate::config::Network;
 use crate::replacements::Link;
 use crate::ws::tests::address;
-use crate::ws::track::tests::{
-    Electrum, Mock, Server, coin, context, context_at, context_with,
-};
+use crate::ws::track::tests::{Electrum, Mock, Server, coin, context, context_at, context_with};
 
 const WAIT: Duration = Duration::from_secs(10);
 

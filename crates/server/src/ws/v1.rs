@@ -764,7 +764,10 @@ async fn history(
     let script = sh.to_string().parse().ok()?;
     let first = Some((None, None));
     let verdicts = &ctx.api.verdicts;
-    if verdicts.check(script, first, std::time::Instant::now()).is_some() {
+    if verdicts
+        .check(script, first, std::time::Instant::now())
+        .is_some()
+    {
         return None;
     }
     let route = Route::ScriptTxs {

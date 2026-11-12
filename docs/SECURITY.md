@@ -30,7 +30,7 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 8. **Expensive answers are computed once.** Concurrent identical requests share one upstream call, results are cached, and list endpoints are paged with a hard cap.
 9. **WebSocket connections are bounded in every dimension:** total connections, connections per address, inbound message size, messages per second, subscriptions per connection, tracked addresses and transactions per connection, and send-queue length. A slow client is disconnected.
 10. **Client subscriptions never map one-to-one onto node resources.** Tracked scripts are multiplexed onto shared Electrum subscriptions with a global cap and reference counts.
-11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated. Requests whose cost grows with the data behind them (address histories, batches) have a cost limit of their own, globally and per client, that counts a call until the node has really finished it, not until we stop waiting ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)).
+11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated. Requests whose cost grows with the data behind them (address histories, batches) have a cost limit of their own, globally and per client, that counts a call until the node has really finished it, not until we stop waiting ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)). What the server learns about histories the node will not finish applies to every path that reads one, the WebSockets included ([`API.md`](API.md#very-large-addresses)).
 
 <!-- Numbered 22, after the last rule, so the rules below keep the numbers the code cites. -->
 
@@ -39,7 +39,7 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 ### Handling data
 
 12. **SQL is always parameterized.** Request handlers get read-only connections.
-13. **Responses are serialized, never string-built.**
+13. **Responses are serialized, never string-built.** The one exception is a page's head ([`FRONTEND.md`](FRONTEND.md#link-previews)): the server writes it into the shell's HTML from parsed identifiers, numbers and its own words, and HTML-escapes the one piece of text it did not write, a Lightning alias (`crates/server/src/pages.rs`).
 14. **The frontend renders chain and gossip data as text.** No `innerHTML`, no building markup from data, no data-derived URLs in `href` or `src` without a scheme allow-list.
 15. **A strict Content-Security-Policy is always sent:** `default-src 'self'`, no inline scripts, no third-party origins. Fonts and assets are self-hosted.
 16. **Static files are served from one fixed directory** with no path traversal.
