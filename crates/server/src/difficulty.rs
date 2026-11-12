@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bitcoin::{BlockHash, CompactTarget};
 use engine::difficulty::{Block, INTERVAL, Period, period_start};
-use logging::events::{DifficultyComputed, DifficultyRefreshFailed};
+use logging::events::{DifficultyComputed, DifficultyRefreshFailed, DifficultyRetried};
 use node::electrum;
 use node::esplora::{Error, Esplora};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -54,11 +54,25 @@ impl Difficulty {
 pub async fn run(ctx: Arc<NetworkContext>, mut events: broadcast::Receiver<electrum::Event>) {
     let network = ctx.config.network;
     let mut failures = 0u32;
+    let mut retries = 0u32;
     loop {
         let retry = match refresh(&ctx).await {
             Ok(()) => {
                 failures = 0;
+                retries = 0;
                 None
+            }
+            // Expected during a burst of blocks: try again soon, or at the next tip, quietly.
+            Err((height, "tip_moved")) => {
+                retries = retries.saturating_add(1);
+                if retries.is_power_of_two() {
+                    logging::emit(&DifficultyRetried {
+                        network: network.name(),
+                        height,
+                        retries,
+                    });
+                }
+                Some(RETRY_MIN)
             }
             Err((height, error)) => {
                 failures = failures.saturating_add(1);

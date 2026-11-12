@@ -43,6 +43,9 @@ pub struct ServerStarting<'a> {
     pub max_tracked_clients: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_proxy_header: Option<&'a str>,
+    /// `TRUSTED_PROXIES` as prefixes; set exactly when `trusted_proxy_header` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_proxies: Option<Vec<String>>,
     pub ws_max_sockets: usize,
     pub ws_client_max_sockets: u32,
     pub ws_max_message_bytes: usize,
@@ -142,6 +145,14 @@ pub struct LogEventsDropped {
 }
 event!(LogEventsDropped, "log_events_dropped", Warn);
 
+/// Connections closed at accept because their address had `CLIENT_MAX_CONNECTIONS` open. The
+/// client sees only a reset, with no response to log. Written at a total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct ConnectionsRefused {
+    pub total: u64,
+}
+event!(ConnectionsRefused, "connections_refused", Warn);
+
 // HTTP.
 
 /// One HTTP request, written when its response head is ready.
@@ -234,6 +245,37 @@ pub struct ChainReorg {
 }
 event!(ChainReorg, "chain_reorg", Warn);
 
+/// The node refused our RPC user and password. Clients see only "unavailable"; the operator must
+/// fix `{NET}_RPC_USER` or `{NET}_RPC_PASSWORD`. Written at startup and whenever a check finds it
+/// newly refused.
+#[derive(Debug, Serialize)]
+pub struct RpcAuthFailed {
+    pub network: &'static str,
+}
+event!(RpcAuthFailed, "rpc_auth_failed", Error);
+
+/// The readiness check could not reach the node's RPC: at the 1st, 2nd, 4th, 8th… check in a row.
+#[derive(Debug, Serialize)]
+pub struct RpcUnreachable {
+    pub network: &'static str,
+    /// `timeout`, `unavailable`, `busy` or `decode`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(RpcUnreachable, "rpc_unreachable", Warn);
+
+/// The node's RPC answered and accepted our credentials: the first check, or the first after
+/// failures.
+#[derive(Debug, Serialize)]
+pub struct RpcReachable {
+    pub network: &'static str,
+    /// The node's best height.
+    pub height: u32,
+    /// Checks that failed before this one.
+    pub failures: u32,
+}
+event!(RpcReachable, "rpc_reachable", Info);
+
 // WebSocket hub.
 
 /// A socket closed. Debug level: one per socket. Clients dropped for a limit are also summarised
@@ -263,6 +305,18 @@ pub struct WsClientsDropped {
     pub total: u64,
 }
 event!(WsClientsDropped, "ws_clients_dropped", Warn);
+
+/// WebSocket upgrades refused because their `Origin` is not this site's. Written when the count on
+/// that network reaches 1, 2, 4, 8…, with the latest refused pair, so a proxy that rewrites `Host`
+/// shows up at once. Both fields are client-sent text, cut to 100 characters.
+#[derive(Debug, Serialize)]
+pub struct WsOriginRefused {
+    pub network: &'static str,
+    pub origin: String,
+    pub host: String,
+    pub total: u64,
+}
+event!(WsOriginRefused, "ws_origin_refused", Warn);
 
 /// One message sent to every subscriber of a topic.
 #[derive(Debug, Serialize)]
@@ -370,12 +424,24 @@ pub struct DifficultyRefreshFailed {
     pub network: &'static str,
     /// The tip the refresh was for.
     pub height: u32,
-    /// `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `tip_moved`,
-    /// `wrong_height` or `invalid_bits`.
+    /// `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `wrong_height` or
+    /// `invalid_bits`. A moved tip is [`DifficultyRetried`] instead.
     pub error: &'static str,
     pub failures: u32,
 }
 event!(DifficultyRefreshFailed, "difficulty_refresh_failed", Warn);
+
+/// A refresh read blocks stamped with a newer tip than the one it was computing (a block or reorg
+/// in between), so it starts again. Expected during a burst of blocks: at the 1st, 2nd, 4th, 8th…
+/// in a row.
+#[derive(Debug, Serialize)]
+pub struct DifficultyRetried {
+    pub network: &'static str,
+    /// The tip the refresh was for.
+    pub height: u32,
+    pub retries: u32,
+}
+event!(DifficultyRetried, "difficulty_refresh_retried", Debug);
 // The store and the block table.
 
 /// A network's SQLite file could not be opened; that network runs without a store.
@@ -681,6 +747,7 @@ mod tests {
                 client_burst: 1,
                 max_tracked_clients: 1,
                 trusted_proxy_header: Some("x-real-ip"),
+                trusted_proxies: Some(vec!["127.0.0.1/32".into()]),
                 ws_max_sockets: 1,
                 ws_client_max_sockets: 1,
                 ws_max_message_bytes: 1,
@@ -769,6 +836,29 @@ mod tests {
                 network: n,
                 reason: "rate",
                 total: 4,
+            }),
+            both(&WsOriginRefused {
+                network: n,
+                origin: "https://evil.example".into(),
+                host: "explorer.example".into(),
+                total: 2,
+            }),
+            both(&RpcAuthFailed { network: n }),
+            both(&ConnectionsRefused { total: 8 }),
+            both(&RpcUnreachable {
+                network: n,
+                error: "timeout",
+                failures: 4,
+            }),
+            both(&RpcReachable {
+                network: n,
+                height: 975_523,
+                failures: 4,
+            }),
+            both(&DifficultyRetried {
+                network: n,
+                height: 975_523,
+                retries: 2,
             }),
             both(&WsFanout {
                 network: n,

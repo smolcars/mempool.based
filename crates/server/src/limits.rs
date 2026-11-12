@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::config::Limits;
+use crate::config::{Limits, TrustedProxy};
 use crate::error::ApiError;
 
 /// A limit said no: the error the client gets, and a fixed reason for the request log. Its
@@ -127,7 +127,7 @@ impl Clients {
     }
 
     /// Takes `cost` rate tokens (0 or 1) and one `kind` slot for `client`, all or nothing.
-    fn acquire(
+    pub(crate) fn acquire(
         self: &Arc<Self>,
         client: IpAddr,
         kind: Held,
@@ -237,27 +237,69 @@ pub fn client_key(ip: IpAddr) -> IpAddr {
     }
 }
 
-/// The client address: from the trusted proxy header when one is configured and parses, else the
-/// socket peer. The last value wins because a proxy appends the address it saw to any the client sent.
+/// The client address. The socket peer, unless the peer is a trusted proxy: then the address that
+/// proxy chain names in the trusted header. Every instance of the header is read as one list, in
+/// order, and walked from the right, the end the nearest proxy wrote: entries that are themselves
+/// trusted proxies are skipped and the first other address is the client. A chain made only of
+/// trusted proxies names the leftmost; a missing or unparsable entry stops the walk at the last
+/// trusted address, so a broken chain costs the proxy its own share, never anyone else's.
 pub(crate) fn client_addr(
     headers: &HeaderMap,
     peer: IpAddr,
-    trusted: Option<&axum::http::HeaderName>,
+    trust: Option<&TrustedProxy>,
 ) -> IpAddr {
-    let from_header = trusted.and_then(|name| {
-        let value = headers.get_all(name).iter().next_back()?.to_str().ok()?;
-        let last = value.rsplit(',').next()?.trim();
-        last.parse::<IpAddr>()
-            .ok()
-            .or_else(|| last.parse::<SocketAddr>().ok().map(|s| s.ip()))
-    });
-    client_key(from_header.unwrap_or(peer))
+    let peer = peer.to_canonical();
+    let Some(trust) = trust.filter(|t| t.trusts(peer)) else {
+        return client_key(peer);
+    };
+    let mut nearest = peer;
+    for value in headers.get_all(&trust.header).iter().rev() {
+        let Ok(value) = value.to_str() else {
+            return client_key(nearest);
+        };
+        for entry in value.rsplit(',') {
+            let entry = entry.trim();
+            let Some(ip) = entry
+                .parse::<IpAddr>()
+                .ok()
+                .or_else(|| entry.parse::<SocketAddr>().ok().map(|s| s.ip()))
+                .map(|ip| ip.to_canonical())
+            else {
+                return client_key(nearest);
+            };
+            if !trust.trusts(ip) {
+                return client_key(ip);
+            }
+            nearest = ip;
+        }
+    }
+    client_key(nearest)
 }
+
+/// Static files and pages: the app shell and the content-hashed files under `/assets`, served from
+/// memory or disk with no node work behind them. Everything a handler answers (`/api`, `/app`,
+/// `/healthz`, `/readyz`, under any network prefix or none) is not.
+pub fn is_static(path: &str) -> bool {
+    let mut segs = path.trim_start_matches('/').split('/');
+    let first = segs.next().unwrap_or_default();
+    let second = segs.next();
+    !(matches!(first, "api" | "app" | "healthz" | "readyz")
+        || matches!(second, Some("api" | "app")))
+}
+
+/// Per-client limits on static files, fixed: generous, since they cost no node work and finish in
+/// milliseconds, but there so one client cannot take every global request slot with them. A cold
+/// load of the heaviest page is 22 files (docs/CONFIG.md, "Per-client defaults").
+pub const STATIC_BURST: u32 = 400;
+pub const STATIC_RATE_PER_SEC: u32 = 100;
+pub const STATIC_CONCURRENCY: u32 = 96;
 
 /// Shared state for [`limit`].
 #[derive(Debug, Clone)]
 pub struct Limiter {
     pub clients: Arc<Clients>,
+    /// Static files' own table, so pages and assets never use up a client's API allowance.
+    statics: Arc<Clients>,
     pub limits: Limits,
     in_flight: Arc<Semaphore>,
 }
@@ -266,15 +308,26 @@ impl Limiter {
     pub fn new(limits: &Limits) -> Self {
         Self {
             clients: Clients::new(limits),
+            statics: Clients::with_rate(
+                f64::from(STATIC_RATE_PER_SEC),
+                STATIC_BURST,
+                limits.max_tracked_clients,
+            ),
             limits: limits.clone(),
             in_flight: Arc::new(Semaphore::new(limits.max_requests)),
         }
     }
 
-    /// Holds a connection slot for `peer`, refusing one past its cap. Behind a trusted proxy every
-    /// connection comes from the proxy, so there is no per-client cap (`Ok(None)`): the proxy owns it.
+    /// Holds a connection slot for `peer`, refusing one past its cap. Connections from a trusted
+    /// proxy carry many clients, so they have no per-client cap (`Ok(None)`): the proxy owns it.
     pub fn connection(&self, peer: IpAddr) -> Result<Option<Hold>, ApiError> {
-        if self.limits.trusted_proxy_header.is_some() {
+        let peer = peer.to_canonical();
+        if self
+            .limits
+            .trusted_proxy
+            .as_ref()
+            .is_some_and(|t| t.trusts(peer))
+        {
             return Ok(None);
         }
         let max = self.limits.client_connections;
@@ -295,7 +348,8 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Middleware applying, in order: the per-client rate and concurrency limits, the global
+/// Middleware applying, in order: the per-client rate and concurrency limits (static files'
+/// own, or the API's), the global
 /// concurrency limit (shedding load instead of queueing), then the request timeout.
 pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next) -> Response {
     let Some(ConnectInfo(peer)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() else {
@@ -303,15 +357,13 @@ pub async fn limit(State(limiter): State<Limiter>, mut req: Request, next: Next)
         return ApiError::INTERNAL.into_response();
     };
     let limits = &limiter.limits;
-    let addr = client_addr(
-        req.headers(),
-        peer.ip(),
-        limits.trusted_proxy_header.as_ref(),
-    );
-    let _hold = match limiter
-        .clients
-        .acquire(addr, Held::Request, limits.client_requests, 1.0)
-    {
+    let addr = client_addr(req.headers(), peer.ip(), limits.trusted_proxy.as_ref());
+    let (table, max) = if is_static(req.uri().path()) {
+        (&limiter.statics, STATIC_CONCURRENCY)
+    } else {
+        (&limiter.clients, limits.client_requests)
+    };
+    let _hold = match table.acquire(addr, Held::Request, max, 1.0) {
         Ok(hold) => hold,
         Err(e) => return e.into_response(),
     };
@@ -415,18 +467,113 @@ mod tests {
         assert_eq!(c.tracked(), 1);
     }
 
+    fn trust(header: &str, proxies: &[&str]) -> TrustedProxy {
+        TrustedProxy {
+            header: axum::http::HeaderName::try_from(header).unwrap(),
+            proxies: proxies
+                .iter()
+                .map(|p| crate::config::IpNet::parse(p).unwrap())
+                .collect(),
+        }
+    }
+
+    fn headers(name: &str, values: &[&str]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for v in values {
+            h.append(
+                axum::http::HeaderName::try_from(name).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        h
+    }
+
     #[test]
-    fn proxy_header_is_used_only_when_trusted() {
+    fn the_header_counts_only_from_a_trusted_proxy() {
+        let t = trust("x-real-ip", &["10.0.0.1"]);
+        let h = headers("x-real-ip", &["203.0.113.9"]);
+        // Not configured, or sent by anyone but the proxy: the socket peer, header ignored.
+        assert_eq!(
+            client_addr(&h, ip("198.51.100.4"), None),
+            ip("198.51.100.4")
+        );
+        assert_eq!(
+            client_addr(&h, ip("198.51.100.4"), Some(&t)),
+            ip("198.51.100.4")
+        );
+        assert_eq!(client_addr(&h, ip("10.0.0.2"), Some(&t)), ip("10.0.0.2"));
+        // From the proxy, also as an IPv4-mapped IPv6 peer.
+        assert_eq!(client_addr(&h, ip("10.0.0.1"), Some(&t)), ip("203.0.113.9"));
+        assert_eq!(
+            client_addr(&h, ip("::ffff:10.0.0.1"), Some(&t)),
+            ip("203.0.113.9")
+        );
+        // Grouped by /64 like any other client.
+        let h6 = headers("x-real-ip", &["2001:db8:1:2::77"]);
+        assert_eq!(
+            client_addr(&h6, ip("10.0.0.1"), Some(&t)),
+            ip("2001:db8:1:2::")
+        );
+    }
+
+    #[test]
+    fn forwarding_chains_are_walked_from_the_nearest_proxy() {
+        let t = trust("x-forwarded-for", &["10.0.0.0/8", "fd00::/8"]);
+        let proxy = ip("10.0.0.1");
+        let walk =
+            |values: &[&str]| client_addr(&headers("x-forwarded-for", values), proxy, Some(&t));
+        // A client's own entries come first and are never reached.
+        assert_eq!(walk(&["1.1.1.1, 203.0.113.9"]), ip("203.0.113.9"));
+        // Trusted hops on the right are skipped, across header instances too.
+        assert_eq!(walk(&["1.1.1.1, 203.0.113.9, 10.0.0.7"]), ip("203.0.113.9"));
+        assert_eq!(
+            walk(&["1.1.1.1", "203.0.113.9", "10.0.0.7, fd00::1"]),
+            ip("203.0.113.9")
+        );
+        assert_eq!(walk(&["203.0.113.9:4711"]), ip("203.0.113.9"));
+        assert_eq!(walk(&["[2001:db8::1]:443"]), ip("2001:db8::"));
+        // Only trusted hops: the leftmost. Nothing usable: the nearest trusted address.
+        assert_eq!(walk(&["10.0.0.9, 10.0.0.7"]), ip("10.0.0.9"));
+        assert_eq!(walk(&[]), proxy);
+        assert_eq!(walk(&["garbage"]), proxy);
+        assert_eq!(walk(&["203.0.113.9, unknown, 10.0.0.7"]), ip("10.0.0.7"));
+        assert_eq!(walk(&[""]), proxy);
+        assert_eq!(walk(&["1.1.1.1,"]), proxy);
         let mut h = HeaderMap::new();
         h.append(
             "x-forwarded-for",
-            "203.0.113.9, 198.51.100.4".parse().unwrap(),
+            axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
         );
-        let peer = ip("127.0.0.1");
-        let name = axum::http::HeaderName::from_static("x-forwarded-for");
-        assert_eq!(client_addr(&h, peer, None), peer);
-        assert_eq!(client_addr(&h, peer, Some(&name)), ip("198.51.100.4"));
-        h.insert("x-forwarded-for", "garbage".parse().unwrap());
-        assert_eq!(client_addr(&h, peer, Some(&name)), peer);
+        assert_eq!(client_addr(&h, proxy, Some(&t)), proxy);
+    }
+
+    #[test]
+    fn static_files_and_pages_are_told_from_handlers() {
+        for p in [
+            "/",
+            "/assets/index-abc.js",
+            "/signet/",
+            "/block/00ff",
+            "/regtest/tx/ab",
+            "/boot.js",
+            "/favicon.svg",
+            "/%61pi/x",
+        ] {
+            assert!(is_static(p), "{p}");
+        }
+        for p in [
+            "/api",
+            "/api/blocks",
+            "/app/ws",
+            "/app/config",
+            "/healthz",
+            "/readyz",
+            "/signet/api/x",
+            "/regtest/app/ws",
+            "/nope/api/x",
+            "/x/app",
+        ] {
+            assert!(!is_static(p), "{p}");
+        }
     }
 }

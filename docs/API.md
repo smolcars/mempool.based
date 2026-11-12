@@ -74,6 +74,7 @@ A successful answer is forwarded byte for byte. Any other answer is replaced by 
 | Node runs without `--sh-index` | `503` | `address index is disabled on this server` |
 | Unpaged address answer too large (`--max-sh-creates`) | `503` | `address history too large for this route; use the paged /txs routes` |
 | Tip moved under a pinned read | `503` | `chain tip moved during the request; retry` |
+| The network's address and batch calls are all running ([below](#protection-for-the-node)) | `503` | `node busy; retry` |
 | Node answered `503` for another reason (no tip, no fee estimates yet) | `503` | `node unavailable` |
 | Node unreachable, failed, or answered nonsense | `502` | `upstream unavailable` |
 | Node too slow | `504` | `request timed out` |
@@ -104,6 +105,8 @@ Block JSON has no confirmation status (the node drops a block that leaves the be
 
 - **Identical requests share one call** (rule 8). Requests that arrive while the same upstream call is in flight wait for it and get its answer. Once answered, the next request asks the node again. Measured: 300 concurrent identical requests made one upstream call.
 - **Hot answers are held for one second:** `/blocks/tip/height`, `/blocks/tip/hash`, `/blocks`, `/mempool`, `/mempool/txids`, `/mempool/recent` and `/fee-estimates`. Their keys are fixed, so this cache holds at most seven answers per network. Measured: 20,303 sequential `/blocks/tip/height` requests in 3 seconds made three upstream calls.
+- **Address and batch routes have a cost limit** (rules 8 and 11). Every address and scripthash route, `/txs/outspends` and `POST /block-heights/txs/outs` can cost the node far more than a lookup: totals for one busy signet address took 9.7 s. At most four run at once per network, and eight more wait for a slot; a client has a share of those and a rate of its own ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)). Past that the answer is immediate, `503` `node busy; retry` or `429`, with `Retry-After: 1`. Joining an identical call already running is free. A call runs in a task of its own that holds its slots until the node has answered, or 60 seconds have passed, even after the request has timed out (`504` at `REQUEST_TIMEOUT_SECS`): retrying a slow query cannot pile more work onto the node than the limit allows. On a regtest node, rbitcoin v0.9.2 stopped using CPU within half a second of its clients hanging up on 200 large address answers, but that work was mostly encoding the answer; nothing shows that a long index scan is abandoned, so the limit assumes it is not.
+- **`?asof=` is served, under that limit.** It pins an answer to a block and makes every request a distinct key, so sharing calls never helps; but the limit counts calls started, not keys, so distinct keys buy nothing. Dropping it would break Esplora clients that page consistently through a history, for no protection the limit does not already give.
 - **Every request** passes the server-wide limits in [`CONFIG.md`](CONFIG.md): body size, timeout, per-client rate and concurrency.
 
 ## Broadcast

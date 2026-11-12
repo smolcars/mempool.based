@@ -20,6 +20,17 @@ Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Ev
 
 It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns for the SQLite store, so it runs with a read-only root filesystem and a volume at `/data`. The image does not set `DATA_DIR`; without it the server keeps no store ([`CONFIG.md`](CONFIG.md)). Its health check is the binary itself: `mempool-based healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
 
+### Health
+
+| Route | Answers | Use it for |
+|---|---|---|
+| `/healthz` | `200` `{"status":"ok","version":…}` while the process serves HTTP. Never asks the node | Liveness: restart the container if it fails. The image's health check |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+
+`/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds whatever the traffic. The startup check is also how a wrong RPC password shows up: as an `rpc_auth_failed` event at once, not as an `unavailable` request later ([`LOGGING.md`](LOGGING.md#node-clients)). Neither route is logged when it passes.
+
+The image's health check stays on `/healthz`, and the compose file adds none of its own. The node is the usual reason for not being ready, and it can take hours to sync; restarting the server would not help, and Docker's restart policy ignores health anyway. Point whatever routes users to the server at `/readyz`.
+
 [`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
 
 linux/amd64 and linux/arm64 both build from the same Dockerfile, natively on each. [`image.yml`](../.github/workflows/image.yml) builds both after every merge to `master`, starts the image read-only with no capabilities until it reports healthy, and validates the compose file. It is not part of the pull-request checks and publishes nothing; publishing comes with the release workflow.
@@ -50,15 +61,15 @@ The server and rbitcoin log to stdout and stderr only; nothing is written to a l
 
 ```sh
 cd deploy
-cp .env.example .env                      # then set MAINNET_RPC_PASSWORD
+cp .env.example .env
 pass=$(openssl rand -hex 32)              # or any long random string
-sed -i "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env
+sed -i.bak "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env && rm .env.bak
 printf 'mempool-based:%s' "$pass" > rpc.cookie
 sudo chown 10001:10001 rpc.cookie && sudo chmod 600 rpc.cookie
 docker compose up -d --build
 ```
 
-`.env` and `rpc.cookie` are git-ignored. The node reads the RPC user and password from `rpc.cookie` (rbitcoin has no `--rpcuser`; `--rpc-cookie-file` takes `user:password` for HTTP Basic, with no newline). The server reads the same pair from `MAINNET_RPC_USER` and `MAINNET_RPC_PASSWORD`. The cookie is a file and not compose `content`, because compose cannot copy content into a container whose root filesystem is read-only.
+`sed -i.bak` works with both GNU and BSD (macOS) `sed`, whose bare `-i` differ. `.env` and `rpc.cookie` are git-ignored. The node reads the RPC user and password from `rpc.cookie` (rbitcoin has no `--rpcuser`; `--rpc-cookie-file` takes `user:password` for HTTP Basic, with no newline). The server reads the same pair from `MAINNET_RPC_USER` and `MAINNET_RPC_PASSWORD`. The cookie is a file and not compose `content`, because compose cannot copy content into a container whose root filesystem is read-only.
 
 The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). The node keeps its chain in the `node-data` volume; the first mainnet sync takes as long as rbitcoin takes. The server keeps its SQLite store in the `server-data` volume, with `DATA_DIR=/data` set by the compose file over anything in `.env`. A new volume starts empty and owned by the server's uid, and the block table's backfill fills it from the node, newest blocks first: about 21 hours for every block's totals on mainnet at the default pace, and 38 for the last year's fee rates ([`STORE.md`](STORE.md#backfill)). `BACKFILL_ENABLED=false` in `.env` pauses it; it resumes on the next start. Back the volume up as [`STORE.md`](STORE.md#backup-and-recovery) says, or drop it and let the backfill rebuild it.
 
@@ -71,7 +82,7 @@ The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). 
 | `no-new-privileges` | both | A setuid binary cannot raise privileges. Neither image has one; this keeps it so |
 | Non-root users | both | The server runs as 65532, the node as 10001, as their images set |
 | Only P2P published | node | RPC and Electrum listen on the compose network, Esplora on a socket. The browser never reaches the node ([`SECURITY.md`](SECURITY.md) rule 1) |
-| Server on loopback | server | Reached through the reverse proxy alone, which `TRUSTED_PROXY_HEADER` depends on |
+| Server on loopback | server | Reached through the reverse proxy alone. The example trusts no proxy header until you set one up ([below](#tls-and-the-reverse-proxy)) |
 | Socket volume is tmpfs, owner 10001, mode 0750 | both | The socket never outlives the stack, and only the node's uid and group can enter the directory |
 | `group_add: ["10001"]` | server | rbitcoin creates the socket mode 0660 owned by 10001:10001. The server joins that group to connect, instead of running as the node's uid |
 | Socket volume read-only | server | Connecting to a socket needs no write access to its directory |
@@ -81,12 +92,45 @@ The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). 
 
 ### TLS and the reverse proxy
 
-TLS is out of scope for the compose file. Put a reverse proxy (Caddy, nginx, …) on the host in front of `127.0.0.1:8080`. It must set one header to the client's address, and the server must be told which:
+TLS is out of scope for the compose file. Put a reverse proxy (Caddy, nginx, …) on the host in front of `127.0.0.1:8080`.
 
-- nginx: `proxy_set_header X-Real-IP $remote_addr;` with `TRUSTED_PROXY_HEADER=X-Real-IP`
-- Caddy: `header_up X-Real-IP {remote_host}` with the same setting
+**Until you do, leave `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES` unset**, as `.env.example` ships them. Every client is then counted by the address it connects from, and a header it sends changes nothing.
 
-Set `TRUSTED_PROXY_HEADER` only when every request reaches the server through that proxy, which is why the server is published on loopback only ([`CONFIG.md`](CONFIG.md)). Without a proxy, unset it, and every client shares the rate limits of whatever address it connects from.
+Once the proxy runs, tell the server two things ([`CONFIG.md`](CONFIG.md#client-addresses)): the header the proxy writes the client's address to, and the address the proxy's connections arrive from. The header is honoured only on connections from that address; the server refuses to start with one setting and not the other.
+
+The proxy must **overwrite** the header (or append to it), never pass on what the client sent. These lines do:
+
+```nginx
+# nginx, in the location that proxies to the server
+proxy_set_header X-Real-IP $remote_addr;          # overwrites anything the client sent
+proxy_set_header Host $http_host;                 # as the browser sent it, port included: the
+                                                  # WebSocket origin check compares against it
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+```caddyfile
+# Caddy: reverse_proxy already passes Host through and appends to X-Forwarded-For
+explorer.example {
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Real-IP {remote_host}         # overwrites anything the client sent
+    }
+}
+```
+
+with, in `.env`:
+
+```sh
+TRUSTED_PROXY_HEADER=X-Real-IP
+TRUSTED_PROXIES=172.18.0.1                        # the compose network's gateway: see below
+```
+
+**Which address.** The server sees the address a connection comes from inside its container, not `127.0.0.1`. A proxy on the host connecting to the published loopback port arrives from the compose network's gateway (Docker's port forwarding connects from there): often `172.18.0.1` on Linux, and on Docker Desktop for Mac a `192.168.x.1` address. Find it with `docker network inspect mempool-based_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`, or read `client` from an `http_request` event with `LOG_CLIENT_ADDR=true` and the trusted settings unset. Docker can give the network another subnet when it is recreated, so check again after `docker compose down`. A proxy running as a container on the compose network arrives from that container's address. Trusting a whole private range (`172.16.0.0/12`) also works when nothing but the proxy can reach the server on it, which the loopback-only publish ensures; never trust a range clients can connect from.
+
+`X-Forwarded-For` works as well, written by a proxy that appends (nginx `$proxy_add_x_forwarded_for`, Caddy's default): the server reads the list from the right and skips the proxies it trusts, so what a client wrote at the left is ignored. With a CDN or a second proxy in front, list each hop's address in `TRUSTED_PROXIES`.
+
+Anything else on the host that connects to the published port arrives from the same gateway, so it is trusted like the proxy: the host is part of the proxy's trust. Clients elsewhere cannot reach the port, and a client of the proxy cannot get past it, since the proxy overwrites the header.
 
 ### Add a network
 

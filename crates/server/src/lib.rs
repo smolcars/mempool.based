@@ -1,7 +1,8 @@
 //! HTTP surface of the mempool.based server.
 //!
 //! [`App::new`] builds everything: per-network routes from [`network_routes`] mounted under each
-//! enabled network's prefix, `/healthz`, the frontend, and the limits around all of it.
+//! enabled network's prefix, `/healthz` (liveness), `/readyz` (readiness, [`health`]), the
+//! frontend, and the limits around all of it.
 
 mod api_v1;
 mod app_config;
@@ -10,6 +11,7 @@ pub mod config;
 pub mod difficulty;
 pub mod error;
 pub mod esplora;
+pub mod health;
 pub mod limits;
 pub mod mining;
 pub mod report;
@@ -89,6 +91,8 @@ pub struct NetworkContext {
     pub blocks: Option<blocks::BlockTable>,
     /// The mining routes' answers, kept current by [`mining::run`].
     pub mining: mining::Mining,
+    /// What the last node check found, for `/readyz`; kept by [`health::watch`].
+    pub node: health::NodeCheck,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -120,12 +124,13 @@ impl NetworkContext {
             ),
             config: config.clone(),
             esplora: Esplora::new(&url).ok()?,
-            api: esplora::Api::new(all.broadcast, all.limits.max_tracked_clients),
+            api: esplora::Api::new(all.broadcast, &all.limits, &url).ok()?,
             electrum: node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum)),
             hub: ws::Hub::new(config.network, Arc::clone(sockets)),
             sockets: Arc::clone(sockets),
             difficulty: difficulty::Difficulty::default(),
             mining: mining::Mining::default(),
+            node: health::NodeCheck::default(),
         })
     }
 }
@@ -160,6 +165,7 @@ impl App {
             .route("/healthz", get(healthz))
             .merge(app_config::routes(config));
         let sockets = ws::Sockets::new(&config.ws, config.limits.request_timeout);
+        let mut enabled_networks = Vec::new();
         for network in Network::ALL {
             let prefix = network.path_prefix();
             let context = config
@@ -172,6 +178,8 @@ impl App {
             let scope = match context {
                 Some(ctx) => {
                     let ctx = Arc::new(ctx);
+                    enabled_networks.push(Arc::clone(&ctx));
+                    tokio::spawn(health::watch(Arc::clone(&ctx)));
                     let events = ctx.electrum.events();
                     tokio::spawn(ws::feed(Arc::clone(&ctx), events));
                     tokio::spawn(summary::worker(Arc::clone(&ctx)));
@@ -213,6 +221,14 @@ impl App {
                 app.nest(prefix, scope)
             };
         }
+        let networks = Arc::new(enabled_networks);
+        app = app.route(
+            "/readyz",
+            get(move || {
+                let networks = Arc::clone(&networks);
+                async move { health::readyz(&networks) }
+            }),
+        );
         // `/<anything>/api/...` is an API call for a network we do not know, never a page.
         for path in API_PATHS {
             app = app.route(&format!("/{{network}}{path}"), any(not_found));

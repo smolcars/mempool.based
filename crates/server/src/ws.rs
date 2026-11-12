@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 
 use axum::Extension;
 use axum::extract::{Request, State};
-use axum::http::header::{CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE};
+use axum::http::header::{
+    CONNECTION, HOST, ORIGIN, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, UPGRADE,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
@@ -150,6 +152,8 @@ pub struct Sockets {
     /// How long sockets get to close after [`Sockets::close_all`].
     grace: Duration,
     next_id: AtomicU64,
+    /// Upgrades refused for their `Origin`, every network together.
+    origin_refused: AtomicU64,
 }
 
 impl Sockets {
@@ -162,6 +166,7 @@ impl Sockets {
             closed_at: OnceLock::new(),
             grace,
             next_id: AtomicU64::new(0),
+            origin_refused: AtomicU64::new(0),
         })
     }
 
@@ -250,6 +255,18 @@ pub async fn handle(
         Err(e) => return e.into_response(),
     };
     let sockets = Arc::clone(&ctx.sockets);
+    if let Err((origin, host)) = same_origin(req.headers()) {
+        let total = sockets.origin_refused.fetch_add(1, Ordering::Relaxed) + 1;
+        if total.is_power_of_two() {
+            logging::emit(&logging::events::WsOriginRefused {
+                network: ctx.config.network.name(),
+                origin,
+                host,
+                total,
+            });
+        }
+        return refused(ORIGIN_REFUSED, "origin");
+    }
     // Each cap names itself in the request log, as every other limit does.
     let Ok(permit) = Arc::clone(&sockets.permits).try_acquire_owned() else {
         return refused(ApiError::OVERLOADED, "server_sockets");
@@ -271,6 +288,50 @@ pub async fn handle(
     h.insert(CONNECTION, HeaderValue::from_static("Upgrade"));
     h.insert(SEC_WEBSOCKET_ACCEPT, accept);
     res
+}
+
+const ORIGIN_REFUSED: ApiError = ApiError::new(
+    StatusCode::FORBIDDEN,
+    "websocket refused: Origin is not this site",
+);
+
+/// `/app` is our frontend's private API, so a browser may open a socket only from a page of this
+/// site; otherwise any page could use up its visitors' per-client socket allowance (SECURITY.md
+/// rule 21). Same site means the `Origin` header's host and port equal the `Host` header's, the
+/// name the browser used to reach us, whatever the scheme (TLS ends at the proxy). That holds for
+/// every host name the site answers to, as long as the proxy passes `Host` through. A request
+/// without `Origin` is not from a browser, which always sends it, so no third party can make a
+/// visitor send one; it is allowed. On refusal, the origin and host, cut short, for the log.
+fn same_origin(h: &HeaderMap) -> Result<(), (String, String)> {
+    let mut origins = h.get_all(ORIGIN).iter();
+    let Some(origin) = origins.next() else {
+        return Ok(());
+    };
+    let text = |v: Option<&HeaderValue>| {
+        let s = v
+            .map(|v| String::from_utf8_lossy(v.as_bytes()))
+            .unwrap_or_default();
+        s.chars().take(100).collect::<String>()
+    };
+    let host = h.get(HOST);
+    let site = |origin: &HeaderValue| {
+        let origin = origin.to_str().ok()?;
+        let (authority, default_port) = match origin.split_once("://")? {
+            ("http", a) => (a, ":80"),
+            ("https", a) => (a, ":443"),
+            _ => return None,
+        };
+        let host = host?.to_str().ok()?;
+        let norm = |a: &str| {
+            let a = a.to_ascii_lowercase();
+            a.strip_suffix(default_port).map(str::to_owned).unwrap_or(a)
+        };
+        (!authority.is_empty() && norm(authority) == norm(host)).then_some(())
+    };
+    if origins.next().is_none() && site(origin).is_some() {
+        return Ok(());
+    }
+    Err((text(Some(origin)), text(host)))
 }
 
 fn refused(error: ApiError, reason: &'static str) -> Response {

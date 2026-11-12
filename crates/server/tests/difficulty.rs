@@ -509,8 +509,13 @@ async fn blocks_read_at_another_tip_are_not_combined() {
     let (app, electrum) = start(&esplora).await;
     let mut peer = Peer::accept(&electrum).await;
     peer.handshake(2066, &tip).await;
-    let failed = logged(|v| v["event"] == "difficulty_refresh_failed" && v["height"] == 2066).await;
-    assert_eq!(failed["error"], "tip_moved");
+    // Expected while blocks arrive: a debug-level retry, never the warning.
+    let retried =
+        logged(|v| v["event"] == "difficulty_refresh_retried" && v["height"] == 2066).await;
+    assert_eq!(
+        (retried["level"].as_str(), retried["retries"].as_u64()),
+        (Some("debug"), Some(1))
+    );
     assert_eq!(
         get_answer(&app).await.status,
         StatusCode::SERVICE_UNAVAILABLE
@@ -520,4 +525,10 @@ async fn blocks_read_at_another_tip_are_not_combined() {
     *esplora.stamp.lock().unwrap() = Some((tip.block_hash(), 2066));
     let a = answer_at(&app, 2066).await;
     assert_eq!(a.body["remainingBlocks"], 1966);
+    let raw = String::from_utf8(capture().0.lock().unwrap().clone()).unwrap();
+    assert!(
+        !raw.lines()
+            .any(|l| l.contains("difficulty_refresh_failed") && l.contains("tip_moved")),
+        "a moved tip is not a failure"
+    );
 }

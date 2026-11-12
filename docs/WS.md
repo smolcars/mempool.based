@@ -184,7 +184,7 @@ CPU and memory grow with the clients, not with the topics: each message is encod
 | Rule | Default | Setting |
 |---|---|---|
 | Sockets open at once, every network together | 1,024 | `WS_MAX_SOCKETS` |
-| Sockets per client address | 8 | `WS_CLIENT_MAX_SOCKETS` |
+| Sockets per client address | 16 | `WS_CLIENT_MAX_SOCKETS` |
 | Largest message from a client, after reassembling fragments | 1,024 bytes | `WS_MAX_MESSAGE_BYTES` |
 | Frames per second from a client, every kind counted; a burst of the same size is allowed | 10 | `WS_MESSAGES_PER_SEC` |
 | Topics subscribed at once | 8 | `WS_MAX_SUBSCRIPTIONS` |
@@ -194,7 +194,9 @@ CPU and memory grow with the clients, not with the topics: each message is encod
 | Messages queued for a client that is not reading | 64 | `WS_SEND_QUEUE` |
 | Silence before the socket is closed; the server pings at half of it | 60 s | `WS_IDLE_TIMEOUT_SECS` |
 
-Over a cap at upgrade time, the request is refused before it becomes a socket: `429` past the per-client cap, `503` past the total. Clients are counted as in [`CONFIG.md`](CONFIG.md#limits) (IPv6 by /64, the trusted proxy header when one is set). The upgrade request also passes the ordinary request limits.
+Over a cap at upgrade time, the request is refused before it becomes a socket: `429` past the per-client cap, `503` past the total. Clients are counted as in [`CONFIG.md`](CONFIG.md#client-addresses) (IPv6 by /64, the trusted proxy header only from a trusted proxy). The upgrade request also passes the ordinary request limits.
+
+**Only this site's pages may open a socket** ([`SECURITY.md`](SECURITY.md) rule 21). A browser always sends `Origin` with an upgrade; the server accepts it only when its host and port equal the request's `Host` (letter case and the scheme's default port ignored), and refuses anything else with `403` `{"error":"websocket refused: Origin is not this site"}` before any socket slot is taken. Without the rule, any website could open sockets from each of its visitors until their per-client cap was reached and lock them out of this one. `Host` is the name the browser used, so every host name the site answers to works without a setting, as long as the reverse proxy passes `Host` through unchanged, port included (nginx: `proxy_set_header Host $http_host`, since `$host` drops a non-default port; Caddy does by default). A proxy that rewrites `Host` to the server's own address makes every browser socket fail: the refusal is an `http_request` with `refused: "origin"` and a `ws_origin_refused` warning naming the origin and host seen ([`LOGGING.md`](LOGGING.md#websocket-hub)). An upgrade without `Origin` is a program, not a browser page, and is allowed: no third party can make a visitor's browser send one.
 
 Browsers answer pings on their own, so a live tab is never closed for silence. A client may send `{"op":"ping"}` every 30 seconds or so to learn that a socket died without a close.
 
@@ -224,7 +226,7 @@ A client closed for 1002 to 4002 has a bug; reconnecting will not help. After 40
 - **Upstream work is shared and capped.** No client message reaches the node. The only upstream calls are the block fetch for each new block, made by one task per network (normally one request, at most 120), the block's summary, computed once by the summary routes' own capped worker, and the mempool engine's polling, which runs whatever the number of subscribers. The full fetch is also the existence check, since a missing block is a short 404 and a separate check would add a round trip once the block is there. `hello` and the snapshots come from memory.
 - **Mempool topics** are produced by one task per network that reads the latest projection, compares each block with what it last published, and encodes each message once. A topic's stored state for new subscribers is its last snapshot plus the deltas appended since; after 16 deltas, or when they outweigh the snapshot, they are folded into a fresh snapshot, which is stored but sent to nobody.
 - **Shutdown.** Every socket is sent `1001` and given up to `REQUEST_TIMEOUT_SECS`, counted from the signal, to finish, together with the HTTP connections. Sockets still open then are dropped, and the server waits for them to release their slots.
-- **Behind TLS.** The reverse proxy must pass `Upgrade` and `Connection` through (nginx: `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, `proxy_set_header Connection "upgrade"`) and keep idle connections open longer than `WS_IDLE_TIMEOUT_SECS / 2`, the ping interval. The page connects to `wss://` on its own host, which the Content-Security-Policy's `default-src 'self'` allows in current Chromium and Firefox. Older WebKit did not match `ws:`/`wss:` with `'self'` ([WebKit bug 201591](https://bugs.webkit.org/show_bug.cgi?id=201591)); if a Safari user cannot connect, that is the cause.
+- **Behind TLS.** The reverse proxy must pass `Upgrade` and `Connection` through (nginx: `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, `proxy_set_header Connection "upgrade"`), pass `Host` through for the origin check above and keep idle connections open longer than `WS_IDLE_TIMEOUT_SECS / 2`, the ping interval. The page connects to `wss://` on its own host, which the Content-Security-Policy's `default-src 'self'` allows in current Chromium and Firefox. Older WebKit did not match `ws:`/`wss:` with `'self'` ([WebKit bug 201591](https://bugs.webkit.org/show_bug.cgi?id=201591)); if a Safari user cannot connect, that is the cause.
 
 ## Conformance
 

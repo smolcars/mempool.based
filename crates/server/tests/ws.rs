@@ -334,9 +334,14 @@ impl Ws {
     }
 
     /// The upgrade request; `Err` carries the status line of a refusal.
-    async fn connect_stream(mut stream: TcpStream, path: &str) -> Result<Ws, String> {
+    async fn connect_stream(stream: TcpStream, path: &str) -> Result<Ws, String> {
+        Self::upgrade(stream, path, "Host: test\r\n").await
+    }
+
+    /// An upgrade with `headers` (each ending `\r\n`) in place of the usual `Host`.
+    async fn upgrade(mut stream: TcpStream, path: &str, headers: &str) -> Result<Ws, String> {
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+            "GET {path} HTTP/1.1\r\n{headers}Upgrade: websocket\r\nConnection: Upgrade\r\n\
              Sec-WebSocket-Key: {KEY}\r\nSec-WebSocket-Version: 13\r\n\r\n"
         );
         stream.write_all(req.as_bytes()).await.unwrap();
@@ -877,4 +882,110 @@ async fn the_mempool_switch_turns_the_topics_off() {
         ws.json().await,
         json!({"topic": "projected-txs:3", "type": "off"})
     );
+}
+
+#[tokio::test]
+async fn only_this_site_may_open_a_socket_from_a_browser() {
+    let s = Harness::start(limits()).await;
+    let up = |headers: &'static str| {
+        let addr = s.addr.clone();
+        async move {
+            let stream = TcpStream::connect(addr).await.unwrap();
+            Ws::upgrade(stream, "/regtest/app/ws", headers).await
+        }
+    };
+    // The app's own page, as the browser tests and a reverse proxy that passes Host send it.
+    let port = s.addr.rsplit(':').next().unwrap().to_owned();
+    let own = format!("Host: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\n");
+    let stream = TcpStream::connect(&s.addr).await.unwrap();
+    let mut ws = Ws::upgrade(stream, "/regtest/app/ws", &own).await.unwrap();
+    assert_eq!(ws.json().await["type"], "hello");
+    assert!(
+        up("Host: explorer.example\r\nOrigin: https://explorer.example\r\n")
+            .await
+            .is_ok()
+    );
+    // Not a browser: no Origin at all.
+    assert!(up("Host: test\r\n").await.is_ok());
+    // Another site's page: refused before it takes a socket slot, and said so in the log.
+    for headers in [
+        "Host: explorer.example\r\nOrigin: https://evil.example\r\n",
+        "Host: explorer.example\r\nOrigin: null\r\n",
+        "Host: 127.0.0.1:1\r\nOrigin: http://127.0.0.1:2\r\n",
+    ] {
+        assert_eq!(
+            up(headers).await.err().unwrap(),
+            "HTTP/1.1 403 Forbidden",
+            "{headers}"
+        );
+    }
+    let refused = logged(|v| v["event"] == "http_request" && v["status"] == 403).await;
+    assert_eq!(refused["refused"], "origin");
+    let event = logged(|v| v["event"] == "ws_origin_refused").await;
+    assert_eq!(
+        (event["origin"].as_str(), event["host"].as_str()),
+        (Some("https://evil.example"), Some("explorer.example"))
+    );
+}
+
+#[tokio::test]
+async fn hostile_frames_and_upgrades_close_with_their_codes() {
+    // The cases of the acceptance check's abuse script that the tests above do not already pin.
+    let s = Harness::start(limits()).await;
+    let many_topics = json!({"op": "subscribe", "topics": vec!["blocks"; 10_000]}).to_string();
+    let deep = format!("{}{}", "[".repeat(500), "]".repeat(500));
+    let mut huge_length = vec![0x81, 0xFF];
+    huge_length.extend_from_slice(&(u64::MAX >> 1).to_be_bytes());
+    let cases: Vec<(&str, Vec<u8>, u16)> = vec![
+        ("reserved bits", masked(0xF1, br#"{"op":"ping"}"#), 1002),
+        ("opcode 3", masked(0x83, b"x"), 1002),
+        ("fragmented ping", masked(0x09, b"x"), 1002),
+        ("continuation first", masked(0x80, b"x"), 1002),
+        ("length 2^63 - 1", huge_length, 1009),
+        ("10,000 topics", masked(0x81, many_topics.as_bytes()), 1009),
+        ("deep JSON", masked(0x81, deep.as_bytes()), 4000),
+        (
+            "prototype key",
+            masked(0x81, br#"{"op":"subscribe","topics":["__proto__"]}"#),
+            4000,
+        ),
+        ("unknown op", masked(0x81, br#"{"op":"x"}"#), 4000),
+    ];
+    for (name, bytes, code) in cases {
+        let mut ws = s.connect().await;
+        ws.json().await;
+        ws.send_raw(&bytes).await;
+        assert_eq!(ws.close_code().await.0, code, "{name}");
+    }
+    // Subscribing to the same topic more times than the subscription cap is one subscription:
+    // the ping after them is answered, not a close.
+    let mut ws = s.connect().await;
+    ws.json().await;
+    for _ in 0..9 {
+        ws.send(json!({"op": "subscribe", "topics": ["blocks"]}))
+            .await;
+    }
+    ws.send(json!({"op": "ping"})).await;
+    loop {
+        match ws.recv_raw().await.0 {
+            Msg::Close(code, _) => panic!("closed with {code}"),
+            Msg::Text(t) if t == br#"{"type":"pong"}"# => break,
+            _ => {}
+        }
+    }
+    // Upgrades with a missing key, a key that is not 16 bytes of base64, or another version: 400.
+    for head in [
+        "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13",
+        "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: !!!!\r\nSec-WebSocket-Version: 13",
+        "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 12",
+    ] {
+        let mut stream = TcpStream::connect(&s.addr).await.unwrap();
+        let req = format!(
+            "GET /regtest/app/ws HTTP/1.1\r\nHost: t\r\nConnection: close\r\n{head}\r\n\r\n"
+        );
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut reply = String::new();
+        let _ = stream.read_to_string(&mut reply).await;
+        assert!(reply.starts_with("HTTP/1.1 400"), "{head}: {reply}");
+    }
 }
