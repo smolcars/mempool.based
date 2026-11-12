@@ -1,0 +1,301 @@
+[
+ {
+  "protocol": "1.6",
+  "method": "server.version",
+  "params": [
+   "mempool.based",
+   [
+    "1.4",
+    "1.6"
+   ]
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": [
+    "rbitcoin-electrs 0.9.1 electrumx",
+    "1.6"
+   ]
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "server.features",
+  "params": [],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "asof": true,
+    "asof_protocol": "1.4.2-asof",
+    "chain_tip": true,
+    "genesis_hash": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+    "hash_function": "sha256",
+    "hosts": {},
+    "protocol_max": "1.6",
+    "protocol_min": "1.4",
+    "pruning": null,
+    "server_version": "rbitcoin-electrs 0.9.1 electrumx",
+    "silent_payments": [
+     0
+    ],
+    "tweaks": true
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.headers.subscribe",
+  "params": [],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "height": 110,
+    "hex": "04000000ee1d195cedf753d7a07c63d89a41ffd2a1f8c242b84340d0763a0da2d27eb0298a723b8e3aa400a85c794bb9bccd8b904e0b7fb3dea2f98f03e57fe6a905d68fd0ba5669ffff7f2001000000"
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.block.header",
+  "params": [
+   106
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": "040000000a5d4ef6361e0b5ef4defea12685811b721feba30a6610e7ab19c725ae18c267869b0710a48a7b6d004c2399e64fcc7fcd9e748c4a9bd7fd433084d420e1ad5370b15669ffff7f2004000000"
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.block.headers",
+  "params": [
+   105,
+   2
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "count": 2,
+    "headers": [
+     "040000003db2ce22af4b09dc18043c840cf7717f27d3340aafc2d9d798f68f3b49d9f53b85a5fb3f4daf8828b830b5bd16a5ba8c1c5443cfed67fefd6ee09b49cd6b585f18af5669ffff7f2001000000",
+     "040000000a5d4ef6361e0b5ef4defea12685811b721feba30a6610e7ab19c725ae18c267869b0710a48a7b6d004c2399e64fcc7fcd9e748c4a9bd7fd433084d420e1ad5370b15669ffff7f2004000000"
+    ],
+    "max": 2016
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "mempool.get_info",
+  "params": [],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "incrementalrelayfee": 1e-06,
+    "mempoolminfee": 1e-06,
+    "minrelaytxfee": 1e-06,
+    "unbroadcastcount": 4
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "mempool.get_fee_histogram",
+  "params": [],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": [
+    [
+     12505,
+     266
+    ],
+    [
+     5000,
+     405
+    ],
+    [
+     2000,
+     532
+    ]
+   ]
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.estimatefee",
+  "params": [
+   1
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": -1.0
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.outpoint.get_status",
+  "params": [
+   "44c64894ca2125fb361f286005f8e27d1c1846bfe00c692925ab4d6844721bbd",
+   1
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "height": 110,
+    "spent": true,
+    "txid": "44c64894ca2125fb361f286005f8e27d1c1846bfe00c692925ab4d6844721bbd",
+    "vout": 1
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.outpoint.get_status",
+  "params": [
+   "7621473f23691b3acc681cada96b25a64e64ff298d8f95fd4818855ea886abbd",
+   0
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "height": 0,
+    "spending_txid": "ad853f8771d8e8f764d362723b23fe758654432f52da63baa993ffc66af93f51",
+    "spent": true,
+    "txid": "7621473f23691b3acc681cada96b25a64e64ff298d8f95fd4818855ea886abbd",
+    "vout": 0
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.outpoint.get_status",
+  "params": [
+   "f8580c086f549b53145643e6b846d617aef17305ec2af34125e41faa74bfd787",
+   0
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "spent": false,
+    "txid": "f8580c086f549b53145643e6b846d617aef17305ec2af34125e41faa74bfd787",
+    "vout": 0
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.scripthash.get_history",
+  "params": [
+   "115c1033ba1ddaff4c1524a1548e76ead601c8b5450ff661118f6a598a4ba10c"
+  ],
+  "reply": {
+   "chain_tip": "3fa932c75119e4a4f4c4f5f43afe8fec03c5f3bc9b84fbadd1e96dd34bc6654d",
+   "chain_tip_height": 110,
+   "jsonrpc": "2.0",
+   "result": [
+    {
+     "height": 106,
+     "tx_hash": "f8580c086f549b53145643e6b846d617aef17305ec2af34125e41faa74bfd787"
+    },
+    {
+     "height": 106,
+     "tx_hash": "44c64894ca2125fb361f286005f8e27d1c1846bfe00c692925ab4d6844721bbd"
+    },
+    {
+     "fee": 3175,
+     "height": -1,
+     "tx_hash": "ad853f8771d8e8f764d362723b23fe758654432f52da63baa993ffc66af93f51"
+    },
+    {
+     "fee": 254,
+     "height": 0,
+     "tx_hash": "0def111d15485da613e9dc24a587a9657d3726772dcc68e0c55c2daa67b1dca9"
+    }
+   ]
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.scripthash.get_balance",
+  "params": [
+   "115c1033ba1ddaff4c1524a1548e76ead601c8b5450ff661118f6a598a4ba10c"
+  ],
+  "reply": {
+   "chain_tip": "3fa932c75119e4a4f4c4f5f43afe8fec03c5f3bc9b84fbadd1e96dd34bc6654d",
+   "chain_tip_height": 110,
+   "jsonrpc": "2.0",
+   "result": {
+    "confirmed": 9100000000,
+    "unconfirmed": 149000000
+   }
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.scripthash.subscribe",
+  "params": [
+   "115c1033ba1ddaff4c1524a1548e76ead601c8b5450ff661118f6a598a4ba10c"
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": "a747b57b6c71fdb53cbae836286867d90f01dcf0da0da90644f1debee91da5a5"
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.scripthash.subscribe",
+  "params": [
+   "73e29ce3348ddc401456a41dfa29dbafc45f367cc438944bec5e45c57c0f215c"
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": null
+  }
+ },
+ {
+  "protocol": "1.6",
+  "method": "blockchain.outpoint.subscribe",
+  "params": [
+   "f8580c086f549b53145643e6b846d617aef17305ec2af34125e41faa74bfd787",
+   0
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "spent": false,
+    "txid": "f8580c086f549b53145643e6b846d617aef17305ec2af34125e41faa74bfd787",
+    "vout": 0
+   }
+  }
+ },
+ {
+  "protocol": "1.4",
+  "method": "server.version",
+  "params": [
+   "mempool.based",
+   "1.4"
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": [
+    "rbitcoin-electrs 0.9.1 electrumx",
+    "1.4"
+   ]
+  }
+ },
+ {
+  "protocol": "1.4",
+  "method": "blockchain.block.headers",
+  "params": [
+   105,
+   2
+  ],
+  "reply": {
+   "jsonrpc": "2.0",
+   "result": {
+    "count": 2,
+    "hex": "040000003db2ce22af4b09dc18043c840cf7717f27d3340aafc2d9d798f68f3b49d9f53b85a5fb3f4daf8828b830b5bd16a5ba8c1c5443cfed67fefd6ee09b49cd6b585f18af5669ffff7f2001000000040000000a5d4ef6361e0b5ef4defea12685811b721feba30a6610e7ab19c725ae18c267869b0710a48a7b6d004c2399e64fcc7fcd9e748c4a9bd7fd433084d420e1ad5370b15669ffff7f2004000000",
+    "max": 2016
+   }
+  }
+ }
+]
