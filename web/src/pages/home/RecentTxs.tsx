@@ -24,6 +24,7 @@ const COLUMNS: Column<RecentTx | null>[] = [
   },
   {
     header: "Fee rate, sat/vB",
+    short: "sat/vB",
     cell: (t) =>
       t ? (
         <FeeRate rate={feeRate(t.fee, t.vsize) ?? Number.NaN} unit={false} />
