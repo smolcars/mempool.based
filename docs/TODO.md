@@ -26,7 +26,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | done ([#11](https://github.com/smolcars/mempool.based/pull/11)) |
 | W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | doing |
 | W3 | Block page: header details, paged transaction list | W1, S2 | done ([#23](https://github.com/smolcars/mempool.based/pull/23)) |
-| W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | doing |
+| W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | done ([#24](https://github.com/smolcars/mempool.based/pull/24)) |
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | doing |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2, LX1 | todo |
 | FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | todo |
@@ -50,7 +50,7 @@ Refined when M1 lands.
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | todo |
 | MP6 | RBF history and CPFP or cluster view | MP1 | todo |
-| BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | todo |
+| BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | doing |
 | W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | todo |
 | W8 | Mempool page: live flow, fee bands | W7 | todo |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | todo |
