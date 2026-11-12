@@ -1,0 +1,41 @@
+# rbitcoin v0.9.1 on regtest. Run it through regtest.py, which picks a project
+# name per checkout so parallel instances never collide.
+name: ${REGTEST_PROJECT:?run dev/regtest/regtest.py, or set REGTEST_PROJECT}
+
+services:
+  node:
+    # Multi-arch (linux/amd64, linux/arm64) release image, pinned by digest.
+    image: ${REGTEST_IMAGE:-ghcr.io/rbitcoin-org/rbitcoin:0.9.1@sha256:07ba41581f0c8f4c98a4b35c1106c61fe1b7c6c2c36cbd8321e7919efaae5207}
+    command:
+      - --network=regtest
+      - --no-seeds
+      - --no-listen
+      - --sh-index
+      # Scenario blocks carry fixed past timestamps; keep relay on regardless of tip age.
+      - --max-tip-age=1000000000
+      - --rpc-listen=0.0.0.0:18443
+      - --rpc-cookie-file=/run/rpc.cookie
+      # Compose mounts configs read-only at mode 0444, wider than the default owner-only.
+      - --rpc-cookie-perms=all
+      - --electrum-listen=0.0.0.0:50001
+      - --esplora-listen=0.0.0.0:3000
+    configs:
+      - source: cookie
+        target: /run/rpc.cookie
+    # Host port 0: Docker picks a free port. `regtest.py env` prints them.
+    ports:
+      - 127.0.0.1::18443
+      - 127.0.0.1::50001
+      - 127.0.0.1::3000
+    volumes:
+      - data:/data
+    # The node flushes its store on SIGTERM.
+    stop_grace_period: 60s
+
+configs:
+  cookie:
+    # Throwaway regtest credentials, HTTP Basic user:password, no newline.
+    content: regtest:regtest
+
+volumes:
+  data:
