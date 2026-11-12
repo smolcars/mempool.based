@@ -105,6 +105,52 @@ During development, `bun run dev` proxies `/api`, `/app` and `/healthz` to the R
 
 `GET /app/config` answers `{"networks": ["mainnet", "signet"], "version": "0.1.0"}`: the enabled networks in server order, and the server version. It is server-wide, so it is served at the root only, whichever networks are enabled (`crates/server/src/app_config.rs`). The shell reads it once for the network switch and the footer. If the root's network (mainnet) is disabled, the shell moves to the same page on the first enabled network.
 
+#### Block summaries
+
+What the public API cannot give cheaply: a mined block's fee facts and every transaction's fee and size. Per network, under its `/app` (`crates/server/src/summary.rs`).
+
+| Route | Answer |
+|---|---|
+| `GET /app/block/:hash/summary` | The block's facts, JSON (below) |
+| `GET /app/block/:hash/txs` | Every transaction as a fixed-width binary record (below) |
+| `GET /app/blocks/summary?hashes=<hash>,<hash>,…` | 1 to 10 blocks' facts, a JSON array in the order asked. Repeats are allowed |
+
+```json
+{
+  "id": "00000000000000000000e13ad5e424f6ba7208b0c1a9a687e9ccc4d62b3b094c", "height": 975511,
+  "tx_count": 4198, "fees": 1475029, "vsize": 999391, "weight": 3991349,
+  "fee_rate": {"min": 0.10071942446043165, "p10": 0.12, "p25": 0.12698412698412698,
+    "median": 1.0850888512305468, "p75": 2.007012551450785, "p90": 3.150749063670412, "max": 62.10091743119266},
+  "fee_bands": [367013, 9447, 153, 5069, 233233, 20986, 238267, 102460, 17310, 5453]
+}
+```
+
+- `tx_count` counts every transaction. Everything else leaves the coinbase out, as `getblockstats` does: `fees` in sats, `vsize` and `weight` summed over the paying transactions.
+- `fee_rate` is in sat/vB, unrounded, `null` for a block holding only its coinbase. Percentiles are weighted by virtual size: `p25` is the rate of the transaction where the cheapest quarter of the block's vbytes ends. Print them with `formatFeeRate`.
+- `fee_bands` is the virtual size paying in each of the ten design bands, cheapest first: the strata. They sum to `vsize`. Each transaction is banded on its rate as printed, as `feeBand` does, so a stratum's color agrees with the numbers beside it. How full the block is comes from the block's own `weight` (Esplora) over 4,000,000.
+
+`/txs` is `application/octet-stream`, little-endian: an 8-byte header, then one 20-byte record per transaction in block order, the coinbase first.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | `u32` | Format version, `1` |
+| 4 | `u32` | Record count, `tx_count` |
+| 8 + 20·i | `u32` | Virtual size of transaction `i` |
+| 12 + 20·i | `u64` | Fee in sats; 0 for the coinbase |
+| 20 + 20·i | `u64` | Total output value in sats |
+
+Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUint64(o, true))` is exact. A record has no txid: when a square is hovered or clicked, ask `/api/block/:hash/txid/:index`, which is cached for good. Mainnet block 975 511, 4,198 transactions, is 83,968 bytes: 16.6 KB gzipped and 12.7 KB with brotli, if the proxy in front compresses (the server itself does not). The facts are about 400 bytes. Check the version before reading; a different one means a newer server and a page that needs a reload.
+
+**Caching.** A summary is fixed by its hash, so success is `Cache-Control: public, max-age=31536000, immutable`, and `api.ts`-style in-memory caching is right. Errors are `no-store`.
+
+**Cost and limits.** An uncached block costs the node a heavy call (about 0.7 s and 10 MB on mainnet), so:
+
+- Concurrent requests for one block share one computation, and the facts and the records come from the same one.
+- The newest ten blocks are computed as they arrive, so the home page's tiles are always cached. A new block's facts are also pushed on the WebSocket as a `summary` message; use that rather than fetching.
+- Each network computes one block at a time, and holds at most six started by clients. Past that the answer is `503` with `Retry-After: 1`. Retry: the work already admitted goes on, so a retry finds more of it cached. A cold batch of ten needs a retry or two.
+- Each client may start ten computations at once, then one every 2 s; past that `429` with `Retry-After: 2`. Cached blocks never count. A page walking back through history should fetch tiles lazily, as they scroll into view.
+- `404` is an unknown block, `400` a malformed hash or query, `502` and `504` the node failing. All are worth a "Try again".
+
 ### Live data
 
 `lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms, and ignores binary frames and message types it does not know. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.

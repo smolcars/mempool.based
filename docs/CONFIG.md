@@ -64,6 +64,14 @@ Fixed limits: a request head (request line and headers) may be at most 16 KiB. A
 
 Clients are counted by IPv4 address or by IPv6 /64, since one host routinely holds a whole /64. Many users behind one NAT share a single client's limits; raise `CLIENT_RATE_PER_SEC`, `CLIENT_BURST` and `CLIENT_MAX_CONCURRENT_REQUESTS` if that is your audience.
 
+### Block summaries
+
+The block summary routes ([`FRONTEND.md`](FRONTEND.md#block-summaries)) keep computed summaries in memory. Their other limits are fixed: one computation at a time per network, six started by clients running or waiting, and ten per client at once then one every 2 seconds.
+
+| Variable | Default | Protects against |
+|---|---|---|
+| `BLOCK_SUMMARY_CACHE_MB` | `32` | Memory held by cached summaries, per network: the least recently used go first once it is reached. A summary takes 20 bytes per transaction plus about 0.5 KB: 40 to 140 KB for today's mainnet blocks, so the default holds 230 to 800 of them. Measured with the cache full: 55 MB resident for the whole process. Each summary not in the cache costs the node a `getblock` of up to 10 MB. At most 1,048,576 |
+
 ### WebSocket
 
 Bounds on `/app/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its close codes are in [`WS.md`](WS.md)). Each must be a positive integer. An upgraded socket gives up its slot under `MAX_CONNECTIONS` and `CLIENT_MAX_CONNECTIONS` and counts under these instead, so keep `MAX_CONNECTIONS` plus `WS_MAX_SOCKETS` below the process's open-file limit. A socket that stops reading is dropped after `REQUEST_TIMEOUT_SECS` without write progress, as for HTTP.

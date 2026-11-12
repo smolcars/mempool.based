@@ -312,7 +312,7 @@ async fn precompressed_variants_and_cache_headers() {
     // A missing asset must not be cached forever, nor be answered with the shell.
     let missing = get_path(&addr, "/assets/missing.js").await;
     assert_json_error(&missing, 404, "not found");
-    assert_eq!(missing.header("cache-control"), None);
+    assert_eq!(missing.header("cache-control"), Some("no-store"));
 }
 
 #[tokio::test]

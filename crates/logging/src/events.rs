@@ -50,6 +50,7 @@ pub struct ServerStarting<'a> {
     pub ws_max_subscriptions: usize,
     pub ws_send_queue: usize,
     pub ws_idle_timeout_secs: u64,
+    pub block_summary_cache_mb: usize,
 }
 event!(ServerStarting<'a>, "server_starting", Info);
 
@@ -257,7 +258,7 @@ event!(WsClientsDropped, "ws_clients_dropped", Warn);
 pub struct WsFanout {
     pub network: &'static str,
     pub topic: &'static str,
-    /// The message's `type`: `block`, `reorg`, `resync`.
+    /// The message's `type`: `block`, `summary`, `reorg`, `resync`.
     pub kind: &'static str,
     pub subscribers: usize,
     /// Sockets open on every network.
@@ -283,6 +284,57 @@ pub struct BlockUnavailable {
     pub failures: u32,
 }
 event!(BlockUnavailable, "block_unavailable", Warn);
+
+// Block summaries.
+
+/// One block's summary was computed from the node. Debug: up to a few a second under load.
+#[derive(Debug, Serialize)]
+pub struct BlockSummaryComputed {
+    pub network: &'static str,
+    pub height: u32,
+    /// Transactions in the block, the coinbase included.
+    pub txs: usize,
+    /// The block's serialized size.
+    pub block_bytes: u64,
+    /// Size of the per-transaction records kept in the cache.
+    pub bytes: usize,
+    /// The `getblock` call alone.
+    pub node_ms: f64,
+    /// From the start, the wait for a computation slot included.
+    pub duration_ms: f64,
+    /// `request` (a client asked) or `new_block` (computed ahead of demand).
+    pub cause: &'static str,
+}
+event!(BlockSummaryComputed, "block_summary_computed", Debug);
+
+/// Computing summaries failed at the node. Written at the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct BlockSummaryFailed {
+    pub network: &'static str,
+    /// `busy`, `timeout`, `unavailable`, `response_too_big` or `decode`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(BlockSummaryFailed, "block_summary_failed", Warn);
+
+/// A summary was computed again after failures.
+#[derive(Debug, Serialize)]
+pub struct BlockSummariesRecovered {
+    pub network: &'static str,
+    pub failures: u32,
+}
+event!(BlockSummariesRecovered, "block_summaries_recovered", Info);
+
+/// Requests for uncached summaries were refused. Written when the count for that reason on that
+/// network reaches 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct BlockSummariesRefused {
+    pub network: &'static str,
+    /// `summary_busy` (the network's queue is full) or `route_rate` (one client's limit).
+    pub reason: &'static str,
+    pub total: u64,
+}
+event!(BlockSummariesRefused, "block_summaries_refused", Warn);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -333,6 +385,7 @@ mod tests {
                 ws_max_subscriptions: 1,
                 ws_send_queue: 1,
                 ws_idle_timeout_secs: 1,
+                block_summary_cache_mb: 1,
             }),
             both(&NetworkEnabled {
                 network: n,
@@ -422,6 +475,30 @@ mod tests {
                 height: 9,
                 hash: "00".repeat(32),
                 failures: 1,
+            }),
+            both(&BlockSummaryComputed {
+                network: n,
+                height: 9,
+                txs: 4200,
+                block_bytes: 1_600_000,
+                bytes: 84_008,
+                node_ms: 640.5,
+                duration_ms: 650.1,
+                cause: "request",
+            }),
+            both(&BlockSummaryFailed {
+                network: n,
+                error: "timeout",
+                failures: 2,
+            }),
+            both(&BlockSummariesRecovered {
+                network: n,
+                failures: 3,
+            }),
+            both(&BlockSummariesRefused {
+                network: n,
+                reason: "summary_busy",
+                total: 8,
             }),
         ]
     }

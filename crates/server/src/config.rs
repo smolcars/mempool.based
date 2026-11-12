@@ -108,6 +108,8 @@ pub struct Limits {
     pub max_tracked_clients: usize,
     /// Header a trusted reverse proxy sets to the client address. `None`: use the socket peer.
     pub trusted_proxy_header: Option<HeaderName>,
+    /// Memory budget of each network's block summary cache (`BLOCK_SUMMARY_CACHE_MB`).
+    pub summary_cache_bytes: usize,
 }
 
 impl Default for Limits {
@@ -123,6 +125,7 @@ impl Default for Limits {
             client_burst: 60,
             max_tracked_clients: 65_536,
             trusted_proxy_header: None,
+            summary_cache_bytes: 32 << 20,
         }
     }
 }
@@ -234,6 +237,14 @@ impl Config {
             client_burst: positive(&var, "CLIENT_BURST", d.client_burst)?,
             max_tracked_clients: positive(&var, "MAX_TRACKED_CLIENTS", d.max_tracked_clients)?,
             trusted_proxy_header,
+            summary_cache_bytes: positive(
+                &var,
+                "BLOCK_SUMMARY_CACHE_MB",
+                d.summary_cache_bytes >> 20,
+            )?
+            .checked_mul(1 << 20)
+            .filter(|b| *b <= 1 << 40)
+            .ok_or("BLOCK_SUMMARY_CACHE_MB must be at most 1048576")?,
         };
         // Semaphore permits are u32 and tokio caps them lower still; keep well inside both.
         if limits.max_connections > 1 << 20 || limits.max_requests > 1 << 20 {
@@ -354,6 +365,9 @@ fn network_config(
 
     if !is_host(&host) {
         return Err(format!("{p}_RPC_HOST is not a host name or IP address"));
+    }
+    if user.contains(':') {
+        return Err(format!("{p}_RPC_USER cannot contain ':'"));
     }
     let port = parse_port(&port).ok_or_else(|| format!("{p}_RPC_PORT is not a port number"))?;
     let esplora = parse_esplora(&esplora).ok_or_else(|| {
@@ -594,6 +608,16 @@ mod tests {
         );
         assert!(parse(&[("WS_MAX_SUBSCRIPTIONS", "0")]).is_err());
         assert!(parse(&[("WS_SEND_QUEUE", "99999999")]).is_err());
+        assert_eq!(parse(&[]).unwrap().limits.summary_cache_bytes, 32 << 20);
+        let c = parse(&[("BLOCK_SUMMARY_CACHE_MB", "64")]).unwrap();
+        assert_eq!(c.limits.summary_cache_bytes, 64 << 20);
+        for bad in ["0", "-1", "2000000", "1.5"] {
+            assert!(parse(&[("BLOCK_SUMMARY_CACHE_MB", bad)]).is_err(), "{bad}");
+        }
+        let mut vars = signet();
+        vars.retain(|(k, _)| *k != "SIGNET_RPC_USER");
+        vars.push(("SIGNET_RPC_USER", "a:b"));
+        assert!(parse(&vars).unwrap_err().contains("SIGNET_RPC_USER"));
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");
     }

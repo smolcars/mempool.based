@@ -11,6 +11,7 @@ pub mod limits;
 pub mod report;
 pub mod request_log;
 mod serve;
+pub mod summary;
 pub mod ws;
 
 use std::future::Future;
@@ -72,6 +73,10 @@ pub struct NetworkContext {
     pub api: esplora::Api,
     /// The node's push channel; feeds [`ws::feed`].
     pub electrum: node::electrum::Client,
+    /// Read-only JSON-RPC, shared by every caller: at most four calls in flight.
+    pub rpc: node::rpc::Rpc,
+    /// State of the block summary routes.
+    pub summaries: summary::Summaries,
     pub hub: ws::Hub,
     pub sockets: Arc<ws::Sockets>,
 }
@@ -86,18 +91,20 @@ impl std::fmt::Debug for NetworkContext {
 
 impl NetworkContext {
     /// Starts the network's Electrum client, so it must run inside a tokio runtime.
-    fn new(
-        config: &NetworkConfig,
-        all: &Config,
-        sockets: &Arc<ws::Sockets>,
-    ) -> Result<Self, node::esplora::Error> {
+    fn new(config: &NetworkConfig, all: &Config, sockets: &Arc<ws::Sockets>) -> Option<Self> {
         let url = match &config.esplora {
             config::EsploraEndpoint::Http(url) => url.clone(),
             config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
         };
-        Ok(Self {
+        let rpc = &config.rpc;
+        Some(Self {
+            rpc: node::rpc::Rpc::new(&rpc.host, rpc.port, &rpc.user, rpc.password.expose()).ok()?,
+            summaries: summary::Summaries::new(
+                all.limits.summary_cache_bytes,
+                all.limits.max_tracked_clients,
+            ),
             config: config.clone(),
-            esplora: Esplora::new(&url)?,
+            esplora: Esplora::new(&url).ok()?,
             api: esplora::Api::new(all.broadcast, all.limits.max_tracked_clients),
             electrum: node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum)),
             hub: ws::Hub::new(config.network, Arc::clone(sockets)),
@@ -109,7 +116,11 @@ impl NetworkContext {
 /// Routes every enabled network serves, written with paths starting `/api` or `/app`. They are
 /// mounted at the root for mainnet and under `/signet`, `/testnet4` and `/regtest` for the others.
 pub fn network_routes() -> Router<Arc<NetworkContext>> {
-    Router::new().route("/app/ws", get(ws::handle))
+    Router::new()
+        .route("/app/ws", get(ws::handle))
+        .route("/app/block/{hash}/summary", get(summary::facts))
+        .route("/app/block/{hash}/txs", get(summary::txs))
+        .route("/app/blocks/summary", get(summary::batch))
 }
 
 /// The whole application, ready to serve.
@@ -137,14 +148,15 @@ impl App {
                 .networks
                 .iter()
                 .find(|n| n.network == network)
-                // Cannot fail: `Config` checked the Esplora URL with the client's own parser.
-                .and_then(|n| NetworkContext::new(n, config, &sockets).ok());
+                // Cannot fail: `Config` checked the endpoints by the clients' own rules.
+                .and_then(|n| NetworkContext::new(n, config, &sockets));
             let enabled = context.is_some();
             let scope = match context {
                 Some(ctx) => {
                     let ctx = Arc::new(ctx);
                     let events = ctx.electrum.events();
                     tokio::spawn(ws::feed(Arc::clone(&ctx), events));
+                    tokio::spawn(summary::worker(Arc::clone(&ctx)));
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()
@@ -303,11 +315,16 @@ async fn cors(req: Request, next: Next) -> Response {
 }
 
 /// Last step for every response: errors through the error model, then the security headers.
+/// An error is `no-store` unless its route said otherwise: the same URL can succeed a moment later.
 async fn finish(res: Response) -> Response {
     let mut res = error::sanitize(res);
+    let failed = res.status().is_client_error() || res.status().is_server_error();
     let headers = res.headers_mut();
     for (name, value) in SECURITY_HEADERS {
         headers.insert(name, HeaderValue::from_static(value));
+    }
+    if failed && !headers.contains_key(CACHE_CONTROL) {
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     res
 }
