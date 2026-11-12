@@ -37,9 +37,11 @@ use logging::events::{
     BlockSummariesRecovered, BlockSummariesRefused, BlockSummaryComputed, BlockSummaryFailed,
     BlockTxsFellBack, BlockTxsSource,
 };
+use node::electrum::Event as ElectrumEvent;
 use node::rpc::Error as RpcError;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
 use crate::esplora::{ApiOutcome, Source};
@@ -435,24 +437,25 @@ pub fn lister(network: Network) -> Lister {
     })
 }
 
-/// Asks the node which source lists its blocks each time the Electrum connection becomes ready:
-/// at startup and after every reconnect, since the node may have been upgraded meanwhile.
+/// Asks the node which source lists its blocks when the Electrum connection is first ready, then
+/// after every reconnect, since the node may have been upgraded meanwhile. A reconnect is the
+/// client's `Resynced` event, which unlike the health watch is never merged with the next one.
 pub async fn detect_listing(ctx: Arc<NetworkContext>) {
-    let mut health = ctx.electrum.health();
-    health.mark_changed();
-    let mut ready = false;
-    while health.changed().await.is_ok() {
-        let now = health.borrow_and_update().ready;
-        if now && !ready {
-            ctx.lister.detect(&ctx.esplora).await;
-            // The watch keeps only the latest value: a reconnect during the probe would read as
-            // still ready, so any change meanwhile counts as one and is probed again.
-            if health.has_changed().unwrap_or(false) {
-                ready = false;
-                continue;
+    // Subscribed before the first probe, so a reconnect during it is still heard.
+    let mut events = ctx.electrum.events();
+    if ctx.electrum.health().wait_for(|h| h.ready).await.is_err() {
+        return;
+    }
+    ctx.lister.detect(&ctx.esplora).await;
+    loop {
+        match events.recv().await {
+            // A lagged receiver may have missed a reconnect.
+            Ok(ElectrumEvent::Resynced) | Err(RecvError::Lagged(_)) => {
+                ctx.lister.detect(&ctx.esplora).await;
             }
+            Ok(_) => {}
+            Err(RecvError::Closed) => return,
         }
-        ready = now;
     }
 }
 
