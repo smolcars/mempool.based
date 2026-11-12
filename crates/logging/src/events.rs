@@ -86,6 +86,8 @@ pub struct NetworkEnabled<'a> {
     pub electrum_addr: &'a str,
     /// Whether the mempool tracker and projected blocks run (`{NET}_MEMPOOL_ENABLED`).
     pub mempool: bool,
+    /// Whether the Lightning gossip peer runs (`{NET}_LIGHTNING_ENABLED`).
+    pub lightning: bool,
 }
 event!(NetworkEnabled<'a>, "network_enabled", Info);
 
@@ -909,6 +911,299 @@ pub struct ReplacementsStoreFailed {
     pub failures: u64,
 }
 event!(ReplacementsStoreFailed, "replacements_store_failed", Warn);
+// Lightning (docs/LIGHTNING.md). No event carries gossip content (an alias, an address a node
+// announced): peers are named as configured, channels by their short channel id. LDK's own log
+// lines may quote what a peer sent; they stay in one escaped, bounded field.
+
+/// The gossip peer started for a network: its settings and what it loaded from its graph file.
+#[derive(Debug, Serialize)]
+pub struct LightningStarted<'a> {
+    pub network: &'static str,
+    /// Peers configured, and connections kept open at once.
+    pub peers: usize,
+    pub max_peers: usize,
+    pub max_channels: usize,
+    /// `fresh` (no file), `loaded` or `unreadable` (replaced at the next save).
+    pub graph: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_channels: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_nodes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_bytes: Option<u64>,
+    /// Time since the graph was last caught up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_age_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_ms: Option<f64>,
+    /// Why an unreadable file was unreadable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'a str>,
+}
+event!(LightningStarted<'a>, "lightning_started", Info);
+
+/// The gossip peer could not start (`stage` `start`: no store, an unusable data directory or
+/// node key) or stopped on its own (`run`). The rest of the server keeps running.
+#[derive(Debug, Serialize)]
+pub struct LightningFailed<'a> {
+    pub network: &'static str,
+    pub stage: &'static str,
+    pub error: &'a str,
+}
+event!(LightningFailed<'a>, "lightning_failed", Error);
+
+/// The gossip peer stopped at shutdown, having written its graph (`graph_bytes`) or not (`error`).
+#[derive(Debug, Serialize)]
+pub struct LightningStopped<'a> {
+    pub network: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'a str>,
+    pub duration_ms: f64,
+}
+event!(LightningStopped<'a>, "lightning_stopped", Info);
+
+/// A Lightning peer, as configured (`<pubkey>@<ip>:<port>`), completed the handshake.
+#[derive(Debug, Serialize)]
+pub struct LightningPeerConnected {
+    pub network: &'static str,
+    pub peer: String,
+}
+event!(LightningPeerConnected, "lightning_peer_connected", Info);
+
+/// A connected Lightning peer went away; it is dialled again after a backoff.
+#[derive(Debug, Serialize)]
+pub struct LightningPeerLost {
+    pub network: &'static str,
+    pub peer: String,
+    pub connected_secs: u64,
+}
+event!(LightningPeerLost, "lightning_peer_lost", Info);
+
+/// Dialling a Lightning peer failed (TCP, timeout or handshake): at the 1st, 2nd, 4th, 8th…
+/// failure in a row.
+#[derive(Debug, Serialize)]
+pub struct LightningPeerUnreachable {
+    pub network: &'static str,
+    pub peer: String,
+    pub failures: u32,
+}
+event!(LightningPeerUnreachable, "lightning_peer_unreachable", Warn);
+
+/// The graph is complete enough to show: from peers, or from a recent file checked again.
+#[derive(Debug, Serialize)]
+pub struct LightningSynced {
+    pub network: &'static str,
+    pub after_ms: f64,
+    pub nodes: usize,
+    pub channels: usize,
+    pub from_disk: bool,
+}
+event!(LightningSynced, "lightning_synced", Info);
+
+/// Once a minute while the peer runs: the graph, validation, the close-watcher, the node load
+/// both cause, and what was stored. Counts are since start unless named otherwise.
+#[derive(Debug, Serialize)]
+pub struct LightningSummary {
+    pub network: &'static str,
+    pub synced: bool,
+    pub peers: usize,
+    pub nodes: usize,
+    pub channels: usize,
+    /// Validation: channels waiting to be checked, waiting for depth, and refused.
+    pub unchecked: usize,
+    pub pending: usize,
+    pub early: usize,
+    pub rejected: u64,
+    /// Funding-output requests to the node and outputs asked for, and failures in a row.
+    pub lookup_requests: u64,
+    pub lookup_outputs: u64,
+    pub lookup_failures: u32,
+    /// The close-watcher: newest block read, outputs watched, channels waiting for the catch-up,
+    /// blocks read, requests, failures in a row, and closes by kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_height: Option<u32>,
+    pub watched: usize,
+    pub catch_up: usize,
+    pub blocks_read: u64,
+    pub close_requests: u64,
+    pub close_failures: u32,
+    pub cooperative: u64,
+    pub force: u64,
+    pub penalty: u64,
+    pub other: u64,
+    pub reorgs: u64,
+    /// Gossip received per second over the last ten seconds, and in all.
+    pub messages_per_sec: f64,
+    pub gossip_bytes: u64,
+    /// History records stored and the last one's sequence number.
+    pub history_records: u64,
+    pub history_seq: u64,
+}
+event!(LightningSummary, "lightning_summary", Info);
+
+/// The graph reached its ceiling (`{NET}_LIGHTNING_MAX_CHANNELS`); new channels are refused.
+#[derive(Debug, Serialize)]
+pub struct LightningCeilingReached {
+    pub network: &'static str,
+    pub channels: usize,
+}
+event!(LightningCeilingReached, "lightning_ceiling_reached", Warn);
+
+/// The graph file was written.
+#[derive(Debug, Serialize)]
+pub struct LightningGraphSaved {
+    pub network: &'static str,
+    pub bytes: u64,
+    pub duration_ms: f64,
+}
+event!(LightningGraphSaved, "lightning_graph_saved", Debug);
+
+/// The graph file could not be written; retried at the next period.
+#[derive(Debug, Serialize)]
+pub struct LightningSaveFailed<'a> {
+    pub network: &'static str,
+    pub error: &'a str,
+}
+event!(LightningSaveFailed<'a>, "lightning_save_failed", Warn);
+
+/// Channels without an update for two weeks left the graph, with nodes left without a channel.
+#[derive(Debug, Serialize)]
+pub struct LightningPruned {
+    pub network: &'static str,
+    pub channels: usize,
+    pub nodes: usize,
+}
+event!(LightningPruned, "lightning_pruned", Info);
+
+/// A funding-output request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
+/// failure in a row, with the announcements waiting.
+#[derive(Debug, Serialize)]
+pub struct LightningLookupFailed<'a> {
+    pub network: &'static str,
+    pub error: &'a str,
+    pub failures: u32,
+    pub pending: usize,
+}
+event!(LightningLookupFailed<'a>, "lightning_lookup_failed", Warn);
+
+/// A close-watcher request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
+/// failure in a row.
+#[derive(Debug, Serialize)]
+pub struct LightningWatchFailed<'a> {
+    pub network: &'static str,
+    pub error: &'a str,
+    pub failures: u32,
+}
+event!(LightningWatchFailed<'a>, "lightning_watch_failed", Warn);
+
+/// Blocks the close-watcher had read left the best chain; what they recorded was undone.
+#[derive(Debug, Serialize)]
+pub struct LightningReorg {
+    pub network: &'static str,
+    pub fork_height: u32,
+    pub disconnected: u32,
+}
+event!(LightningReorg, "lightning_reorg", Warn);
+
+/// The close-watcher did not read blocks `from` (exclusive) to `to` and checks every watched
+/// output instead.
+#[derive(Debug, Serialize)]
+pub struct LightningWatchReset {
+    pub network: &'static str,
+    pub from: u32,
+    pub to: u32,
+    pub rechecked: usize,
+}
+event!(LightningWatchReset, "lightning_watch_reset", Warn);
+
+/// A channel's funding output was spent: one line per close, with how.
+#[derive(Debug, Serialize)]
+pub struct LightningChannelClosed {
+    pub network: &'static str,
+    /// `<height>x<index>x<output>`.
+    pub channel: String,
+    /// `cooperative`, `force`, `penalty` or `other`.
+    pub kind: &'static str,
+    pub height: u32,
+    /// Sats; absent for a penalty, which names only the sweep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee: Option<u64>,
+}
+event!(LightningChannelClosed, "lightning_channel_closed", Info);
+
+/// The history store fell further behind than the peer keeps: `missed` records were never seen.
+/// The open channels were stored again from the peer's current set; closes among the missed
+/// records are lost.
+#[derive(Debug, Serialize)]
+pub struct LightningHistoryGap {
+    pub network: &'static str,
+    pub missed: u64,
+    pub open: usize,
+}
+event!(LightningHistoryGap, "lightning_history_gap", Warn);
+
+/// Storing history records failed (`busy`: the write queue was full; `store`); retried after a
+/// backoff. At the 1st, 2nd, 4th… failure in a row. `shutdown`: the records still waiting at
+/// shutdown could not be stored in time.
+#[derive(Debug, Serialize)]
+pub struct LightningHistoryFailed {
+    pub network: &'static str,
+    pub error: &'static str,
+    pub failures: u32,
+    pub waiting: usize,
+}
+event!(LightningHistoryFailed, "lightning_history_failed", Warn);
+
+/// History records were stored again after failures.
+#[derive(Debug, Serialize)]
+pub struct LightningHistoryResumed {
+    pub network: &'static str,
+    pub failures: u32,
+}
+event!(LightningHistoryResumed, "lightning_history_resumed", Info);
+
+/// A ten-minute statistics snapshot was stored, with `skipped` slots missed before it.
+#[derive(Debug, Serialize)]
+pub struct LightningStatsStored {
+    pub network: &'static str,
+    pub time: u64,
+    pub channels: u64,
+    pub nodes: u64,
+    pub capacity: u64,
+    pub skipped: u32,
+    pub rolled_minutes: usize,
+    pub rolled_hours: usize,
+    pub duration_ms: f64,
+}
+event!(LightningStatsStored, "lightning_stats_stored", Info);
+
+/// Snapshots were not taken: `syncing`, `late`, `store_busy` or `store_failed`. At the 1st,
+/// 2nd, 4th… in a row.
+#[derive(Debug, Serialize)]
+pub struct LightningStatsSkipped {
+    pub network: &'static str,
+    pub reason: &'static str,
+    pub skipped: u32,
+}
+event!(LightningStatsSkipped, "lightning_stats_skipped", Info);
+
+/// A line from LDK's own logger. `message` is LDK's text, at most 512 bytes, and may quote what
+/// a peer sent.
+#[derive(Debug, Serialize)]
+pub struct LightningLdkRecord<'a> {
+    pub network: &'static str,
+    pub ldk_level: &'static str,
+    pub module: &'a str,
+    pub line: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer: Option<String>,
+    pub message: &'a str,
+}
+event!(LightningLdkRecord<'a>, "lightning_ldk_record", Debug);
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -983,6 +1278,7 @@ mod tests {
                 esplora: "http://node.example:2".into(),
                 electrum_addr: "node.example:3",
                 mempool: true,
+                lightning: false,
             }),
             both(&NoNetworks {}),
             both(&WebDirMissing {
@@ -1370,6 +1666,168 @@ mod tests {
                 kind: "tx",
                 reason: "server_full",
                 total: 1,
+            }),
+            both(&LightningStarted {
+                network: n,
+                peers: 6,
+                max_peers: 3,
+                max_channels: 100_000,
+                graph: "loaded",
+                graph_channels: Some(36_000),
+                graph_nodes: Some(13_000),
+                graph_bytes: Some(32_000_000),
+                graph_age_secs: Some(600),
+                load_ms: Some(70.0),
+                error: None,
+            }),
+            both(&LightningFailed {
+                network: n,
+                stage: "start",
+                error: "Permission denied (os error 13)",
+            }),
+            both(&LightningStopped {
+                network: n,
+                graph_bytes: Some(32_000_000),
+                error: None,
+                duration_ms: 140.0,
+            }),
+            both(&LightningPeerConnected {
+                network: n,
+                peer: "02aa@203.0.113.1:9735".into(),
+            }),
+            both(&LightningPeerLost {
+                network: n,
+                peer: "02aa@203.0.113.1:9735".into(),
+                connected_secs: 30,
+            }),
+            both(&LightningPeerUnreachable {
+                network: n,
+                peer: "02aa@203.0.113.1:9735".into(),
+                failures: 4,
+            }),
+            both(&LightningSynced {
+                network: n,
+                after_ms: 84_000.0,
+                nodes: 13_000,
+                channels: 36_000,
+                from_disk: false,
+            }),
+            both(&LightningSummary {
+                network: n,
+                synced: true,
+                peers: 3,
+                nodes: 13_000,
+                channels: 36_000,
+                unchecked: 0,
+                pending: 0,
+                early: 2,
+                rejected: 1,
+                lookup_requests: 165,
+                lookup_outputs: 36_227,
+                lookup_failures: 0,
+                close_height: Some(975_000),
+                watched: 36_000,
+                catch_up: 0,
+                blocks_read: 13,
+                close_requests: 388,
+                close_failures: 0,
+                cooperative: 26,
+                force: 1,
+                penalty: 0,
+                other: 0,
+                reorgs: 0,
+                messages_per_sec: 4.5,
+                gossip_bytes: 50_000_000,
+                history_records: 36_250,
+                history_seq: 36_250,
+            }),
+            both(&LightningCeilingReached {
+                network: n,
+                channels: 100_000,
+            }),
+            both(&LightningGraphSaved {
+                network: n,
+                bytes: 32_000_000,
+                duration_ms: 140.0,
+            }),
+            both(&LightningSaveFailed {
+                network: n,
+                error: "No space left on device (os error 28)",
+            }),
+            both(&LightningPruned {
+                network: n,
+                channels: 12,
+                nodes: 3,
+            }),
+            both(&LightningLookupFailed {
+                network: n,
+                error: "timeout",
+                failures: 2,
+                pending: 5_000,
+            }),
+            both(&LightningWatchFailed {
+                network: n,
+                error: "timeout",
+                failures: 1,
+            }),
+            both(&LightningReorg {
+                network: n,
+                fork_height: 974_999,
+                disconnected: 1,
+            }),
+            both(&LightningWatchReset {
+                network: n,
+                from: 974_980,
+                to: 975_000,
+                rechecked: 36_000,
+            }),
+            both(&LightningChannelClosed {
+                network: n,
+                channel: "800000x5x0".into(),
+                kind: "cooperative",
+                height: 975_000,
+                capacity: Some(1_000_000),
+                fee: Some(1_410),
+            }),
+            both(&LightningHistoryGap {
+                network: n,
+                missed: 120,
+                open: 36_000,
+            }),
+            both(&LightningHistoryFailed {
+                network: n,
+                error: "busy",
+                failures: 1,
+                waiting: 2_000,
+            }),
+            both(&LightningHistoryResumed {
+                network: n,
+                failures: 3,
+            }),
+            both(&LightningStatsStored {
+                network: n,
+                time: 1_800_000_000,
+                channels: 36_000,
+                nodes: 13_000,
+                capacity: 323_100_000_000,
+                skipped: 1,
+                rolled_minutes: 6,
+                rolled_hours: 0,
+                duration_ms: 3.2,
+            }),
+            both(&LightningStatsSkipped {
+                network: n,
+                reason: "syncing",
+                skipped: 1,
+            }),
+            // LDK's text can quote a peer: it stays inside its field whatever it holds.
+            both(&LightningLdkRecord {
+                network: n,
+                ldk_level: "warn",
+                module: "lightning::ln::peer_handler",
+                line: 1200,
+                peer: Some("02aa".into()),
+                message: "alias=\"x\"\nlevel=error event=\"forged\" \u{2028}\u{1b}[31m",
             }),
         ]
     }

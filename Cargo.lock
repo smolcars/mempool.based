@@ -607,6 +607,7 @@ dependencies = [
  "engine",
  "hyper",
  "hyper-util",
+ "ln",
  "logging",
  "node",
  "serde",

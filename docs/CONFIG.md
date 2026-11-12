@@ -10,7 +10,7 @@ The server reads its configuration from the environment once, at startup. Invali
 |---|---|---|
 | `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the `listening` event shows which |
 | `WEB_DIR` | `web/dist` | The built frontend. Nothing outside it is served |
-| `DATA_DIR` | unset | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Unset, the server runs without a store: everything is asked of the node, and the block table below, the mining routes ([`API.md`](API.md#mining)) and the mempool history ([`API.md`](API.md#mempool-statistics)) do not exist. A file that will not open is a `store_open_failed` event, and that network runs without one |
+| `DATA_DIR` | unset | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Unset, the server runs without a store: everything is asked of the node, and the block table below, the mining routes ([`API.md`](API.md#mining)), the mempool history ([`API.md`](API.md#mempool-statistics)) and Lightning ([below](#lightning)) do not exist. A file that will not open is a `store_open_failed` event, and that network runs without one |
 
 ## Networks
 
@@ -32,6 +32,21 @@ A network is enabled when all six of its variables are set, and disabled when no
 | `{NET}_MEMPOOL_ENABLED` | `true` | `false` stops the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOOL.md#in-the-server)). The mempool topics then answer `off` ([`WS.md`](WS.md#mempool-topics)), fee recommendations are the node's own estimates and `/api/v1/fees/mempool-blocks` is `503` ([`API.md`](API.md#fees)); blocks, the rest of the API and everything else keep working. Optional, unlike the six above |
 
 **Turn it off when you share a node.** With it on, every running server polls its node continuously: on mainnet about 150 MB a minute of RPC answers (one 3.6 MB `getrawmempool` a second), plus an initial sync of about 250 MB and 10 s. Several developers each running a server against the same node multiply that. Leave it on only on the server that serves the mempool, or while you work on it.
+
+### Lightning
+
+The gossip-only Lightning peer ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)), per network. Off unless switched on; it needs `DATA_DIR`, where it keeps its node key and graph file in `<DATA_DIR>/lightning/<network>/` (32 bytes and about 33 MB on mainnet) beside the history it stores in the network's SQLite file. Setting `{NET}_LIGHTNING_ENABLED=true` without `DATA_DIR` stops the server at startup.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `{NET}_LIGHTNING_ENABLED` | `false` | `true` runs the peer for the network: it syncs the public channel graph, checks every channel against the node, records opens and closes and serves `/app/lightning/…` and `/api/v1/lightning/statistics/…` ([`API.md`](API.md#lightning)) |
+| `{NET}_LIGHTNING_PEERS` | mainnet: six public nodes ([`LIGHTNING.md`](LIGHTNING.md#peers)); other networks: none | Who to dial, in order of preference: comma-separated `<pubkey>@<ip>:<port>`, 1 to 64 of them. An IP address, not a host name, so nothing is resolved. Required on every network but mainnet |
+| `{NET}_LIGHTNING_MAX_PEERS` | `3` | Connections kept open at once, 1 to 64. Each brings its own copy of new gossip; three cover the graph |
+| `{NET}_LIGHTNING_MAX_CHANNELS` | `100000` | The graph's ceiling, at most 1,000,000: new channels beyond it are refused. It bounds the peer's memory (about 4 KB a channel at mainnet's mix, 8 KB at worst: 400 to 800 MB at the default) and its graph file. Mainnet had 36,000 in November 2026 |
+
+**It connects out to the public Lightning network.** The peer opens plain TCP connections to the peers listed (port 9735 for the defaults) and keeps them open; it never listens, so no port needs opening. Behind a firewall that blocks outbound traffic, allow TCP to those addresses, or set `{NET}_LIGHTNING_PEERS` to nodes you can reach (your own node, for one). It does not use Tor and cannot reach `.onion` peers: under a Tor-only policy, leave Lightning off, or point it at a clearnet node of your own that relays the graph. It costs about 50 MB of download for the first sync on mainnet, then 1 to 2 kB/s.
+
+**The node's share:** the peer checks each channel's funding output against the node, at most two requests a second whatever gossip sends, and reads each new block once to find closes ([`LIGHTNING.md`](LIGHTNING.md#bounds-and-cost)). A first start on mainnet costs about 125 requests and 18 MB; after that a block costs one raw block (about 1.7 MB) and a request per close.
 
 ## Broadcast
 

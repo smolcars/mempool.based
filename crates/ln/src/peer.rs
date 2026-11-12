@@ -16,7 +16,7 @@ use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::chain::{self, Chain};
-use crate::closes;
+use crate::closes::{self, Opened};
 use crate::gossip::{Gossip, Graph, Replay};
 use crate::log::LogSink;
 use crate::store::{self, GraphLoad};
@@ -214,6 +214,13 @@ impl Peer {
     /// The newest [`Config::history`] records after sequence number `after` (0 for all kept).
     pub fn recent(&self, after: u64) -> Vec<Record> {
         self.shared.gossip.watch.recent(after)
+    }
+
+    /// The channels open now (every watched funding output), as [`Opened`] records, and the
+    /// sequence number they are current at: what [`Peer::history`] adds up to by that record. For
+    /// a consumer that lagged past what [`Peer::recent`] keeps.
+    pub fn open(&self) -> (u64, Vec<Opened>) {
+        self.shared.gossip.watch.open()
     }
 
     /// Disconnects every peer and writes the graph. Returns the bytes written. Dropping the peer
@@ -479,6 +486,11 @@ async fn supervise(
                 s.next_try = now + backoff(config, s.failures);
             }
             _ = tick.tick() => {
+                // The lookup worker and the close-watcher run until stopped; one that ended
+                // panicked, and the peer cannot validate or watch without it.
+                if tasks.iter().any(JoinHandle::is_finished) {
+                    break;
+                }
                 let now = Instant::now();
                 for s in &mut slots {
                     if s.state == State::Dialing && shared.pm.peer_by_node_id(&s.peer.node_id).is_some() {

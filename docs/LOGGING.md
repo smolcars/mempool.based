@@ -59,7 +59,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | Event | Level | Fields | When |
 |---|---|---|---|
 | `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
-| `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`) |
+| `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool`, `lightning` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`), `lightning` whether its Lightning peer does (`{NET}_LIGHTNING_ENABLED`) |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
 | `listening` | info | `addr` | The listener is bound; shows the real port when asked for port 0 |
@@ -202,3 +202,33 @@ The sampler and its table are in [`STORE.md`](STORE.md#mempool_history), the rou
 | `mempool_history_skipped` | info | `network`, `reason`, `skipped` | Minutes left out of the history, at the 1st, 2nd, 4th, 8th… in a row, with the latest `reason`: `syncing` (the engine's first cycle, or the first minute after it started or came back), `stale` (the node is failing), `lagged` (the sampler fell behind the change stream), `late` (it read the minute more than 5 s off, or missed it), `store_busy` (the write queue was full) or `store_failed` |
 | `mempool_history_resumed` | info | `network`, `skipped` | A minute was stored again after `skipped` in a row were not |
 | `mempool_history_failed` | warn | `network`, `error`, `failures` | A history route could not read the table (`timed_out` past the store's read limit, or `store`). At the 1st, 2nd, 4th, 8th… failure in a row |
+
+### Lightning
+
+The peer and what it stores are in [`LIGHTNING.md`](LIGHTNING.md#in-the-server). A healthy mainnet start writes `lightning_started`, three `lightning_peer_connected`, `lightning_synced` after a few minutes, then one `lightning_summary` a minute, one `lightning_stats_stored` every ten minutes and one `lightning_channel_closed` per close (about 200 a day). **No event carries gossip content:** peers are named as configured, channels by their short channel id, and no alias, colour or announced address is ever written. LDK's own lines (`lightning_ldk_record`, debug) may quote what a peer sent; they stay in their `message` field, escaped like every field and cut to 512 bytes.
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `lightning_started` | info | `network`, `peers`, `max_peers`, `max_channels`, `graph`, `graph_channels`, `graph_nodes`, `graph_bytes`, `graph_age_secs`, `load_ms`, `error` | The peer started: its settings and its graph file, `fresh` (none), `loaded` (with its size and age) or `unreadable` (with why; it is replaced at the next save) |
+| `lightning_failed` | error | `network`, `stage`, `error` | The peer did not start (`stage` `start`: the store did not open, or the data directory or node key is unusable), or stopped working (`run`): its server task panicked (`panicked`), or it sent no statistics for two minutes (`stalled`: its supervisor ended). The rest of the server keeps running; `/app/lightning/status` says `failed` |
+| `lightning_stopped` | info | `network`, `graph_bytes`, `error`, `duration_ms` | The peer stopped at shutdown and wrote its graph, or says why it could not |
+| `lightning_peer_connected` | info | `network`, `peer` | A configured peer (`<pubkey>@<ip>:<port>`) completed the handshake |
+| `lightning_peer_lost` | info | `network`, `peer`, `connected_secs` | A connected peer went away; it is dialled again after a backoff |
+| `lightning_peer_unreachable` | warn | `network`, `peer`, `failures` | Dialling a peer failed: at the 1st, 2nd, 4th, 8th… failure in a row |
+| `lightning_synced` | info | `network`, `after_ms`, `nodes`, `channels`, `from_disk` | The graph is complete enough to show ([`LIGHTNING.md`](LIGHTNING.md#sync)) |
+| `lightning_summary` | info | `network`, `synced`, `peers`, `nodes`, `channels`, `unchecked`, `pending`, `early`, `rejected`, `lookup_requests`, `lookup_outputs`, `lookup_failures`, `close_height`, `watched`, `catch_up`, `blocks_read`, `close_requests`, `close_failures`, `cooperative`, `force`, `penalty`, `other`, `reorgs`, `messages_per_sec`, `gossip_bytes`, `history_records`, `history_seq` | Once a minute: the graph, validation, the close-watcher, the node load both cause (requests since start: the difference between two lines is the rate) and the history stored |
+| `lightning_ceiling_reached` | warn | `network`, `channels` | The graph holds `{NET}_LIGHTNING_MAX_CHANNELS`; new channels are refused |
+| `lightning_graph_saved` | debug | `network`, `bytes`, `duration_ms` | The graph file was written (every 10 minutes when it changed) |
+| `lightning_save_failed` | warn | `network`, `error` | The graph file could not be written; retried at the next period |
+| `lightning_pruned` | info | `network`, `channels`, `nodes` | Channels without an update for two weeks left the graph |
+| `lightning_lookup_failed` | warn | `network`, `error`, `failures`, `pending` | A funding-output request to the node failed: at the 1st, 2nd, 4th… failure in a row, with the announcements waiting |
+| `lightning_watch_failed` | warn | `network`, `error`, `failures` | A close-watcher request to the node failed: at the 1st, 2nd, 4th… in a row |
+| `lightning_reorg` | warn | `network`, `fork_height`, `disconnected` | Blocks the close-watcher had read left the best chain; their records were undone |
+| `lightning_watch_reset` | warn | `network`, `from`, `to`, `rechecked` | The close-watcher skipped blocks `from` (exclusive) to `to` (a gap of more than ten, or a reorg past its window) and checks every watched output instead |
+| `lightning_channel_closed` | info | `network`, `channel`, `kind`, `height`, `capacity`, `fee` | A channel's funding output was spent (`cooperative`, `force`, `other`), or a force close turned out to be a breach (`penalty`, at the sweep's height, without capacity or fee) |
+| `lightning_history_gap` | warn | `network`, `missed`, `open` | The history store fell further behind than the peer remembers: `missed` records were never seen. The open channels were stored again from the peer's current set; closes among the missed records are lost ([`STORE.md`](STORE.md#ln_channels)) |
+| `lightning_history_failed` | warn | `network`, `error`, `failures`, `waiting` | Storing history records failed (`busy`: the write queue was full; `store`); retried after 1 s, doubling to 32 s. At the 1st, 2nd, 4th… in a row. `shutdown`: the records still `waiting` at shutdown could not be stored in time and are lost |
+| `lightning_history_resumed` | info | `network`, `failures` | History records were stored again after failures |
+| `lightning_stats_stored` | info | `network`, `time`, `channels`, `nodes`, `capacity`, `skipped`, `rolled_minutes`, `rolled_hours`, `duration_ms` | A ten-minute statistics snapshot was stored, with the slots missed before it and the rows the same write rolled up |
+| `lightning_stats_skipped` | info | `network`, `reason`, `skipped` | Snapshots not taken, at the 1st, 2nd, 4th… in a row: `syncing` (the graph is not synced), `late` (the server woke more than a minute after the slot), `store_busy` or `store_failed` |
+| `lightning_ldk_record` | debug | `network`, `ldk_level`, `module`, `line`, `peer`, `message` | A line from LDK's own logger, at most 20 a second ([`LIGHTNING.md`](LIGHTNING.md#interface)) |

@@ -620,6 +620,9 @@ async fn history_and_sweeps_are_bounded() {
         n.open(scid(h, u32::from(i) + 1, 0), 10 + 2 * i, 11 + 2 * i)
             .await;
     }
+    // A consumer past the stream's room rebuilds from the open set, current at the last record.
+    let (seq, open) = n.g.watch.open();
+    assert_eq!((seq, open.len()), (5, 5));
     let closes = funds
         .iter()
         .enumerate()
@@ -639,6 +642,7 @@ async fn history_and_sweeps_are_bounded() {
         [7, 8, 9, 10]
     );
     assert_eq!(n.g.watch.recent(9).len(), 1);
+    assert_eq!(n.g.watch.open(), (10, Vec::new()));
     // The stream had room for four, so this receiver lagged.
     assert!(matches!(
         rx.try_recv(),

@@ -14,9 +14,9 @@ We do not run LND or Core Lightning (a second daemon with a wallet and channel d
 2. **Sync.** Peers send the full graph, then live updates. LDK verifies every signature and maintains the network graph.
 3. **Validate.** For each announced channel, LDK asks whether the funding output exists, is unspent, is six blocks deep and pays the announced script. We answer from rbitcoin's position routes ([`RBITCOIN.md`](RBITCOIN.md)), which also give the capacity. A channel enters the graph only once it passes ([Validation](#validation)).
 4. **Track opens and closes.** Every new block's inputs are checked against the set of verified channels' funding outputs. A match is a channel close: the channel leaves the graph, and the spending transaction's shape classifies it: cooperative, force or (later) penalty. Opens and closes are kept as a history ([Opens and closes](#opens-and-closes)).
-5. **Store.** *Not built yet.* Nodes, channels, open and close records and periodic network totals go to SQLite. LDK's own serialized graph is kept for fast restarts (built: see [Files](#files)).
+5. **Store.** Every open and close, and the network's totals every ten minutes, go to the network's SQLite file ([In the server](#in-the-server)). Nodes and open channels are served from the live graph, which LDK's own serialized file brings back quickly after a restart ([Files](#files)).
 
-Steps 1 to 4 and the graph file are the `ln` crate (`crates/ln`). It is a library: it does not log and is not wired into the server yet.
+Steps 1 to 4 and the graph file are the `ln` crate (`crates/ln`). It is a library and does not log; the server runs it, stores what it reports and logs its events ([In the server](#in-the-server)).
 
 ## Pieces of LDK used
 
@@ -60,13 +60,13 @@ Default mainnet peers, all `<pubkey>@<ip>:9735`-style clearnet addresses:
 | Bitstamp | Exchange |
 | NiceHash | Exchange |
 
-They were picked from the live graph on 2026-11-12: the best-connected nodes that announce a clearnet address and are run by companies that have operated Lightning nodes for years, with the address in the list matching the node's own announcement. Several nodes picked from memory (Kraken, River, Wallet of Satoshi, Boltz) were unreachable at their old addresses and were dropped. Only the first three are dialled while they stay up. An operator replaces the list through `Config::peers` (the server will read it from a variable when the peer is wired in). On other networks there are no defaults.
+They were picked from the live graph on 2026-11-12: the best-connected nodes that announce a clearnet address and are run by companies that have operated Lightning nodes for years, with the address in the list matching the node's own announcement. Several nodes picked from memory (Kraken, River, Wallet of Satoshi, Boltz) were unreachable at their old addresses and were dropped. Only the first three are dialled while they stay up. An operator replaces the list with `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). On other networks there are no defaults, and the server will not start Lightning there without a list.
 
 **Tor-only nodes are out of reach:** the peer makes plain TCP connections and does not use Tor.
 
 ### Files
 
-Both live in `Config::data_dir`, which the server will put beside each network's SQLite file.
+Both live in `Config::data_dir`, which the server sets to `<DATA_DIR>/lightning/<network>/`, beside the network's SQLite file.
 
 | File | Holds | Size |
 |---|---|---|
@@ -88,6 +88,7 @@ For the tasks that follow, coded against `ln::Peer`:
 | `history()` | A stream of `Record`s: each channel opened, closed, swept as a penalty, or undone by a reorg ([Opens and closes](#history)) |
 | `recent(after)` | The newest `Config::history` (10,000) records after a sequence number |
 | `events()` | `Event`s as data: periodic `Stats` (counts, validation, messages and bytes per second, totals), sync, peer, ceiling, save, prune and failed-lookup events, and LDK's own log records |
+| `open()` | Every channel open now as an `Opened` record, and the sequence number that set is current at: what a consumer that fell past `recent` stores instead |
 | `shutdown()` | Disconnects and writes the graph. Dropping the peer does the same in the background |
 
 **LDK's log records** (`Event::Ldk`) carry the level, module, line, peer and message, cut to 512 bytes; the message is LDK's free text and may quote what a peer sent. Records below `Config::log_level` (`Info`) are not formatted. At most 20 a second are sent; the rest are counted in `Event::LdkSuppressed`. At `Info`, LDK says one line per connection.
@@ -293,6 +294,60 @@ Nothing gossip sends changes what the watcher asks of the node: a channel enters
 
 **Across a day's blocks.** Every spend of a two-of-two in the 144 blocks before 975,536 (229 MB read): 209 commitments (206 with anchors), 1,720 single-input non-commitment spends and 3,070 multi-input ones, no revocation sweep. Commitments are Lightning's alone, so about 200 force closes a day, private channels included; the other two counts include ordinary two-of-two wallets (consolidations of up to 224 such inputs, sequence 0), which is why the watcher matches only announced channels' outputs. No public source gives a daily close count to compare: Glassnode charts only the net daily change in channels, mempool.space and Coinglass only totals.
 
+## In the server
+
+With `{NET}_LIGHTNING_ENABLED=true` ([`CONFIG.md`](CONFIG.md#lightning)) the server runs one peer per network, in `crates/server/src/lightning.rs`.
+
+### What runs
+
+One task per network owns the peer. It is spawned after the routes are built, and nothing else waits on it: the graph file is read inside that task, so a large or corrupt file, an unreachable peer or a slow node never delays startup, readiness, block handling or the mempool engine. The task starts the peer, then runs three loops until shutdown: the history consumer, the event reporter and the statistics sampler. A peer that cannot start (the store did not open, the data directory or node key is unusable) is logged as `lightning_failed` and shows as `failed`. So does one whose server task panics, which tokio confines to that task, and one that went silent: the peer sends its statistics every ten seconds, and its supervisor stops if the lookup worker or the close-watcher ended (they end only by panicking), so two minutes without them mean it can no longer validate or watch (`error` `stalled`). None of this stops anything else, and nothing restarts the peer: fix the cause and restart the server.
+
+At shutdown, after the last request, the server stops each peer (which writes its graph: `lightning_stopped`, 0.1 s on mainnet), then stores every history record it had not stored yet, the ones still on the stream included, so a close the peer found is never lost to the graph file that no longer holds its channel. All of it within 10 s.
+
+**Readiness.** `/readyz` reports each network's `lightning` state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`) but does not count it: the explorer is ready whatever Lightning does ([`DEPLOY.md`](DEPLOY.md#health)). `/app/lightning/status` has the detail ([`API.md`](API.md#lightning)).
+
+### What is stored
+
+| Table | Holds | Written |
+|---|---|---|
+| [`ln_channels`](STORE.md#ln_channels) | Every channel the peer verified and how it closed: kind, block, txid and fee, kept consistent through reorgs by the `…Undone` records | As the [history](#history) arrives, in writes of up to 2,000 records |
+| [`ln_statistics`](STORE.md#ln_statistics) | Channels, nodes (by address kind), capacity and fee policies every ten minutes, rolled into hours and days | At every whole ten minutes while the graph is synced |
+
+Both are written with `try_write`: when the store's queue is full the Lightning side waits and retries instead of taking a slot, so block and mempool history writes never queue behind it. Nodes, aliases and open channels' policies are not stored: they are in the live graph, and come back from the graph file after a restart.
+
+### What is served
+
+The peer's status, the latest statistics and the series over an interval, and the newest opens and closes, under `/app/lightning/…`; and `/api/v1/lightning/statistics/latest` and `/:interval` in the reference's shapes ([`API.md`](API.md#lightning)). Every answer comes from the store or the peer's memory; none asks the node.
+
+### Still missing
+
+- Node, channel, search and ranking routes (LN4b), and the Lightning pages (W11). They can read the live graph through `Lightning::read_graph` (a closure over LDK's `ReadOnlyNetworkGraph`, under the peer's lock) and closed channels from `ln_channels`.
+- Per-node history over time (`/lightning/nodes/:pubkey/statistics`): only network totals are snapshotted.
+- A channel's close is lost when the history store falls past the peer's memory ([`STORE.md`](STORE.md#ln_channels)), and channels the peer stops watching (pruned) keep their row as open.
+
+### Measured in the server
+
+2026-11-12, the release server on an Apple M4, mainnet only, read-only against a synced rbitcoin v0.9.2 on the same private network, mempool engine and backfill off, the default peers, an empty data directory. It ran 16 minutes, was stopped (SIGTERM) and restarted from the files it left, then ran on. Footprint is the process's physical footprint (`footprint`), sampled every 10 s; the same server with Lightning off sat at 90 MB.
+
+| | First start | Restart from the graph file |
+|---|---|---|
+| Startup | The peer started 25 ms after the server listened; three peers connected 2 s later. Nothing else waited: the first block summaries and the difficulty answer went out meanwhile | The 35 MB graph file loaded in 63 ms, inside the peer's task |
+| Graph usable | All 36,193 channels verified after 128 s; `synced` after 238 s (36,219 channels, 13,639 nodes) | 36,219 channels checked again; `synced` after 68 s |
+| Node load | 165 funding-output requests (36,220 outputs) by the sync, none after | 123 requests (36,223 outputs) |
+| History stored | One row per channel as it was verified, in step: 30,930 of 30,930 records after a minute, 36,219 rows (5.5 MB) by the sync | The 36,219 `Opened` records arrived again; the table was identical after them (same row count, capacity and funding-time sums) |
+| Footprint | 270 MB at its peak, so the peer adds about 180 MB | 380 MB while the loaded graph and the new one coexist; over the next 2.5 hours a median of 334 MB and at most 423 MB: plan for 250 to 330 MB more than without Lightning |
+| Shutdown | Graph written (35 MB) in 124 ms, then the server exited | After 2.5 hours: graph written (33 MB) in 1.2 s, nothing left unstored |
+
+**Steady state.** The close-watcher's requests are the tip every 10 s, a page of headers and the raw block per block, and one position request per close: 962 requests and 15 blocks read in 2.5 hours, about 385 an hour, nearly all of them the tip. Validation asked for 28 more outputs (new channels) in that time. When the node's proxy answered `502` for a few seconds, `lightning_watch_failed` was logged three times and the watcher went on by itself. A statistics snapshot took 0.3 to 2.1 ms to store; 16 were stored. The routes answered in 0.03 to 1.1 ms of server time (a list of 100 channels with aliases 1.0 ms).
+
+**Closes.** 30 closes in the 13 blocks from 975,557 to 975,569 (the first 45 minutes of the run had no block at all): 27 cooperative and 3 force, no penalty, no reorg. The table held exactly those 30 closed rows. Four were checked by hand against the node: each spending transaction is the funding output's spender in the block recorded, with the fee and capacity recorded; the cooperative ones have the `closing_signed` shape (one input, sequence `0xffffffff`, locktime 0) and the force close both commitment markers and a 330-sat anchor.
+
+**Against the reference.** `GET /api/v1/lightning/statistics/latest` at 13:50 UTC said 36,219 channels, 13,639 nodes, 3,232.02 BTC, average capacity 8,923,540 sats, median 1,000,000, average fee rate 981 ppm and base fee 1,439 msat, medians 130 ppm and 500 msat. mempool.space's public answer was still dated 2026-08-30 and its series were empty, so there is no same-moment figure: there it read 32,518 channels, 16,225 nodes, 3,753.7 BTC, average 11,543,473 sats, median 2,010,000, 823 ppm and 904 msat, medians 100 ppm and 500 msat. Its newest point in the three-month series, 2026-11-03, read 28,940 channels and 3,194.7 BTC. The differences:
+
+- **Channels and capacity:** we count only channels whose funding output we found unspent, six deep and paying the announced keys, as of now; they count what gossip claims, in their own database. Their own series moved from 32,500 to 28,900 channels between August and November, and the capacity agrees within 1.2 % with their November point.
+- **Nodes and their kinds:** LDK keeps a node only while it has a channel in the graph, and 6,628 of ours sent no announcement we received (so no address: `unannounced`), against their 2,022. Their database keeps nodes and their last announcement much longer. Tor, clearnet and both are counted the same way from the addresses announced.
+- **Fees:** ours leave policies over 1,000,000 ppm or 1,000,000 msat out of the averages (118 and 274 on mainnet; [`STORE.md`](STORE.md#ln_statistics)); we do not know their rule. Our medians count every policy, disabled ones included.
+
 ## Bounds
 
 Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a channel cost an attacker a real funding output, but the graph is bounded anyway, and so is the validation itself.
@@ -318,4 +373,4 @@ Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Validation makes a cha
 
 ## Switch
 
-Lightning is optional. A network runs without it when it is not enabled.
+Lightning is optional and off by default: a network runs it only with `{NET}_LIGHTNING_ENABLED=true` and a `DATA_DIR` ([`CONFIG.md`](CONFIG.md#lightning)).
