@@ -85,7 +85,7 @@ export function bandShares(histogram: readonly (readonly [number, number])[]): F
 
 /** The cheapest fee rate waiting: the last histogram entry's lower bound. */
 export function lowestRate(histogram: readonly (readonly [number, number])[]): number | undefined {
-  return histogram.length > 0 ? histogram[histogram.length - 1]?.[0] : undefined;
+  return histogram.length > 0 ? histogram.at(-1)?.[0] : undefined;
 }
 
 /** The four priorities on the fee ladder, by confirmation target in blocks. */
@@ -136,6 +136,7 @@ export function stackLabels(
 ): { row: number; flip: boolean }[] {
   const placed: { x: number; from: number; to: number; row: number }[] = [];
   const out: { row: number; flip: boolean }[] = pins.map(() => ({ row: 0, flip: false }));
+  // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
   const order = pins.map((_, i) => i).sort((a, b) => (pins[b]?.x ?? 0) - (pins[a]?.x ?? 0));
   for (const i of order) {
     const { x, width } = pins[i] ?? { x: 0, width: 0 };

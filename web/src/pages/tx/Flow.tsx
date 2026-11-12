@@ -34,7 +34,7 @@ export function scriptLabel(out: Vout): string {
   if (c.kind !== "op_return") return c.label;
   const data = opReturnData(out.scriptpubkey);
   if (!isText(data))
-    return data.length ? `OP_RETURN, ${groupDigits(data.length)} bytes` : "OP_RETURN";
+    return data.length > 0 ? `OP_RETURN, ${groupDigits(data.length)} bytes` : "OP_RETURN";
   const p = printable(data, CARD_TEXT_CHARS);
   return `OP_RETURN “${p.text}${p.chars < printable(data).chars ? "…" : ""}”`;
 }
@@ -67,7 +67,7 @@ export function Flow(props: {
   const fee = () => (coinbase() ? 0 : (props.tx.fee ?? 0));
   const rate = () => {
     const v = vsize(props.tx);
-    return v ? fee() / v : 0;
+    return v !== undefined && v !== 0 ? fee() / v : 0;
   };
   const hiddenIn = () =>
     vin()

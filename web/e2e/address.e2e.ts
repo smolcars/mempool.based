@@ -1,6 +1,7 @@
+import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
 
-const stat = (page: import("@playwright/test").Page, label: string) =>
+const stat = (page: Page, label: string) =>
   page
     .locator(".address-stat", { has: page.getByText(label, { exact: true }) })
     .locator("dd")
@@ -66,10 +67,12 @@ test("unconfirmed payments are marked and agree with the node's own figures", as
   request,
 }) => {
   const address = chain.addresses.p2wpkh;
-  const stats = await (await request.get(`/regtest/api/address/${address}`)).json();
-  const summary: { txid: string; value: number }[] = await (
+  const stats = (await (await request.get(`/regtest/api/address/${address}`)).json()) as {
+    mempool_stats: { funded_txo_sum: number; spent_txo_sum: number; tx_count: number };
+  };
+  const summary = (await (
     await request.get(`/regtest/api/address/${address}/txs/summary`)
-  ).json();
+  ).json()) as { txid: string; value: number }[];
   await page.goto(`/regtest/address/${address}`);
   await expect(stat(page, "Balance")).toHaveText("91.00000000 BTC");
   const pending = stats.mempool_stats.funded_txo_sum - stats.mempool_stats.spent_txo_sum;

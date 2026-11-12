@@ -21,7 +21,7 @@ describe("bandShares", () => {
       [0.1996, 200],
       [0.12, 250],
     ]);
-    expect(bands.map((b) => b.vsize)).toEqual([250, 200, 0, 0, 300, 0, 0, 0, 0, 250]);
+    expect(bands.map((b) => b.vsize)).toStrictEqual([250, 200, 0, 0, 300, 0, 0, 0, 0, 250]);
     expect(bands.reduce((a, b) => a + b.share, 0)).toBeCloseTo(1);
     expect(bands[0]).toMatchObject({ band: 1, from: 0, to: 0.2, x: 0, share: 0.25 });
     expect(bands[1]).toMatchObject({ band: 2, x: 0.25, share: 0.2 });
@@ -78,7 +78,7 @@ describe("stackLabels", () => {
       ],
       400,
     );
-    expect(out).toEqual([
+    expect(out).toStrictEqual([
       { row: 1, flip: false },
       { row: 0, flip: false },
     ]);
@@ -93,7 +93,7 @@ describe("stackLabels", () => {
       ],
       400,
     );
-    expect(out.map((o) => o.row)).toEqual([0, 0, 0]);
+    expect(out.map((o) => o.row)).toStrictEqual([0, 0, 0]);
   });
 
   it("never lets a label cover a stem that reaches its row, or a stem cross a label below its top", () => {

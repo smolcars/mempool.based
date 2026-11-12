@@ -80,12 +80,12 @@ describe("home page", () => {
 
   it("shows the blocks, the mempool, the node's estimates and the latest transactions", async () => {
     const { el } = await open();
-    expect(tileHeights(el)).toEqual(chain(1, 10).map((b) => b.height));
+    expect(tileHeights(el)).toStrictEqual(chain(1, 10).map((b) => b.height));
     expect(el.querySelector(".home-tile--mined a")?.getAttribute("href")).toBe(
       `/regtest/block/${fakeBlock(10).id}`,
     );
     await vi.waitFor(() => expect(el.querySelector(".home-stats")?.textContent).toContain("3"));
-    expect(el.querySelector(".home-stats")?.textContent).toContain("1\u202f500 vB");
+    expect(el.querySelector(".home-stats")?.textContent).toContain("1\u202F500 vB");
     expect(el.querySelector(".home-stats")?.textContent).toContain("≈ 1 block");
     expect(el.querySelector(".home-ladder__list")?.textContent).toContain("5.20");
     expect(el.querySelector(".home-fees__note")?.textContent).toContain("node's own estimates");
@@ -145,7 +145,7 @@ describe("the strip, kept live", () => {
     const fetched = blocksFetches();
     for (let h = 11; h <= 14; h++)
       ws.receive({ topic: "blocks", type: "block", block: fakeBlock(h) });
-    expect(tileHeights(el)).toEqual(chain(5, 14).map((b) => b.height));
+    expect(tileHeights(el)).toStrictEqual(chain(5, 14).map((b) => b.height));
     expect(blocksFetches()).toBe(fetched);
   });
 
@@ -154,7 +154,7 @@ describe("the strip, kept live", () => {
     blocksServed = chain(4, 13);
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
     await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
-    expect(tileHeights(el)).toEqual(chain(4, 13).map((b) => b.height));
+    expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
   });
 
   it("refetches on a resync whose tip differs, and not on one that matches", async () => {
@@ -234,19 +234,19 @@ describe("the strip, kept live", () => {
   it("follows a reorg: drops the replaced blocks, then takes the new branch", async () => {
     const { el, ws } = await open();
     ws.receive({ topic: "blocks", type: "reorg", fork_height: 8 });
-    expect(tileHeights(el)).toEqual([8, 7, 6, 5, 4, 3, 2, 1]);
+    expect(tileHeights(el)).toStrictEqual([8, 7, 6, 5, 4, 3, 2, 1]);
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(9, "b", "a") });
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(10, "b") });
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11, "b") });
     const ids = [...el.querySelectorAll<HTMLElement>(".home-strip__lane > li[data-id]")].map(
       (li) => li.dataset.id,
     );
-    expect(ids.slice(0, 3)).toEqual([
+    expect(ids.slice(0, 3)).toStrictEqual([
       fakeBlock(11, "b").id,
       fakeBlock(10, "b").id,
       fakeBlock(9, "b").id,
     ]);
-    expect(tileHeights(el)).toEqual([11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
+    expect(tileHeights(el)).toStrictEqual([11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
   });
 
   it("applies a block that arrives while the first list is loading, once it lands", async () => {
@@ -255,7 +255,11 @@ describe("the strip, kept live", () => {
     vi.stubGlobal("fetch", async (url: string) => {
       const path = url.replace(/^\/regtest\/api/, "");
       requests.push(path);
-      if (path === "/blocks") await new Promise<void>((r) => (release = r));
+      if (path === "/blocks") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
       return (replies[path] ?? (() => Response.json({}, { status: 404 })))();
     });
     const el = mount(() => <HomePage />, "/regtest/");

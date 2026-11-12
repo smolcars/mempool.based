@@ -12,10 +12,11 @@ import { mount } from "./test-utils";
 
 const txid = "65428488a6202f1d681d053b3ff5d8ea9f5b0e5e1e0dcf7bf2e4c1e5a3f9c2e1";
 const hostile = '<img src=x onerror="alert(1)">';
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- the type argument picks the element type, as querySelector's does
 const q = <T extends Element = HTMLElement>(el: Element, sel: string) => {
   const found = el.querySelector<T & Element>(sel);
   if (!found) throw new Error(`no ${sel}`);
-  return found as T;
+  return found;
 };
 
 describe("Amount", () => {
@@ -38,16 +39,14 @@ describe("FeeRate", () => {
   it("colors the swatch by the printed value", () => {
     const el = mount(() => <FeeRate rate={0.1996} />);
     expect(el.textContent).toBe("0.20 sat/vB");
-    expect(q<HTMLElement>(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe(
-      "var(--fee-2)",
-    );
+    expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-2)");
     expect(mount(() => <FeeRate rate={0.64} approx unit={false} />).textContent).toBe("~0.64");
   });
 
   it("has ten bands in the key", () => {
     const el = mount(() => <FeeKey />);
     const labels = [...el.querySelectorAll(".feekey__label")].map((l) => l.textContent);
-    expect(labels).toEqual(["0.1", "0.2", "0.3", "0.5", "1", "1.5", "2", "3", "5", "10+"]);
+    expect(labels).toStrictEqual(["0.1", "0.2", "0.3", "0.5", "1", "1.5", "2", "3", "5", "10+"]);
     const last = el.querySelectorAll<HTMLElement>(".feekey__swatch")[9];
     expect(last?.style.getPropertyValue("--swatch")).toBe("var(--fee-10)");
   });
@@ -70,13 +69,13 @@ describe("Hash", () => {
   });
 
   it("copies and confirms", async () => {
-    const writeText = vi.fn(async () => undefined);
+    const writeText = vi.fn<() => Promise<void>>(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const el = mount(() => <Hash value={txid} copyLabel="Copy transaction ID" />);
     const button = q<HTMLButtonElement>(el, "button");
     expect(button.textContent).toBe("Copy transaction ID");
     button.click();
-    await vi.waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
+    await vi.waitFor(() => expect(button.dataset.copied).toBeDefined());
     expect(writeText).toHaveBeenCalledWith(txid);
     expect(button.textContent).toBe("Copied");
   });
@@ -121,7 +120,7 @@ describe("DataTable", () => {
       { id: "b", v: 2 },
     ];
     const el = mount(() => <DataTable caption="Latest" columns={columns} rows={rows} />);
-    expect([...el.querySelectorAll("th")].map((th) => th.textContent)).toEqual([
+    expect([...el.querySelectorAll("th")].map((th) => th.textContent)).toStrictEqual([
       "Transaction",
       "Value, sats",
     ]);
@@ -148,7 +147,7 @@ describe("DataTable", () => {
 
 describe("Pagination", () => {
   it("disables what cannot be reached and reports the page asked for", () => {
-    const onPage = vi.fn();
+    const onPage = vi.fn<(page: number) => void>();
     const el = mount(() => <Pagination page={1} pageCount={3} onPage={onPage} label="Pages" />);
     const [prev, next] = el.querySelectorAll("button");
     expect(prev?.disabled).toBe(true);
@@ -169,7 +168,7 @@ describe("Pagination", () => {
 
 describe("ErrorState", () => {
   it("shows the API's message and retries", () => {
-    const retry = vi.fn();
+    const retry = vi.fn<() => void>();
     const el = mount(() => (
       <ErrorState
         title="Could not load this block"
@@ -180,7 +179,7 @@ describe("ErrorState", () => {
     expect(el.textContent).toContain("Could not load this block");
     expect(el.textContent).toContain("Not found.");
     q<HTMLButtonElement>(el, "button").click();
-    expect(retry).toHaveBeenCalled();
+    expect(retry).toHaveBeenCalledWith();
   });
 
   it("never shows an unexpected error's internals", () => {

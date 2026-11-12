@@ -20,7 +20,7 @@ export default defineConfig<{ regtestRpc: RegtestRpc | null }>({
   testMatch: "*.e2e.ts",
   outputDir: process.env.E2E_OUTPUT_DIR ?? "test-results",
   fullyParallel: true,
-  forbidOnly: !!process.env.CI,
+  forbidOnly: Boolean(process.env.CI),
   reporter: "list",
   use: { baseURL, trace: "retain-on-failure" },
   projects: [

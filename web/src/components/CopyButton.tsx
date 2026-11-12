@@ -24,7 +24,7 @@ export function CopyButton(props: { value: string; label?: string }) {
     <button
       class="copy"
       type="button"
-      onClick={copy}
+      onClick={() => void copy()}
       data-copied={copied() ? "" : undefined}
       title={props.label ?? "Copy"}
     >

@@ -11,5 +11,6 @@ export type LinkProps = Omit<JSX.AnchorHTMLAttributes<HTMLAnchorElement>, "href"
 export function Link(props: LinkProps) {
   const [own, rest] = splitProps(props, ["href"]);
   const network = useNetwork();
+  // oxlint-disable-next-line jsx-a11y/anchor-has-content -- the content arrives in `rest.children`
   return <a {...rest} href={onNetwork(network(), own.href)} />;
 }

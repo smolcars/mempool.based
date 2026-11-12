@@ -5,29 +5,30 @@ import { fakeBlock as block } from "./fakes";
 
 const chain = (from: number, to: number, branch = "a") =>
   Array.from({ length: to - from + 1 }, (_, i) => block(to - i, branch));
-const heights = (r: Block[] | "gap") => (r === "gap" ? r : r.map((b) => `${b.height}${b.id[0]}`));
+const ids = (bs: Block[]) => bs.map((b) => `${b.height}${b.id[0]}`);
+const heights = (r: Block[] | "gap") => (r === "gap" ? r : ids(r));
 
 describe("blocksTopic.parse", () => {
   it("reads the three message types", () => {
     const b = block(5);
-    expect(blocksTopic.parse({ topic: "blocks", type: "block", block: b })).toEqual({
+    expect(blocksTopic.parse({ topic: "blocks", type: "block", block: b })).toStrictEqual({
       type: "block",
       block: b,
     });
-    expect(blocksTopic.parse({ topic: "blocks", type: "reorg", fork_height: 3 })).toEqual({
+    expect(blocksTopic.parse({ topic: "blocks", type: "reorg", fork_height: 3 })).toStrictEqual({
       type: "reorg",
       forkHeight: 3,
     });
-    expect(blocksTopic.parse({ topic: "blocks", type: "resync", tip: null })).toEqual({
+    expect(blocksTopic.parse({ topic: "blocks", type: "resync", tip: null })).toStrictEqual({
       type: "resync",
       tip: null,
     });
-    expect(blocksTopic.parse({ type: "resync", tip: { height: 5, hash: b.id, extra: 1 } })).toEqual(
-      {
-        type: "resync",
-        tip: { height: 5, hash: b.id, extra: 1 },
-      },
-    );
+    expect(
+      blocksTopic.parse({ type: "resync", tip: { height: 5, hash: b.id, extra: 1 } }),
+    ).toStrictEqual({
+      type: "resync",
+      tip: { height: 5, hash: b.id, extra: 1 },
+    });
   });
 
   it("ignores unknown types and malformed messages", () => {
@@ -45,17 +46,17 @@ describe("blocksTopic.parse", () => {
 
 describe("applyBlock", () => {
   it("appends the next block and keeps at most `max`", () => {
-    expect(heights(applyBlock(chain(1, 10), block(11), 10))).toEqual(heights(chain(2, 11)));
+    expect(heights(applyBlock(chain(1, 10), block(11), 10))).toStrictEqual(heights(chain(2, 11)));
   });
 
   it("leaves the list alone for the block already on top (a reconnect's snapshot)", () => {
-    expect(heights(applyBlock(chain(1, 10), block(10), 10))).toEqual(heights(chain(1, 10)));
+    expect(heights(applyBlock(chain(1, 10), block(10), 10))).toStrictEqual(heights(chain(1, 10)));
   });
 
   it("replaces blocks at and above a block that builds lower down", () => {
-    expect(heights(applyBlock(chain(1, 10), block(9, "b", "a"), 10))).toEqual([
+    expect(heights(applyBlock(chain(1, 10), block(9, "b", "a"), 10))).toStrictEqual([
       "9b",
-      ...heights(chain(1, 8)),
+      ...ids(chain(1, 8)),
     ]);
   });
 
@@ -74,18 +75,18 @@ describe("applyBlock", () => {
       if (next === "gap") throw new Error("unexpected gap");
       list = next;
     }
-    expect(heights(list)).toEqual(heights(chain(6, 15)));
+    expect(heights(list)).toStrictEqual(heights(chain(6, 15)));
   });
 
   it("follows a reorg message and the new branch's blocks", () => {
     let list = applyReorg(chain(1, 10), 8);
-    expect(heights(list)).toEqual(heights(chain(1, 8)));
+    expect(heights(list)).toStrictEqual(heights(chain(1, 8)));
     for (const b of [block(9, "b", "a"), block(10, "b"), block(11, "b")]) {
       const next = applyBlock(list, b, 10);
       if (next === "gap") throw new Error("unexpected gap");
       list = next;
     }
-    expect(heights(list)).toEqual(["11b", "10b", "9b", ...heights(chain(2, 8))]);
+    expect(heights(list)).toStrictEqual(["11b", "10b", "9b", ...ids(chain(2, 8))]);
   });
 });
 

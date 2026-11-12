@@ -18,6 +18,10 @@
   "ignorePatterns": ["dist"],
   "rules": {
     "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "typescript/strict-boolean-expressions": [
+      "error",
+      { "allowNullableBoolean": true, "allowNullableString": true }
+    ],
 
     "typescript/prefer-readonly-parameter-types": "off",
     "typescript/no-confusing-void-expression": "off",
@@ -76,10 +80,29 @@
     "oxc/no-optional-chaining": "off",
     "oxc/no-async-await": "off",
     "oxc/no-rest-spread-properties": "off",
+    "typescript/promise-function-async": "off",
+    "eslint/no-unassigned-vars": "off",
+    "jsx-a11y/label-has-associated-control": "off",
+    "jsx-a11y/prefer-tag-over-role": "off",
+    "unicorn/no-useless-undefined": "off",
+    "promise/prefer-await-to-then": "off",
+    "promise/prefer-catch": "off",
+    "promise/always-return": "off",
+    "promise/catch-or-return": ["error", { "allowThen": true }],
+    "unicorn/prefer-top-level-await": "off",
+    "unicorn/prefer-number-coercion": "off",
+    "unicorn/import-style": "off",
+    "unicorn/no-array-for-each": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/prefer-query-selector": "off",
+    "eslint/no-implicit-coercion": ["error", { "boolean": false }],
     "unicorn/number-literal-case": "off",
     "unicorn/numeric-separators-style": "off",
     "typescript/no-unsafe-type-assertion": "off",
-    "eslint/no-use-before-define": ["error", { "functions": false, "typedefs": false }]
+    "eslint/no-use-before-define": [
+      "error",
+      { "functions": false, "typedefs": false, "variables": false }
+    ]
   },
   "overrides": [
     {
@@ -98,8 +121,24 @@
         "vitest/padding-around-test-blocks": "off",
         "vitest/prefer-to-be-falsy": "off",
         "vitest/prefer-to-be-truthy": "off",
-        "eslint/no-empty-function": "off"
+        "vitest/prefer-called-times": "off",
+        "vitest/no-conditional-in-test": "off",
+        "eslint/no-empty-function": "off",
+        "typescript/require-await": "off"
       }
+    },
+    {
+      "files": ["src/**/*.test.ts", "src/**/*.test.tsx", "e2e/**"],
+      "rules": { "eslint/no-await-in-loop": "off" }
+    },
+    {
+      "files": ["scripts/**", "*.config.ts"],
+      "env": { "node": true },
+      "rules": { "eslint/no-console": "off", "unicorn/no-process-exit": "off" }
+    },
+    {
+      "files": ["public/boot.js"],
+      "rules": { "import/unambiguous": "off" }
     }
   ]
 }

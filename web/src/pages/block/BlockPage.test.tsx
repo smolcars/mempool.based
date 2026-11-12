@@ -48,7 +48,10 @@ const coinbase = tx(0, {
   ],
 });
 
-type Reply = { status?: number; body: unknown };
+interface Reply {
+  status?: number;
+  body: unknown;
+}
 let replies: Record<string, Reply | ((n: number) => Reply)> = {};
 const calls: string[] = [];
 

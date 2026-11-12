@@ -60,6 +60,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
         </div>
         <nav class="nav" aria-label="Main">
           {NAV.map((item) => (
+            // oxlint-disable-next-line unicorn/prefer-regexp-test -- `match` is our own function, not String#match
             <Link href={item.href} aria-current={item.match(page()) ? "page" : undefined}>
               {item.label}
             </Link>

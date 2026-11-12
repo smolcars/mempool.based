@@ -20,14 +20,14 @@ export type LiveStatus = "connecting" | "live" | "reconnecting" | "offline";
 export interface Topic<M> {
   readonly name: string;
   /** Reads one of this topic's messages; `undefined` ignores it (an unknown or malformed type). */
-  parse(message: Record<string, unknown>): M | undefined;
+  parse: (message: Record<string, unknown>) => M | undefined;
 }
 
 export interface TopicHandlers<M> {
   /** One message, in order. The first one after subscribing is the topic's current state, if any. */
-  message(message: M): void;
+  message: (message: M) => void;
   /** Messages may have been missed (the socket reconnected): fetch the current state over HTTP. */
-  resync(): void;
+  resync: () => void;
 }
 
 /** The part of the browser's WebSocket the client uses, so tests can hand it a fake. */
@@ -86,12 +86,21 @@ export class LiveConnection {
   private lastReceivedAt = 0;
   private readonly detach: () => void;
 
+  readonly network: Network;
+  private readonly url: string;
+  private readonly open: (url: string) => SocketLike;
+  private readonly random: () => number;
+
   constructor(
-    readonly network: Network,
-    private readonly url: string,
-    private readonly open: (url: string) => SocketLike = (u) => new WebSocket(u),
-    private readonly random: () => number = Math.random,
+    network: Network,
+    url: string,
+    open: (url: string) => SocketLike = (u) => new WebSocket(u),
+    random: () => number = Math.random,
   ) {
+    this.network = network;
+    this.url = url;
+    this.open = open;
+    this.random = random;
     const [status, setStatus] = createSignal<LiveStatus>("connecting");
     this.status = status;
     this.setStatus = setStatus;
@@ -116,7 +125,7 @@ export class LiveConnection {
   add<M>(topic: Topic<M>, handlers: TopicHandlers<M>): () => void {
     const sub = { topic, handlers } as Subscriber;
     this.subscribers.add(sub);
-    if (!this.ws && !this.retryTimer && !this.waiting && !this.stopped) this.connect();
+    if (!this.ws && this.retryTimer === undefined && !this.waiting && !this.stopped) this.connect();
     else this.scheduleFlush();
     return () => {
       this.subscribers.delete(sub);
@@ -150,9 +159,13 @@ export class LiveConnection {
     this.ws = ws;
     this.greeted = false;
     this.subscribed = new Set();
+    // oxlint-disable unicorn/prefer-add-event-listener -- `forget` detaches these by setting them to null
     ws.onmessage = (ev) => this.receive(ev.data);
     ws.onclose = (ev) => this.closed(ev.code);
-    ws.onerror = () => {}; // a close always follows, and is handled there
+    ws.onerror = () => {
+      // A close always follows, and is handled there.
+    };
+    // oxlint-enable unicorn/prefer-add-event-listener
     this.helloTimer = setTimeout(() => this.drop(), TIMING.helloTimeoutMs);
   }
 
@@ -173,6 +186,7 @@ export class LiveConnection {
       return;
     }
     if (typeof m.topic !== "string") return; // pong, and connection messages added later
+    // oxlint-disable-next-line unicorn/no-useless-spread -- a copy: a handler may subscribe while this runs
     for (const sub of [...this.subscribers]) {
       if (sub.topic.name !== m.topic || !this.subscribers.has(sub)) continue;
       const parsed = sub.topic.parse(m);
@@ -195,6 +209,7 @@ export class LiveConnection {
     this.lastControlAt = -Infinity;
     this.flush();
     this.pingTimer = setInterval(() => this.ping(), TIMING.pingEveryMs);
+    // oxlint-disable-next-line unicorn/no-useless-spread -- a copy: a handler may subscribe while this runs
     if (reconnected) for (const sub of [...this.subscribers]) sub.handlers.resync();
   }
 
@@ -217,7 +232,7 @@ export class LiveConnection {
   }
 
   private scheduleFlush(): void {
-    if (!this.greeted || this.flushTimer) return;
+    if (!this.greeted || this.flushTimer !== undefined) return;
     const wait = Math.max(0, this.lastControlAt + TIMING.controlGapMs - Date.now());
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
@@ -282,7 +297,7 @@ export class LiveConnection {
 
   private wakeUp(): void {
     if (this.subscribers.size === 0 || this.stopped || this.ws) return;
-    if (this.waiting || this.retryTimer) this.connect();
+    if (this.waiting || this.retryTimer !== undefined) this.connect();
   }
 
   private stop(): void {
@@ -315,10 +330,12 @@ export class LiveConnection {
   /** Detaches the current socket so nothing it does later reaches this connection. */
   private forget(): void {
     if (this.ws) {
+      // oxlint-disable unicorn/prefer-add-event-listener -- detaching the handlers set in `connect`
       this.ws.onmessage = null;
       this.ws.onclose = null;
       this.ws.onerror = null;
       this.ws.onopen = null;
+      // oxlint-enable unicorn/prefer-add-event-listener
     }
     this.ws = undefined;
     this.greeted = false;

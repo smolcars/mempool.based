@@ -36,6 +36,7 @@ describe("network paths", () => {
   it("encodes chain data into a single path segment", () => {
     expect(paths.tx("ab")).toBe("/tx/ab");
     expect(paths.block(840000)).toBe("/block/840000");
+    // oxlint-disable-next-line eslint/no-script-url -- checks that such a value is escaped
     expect(paths.address("javascript:alert(1)")).toBe("/address/javascript%3Aalert(1)");
     expect(paths.address("../../api/x?y#z")).toBe("/address/..%2F..%2Fapi%2Fx%3Fy%23z");
   });

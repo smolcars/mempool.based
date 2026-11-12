@@ -64,10 +64,10 @@ describe("LiveConnection", () => {
     const ws = FakeSocket.last();
     expect(ws.url).toBe("ws://test/regtest/app/ws");
     expect(c.status()).toBe("connecting");
-    expect(ws.sent).toEqual([]);
+    expect(ws.sent).toStrictEqual([]);
     ws.hello();
     expect(c.status()).toBe("live");
-    expect(ws.sent).toEqual([{ op: "subscribe", topics: ["blocks"] }]);
+    expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["blocks"] }]);
   });
 
   it("stops for good when the greeting is from another protocol version or network", () => {
@@ -95,8 +95,8 @@ describe("LiveConnection", () => {
     ws.hello();
     ws.receive({ topic: "blocks", type: "block", n: 1 });
     ws.receive({ topic: "blocks", type: "something-new" });
-    expect(got).toEqual([{ topic: "blocks", type: "block", n: 1 }]);
-    expect(others).toEqual([]);
+    expect(got).toStrictEqual([{ topic: "blocks", type: "block", n: 1 }]);
+    expect(others).toStrictEqual([]);
   });
 
   it("ignores binary frames, bad JSON, unknown message types and messages before the greeting", () => {
@@ -111,13 +111,13 @@ describe("LiveConnection", () => {
     ws.receive("[1,2]");
     ws.receive({ type: "pong" });
     ws.receive({ type: "notice", text: "new kind of message" });
-    expect(got).toEqual([]);
+    expect(got).toStrictEqual([]);
     expect(c.status()).toBe("live");
   });
 
   it("reconnects with growing backoff, resubscribes, and asks every subscriber to resync", () => {
     const c = connect();
-    const resyncs = vi.fn();
+    const resyncs = vi.fn<() => void>();
     c.add(echo, { message: () => {}, resync: resyncs });
     FakeSocket.last().hello();
     expect(resyncs).not.toHaveBeenCalled();
@@ -139,8 +139,8 @@ describe("LiveConnection", () => {
     const ws = FakeSocket.last();
     ws.hello();
     expect(c.status()).toBe("live");
-    expect(ws.sent).toEqual([{ op: "subscribe", topics: ["blocks"] }]);
-    expect(resyncs).toHaveBeenCalledTimes(1);
+    expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["blocks"] }]);
+    expect(resyncs).toHaveBeenCalledOnce();
 
     // A greeting resets the backoff.
     ws.drop(1001);
@@ -186,7 +186,7 @@ describe("LiveConnection", () => {
     const ws = FakeSocket.last();
     ws.hello();
     vi.advanceTimersByTime(TIMING.pingEveryMs);
-    expect(ws.sent.at(-1)).toEqual({ op: "ping" });
+    expect(ws.sent.at(-1)).toStrictEqual({ op: "ping" });
     ws.receive({ type: "pong" });
     vi.advanceTimersByTime(TIMING.pongTimeoutMs);
     expect(c.status()).toBe("live");
@@ -208,10 +208,10 @@ describe("LiveConnection", () => {
     }
     c.add(other, { message: () => {}, resync: () => {} });
     vi.advanceTimersByTime(TIMING.controlGapMs);
-    expect(ws.sent).toEqual([{ op: "subscribe", topics: ["mempool"] }]);
+    expect(ws.sent).toStrictEqual([{ op: "subscribe", topics: ["mempool"] }]);
     off();
     vi.advanceTimersByTime(TIMING.controlGapMs);
-    expect(ws.sent.at(-1)).toEqual({ op: "unsubscribe", topics: ["blocks"] });
+    expect(ws.sent.at(-1)).toStrictEqual({ op: "unsubscribe", topics: ["blocks"] });
   });
 
   it("closes when the last subscriber leaves, and connects afresh for the next", () => {
@@ -220,7 +220,7 @@ describe("LiveConnection", () => {
     FakeSocket.last().hello();
     off();
     expect(FakeSocket.last().closedWith).toBe(1000);
-    const resync = vi.fn();
+    const resync = vi.fn<() => void>();
     c.add(echo, { message: () => {}, resync });
     expect(FakeSocket.all).toHaveLength(2);
     FakeSocket.last().hello();
@@ -278,6 +278,6 @@ describe("LiveConnection", () => {
     old.hello();
     old.drop(1006);
     old.receive({ topic: "blocks", type: "block" });
-    expect(got).toEqual([]);
+    expect(got).toStrictEqual([]);
   });
 });

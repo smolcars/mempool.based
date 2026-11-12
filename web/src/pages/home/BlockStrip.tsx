@@ -116,7 +116,7 @@ export function BlockStrip(props: {
       const keep = new Set(list.map((b) => b.id));
       const leaving = [...lane.children].filter((el) => {
         const id = (el as HTMLElement).dataset.id;
-        return id && !keep.has(id);
+        return id ? !keep.has(id) : false;
       });
       const ghostsOut = leaving.map((el) => {
         const g = el.cloneNode(true) as HTMLElement;
@@ -181,7 +181,9 @@ export function BlockStrip(props: {
           g.remove();
           ghosts.delete(g);
         },
-        () => {},
+        () => {
+          // Cancelled: whoever cancelled it cleans up.
+        },
       );
     }
 
@@ -239,7 +241,9 @@ export function BlockStrip(props: {
       }
       void arc.finished.then(
         () => el.classList.remove("home-tile--landing"),
-        () => {},
+        () => {
+          // Cancelled: whoever cancelled it cleans up.
+        },
       );
     });
 
@@ -320,7 +324,7 @@ export function BlockStrip(props: {
           </div>
           <div class="home-strip__mined">
             <Show
-              when={shown() ?? !props.error()}
+              when={shown() ?? props.error() === undefined}
               fallback={
                 <div class="home-strip__error">
                   <ErrorState

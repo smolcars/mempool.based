@@ -1,7 +1,7 @@
 // Every browser test imports `test` and `expect` from here, never from @playwright/test.
 import { test as base, expect } from "@playwright/test";
 
-export { expect };
+export { expect } from "@playwright/test";
 
 /** The regtest node's JSON-RPC, which only the `mines` project is given (playwright.config.ts). */
 export interface RegtestRpc {

@@ -42,7 +42,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolSummary> }) {
     <section class="home-mempool" aria-labelledby="mempool-title">
       <SectionHeader title="Mempool" id="mempool-title" />
       <Show
-        when={m() || !props.feed.error()}
+        when={m() ?? props.feed.error() === undefined}
         fallback={
           <ErrorState
             title="Could not load the mempool"
@@ -91,6 +91,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolSummary> }) {
             >
               <Index each={bands()}>
                 {(b, i) => (
+                  // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- each bar takes focus and hover to show its tooltip
                   <li
                     class="home-feebar__seg"
                     style={{
@@ -98,6 +99,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolSummary> }) {
                       "--w": String(b().share),
                       "--c": `var(--fee-${b().band})`,
                     }}
+                    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focus shows the bar's tooltip
                     tabindex={b().share > 0 ? 0 : undefined}
                     aria-hidden={b().share > 0 ? undefined : "true"}
                     aria-label={`${rangeText(b())}: ${formatSize(b().vsize)}, ${percent(b().share)}`}

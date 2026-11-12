@@ -65,7 +65,7 @@ const coinbase = (values: number[], scriptsig = "03"): Transaction => ({
 
 describe("blockReward", () => {
   it("sums every output and takes the subsidy off for fees", () => {
-    expect(blockReward(coinbase([312_000_000, 2_059_121, 0]), 975_516, MAIN)).toEqual({
+    expect(blockReward(coinbase([312_000_000, 2_059_121, 0]), 975_516, MAIN)).toStrictEqual({
       reward: 314_059_121,
       subsidy: 312_500_000,
       fees: 1_559_121,
@@ -103,9 +103,9 @@ describe("fullness", () => {
 describe("parseBlockId", () => {
   const hash = "000000000019D6689C085AE165831E934FF763AE46A2A6C172B3F1B60A8CE26F";
   it("reads hashes and heights", () => {
-    expect(parseBlockId(hash)).toEqual({ kind: "hash", hash: hash.toLowerCase() });
-    expect(parseBlockId("0")).toEqual({ kind: "height", height: 0 });
-    expect(parseBlockId("4294967295")).toEqual({ kind: "height", height: 4_294_967_295 });
+    expect(parseBlockId(hash)).toStrictEqual({ kind: "hash", hash: hash.toLowerCase() });
+    expect(parseBlockId("0")).toStrictEqual({ kind: "height", height: 0 });
+    expect(parseBlockId("4294967295")).toStrictEqual({ kind: "height", height: 4_294_967_295 });
   });
 
   it("rejects everything else", () => {
@@ -142,7 +142,7 @@ describe("coinbaseTag", () => {
       975_516,
     );
     expect(tagText(t)).toBe("·1·j·MARA Made in USA 🇺🇸 |v05···z·········");
-    expect(t?.parts[0]).toEqual({ hidden: 1 });
+    expect(t?.parts[0]).toStrictEqual({ hidden: 1 });
   });
 
   it("reads a signet tag", () => {
@@ -164,16 +164,17 @@ describe("coinbaseTag", () => {
     // "<b>" + RLO + NUL + ZWSP + "x" + invalid byte
     const t = coinbaseTag(`0f3c623ee280ae00e2808b78ff${"41".repeat(3)}`, 999_999);
     expect(tagText(t)).toBe("<b>···x·AAA");
-    for (const p of t?.parts ?? []) if ("text" in p) expect(p.text).not.toMatch(/[‮​\0]/);
+    const texts = (t?.parts ?? []).map((p) => ("text" in p ? p.text : ""));
+    expect(texts.join("")).not.toMatch(/[‮​\0]/);
   });
 
   it("bounds the length and survives broken input", () => {
-    const long = coinbaseTag(`4c${"ff"}${"41".repeat(400)}`, 999_999);
+    const long = coinbaseTag(`4cff${"41".repeat(400)}`, 999_999);
     expect(tagText(long)?.length).toBeLessThanOrEqual(100);
     expect(coinbaseTag("zz", 1)).toBeNull();
     expect(coinbaseTag("abc", 1)).toBeNull();
     expect(coinbaseTag(undefined, 1)).toBeNull();
-    expect(coinbaseTag("4effffffff41", 999_999)?.parts).toEqual([{ text: "A" }]);
+    expect(coinbaseTag("4effffffff41", 999_999)?.parts).toStrictEqual([{ text: "A" }]);
   });
 });
 

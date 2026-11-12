@@ -19,7 +19,7 @@ test("the home page shows the scenario's blocks, live, with the mempool and fees
 
   // The figures are the node's: another test may broadcast meanwhile, so compare with a fresh answer.
   await expect(async () => {
-    const mempool = await (await request.get("/regtest/api/mempool")).json();
+    const mempool = (await (await request.get("/regtest/api/mempool")).json()) as { count: number };
     await expect(page.locator(".home-stat").first()).toContainText(String(mempool.count), {
       timeout: 100,
     });

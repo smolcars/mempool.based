@@ -101,18 +101,16 @@ function InputDetails(props: { vin: Vin; version: number }) {
   const inner = createMemo((): { label: string; hex: string } | null => {
     const w = witness();
     const kind = prevKind();
-    if (kind === "p2wsh" && w.length > 0)
-      return { label: "Witness script", hex: w[w.length - 1] ?? "" };
+    if (kind === "p2wsh" && w.length > 0) return { label: "Witness script", hex: w.at(-1) ?? "" };
     if (kind === "p2tr") {
-      const stack = w.length > 1 && w[w.length - 1]?.startsWith("50") ? w.slice(0, -1) : w;
-      return stack.length >= 2 ? { label: "Tapscript", hex: stack[stack.length - 2] ?? "" } : null;
+      const stack = w.length > 1 && w.at(-1)?.startsWith("50") ? w.slice(0, -1) : w;
+      return stack.length >= 2 ? { label: "Tapscript", hex: stack.at(-2) ?? "" } : null;
     }
     if (kind === "p2sh") {
       const redeem = lastPush(props.vin.scriptsig ?? "");
       if (!redeem) return null;
       const c = classify(redeem).kind;
-      if (c === "p2wsh" && w.length > 0)
-        return { label: "Witness script", hex: w[w.length - 1] ?? "" };
+      if (c === "p2wsh" && w.length > 0) return { label: "Witness script", hex: w.at(-1) ?? "" };
       return { label: "Redeem script", hex: redeem };
     }
     return null;

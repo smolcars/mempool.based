@@ -14,7 +14,9 @@ if (files.length === 0) {
   console.error("No JavaScript in dist/assets. Run `bun run build` first.");
   process.exit(1);
 }
+/** @param {string} f */
 const gz = (f) => gzipSync(readFileSync(new URL(f, assets)), { level: 9 }).length;
+/** @param {number} n */
 const kb = (n) => `${(n / 1024).toFixed(1).padStart(7)} KB`;
 
 const html = readFileSync(new URL("index.html", dist), "utf8");
@@ -26,7 +28,9 @@ if (entries.length === 0 || !home) {
 }
 
 // Static imports in Vite's output look like `from"./x-hash.js"` or `import"./x-hash.js"`.
+/** @type {Set<string>} */
 const firstLoad = new Set();
+/** @param {string} f */
 const visit = (f) => {
   if (firstLoad.has(f)) return;
   firstLoad.add(f);
@@ -42,7 +46,7 @@ for (const f of firstLoad) {
   console.log(`${kb(gz(f))}  ${f}`);
 }
 console.log("Loaded later, by route:");
-for (const f of files.filter((f) => !firstLoad.has(f))) console.log(`${kb(gz(f))}  ${f}`);
+for (const f of files.filter((name) => !firstLoad.has(name))) console.log(`${kb(gz(f))}  ${f}`);
 console.log(`${kb(total)}  first load gzipped, budget ${BUDGET / 1024} KB`);
 if (total > BUDGET) {
   console.error("First-load JavaScript is over budget.");

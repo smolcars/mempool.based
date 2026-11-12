@@ -5,7 +5,7 @@ import type { SocketLike } from "./live";
 export class FakeSocket implements SocketLike {
   static all: FakeSocket[] = [];
   static last(): FakeSocket {
-    const s = FakeSocket.all[FakeSocket.all.length - 1];
+    const s = FakeSocket.all.at(-1);
     if (!s) throw new Error("no socket was opened");
     return s;
   }
@@ -17,7 +17,10 @@ export class FakeSocket implements SocketLike {
   readonly sent: unknown[] = [];
   closedWith: number | undefined | null = null;
 
-  constructor(readonly url: string) {
+  readonly url: string;
+
+  constructor(url: string) {
+    this.url = url;
     FakeSocket.all.push(this);
   }
 
