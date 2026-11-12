@@ -62,6 +62,8 @@ Refined when M1 lands.
 | FE5 | The live mempool on the home page: projected-block tiles with their fee layers, the mempool panel and the latest transactions from the WebSocket topics; the projected tile becomes the mined one when a block arrives | MP3, FE3 | done ([#41](https://github.com/smolcars/mempool.based/pull/41)) |
 | FE6 | The transaction and address pages, live: a transaction's place in the projected blocks, what replaced it, the group it will be mined with, and its confirmation, from the tracking topics instead of polling; an address page that refreshes when its history changes | MP5, FE4 | done ([#51](https://github.com/smolcars/mempool.based/pull/51)) |
 | FE7 | Home page follow-ups: the fee panel from our own recommendations (MP4); a tile's size in the agreed convention (serialized size in B, kB, MB); tighten the new-block workarounds once the server's order is promised (MP7) | MP4, MP7, FE5 | todo |
+| FE8 | Show a block's audit on the block page and its score in block lists: what we expected against what was mined, by category, from `/app/block/:hash/audit` and the `audit` field | MI4, SJ1 | todo |
+| FE9 | Mempool history chart from `/app/mempool/history/:interval`: size by fee band over time with the flow in and out, gaps drawn as gaps | MI5, SJ1 | todo |
 | W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | done ([#40](https://github.com/smolcars/mempool.based/pull/40)) |
 | MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | done ([#49](https://github.com/smolcars/mempool.based/pull/49)) |
 | MI6 | Give each block its miner where pages show it: the pool in the block facts, in the WebSocket's `summary` message and in a recent-blocks answer, then on the block page, the home tiles and the mining page's recent blocks | MI2, FE3 | done ([#47](https://github.com/smolcars/mempool.based/pull/47)) |
@@ -81,7 +83,7 @@ Refined when M2 lands.
 | MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | done ([#34](https://github.com/smolcars/mempool.based/pull/34)); the full mainnet backfill started on 2026-11-12 on the owner's instance |
 | MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
 | MI3 | Hashrate history | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
-| MI4 | Block audit: expected template against the mined block | MP2, MI1 | doing |
+| MI4 | Block audit: expected template against the mined block | MP2, MI1 | done ([#52](https://github.com/smolcars/mempool.based/pull/52)); per-pool averages are still empty |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | doing |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
 | W9 | Mining dashboard and pool pages | MI2, MI3 | done ([#44](https://github.com/smolcars/mempool.based/pull/44)) |
