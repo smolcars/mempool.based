@@ -1,0 +1,45 @@
+@layer components {
+  /* Wide tables scroll inside themselves, never the page. */
+  .table-scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .table {
+    width: 100%;
+    font-size: var(--text-sm);
+  }
+  .table__caption {
+    text-align: left;
+    color: var(--color-text-muted);
+    padding-bottom: var(--space-2);
+  }
+  .table th {
+    text-align: left;
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+    padding: 0 var(--space-3) var(--space-2) 0;
+    white-space: nowrap;
+  }
+  .table td {
+    padding: var(--space-2) var(--space-3) var(--space-2) 0;
+    border-top: 1px solid var(--color-line);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .table .table__num {
+    text-align: right;
+    padding-right: 0;
+    padding-left: var(--space-3);
+  }
+  .table tbody tr {
+    transition: background-color var(--dur-quick) var(--ease-out);
+  }
+  .table tbody tr:hover {
+    background: var(--color-surface-sunken);
+  }
+  @media (max-width: 640px) {
+    .table .table__optional {
+      display: none;
+    }
+  }
+}

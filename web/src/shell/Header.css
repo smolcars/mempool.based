@@ -1,0 +1,186 @@
+@layer components {
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-header);
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-line);
+  }
+  /* A page is loading: a thin accent line along the header's bottom edge grows, then holds. */
+  .route-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: var(--color-accent);
+    transform-origin: left;
+    transform: scaleX(0);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .route-progress--on {
+    opacity: 1;
+    transform: scaleX(0.8);
+    transition:
+      opacity var(--dur-fade) linear 150ms,
+      transform 2s var(--ease-out) 150ms;
+  }
+
+  .site-header__inner {
+    max-width: var(--page-max);
+    margin-inline: auto;
+    padding: var(--space-3) var(--gutter);
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--space-4);
+  }
+  .site-header__search {
+    width: 100%;
+    max-width: 34rem;
+    justify-self: center;
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    text-decoration: none;
+  }
+  .brand:hover {
+    color: inherit;
+  }
+  .brand__word {
+    font-size: var(--text-lg);
+    font-weight: var(--weight-heavy);
+    letter-spacing: var(--tracking-tight);
+    white-space: nowrap;
+  }
+
+  .logo {
+    width: 30px;
+    height: 30px;
+    flex: none;
+  }
+  .logo__tile {
+    fill: var(--color-network);
+  }
+  .logo__layer {
+    fill: var(--color-surface);
+  }
+  .logo__layer--mid {
+    fill-opacity: 0.62;
+  }
+  .logo__layer--top {
+    fill: var(--color-accent);
+  }
+  /* On a test network the tile carries the network color; a pink layer on it would clash. */
+  :root:not([data-network="mainnet"]) .logo__layer--top {
+    fill: var(--color-surface);
+  }
+
+  .nav {
+    display: flex;
+    gap: var(--space-1);
+  }
+  .nav a {
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-m);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .nav a:hover {
+    color: var(--color-text);
+    background: var(--color-surface-sunken);
+  }
+  .nav a[aria-current="page"] {
+    color: var(--color-text);
+    border-radius: 0;
+    box-shadow: inset 0 -2px 0 var(--color-accent);
+  }
+
+  .icon-btn {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-m);
+    background: none;
+    cursor: pointer;
+  }
+  .icon-btn:hover {
+    background: var(--color-surface-sunken);
+  }
+  .icon-btn svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+  }
+  .theme-toggle__half {
+    fill: currentColor;
+    stroke: none;
+    transform-origin: 10px 10px;
+    transition: transform var(--dur-base) var(--ease-in-out);
+  }
+  /* The lit half turns over with the theme. */
+  :root[data-theme="dark"] .theme-toggle__half {
+    transform: rotate(180deg);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .theme-toggle__half {
+      transform: rotate(180deg);
+    }
+  }
+
+  @media (max-width: 1040px) {
+    .site-header__inner {
+      grid-template-columns: auto auto 1fr auto auto;
+      row-gap: var(--space-3);
+    }
+    .site-header__search {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      max-width: none;
+    }
+    .nav {
+      grid-column: 4;
+    }
+  }
+  @media (max-width: 640px) {
+    .site-header__inner {
+      grid-template-columns: auto 1fr auto;
+      row-gap: var(--space-2);
+    }
+    .brand__word {
+      font-size: var(--text-md);
+    }
+    .network {
+      justify-self: end;
+    }
+    .nav {
+      grid-column: 1 / -1;
+      grid-row: 3;
+      justify-self: start;
+      margin-left: calc(-1 * var(--space-3));
+    }
+  }
+  /* Smallest phones: the mark alone carries the brand; the name stays for screen readers. */
+  @media (max-width: 380px) {
+    .brand__word {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+}

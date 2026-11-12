@@ -1,0 +1,17 @@
+// The route table. Each page declares its own routes in pages/<page>/routes.ts; add new pages here once.
+import type { RouteDefinition } from "@solidjs/router";
+import { routes as address } from "./pages/address/routes";
+import { routes as block } from "./pages/block/routes";
+import { routes as home } from "./pages/home/routes";
+import { routes as lightning } from "./pages/lightning/routes";
+import { routes as mining } from "./pages/mining/routes";
+import { routes as notFound } from "./pages/not-found/routes";
+import { routes as tx } from "./pages/tx/routes";
+
+/** Every page, on every network: mainnet at the root, the others under their prefix. */
+export const routes: RouteDefinition[] = [
+  {
+    path: ["/", "/signet", "/testnet4", "/regtest"],
+    children: [...home, ...block, ...tx, ...address, ...mining, ...lightning, ...notFound],
+  },
+];

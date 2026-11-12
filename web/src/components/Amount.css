@@ -1,0 +1,13 @@
+@layer components {
+  .amount {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  .amount__zeros {
+    color: var(--color-text-muted);
+    font-weight: var(--weight-light);
+  }
+  .amount--in {
+    color: var(--color-positive);
+  }
+}

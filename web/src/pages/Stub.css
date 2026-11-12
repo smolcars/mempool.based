@@ -1,0 +1,17 @@
+@layer pages {
+  .stub {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-6);
+  }
+  .stub__subject {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+  .stub__text {
+    color: var(--color-text-muted);
+    max-width: 60ch;
+  }
+}

@@ -1,0 +1,161 @@
+# Frontend
+
+How the Solid app in `web/` is put together, and the rules that let several people build pages at once without colliding. The visual rules are in [`DESIGN.md`](DESIGN.md); this file is about code.
+
+## Layout
+
+```text
+web/
+  index.html            The shell document: preloads the font, runs public/boot.js, loads src/index.tsx
+  public/boot.js        Runs before first paint: applies a stored theme and the network (see "Theme")
+  scripts/check-size.js First-load budget check (`bun run size`)
+  src/
+    index.tsx           Waits briefly for the font, then mounts the router
+    routes.ts           The route table: every page, on every network
+    styles/global.css   Layer order, reset, base and layout. Imports nothing; tokens come from design/
+    lib/                Pure logic and hooks, no markup
+      format.ts         Amounts, fee rates and bands, sizes, hashes, times
+      network.ts        Networks, prefixes, `paths` for every page
+      api.ts            HTTP client and `createApi` resource
+      esplora.ts        Types for the Esplora replies pages use
+      page.ts           `useNetwork`, `usePageTitle`
+      clock.ts          Shared ticking clock for relative times
+      config.ts         Reads `/app/config`
+      theme.ts          Theme toggle state
+    components/         Shared components, one CSS file each
+    shell/              Header, network switch, theme toggle, band, footer, the frame around pages
+    search/submit.ts    What a search query leads to (task W6 owns it)
+    pages/<page>/       One directory per page: its routes, component, CSS and tests
+```
+
+## Routing
+
+`@solidjs/router`. Mainnet pages are at the root and the other networks under `/signet`, `/testnet4` and `/regtest`, matching the server ([`ARCHITECTURE.md`](ARCHITECTURE.md)). `src/routes.ts` mounts every page's routes under all four prefixes, so a page is written once with network-free paths (`/tx/:txid`) and works on every network. The server sends the app shell for any page path, so deep links and reloads work; a disabled network's paths are a 404 from the server.
+
+The network comes from the path. `useNetwork()` returns it; never keep it anywhere else.
+
+| Page | Path | Directory | Built in |
+|---|---|---|---|
+| Home | `/` | `pages/home` | W2 |
+| Block | `/block/:id` (hash or height) | `pages/block` | W3 |
+| Transaction | `/tx/:txid` | `pages/tx` | W4 |
+| Address | `/address/:address` | `pages/address` | W5 |
+| Mining | `/mining` | `pages/mining` | W9 |
+| Lightning | `/lightning` | `pages/lightning` | W11 |
+| Not found | anything else | `pages/not-found` | shell |
+
+Every page is loaded lazily. The pages above are stubs that say which task builds them (`pages/Stub.tsx`); delete the stub's use when you build the page, and the last page built deletes the file.
+
+### Adding a page or a route
+
+1. Create `pages/<page>/` with `<Name>Page.tsx` (default export) and `routes.ts`:
+
+   ```ts
+   export const routes: RouteDefinition[] = [
+     { path: "/blocks", component: lazy(() => import("./BlocksPage")) },
+   ];
+   ```
+
+2. Spread `routes` into the list in `src/routes.ts`, before `notFound`. That one line is the only edit outside your directory.
+
+Sub-pages (`/mining/pool/:slug`) go in the same `routes.ts`; you never touch `src/routes.ts` again.
+
+### Links
+
+Internal links stay on the current network. Use `<Link href={paths.tx(txid)}>` from `components/Link.tsx`; it adds the prefix and the router handles the click. Build every path with `paths` in `lib/network.ts`, which encodes chain data into a single path segment so it can never change the route or the scheme ([`SECURITY.md`](SECURITY.md) rule 14). Add a function to `paths` for a new page rather than writing the path by hand. To navigate from code: `navigate(onNetwork(network(), paths.block(h)))`.
+
+### Page title
+
+Call `usePageTitle(() => "Block 975 411")`. Test networks get their name in front, and every title ends in `| mempool.based`.
+
+## Data
+
+### The public API
+
+`lib/api.ts` is the only way pages talk to `/api`. Paths are relative to the network's API, so the same code works on every network.
+
+```tsx
+const params = useParams<{ id: string }>();
+const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`);
+
+<Show when={block()} fallback={<Loading label="Loading block" />}>
+  {(b) => <h1>Block {groupDigits(b().height)}</h1>}
+</Show>
+```
+
+- `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, and answers at once from the cache. Return a falsy path to wait for something else first.
+- `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops.
+- `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`). The default is JSON.
+- Failures are `ApiError` with `status` (0 when the server cannot be reached) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
+- Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
+- Reading a resource inside the shell's `<Suspense>` holds the whole page until it loads. To show the page frame first and fill sections as they arrive, give each section its own `<Suspense>` or test `resource.loading`.
+- An error thrown while rendering reaches the shell's error boundary, which shows "This page could not be shown". Catch expected failures (not found, node unavailable) in the page with `<ErrorState>` instead.
+
+`lib/esplora.ts` has hand-written types for the replies pages use, from rbitcoin v0.9.1's `docs/esplora-openapi.yaml`. Add a type when you use a new route; keep the field names exactly as the API sends them. Amounts are integer sats and times are unix seconds throughout.
+
+During development, `bun run dev` proxies `/api`, `/app` and `/healthz` to the Rust server at `LISTEN_ADDR`.
+
+### The app's own API
+
+`GET /app/config` answers `{"networks": ["mainnet", "signet"], "version": "0.1.0"}`: the enabled networks in server order, and the server version. It is server-wide, so it is served at the root only, whichever networks are enabled (`crates/server/src/app_config.rs`). The shell reads it once for the network switch and the footer. If the root's network (mainnet) is disabled, the shell moves to the same page on the first enabled network.
+
+Live data will come from the WebSocket at `/app/ws`, which does not exist yet.
+
+## Shared components
+
+Import from `components/`. All of them render chain data as text only.
+
+| Component | Use |
+|---|---|
+| `Amount sats unit? signed?` | BTC with eight decimals, trailing zeros dimmed, sats in the title. `signed` adds `+` and the positive color to incoming amounts |
+| `Sats sats unit?` | Grouped sats |
+| `FeeRate rate unit? approx?` | Fee rate with its band's swatch. `approx` adds `~` |
+| `FeeKey` | The ten bands with their lower bounds. Put it next to every fee visual |
+| `Hash value href? head? tail? copy? copyLabel?` | Hash or address, shortened in the middle, linked when given a `paths` result, with copy |
+| `HashFull value copyLabel?` | A page subject's hash in full, grouped by eight, with copy |
+| `CopyButton value label?` | The copy button on its own |
+| `TimeAgo time suffix?` | Relative time that keeps itself current, UTC in the title |
+| `TimeUtc time` | Absolute UTC time |
+| `DataTable caption columns rows empty?` | Table with units in headers. Columns: `header`, `cell(row, i)`, `numeric`, `optional` (dropped on phones) |
+| `SectionHeader title id? children?` | A section's `h2` over the 2 px rule; `children` sit at the right |
+| `Loading label?` | Waiting. Fades in only after 300 ms, so fast loads show nothing |
+| `Empty title children?` | Nothing to show, and what to do about it |
+| `ErrorState title error? retry?` | What failed, the API's message, and "Try again" |
+| `Pagination page pageCount? hasNext? onPage label` | Previous and next. Esplora's cursor-paged lists pass `hasNext` instead of `pageCount` |
+| `SearchField onSearch` | The search field; the header owns the one instance |
+| `Link href` | Internal link on the current network |
+
+Buttons are `<button class="btn">` (or `btn btn--accent`) with `components/Button.css`; toggles add `aria-pressed`.
+
+For a figure without a component, use `lib/format.ts` directly: `formatBtc`, `formatSats`, `formatFeeRate`, `feeBand` and `feeColor`, `formatSize`, `groupDigits`, `truncateMiddle`, `formatUtc`, `formatRelative`. They never throw and print `–` for a value that is missing or malformed. Fee bands always come from `feeBand`, which bands the rate as printed.
+
+## CSS
+
+- Plain CSS with the tokens in `design/tokens.css`, imported once in `index.tsx`. Never copy a token value; use the custom property.
+- Cascade layers, in this order: `reset, base, layout, components, pages`. Shared components write in `@layer components`, pages in `@layer pages`.
+- One CSS file per component, next to it, imported by the component. BEM-style names: `block`, `block__part`, `block--variant`. Prefix a page's classes with the page name (`tx-flow`, `block-grid`) so pages never share a class by accident.
+- Per-element values (a fee color, a position) are custom properties set through Solid's `style` object, with a value that comes from props or a signal: `style={{ "--swatch": feeColor(rate) }}`. Solid applies those through the CSSOM, which the Content-Security-Policy allows. Never write a `style` string, and never a `style` object whose values are all literals, because the compiler may turn it into an inline `style` attribute, which the policy blocks.
+- Breakpoints: 1040 px and 640 px ([`DESIGN.md`](DESIGN.md)).
+
+## Theme
+
+Light by default, dark when the OS asks, either one forced by the toggle. A forced choice is stored under `theme` in `localStorage`. Choosing the scheme the OS already shows clears the stored choice, so the page follows the OS again.
+
+The stored theme must apply before first paint, and the Content-Security-Policy forbids inline script. So `index.html` loads `public/boot.js` as a small blocking same-origin script in the head: it sets `data-theme` and `data-network` on `<html>` before the body is drawn. It is fetched alongside the render-blocking stylesheet, so it adds no round trip.
+
+The font is preloaded, and `index.tsx` waits up to 400 ms for it before the first render, so text is laid out once in Recursive and does not reflow when it arrives. Anything that appears after the first render must not move what is already on screen: reserve its space, or put it where nothing follows it.
+
+## Rules for page builders
+
+1. **Stay in your directory.** A page owns `pages/<page>/` and nothing else. Its only edit outside is the one line in `src/routes.ts`, plus a function in `paths` and types in `lib/esplora.ts` when it needs them; those are append-only.
+2. **Shared code changes in its own PR.** `components/`, `lib/`, `shell/` and `styles/` are shared. If a page needs a change there (a new prop, a fix, a new component), make it a small separate PR, or ask whoever is working on the shell. A component used by one page lives in that page's directory until a second page needs it.
+3. **Chain data is text.** No `innerHTML`, no markup built from data, no data in `href` or `src` except through `paths` ([`SECURITY.md`](SECURITY.md) rule 14).
+4. **No style attributes.** Custom properties through the `style` object with dynamic values only (see "CSS").
+5. **Numbers through `lib/format.ts`.** Never `toFixed` a BTC amount or a fee rate in a page.
+6. **No layout shift.** Reserve space for what loads later.
+7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy library (WebGL, uPlot) loads only on the page that uses it.
+8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router at a given URL.
+
+## Testing
+
+`bun run test` runs Vitest in a happy-dom document, so logic and components are tested the same way. `bun run size` checks the first-load budget after `bun run build`: the scripts `index.html` loads, the home page's chunk, and everything they import statically. CI runs typecheck, lint, test, build and size ([`CI.md`](CI.md)).

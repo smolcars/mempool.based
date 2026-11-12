@@ -1,0 +1,11 @@
+@layer pages {
+  .not-found {
+    display: grid;
+    gap: var(--space-4);
+    padding-top: var(--space-7);
+  }
+  .not-found__text {
+    max-width: 60ch;
+    color: var(--color-text-muted);
+  }
+}
