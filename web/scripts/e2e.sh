@@ -48,10 +48,11 @@ wait "$browser_pid"
 eval "$(python3 "$regtest" env | sed 's/^/export /')"
 
 # Only the regtest network, whatever the caller's environment holds: tests never reach a shared
-# node. One client runs every test, so the per-client limits are raised. The block table lives in
-# the run's directory, so the mining pages have data and nothing outlives the run.
+# node. Every limit is at its default: each test names itself as a separate client in
+# X-Forwarded-For (e2e/fixtures.ts), which the server reads only from the proxy named here. The block
+# table lives in the run's directory, so the mining pages have data and nothing outlives the run.
 env -i PATH="$PATH" LISTEN_ADDR=127.0.0.1:0 WEB_DIR="$run/dist" DATA_DIR="$run/data" LOG_FORMAT=json \
-  CLIENT_RATE_PER_SEC=1000 CLIENT_BURST=1000 CLIENT_MAX_CONCURRENT_REQUESTS=256 \
+  TRUSTED_PROXY_HEADER=X-Forwarded-For TRUSTED_PROXIES=127.0.0.1 LOG_CLIENT_ADDR=true \
   REGTEST_RPC_HOST="$REGTEST_RPC_HOST" REGTEST_RPC_PORT="$REGTEST_RPC_PORT" \
   REGTEST_RPC_USER="$REGTEST_RPC_USER" REGTEST_RPC_PASSWORD="$REGTEST_RPC_PASSWORD" \
   REGTEST_ESPLORA_URL="$REGTEST_ESPLORA_URL" REGTEST_ELECTRUM_ADDR="$REGTEST_ELECTRUM_ADDR" \
@@ -69,4 +70,14 @@ done
 [ -n "$addr" ] || { echo "e2e: the server did not start" >&2; exit 1; }
 
 echo "e2e: ready in ${SECONDS}s, server at http://$addr" >&2
-E2E_BASE_URL="http://$addr" E2E_OUTPUT_DIR="$run/results" node_modules/.bin/playwright test "$@"
+status=0
+E2E_BASE_URL="http://$addr" E2E_OUTPUT_DIR="$run/results" node_modules/.bin/playwright test "$@" ||
+  status=$?
+# No page load may trip a limit at the defaults, even one a test tolerates: name them.
+refused=$(grep -E '"refused":|"event":"connections_refused"' "$run/server.log" || true)
+if [ -n "$refused" ]; then
+  echo "e2e: the server's limits refused $(echo "$refused" | wc -l | tr -d ' ') requests (docs/CONFIG.md \"Limits\"); the first:" >&2
+  echo "$refused" | head -n 10 >&2
+  [ "$status" -ne 0 ] || status=1
+fi
+exit "$status"

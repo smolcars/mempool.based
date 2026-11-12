@@ -43,6 +43,7 @@ import {
 } from "../../lib/projected-txs";
 import {
   dismissChange,
+  FOUND_WAIT_MS,
   initialState,
   movedTo,
   onProjected,
@@ -56,9 +57,6 @@ import "./ProjectedPage.css";
 
 // WebGL and its layout load only when a page draws them.
 const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
-
-/** The longest the found moment waits for the block's new picture. */
-const FOUND_WAIT_MS = 8000;
 
 /** Rows in a page of the list. */
 const PAGE = 25;

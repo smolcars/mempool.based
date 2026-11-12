@@ -1,6 +1,6 @@
 // Mines on the run's node, so it runs after every other test (the `mines` project).
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 const heights = (page: Page) =>
   page.$$eval(".home-strip__lane > li[data-height]:not(.home-tile--leaving)", (els) =>
@@ -23,7 +23,7 @@ test("mining takes the projected next block across the line and empties the proj
     const label = (await nextLink.getAttribute("aria-label")) ?? "";
     waiting = Number(/projected: (\d+) transactions/.exec(label)?.[1]);
     expect(waiting).toBe(node.count);
-  }).toPass({ timeout: 15_000 });
+  }).toPass({ timeout: PROJECTION_LAG_MS });
   const key = await next.getAttribute("data-key");
 
   const [hash] = await mine(1);
@@ -33,7 +33,10 @@ test("mining takes the projected next block across the line and empties the proj
   // The block that was projected next: its height, and everything that waited, plus its coinbase.
   await expect(lane.getByRole("listitem").first()).toHaveAttribute("data-height", key ?? "");
   await expect(tile).toHaveAccessibleName(new RegExp(`, ${waiting + 1} transactions,`));
-  await expect(nextLink).toHaveAccessibleName("Next block, projected: nothing waiting");
+  // The strip moves with the block; the projection empties when it catches up.
+  await expect(nextLink).toHaveAccessibleName("Next block, projected: nothing waiting", {
+    timeout: PROJECTION_LAG_MS,
+  });
   await expect(page.getByText("Nothing is waiting.", { exact: false })).toBeVisible();
 });
 

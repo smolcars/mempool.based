@@ -13,6 +13,20 @@ export interface RegtestRpc {
 // P2WSH of OP_TRUE, the harness's anyone-can-spend miner script (docs/REGTEST.md).
 const MINER = "raw(00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260)";
 
+/**
+ * How long the projected blocks may trail the node's tip: the mempool tracker skips full cycles
+ * for up to 10 s while its probe sees no change and no tip hint came (docs/MEMPOOL.md), then the
+ * mempool topics send at most every 2 s (`WS_MEMPOOL_INTERVAL_MS`); 3 s more for a busy machine.
+ * A wait on it ends as soon as the page catches up, so a passing run never pays it.
+ */
+export const PROJECTION_LAG_MS = 15_000;
+
+// Tests this worker has started, for their client addresses.
+let started = 0;
+
+// What a handler answers, told from pages and static files as the server's limiter does.
+const HANDLED = /^\/(?:healthz|readyz)(?:\/|$)|^\/(?:[^/]*\/)?(?:api|app)(?:\/|$)/;
+
 export const test = base.extend<{
   consoleErrorsAllowed: RegExp[];
   noConsoleErrors: undefined;
@@ -20,6 +34,14 @@ export const test = base.extend<{
   mine: (blocks: number) => Promise<string[]>;
 }>({
   regtestRpc: [null, { option: true }],
+  // Each test is a visitor of its own, as its fresh browser context is: e2e.sh trusts
+  // X-Forwarded-For from 127.0.0.1, so the server keys every per-client limit on this address and
+  // the suite runs at the defaults. It reaches pages, files, API calls, WebSockets and `request`.
+  extraHTTPHeaders: async ({ extraHTTPHeaders }, use, testInfo) => {
+    started += 1;
+    const client = `198.18.${testInfo.parallelIndex}.${(started % 254) + 1}`;
+    await use({ ...extraHTTPHeaders, "x-forwarded-for": client });
+  },
   // Mines blocks on the run's node and returns their hashes. Only `*.mine.e2e.ts` files may: they
   // run after every other test, so no test ever sees the chain change under it.
   mine: async ({ request, regtestRpc }, use) => {
@@ -39,15 +61,27 @@ export const test = base.extend<{
   // Console errors a test causes on purpose, such as a fetch that fails. CSP violations never pass.
   consoleErrorsAllowed: [[], { option: true }],
   // Runs around every test: a console error, an uncaught exception or a CSP violation on any
-  // page of the test fails it.
+  // page of the test fails it, and so does a page or static file the server's limits refused.
   noConsoleErrors: [
     async ({ context, consoleErrorsAllowed }, use) => {
       const errors: string[] = [];
+      const refused = new Set<string>();
       context.on("console", (m) => {
-        if (m.type() === "error") errors.push(m.text());
+        // A failed load's text does not name the resource; its location does.
+        if (m.type() === "error") errors.push(`${m.text()} ${m.location().url}`.trimEnd());
       });
       context.on("weberror", (e) => errors.push(`uncaught: ${e.error().message}`));
+      context.on("response", (r) => {
+        const path = new URL(r.url()).pathname;
+        if ((r.status() !== 429 && r.status() !== 503) || HANDLED.test(path)) return;
+        // No page code retries a refused page or file, so end the test now with the reason
+        // instead of letting a later assertion time out. e2e.sh prints which limit refused it.
+        const why = `the server refused ${r.request().method()} ${path} with ${r.status()}: a page or static file over its limits (docs/CONFIG.md "Static files")`;
+        if (refused.size === 0) void context.close({ reason: why });
+        refused.add(why);
+      });
       await use(undefined);
+      expect([...refused], "pages and static files refused by the server's limits").toEqual([]);
       const unexpected = errors.filter(
         (e) => /Content Security Policy/i.test(e) || !consoleErrorsAllowed.some((r) => r.test(e)),
       );
