@@ -374,14 +374,15 @@
     min-height: 24px;
     min-width: 24px;
   }
-  /* A 44 px target in a 28 px button's room, clear of the address beneath it. */
+  /* A 44 px target in a 28 px button's room sideways and above; below, it keeps clear of the
+     address under it. */
   .tx-flow__open {
     position: relative;
     display: grid;
     place-items: center;
     width: var(--touch);
     height: var(--touch);
-    margin: -8px;
+    margin: -8px -8px 0;
     flex: none;
     isolation: isolate;
     border: 0;
@@ -946,7 +947,7 @@
       font-size: var(--text-sm);
     }
     .tx-flow__open {
-      margin: -10px;
+      margin: -10px -10px 0;
     }
     .tx-facts--two {
       grid-template-columns: minmax(0, 1fr);

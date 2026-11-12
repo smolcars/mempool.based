@@ -105,7 +105,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
                   fallback={
                     s().vsize === 0
                       ? "Nothing is waiting. The next block would hold only its coinbase."
-                      : "Everything waiting fits in the next block."
+                      : "All of it would fit in the next block."
                   }
                 >
                   {(reach) => (

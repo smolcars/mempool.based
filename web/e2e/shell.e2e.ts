@@ -119,7 +119,7 @@ for (const [name, viewport] of [
     if (viewport.width < 700) {
       await header.getByRole("searchbox").fill("nonsense query");
       await header.getByRole("searchbox").press("Enter");
-      const panel = page.getByText("Nothing matches");
+      const panel = page.getByText("Nothing matches", { exact: true });
       await expect(panel).toBeVisible();
       const field = await header.locator(".search__field").boundingBox();
       expect(field && field.width).toBeGreaterThan(viewport.width * 0.85);

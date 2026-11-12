@@ -120,8 +120,10 @@ test("a tap anywhere on a list's row opens its item, and the keyboard meets it o
   const table = page.getByRole("table", { name: "Recent blocks, newest first" });
   const row = table.getByRole("row").nth(1);
   const height = await row.getByRole("link").first().textContent();
-  // Its transaction count, far from any link.
-  await row.getByRole("cell").nth(2).click();
+  // Its transaction count, far from any link: pressed where it is, as a thumb would.
+  const cell = await row.getByRole("cell").nth(2).boundingBox();
+  if (!cell) throw new Error("no cell");
+  await page.mouse.click(cell.x + cell.width / 2, cell.y + cell.height / 2);
   await expect(page).toHaveURL(/\/regtest\/block\/[0-9a-f]{64}$/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(height ?? "-");
   // The row's own link is hidden from the keyboard and from screen readers: one stop a row.
