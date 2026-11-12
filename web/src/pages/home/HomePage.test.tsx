@@ -369,9 +369,9 @@ describe("the tiles' fee facts", () => {
   it("loads every tile's facts in one request on first paint, and settles their layers in", async () => {
     summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
     const { el } = await open();
-    // One quiet gauge of the block's fees, not its every band.
+    // The block's fee make-up: a layer for each band that holds any of it.
     await vi.waitFor(() =>
-      expect(tile(el, 10)?.querySelectorAll(".strata__layer")).toHaveLength(1),
+      expect(tile(el, 10)?.querySelectorAll(".strata__layer")).toHaveLength(3),
     );
     expect(summaryRequests()).toHaveLength(1);
     expect(summaryRequests()[0]?.split(",")).toHaveLength(10);
@@ -384,9 +384,7 @@ describe("the tiles' fee facts", () => {
     expect(t.querySelector("a")?.getAttribute("aria-label")).toContain(
       "median fee 1.23 sat/vB, fee range 0.10 to 12.5 sat/vB",
     );
-    // The gauge takes the band of the block's median vbyte, and the tile states its fees.
-    const gauge = t.querySelector<HTMLElement>(".strata__layer")?.style.getPropertyValue("--c");
-    expect(gauge).toMatch(/^var\(--fee-\d+\)$/);
+    // The layers carry the colour; the median beside them is a number alone, and the tile states its fees.
     expect(t.querySelector(".fee__swatch")).toBeNull();
     expect(t.querySelector(".home-tile__fees")?.textContent).toMatch(/ BTC$/);
   });
@@ -874,9 +872,9 @@ describe("the projected tiles", () => {
       "/signet/block/next/3",
       "/signet/block/next/4",
     ]);
-    // Its one gauge is in the band of the median vbyte; the median itself is a number.
+    // Its layers show the projection's fee make-up; the median itself is a number.
     expect(next.querySelector(".fee__swatch")).toBeNull();
-    expect(next.querySelectorAll(".strata__layer")).toHaveLength(1);
+    expect(next.querySelectorAll(".strata__layer").length).toBeGreaterThan(0);
   });
 
   it("make a small mempool one short tile, and an empty one an empty tile that says so", async () => {

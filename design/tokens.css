@@ -51,10 +51,10 @@
   --color-scrim: rgb(22 27 30 / 0.5);
 
   /* Fee bands, cheapest to dearest: one ramp, the same in both themes. Thresholds in docs/DESIGN.md. */
-  --fee-1: #7f8b92;
-  --fee-2: #708da0;
-  --fee-3: #668dac;
-  --fee-4: #608cb8;
+  --fee-1: #868a8d;
+  --fee-2: #6b8494;
+  --fee-3: #688fac;
+  --fee-4: #5885b7;
   --fee-5: #5c89c3;
   --fee-6: #5d86ce;
   --fee-7: #6182d7;
@@ -123,7 +123,7 @@
 
   /* ---- Block strip ---- */
   --tile-w: 8.25rem;
-  --tile-h: 9.5rem;
+  --tile-h: 10.25rem;
   --tile-gap: 0.75rem;
 
   /* ---- Motion ---- */

@@ -14,7 +14,7 @@ import {
 import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
-import { gaugeLayers, type Layer, Strata } from "../../components/Strata";
+import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { useNow } from "../../lib/clock";
 import type { Block } from "../../lib/esplora";
@@ -608,7 +608,7 @@ function MinedTile(props: {
   const layers = createMemo<Layer[]>(
     () => {
       const s = summary();
-      return s ? gaugeLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
+      return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
     },
     { equals: sameLayers },
   );
