@@ -43,6 +43,10 @@ test("the page shows the minutes the server stored, with the gap where none was"
   await expect(page.getByText(/This server has recorded the mempool since/)).toBeVisible();
   const figures = page.getByRole("region", { name: /The mempool's size by fee rate.*, figures/ });
   await chart.locator("xpath=ancestor::figure").getByText("Show the figures").click();
+  // The table renders after the click: wait for it before reading it once.
+  await expect(
+    figures.getByRole("columnheader", { name: "Transactions", exact: true }),
+  ).toBeVisible();
   const column = (await figures.locator("th").allInnerTexts()).indexOf("Transactions");
   expect(column).toBeGreaterThan(0);
   // A minute the server records live while the test runs is not in the 900s.
