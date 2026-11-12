@@ -27,6 +27,7 @@ use tokio::time::Instant;
 use super::track::{self, TxState};
 use super::{Api, Close, Conn, Frame, Hub, Snapshot, Subscriptions, Topic};
 use crate::config::WsLimits;
+use crate::verdicts::Verdict;
 use crate::{NetworkContext, api_v1, limits};
 
 /// Blocks in the `blocks` message, oldest first, as the reference sends them.
@@ -684,7 +685,7 @@ async fn read_address(ctx: Arc<NetworkContext>, sh: ScriptHash, epoch: u64) {
             _ = alive.changed() => return,
         };
         let page = match (permit, &c.esplora) {
-            (Ok(_turn), Some(esplora)) => history(esplora, sh).await,
+            (Ok(_turn), Some(esplora)) => history(&ctx, esplora, sh).await,
             _ => None,
         };
         // Published under this lock, which `release` takes before the hub topics go, so a
@@ -752,14 +753,31 @@ fn publish_address(
 
 /// The script's newest history page from the node: up to 50 mempool transactions and the 25
 /// newest confirmed, each as `(txid, confirmed, the node's JSON)`. `None` when the node failed
-/// or answered something else.
-async fn history(esplora: &Esplora, sh: ScriptHash) -> Option<Vec<(Txid, bool, Value)>> {
+/// or answered something else, or when the server knows the node will not finish it: the HTTP
+/// routes' verdicts apply here too, and a read that runs past their deadline teaches one
+/// (docs/API.md, "Very large addresses"; SECURITY.md rule 11).
+async fn history(
+    ctx: &NetworkContext,
+    esplora: &Esplora,
+    sh: ScriptHash,
+) -> Option<Vec<(Txid, bool, Value)>> {
+    let script = sh.to_string().parse().ok()?;
+    let first = Some((None, None));
+    let verdicts = &ctx.api.verdicts;
+    if verdicts.check(script, first, std::time::Instant::now()).is_some() {
+        return None;
+    }
     let route = Route::ScriptTxs {
-        script: ScriptRef::ScriptHash(sh.to_string().parse().ok()?),
+        script: ScriptRef::ScriptHash(script),
         after: None,
         asof: None,
     };
-    let raw = esplora.raw(&route).await.ok()?;
+    let started = std::time::Instant::now();
+    let raw = esplora.raw(&route).await;
+    if started.elapsed() >= ctx.api.history_timeout() {
+        verdicts.learn(script, first, Verdict::Slow, std::time::Instant::now());
+    }
+    let raw = raw.ok()?;
     if !raw.status.is_success() {
         return None;
     }

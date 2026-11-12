@@ -22,7 +22,9 @@ use super::*;
 use crate::config::Network;
 use crate::replacements::Link;
 use crate::ws::tests::address;
-use crate::ws::track::tests::{Electrum, Mock, Server, coin, context, context_at};
+use crate::ws::track::tests::{
+    Electrum, Mock, Server, coin, context, context_at, context_with,
+};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -920,4 +922,32 @@ async fn following_and_stopping_fast_leaves_no_reads_waiting_on_the_node() {
     assert!(reads <= 4, "{reads} reads reached the node");
     assert!(history.most.load(Ordering::Relaxed) <= 2);
     assert_eq!(history.running.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn an_address_history_the_node_will_not_finish_is_not_read_again() {
+    let history = History::default();
+    history.delay.store(300, Ordering::Relaxed);
+    let url = history.start().await;
+    let ctx = context_with("127.0.0.1:1", &url, false, None, |c| {
+        c.limits.history_timeout = Duration::from_millis(100);
+    });
+    let c = Client::new();
+    let mut s = Session::new(&ctx, &c.conn);
+    // The first read runs past the history deadline, as on an address too large to serve.
+    send(&mut s, &json!({"track-address": address(1)}));
+    history.reads_reach(1).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    send(&mut s, &json!({"track-address": "stop"}));
+    // Followed again, by this socket or another: the node is not asked again.
+    send(&mut s, &json!({"track-address": address(1)}));
+    // An address the HTTP routes learned is too large is never asked at all.
+    let sh = script_of(&address(2)).to_string().parse().unwrap();
+    ctx.api
+        .verdicts
+        .learn(sh, None, Verdict::TooLarge, std::time::Instant::now());
+    send(&mut s, &json!({"track-addresses": [address(2)]}));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(history.reads.load(Ordering::Relaxed), 1);
+    assert_eq!(ctx.v1.followed(), 2);
 }
