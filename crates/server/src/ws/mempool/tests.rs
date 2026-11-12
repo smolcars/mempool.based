@@ -1046,3 +1046,168 @@ async fn fees_follow_the_projection_and_are_withdrawn_while_it_is_stale() {
     }
     task.abort();
 }
+
+// A block found: the order and timing `docs/WS.md` promises.
+
+/// What the `blocks` feed does for a new block: its message to subscribers, then the record of
+/// what it announced.
+fn announce_block(s: &Server) -> ChainTip {
+    let tip = s.mock.node().tip.unwrap();
+    let msg = json!({ "topic": "blocks", "type": "block", "block": { "id": tip.hash, "height": tip.height } });
+    s.ctx.hub.announce_tip(Some(tip.hash), || {
+        s.ctx.hub.publish(
+            Topic::Blocks,
+            &Frame::text(msg.to_string().as_bytes()),
+            Snapshot::Replace,
+        );
+    });
+    tip
+}
+
+/// A received frame as (topic, the tip height of a `projected` message, or the height of a
+/// `block` message).
+fn label(f: &Frame) -> (String, Option<u64>) {
+    let (opcode, p) = open(f);
+    if opcode == frame::BINARY {
+        return (format!("projected-txs:{}", p[2]), None);
+    }
+    let v: Value = serde_json::from_slice(p).unwrap();
+    let topic = v["topic"].as_str().unwrap().to_owned();
+    let height = match v["type"].as_str() {
+        Some("projected") => v["tip"]["height"].as_u64(),
+        Some("block") => v["block"]["height"].as_u64(),
+        _ => None,
+    };
+    (topic, height)
+}
+
+/// Frames until a `projected` message on `height` arrives, with the time it took.
+async fn until_projected(
+    rx: &mut mpsc::Receiver<Frame>,
+    height: u64,
+) -> (Vec<(String, Option<u64>)>, Duration) {
+    let at = Instant::now();
+    let mut seen = Vec::new();
+    loop {
+        let f = tokio::time::timeout(WAIT, rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let l = label(&f);
+        let done = l == ("projected".to_owned(), Some(height));
+        seen.push(l);
+        if done {
+            return (seen, at.elapsed());
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_found_block_is_followed_by_the_projection_on_it_and_nothing_older() {
+    let mock = Mock::new();
+    for i in 0..20 {
+        mock.add(1_000 + i, 500);
+    }
+    // A long interval: only the new tip can explain a prompt message.
+    let s = Server::start(&mock, Duration::from_secs(10));
+    s.settle().await;
+    announce_block(&s);
+    let (watcher, mut rx) = conn(4096);
+    s.ctx.hub.subscribe(Topic::Blocks, &watcher);
+    subscribe_all(&s.ctx, &watcher);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    while rx.try_recv().is_ok() {}
+
+    // The engines see the block before the `blocks` topic has announced it: the mempool topics
+    // wait for its message.
+    mock.mine(10);
+    let tip = mock.node().tip.unwrap();
+    s.tracker.block_found(tip);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.projector.current().tip, Some(tip), "the engines have it");
+    assert!(rx.try_recv().is_err(), "nothing before the block's message");
+    announce_block(&s);
+    let (seen, took) = until_projected(&mut rx, u64::from(tip.height)).await;
+    assert_eq!(seen[0], ("blocks".to_owned(), Some(u64::from(tip.height))));
+    assert!(took < Duration::from_millis(500), "{took:?}");
+
+    // The other way round: the block's message first, then the engines.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    while rx.try_recv().is_ok() {}
+    mock.mine(5);
+    let tip = announce_block(&s);
+    s.tracker.block_found(tip);
+    let (seen, took) = until_projected(&mut rx, u64::from(tip.height)).await;
+    assert_eq!(seen[0], ("blocks".to_owned(), Some(u64::from(tip.height))));
+    assert!(
+        seen.iter()
+            .all(|(t, h)| t != "projected" || *h == Some(u64::from(tip.height))),
+        "no projection on the old tip after the block: {seen:?}"
+    );
+    assert!(took < Duration::from_millis(500), "{took:?}");
+    let mut c = Client::default();
+    let (late, mut late_rx) = conn(4096);
+    subscribe_all(&s.ctx, &late);
+    converge(&s, &mut c, &mut late_rx).await;
+    assert_eq!(c.json["mempool"]["count"], 5);
+    assert_eq!(c.json["projected"]["tip"]["height"], tip.height);
+}
+
+#[tokio::test]
+async fn in_an_empty_mempool_the_projection_follows_every_block() {
+    let mock = Mock::new();
+    let s = Server::start(&mock, Duration::from_secs(10));
+    s.settle().await;
+    announce_block(&s);
+    let (conn, mut rx) = conn(4096);
+    subscribe_all(&s.ctx, &conn);
+    for _ in 0..4 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        mock.mine(0);
+        let tip = announce_block(&s);
+        s.tracker.block_found(tip);
+        let (_, took) = until_projected(&mut rx, u64::from(tip.height)).await;
+        assert!(took < Duration::from_millis(500), "{took:?}");
+    }
+}
+
+#[tokio::test]
+async fn found_blocks_keep_every_client_equal_to_the_server() {
+    for seed in 1..=3u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let mock = Mock::new();
+        let s = Server::start(&mock, Duration::from_millis(15));
+        let (early, mut early_rx) = conn(4096);
+        subscribe_all(&s.ctx, &early);
+        let mut a = Client::default();
+        for _ in 0..8 {
+            for _ in 0..rng.below(40) {
+                mock.add(rng.below(400_000), 1_000 + rng.below(150_000));
+            }
+            let ids: Vec<Txid> = mock
+                .node()
+                .txs
+                .iter()
+                .map(|t| t.tx.compute_txid())
+                .collect();
+            for _ in 0..rng.below(4) {
+                if ids.len() > 1 {
+                    let i = rng.below(ids.len() as u64) as usize;
+                    let j = rng.below(ids.len() as u64) as usize;
+                    if i != j {
+                        mock.join(ids[i], ids[j]);
+                    }
+                }
+            }
+            converge(&s, &mut a, &mut early_rx).await;
+            // The block is applied from its transactions and published at once; the client
+            // still lands on the server's state.
+            let n = mock.node().txs.len();
+            mock.mine(rng.below(n as u64 + 1) as usize);
+            let tip = announce_block(&s);
+            s.tracker.block_found(tip);
+            converge(&s, &mut a, &mut early_rx).await;
+            assert_eq!(a.json["projected"]["tip"]["height"], tip.height);
+        }
+    }
+}

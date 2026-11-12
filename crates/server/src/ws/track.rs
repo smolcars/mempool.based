@@ -438,8 +438,8 @@ impl Tracking {
     }
 
     /// Folds one tracker delta in: every replacement goes into the record, and each tracked
-    /// transaction that left or came back has its reason set or cleared.
-    fn apply(&self, d: &Delta, tracker: &Tracker) {
+    /// transaction that left or came back has its reason set or cleared. Returns whether one did.
+    fn apply(&self, d: &Delta, tracker: &Tracker) -> bool {
         let mut st = lock(&self.state);
         st.applied = d.seq;
         let seen = unix_now();
@@ -467,19 +467,20 @@ impl Tracking {
                 by_vsize: by_info.map(|b| b.1),
             });
         }
-        if st.txs.is_empty() {
-            return;
-        }
+        let mut moved = false;
         for (txid, reason) in &d.removed {
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = Some(*reason);
+                moved = true;
             }
         }
         for (txid, _) in &d.added {
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = None;
+                moved = true;
             }
         }
+        moved
     }
 
     /// Starting over from the tracker's state at `seq`, after losing our place in its stream:
@@ -513,8 +514,8 @@ impl Tracking {
 
     /// Publishes every tracked transaction whose state changed, or with `new_only` those not
     /// said yet. A shuffle waits until `WS_POSITION_INTERVAL_MS` after the last message. Returns
-    /// whether something is waiting: a shuffle, or a view that did not match the removal reasons.
-    async fn publish_txs(self: &Arc<Self>, new_only: bool) -> bool {
+    /// what is left to say.
+    async fn publish_txs(self: &Arc<Self>, new_only: bool) -> Left {
         let txids: Vec<Txid> = lock(&self.state)
             .txs
             .iter()
@@ -522,11 +523,11 @@ impl Tracking {
             .map(|(t, _)| *t)
             .collect();
         if txids.is_empty() {
-            return false;
+            return Left::Nothing;
         }
         let me = Arc::clone(self);
         let Ok(Some(view)) = tokio::task::spawn_blocking(move || me.view(&txids)).await else {
-            return false;
+            return Left::Nothing;
         };
         let now = Instant::now();
         let interval = self.bounds.position_interval;
@@ -536,7 +537,7 @@ impl Tracking {
         // The tracker moved on from the deltas folded in, or they from it: a transaction could
         // read as present when it has left, or gone without its reason. Try again shortly.
         if view.seq != st.applied {
-            return true;
+            return Left::Again;
         }
         let State {
             txs, replacements, ..
@@ -565,7 +566,11 @@ impl Tracking {
         for (topic, msg) in out {
             self.publish(&mut st, topic, &msg);
         }
-        waiting
+        if waiting {
+            Left::Shuffle
+        } else {
+            Left::Nothing
+        }
     }
 
     // Addresses.
@@ -908,7 +913,11 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration) {
                 biased;
                 d = deltas.recv() => match d {
                     Ok(d) => {
-                        track.apply(&d, &tracker);
+                        // A confirmation, replacement or return is said at once, not at the
+                        // next interval: a block's confirmations go out with its projection.
+                        if track.apply(&d, &tracker) {
+                            next = Instant::now();
+                        }
                         dirty = true;
                     }
                     Err(RecvError::Lagged(_)) => break,
@@ -919,16 +928,32 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration) {
                     Err(RecvError::Closed) => return,
                 },
                 () = track.wake.notified() => {
-                    dirty |= track.publish_txs(true).await;
+                    dirty |= track.publish_txs(true).await != Left::Nothing;
                 }
                 () = tokio::time::sleep_until(next), if dirty => {
-                    dirty = track.publish_txs(false).await;
-                    next = Instant::now() + interval;
+                    let left = track.publish_txs(false).await;
+                    dirty = left != Left::Nothing;
+                    // A view ahead of the deltas folded in is tried again once they are in, not
+                    // an interval later: it may hold a confirmation.
+                    next = Instant::now() + if left == Left::Again { AGAIN } else { interval };
                 }
             }
         }
     }
 }
+
+/// What [`Tracking::publish_txs`] left to say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Left {
+    Nothing,
+    /// A position shuffle, until `WS_POSITION_INTERVAL_MS` after the last message.
+    Shuffle,
+    /// Everything: the view was read at another tracker delta than the reasons folded in.
+    Again,
+}
+
+/// How soon a publish whose view missed the deltas folded in is tried again.
+const AGAIN: Duration = Duration::from_millis(25);
 
 /// Follows the network's Electrum events for the tracked addresses, and writes the minute's
 /// `tracking_summary`. One task per network.

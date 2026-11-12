@@ -282,6 +282,45 @@ fn a_block_can_confirm_some_and_double_spend_others() {
 }
 
 #[test]
+fn a_block_rules_out_held_transactions_and_additions_alike() {
+    // Held: `a` is mined, `b` loses its coin to `b2` and takes its child `bc` along, `ac` spends
+    // `a`'s output and stays, `e` left the pool on its own.
+    let a = tx(&[coin(0)], 1, 1);
+    let b = tx(&[coin(1)], 1, 2);
+    let b2 = tx(&[coin(1)], 1, 3);
+    let bc = tx(&[out(&b, 0)], 1, 4);
+    let ac = tx(&[out(&a, 0)], 1, 5);
+    let e = tx(&[coin(2)], 1, 6);
+    let m = pool(&[&a, &b, &bc, &ac, &e]);
+    let blk = m.keys().block(1, &block(1, genesis(), &[&a, &b2]));
+    let mut want = vec![a.compute_txid(), b.compute_txid(), bc.compute_txid()];
+    want.sort_unstable();
+    assert_eq!(m.ruled_out(std::slice::from_ref(&blk)), want);
+
+    // Added in the same cycle, from a listing taken before the block: the mined `x`, `y` that
+    // loses its coin to the block, `yc` its child, `ec` a child of the departed `e`, and two that
+    // stay: `z`, and `ac2`, which spends `a`'s second output.
+    let x = tx(&[coin(3)], 1, 7);
+    let y = tx(&[coin(4)], 1, 8);
+    let yc = tx(&[out(&y, 0)], 1, 9);
+    let ec = tx(&[out(&e, 0)], 1, 10);
+    let z = tx(&[coin(5)], 1, 11);
+    let ac2 = tx(&[out(&ac, 0)], 1, 12);
+    let blk = m.keys().block(
+        1,
+        &block(1, genesis(), &[&a, &b2, &x, &tx(&[coin(4)], 1, 13)]),
+    );
+    let mut added: Vec<(Txid, TxInfo)> = [&yc, &x, &y, &ec, &z, &ac2]
+        .iter()
+        .map(|t| (t.compute_txid(), m.keys().record(&entry(t), t)))
+        .collect();
+    let removed = [a.compute_txid(), e.compute_txid()];
+    m.rule_out_added(&mut added, &removed, &[blk]);
+    let kept: HashSet<Txid> = added.iter().map(|(t, _)| *t).collect();
+    assert_eq!(kept, HashSet::from([z.compute_txid(), ac2.compute_txid()]));
+}
+
+#[test]
 fn an_older_block_in_the_window_still_counts() {
     let a = tx(&[coin(0)], 1, 1);
     let m = pool(&[&a]);
@@ -399,6 +438,8 @@ struct Node {
     /// Same `getmempoolinfo` whatever the pool, to test the heartbeat.
     frozen_info: bool,
     delay: Duration,
+    /// What Esplora's tip route answers while the node has announced a block it does not serve.
+    lag: Option<ChainTip>,
 }
 
 #[derive(Default)]
@@ -460,10 +501,23 @@ impl Mock {
             .flat_map(|t| t.input.iter().map(|i| i.previous_output))
             .collect();
         let ids: HashSet<Txid> = b.txdata.iter().map(|t| t.compute_txid()).collect();
-        n.pool.retain(|p| {
-            !ids.contains(&p.compute_txid())
-                && !p.input.iter().any(|i| spent.contains(&i.previous_output))
-        });
+        // Conflicts go, and so do their descendants, generation by generation.
+        let mut gone: HashSet<Txid> = HashSet::new();
+        loop {
+            let before = n.pool.len();
+            n.pool.retain(|p| {
+                let out = p.input.iter().any(|i| {
+                    spent.contains(&i.previous_output) || gone.contains(&i.previous_output.txid)
+                });
+                if out && !ids.contains(&p.compute_txid()) {
+                    gone.insert(p.compute_txid());
+                }
+                !out && !ids.contains(&p.compute_txid())
+            });
+            if n.pool.len() == before {
+                break;
+            }
+        }
         n.sequence += 1;
         n.tip = Some(tip(&b, height));
         n.blocks.insert(b.block_hash(), b.clone());
@@ -550,7 +604,7 @@ impl Source for Mock {
 
     async fn tip(&self) -> Result<ChainTip, SourceError> {
         self.enter().await?;
-        self.with(|n| n.tip.ok_or(SourceError::Failed("no tip".into())))
+        self.with(|n| n.lag.or(n.tip).ok_or(SourceError::Failed("no tip".into())))
     }
 
     async fn block(&self, hash: BlockHash) -> Result<Block, SourceError> {
@@ -933,5 +987,380 @@ async fn a_slow_subscriber_is_told_to_resubscribe() {
     // A fresh subscription starts consistent again.
     let (seq, _sub) = tracker.subscribe(|m| m.seq());
     assert_eq!(seq, tracker.read(|m| m.seq()));
+    task.abort();
+}
+
+// A block announced by the node: `Tracker::block_found`.
+
+/// The next `Block` event, skipping others.
+async fn next_block(ev: &mut tokio::sync::broadcast::Receiver<Event>) -> super::CycleStats {
+    loop {
+        if let Event::Block(s) = ev.recv().await.unwrap() {
+            return s;
+        }
+    }
+}
+
+fn found(mock: &Mock) -> ChainTip {
+    mock.with(|n| n.tip.unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_found_block_leaves_at_once_from_its_own_transactions() {
+    let mock = Mock::new();
+    // `a` confirms; `rival` loses its coin to `winner`, and takes its child with it; `stays`
+    // spends an output of `a` and stays.
+    let a = tx(&[coin(0)], 2, 1);
+    let rival = tx(&[coin(1)], 1, 2);
+    let child = tx(&[out(&rival, 0)], 1, 3);
+    let stays = tx(&[out(&a, 1)], 1, 4);
+    for t in [&a, &rival, &child, &stays] {
+        mock.send(t);
+    }
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    let listings = mock.n.listings.load(Ordering::SeqCst);
+
+    let winner = tx(&[coin(1)], 1, 5);
+    let blk = mock.mine(&[&a, &winner]);
+    tracker.block_found(found(&mock));
+    let s = next_block(&mut ev).await;
+    assert_eq!((s.confirmed, s.replaced, s.evicted, s.blocks), (1, 2, 0, 1));
+    assert_eq!(s.calls, 2, "one tip read and the block");
+    assert_eq!(s.tip, Some(tip(&blk, 1)));
+    let d = sub.recv().await.unwrap();
+    let by = Removal::Replaced {
+        by: winner.compute_txid(),
+    };
+    let mut want = vec![
+        (
+            a.compute_txid(),
+            Removal::Confirmed {
+                height: 1,
+                block: blk.block_hash(),
+            },
+        ),
+        (rival.compute_txid(), by),
+        (child.compute_txid(), by),
+    ];
+    want.sort_unstable_by_key(|(t, _)| *t);
+    assert_eq!(d.removed, want);
+    assert!(d.added.is_empty());
+    assert_eq!(txids(&tracker), pool_txids(&mock));
+    assert_eq!(
+        mock.n.listings.load(Ordering::SeqCst),
+        listings,
+        "no listing"
+    );
+
+    // The next cycle finds nothing left to do, and fetches no block again.
+    let blocks = mock.n.blocks.load(Ordering::SeqCst);
+    tracker.tip_changed();
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!((s.seq, s.blocks), (None, 0));
+    assert_eq!(mock.n.blocks.load(Ordering::SeqCst), blocks);
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_block_found_during_a_poll_leaves_with_that_poll() {
+    let mock = Mock::new();
+    let a = tx(&[coin(0)], 1, 1);
+    mock.send(&a);
+    mock.with(|n| n.delay = Duration::from_millis(100));
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    // Mined after the next listing read the pool but before the cycle reads the tip: the
+    // listing still holds `a`, the tip is the new block's.
+    while mock.n.listings_in_flight.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    while mock.n.listings_in_flight.load(Ordering::SeqCst) == 1 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let at = tokio::time::Instant::now();
+    mock.mine(&[&a]);
+    tracker.block_found(found(&mock));
+    // That cycle drops `a` itself: no delta on the new tip still holds it.
+    let c = cycle(next_cycle(&mut ev).await);
+    assert_eq!((c.tip.unwrap().height, c.confirmed), (1, 1));
+    let d = sub.recv().await.unwrap();
+    assert_eq!(d.tip.height, 1);
+    assert_eq!(d.removed.len(), 1);
+    assert!(tracker.read(Mempool::is_empty));
+    assert!(
+        at.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        at.elapsed()
+    );
+    // The announced block then finds nothing left to do.
+    let s = next_block(&mut ev).await;
+    assert_eq!((s.confirmed, s.seq, s.blocks), (0, None, 0));
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocks_announced_before_they_are_served_are_never_lost_in_a_quiet_mempool() {
+    let mock = Mock::new();
+    // Nothing in `getmempoolinfo` moves: only the tip says a block came.
+    mock.with(|n| n.frozen_info = true);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    for height in 1..=3 {
+        let served = found(&mock);
+        mock.mine(&[]);
+        // Announced, but Esplora still answers the old tip for 300 ms.
+        mock.with(|n| n.lag = Some(served));
+        let at = tokio::time::Instant::now();
+        tracker.block_found(found(&mock));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        mock.with(|n| n.lag = None);
+        let d = sub.recv().await.unwrap();
+        assert_eq!(d.tip.height, height);
+        assert!(d.removed.is_empty() && d.added.is_empty());
+        assert!(
+            at.elapsed() < Duration::from_millis(400),
+            "{:?}",
+            at.elapsed()
+        );
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+
+    // Not served for longer than the tracker waits: the cycles that follow list again, probe
+    // or not, until the tip shows, instead of waiting for the 10 s heartbeat.
+    let served = found(&mock);
+    mock.mine(&[]);
+    mock.with(|n| n.lag = Some(served));
+    tracker.block_found(found(&mock));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let listings = mock.n.listings.load(Ordering::SeqCst);
+    mock.with(|n| n.lag = None);
+    let at = tokio::time::Instant::now();
+    let d = sub.recv().await.unwrap();
+    assert_eq!(d.tip.height, 4);
+    assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
+    assert!(mock.n.listings.load(Ordering::SeqCst) > listings);
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_blocks_fetches_each_once_and_confirms_them_all() {
+    let mock = Mock::new();
+    let txs: Vec<Transaction> = (0..6).map(|i| tx(&[coin(i)], 1, i)).collect();
+    for t in &txs {
+        mock.send(t);
+    }
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let blocks = mock.n.blocks.load(Ordering::SeqCst);
+    let at = tokio::time::Instant::now();
+    for pair in txs.chunks(2) {
+        mock.mine(&[&pair[0], &pair[1]]);
+        tracker.block_found(found(&mock));
+    }
+    let mut confirmed = 0;
+    while confirmed < 6 {
+        match ev.recv().await.unwrap() {
+            Event::Block(s) | Event::Cycle(s) => confirmed += s.confirmed,
+            _ => {}
+        }
+    }
+    assert!(tracker.read(Mempool::is_empty));
+    assert_eq!(tracker.read(Mempool::tip), Some(found(&mock)));
+    assert_eq!(
+        mock.n.blocks.load(Ordering::SeqCst) - blocks,
+        3,
+        "each block once"
+    );
+    assert!(
+        at.elapsed() < Duration::from_millis(100),
+        "{:?}",
+        at.elapsed()
+    );
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_found_block_on_another_branch_lists_at_once() {
+    let mock = Mock::new();
+    let (a, b) = (tx(&[coin(0)], 1, 1), tx(&[coin(1)], 1, 2));
+    mock.send(&a);
+    mock.send(&b);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let base = found(&mock);
+    let old = mock.mine(&[&a]);
+    tracker.block_found(found(&mock));
+    assert_eq!(next_block(&mut ev).await.confirmed, 1);
+    // A heavier branch from the same parent confirms `b`; `a` comes back.
+    mock.with(|n| {
+        n.pool.push(a.clone());
+        n.blocks.remove(&old.block_hash());
+        let x = Mock::connect(n, block(base.height + 1, base.hash, &[&b]), base.height + 1);
+        Mock::connect(
+            n,
+            block(base.height + 2, x.block_hash(), &[]),
+            base.height + 2,
+        );
+    });
+    let listings = mock.n.listings.load(Ordering::SeqCst);
+    let at = tokio::time::Instant::now();
+    tracker.block_found(found(&mock));
+    assert_eq!(next_block(&mut ev).await.confirmed, 1);
+    // Only a listing shows what came back: one runs at once, not at the next gap.
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!(s.added, 1);
+    assert_eq!(mock.n.listings.load(Ordering::SeqCst), listings + 1);
+    assert!(
+        at.elapsed() < Duration::from_millis(100),
+        "{:?}",
+        at.elapsed()
+    );
+    assert_eq!(txids(&tracker), HashSet::from([a.compute_txid()]));
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reorg_to_the_same_height_waits_for_the_new_block() {
+    let mock = Mock::new();
+    mock.with(|n| n.frozen_info = true);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let base = found(&mock);
+    mock.mine(&[]);
+    tracker.block_found(found(&mock));
+    let old = next_block(&mut ev).await.tip.unwrap();
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    // A rival block at the same height wins; Esplora keeps serving the old one for 500 ms.
+    let rival = mock.with(|n| {
+        n.blocks.remove(&old.hash);
+        let other = tx(&[coin(9)], 1, 99);
+        let b = Mock::connect(
+            n,
+            block(base.height + 1, base.hash, &[&other]),
+            base.height + 1,
+        );
+        n.lag = Some(old);
+        tip(&b, base.height + 1)
+    });
+    assert_eq!(rival.height, old.height);
+    assert_ne!(rival.hash, old.hash);
+    let at = tokio::time::Instant::now();
+    tracker.block_found(rival);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    mock.with(|n| n.lag = None);
+    let d = sub.recv().await.unwrap();
+    assert_eq!(d.tip, rival);
+    assert!(
+        at.elapsed() < Duration::from_millis(600),
+        "{:?}",
+        at.elapsed()
+    );
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_newer_announcement_replaces_one_still_waited_for() {
+    let mock = Mock::new();
+    mock.with(|n| n.frozen_info = true);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    let base = found(&mock);
+    // B is announced but never served: before Esplora has it, C replaces it at the same height.
+    let b = block(base.height + 1, base.hash, &[]);
+    tracker.block_found(tip(&b, base.height + 1));
+    mock.with(|n| n.lag = Some(base));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let c = mock.with(|n| {
+        n.lag = None;
+        let c = Mock::connect(
+            n,
+            block(base.height + 1, base.hash, &[&tx(&[coin(9)], 1, 99)]),
+            base.height + 1,
+        );
+        tip(&c, base.height + 1)
+    });
+    let at = tokio::time::Instant::now();
+    tracker.block_found(c);
+    let d = sub.recv().await.unwrap();
+    assert_eq!(d.tip, c);
+    assert!(
+        at.elapsed() < Duration::from_millis(100),
+        "{:?}",
+        at.elapsed()
+    );
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_replacement_announcement_still_served_late_is_not_lost() {
+    let mock = Mock::new();
+    mock.with(|n| n.frozen_info = true);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let (_, mut sub) = tracker.subscribe(|_| ());
+    let base = found(&mock);
+    // B, then C on top of it, are announced; Esplora serves neither for longer than the wait,
+    // then B for a while, then C.
+    mock.mine(&[]);
+    let b = found(&mock);
+    mock.mine(&[]);
+    let c = found(&mock);
+    mock.with(|n| n.lag = Some(base));
+    tracker.block_found(b);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    tracker.block_found(c);
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    mock.with(|n| n.lag = Some(b));
+    assert_eq!(sub.recv().await.unwrap().tip, b);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    mock.with(|n| n.lag = None);
+    let at = tokio::time::Instant::now();
+    // C is still wanted: the next cycles list despite unchanged totals, and find it.
+    assert_eq!(sub.recv().await.unwrap().tip, c);
+    assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn once_the_announced_block_is_applied_quiet_probes_skip_again() {
+    let mock = Mock::new();
+    mock.with(|n| n.frozen_info = true);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    let base = found(&mock);
+    mock.mine(&[]);
+    let b = found(&mock);
+    tracker.block_found(b);
+    next_block(&mut ev).await;
+    // D on top of B is announced but never served: C, a rival of B, wins and is announced
+    // while D is still waited for.
+    let d = tip(&block(b.height + 1, b.hash, &[]), b.height + 1);
+    let c = mock.with(|n| {
+        let c = block(base.height + 1, base.hash, &[&tx(&[coin(9)], 1, 99)]);
+        tip(&Mock::connect(n, c, base.height + 1), base.height + 1)
+    });
+    tracker.block_found(d);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    tracker.block_found(c);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(tracker.read(Mempool::tip), Some(c));
+    // D is no longer wanted: unchanged probes skip the listing again until the heartbeat.
+    let listings = mock.n.listings.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(mock.n.listings.load(Ordering::SeqCst) - listings <= 1);
     task.abort();
 }
