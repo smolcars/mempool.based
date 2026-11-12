@@ -52,7 +52,7 @@ Refined when M1 lands.
 | MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | done ([#20](https://github.com/smolcars/mempool.based/pull/20)) |
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | done ([#28](https://github.com/smolcars/mempool.based/pull/28)) |
 | MP3 | Run the mempool tracker and projected blocks inside the server, and serve them over the WebSocket: mempool totals, projected-block totals, binary per-transaction deltas, the latest transactions | MP2, S3 | done ([#35](https://github.com/smolcars/mempool.based/pull/35)) |
-| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | doing |
+| MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | built and reviewed in [#45](https://github.com/smolcars/mempool.based/pull/45); not merged: the same browser test fails in its CI (MP7, FX6) |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | built and reviewed in [#42](https://github.com/smolcars/mempool.based/pull/42); not merged: one browser test fails in its CI because the projection can lag the chain tip (MP7, FX6) |
 | MP6 | RBF history and CPFP or cluster view | MP1 | doing (with MP5) |
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | done ([#27](https://github.com/smolcars/mempool.based/pull/27)) |
@@ -65,6 +65,7 @@ Refined when M1 lands.
 | MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | doing |
 | MI6 | Give each block its miner where pages show it: the pool in the block facts, in the WebSocket's `summary` message and in a recent-blocks answer, then on the block page, the home tiles and the mining page's recent blocks | MI2, FE3 | doing |
 | FX6 | Make the browser tests reliable under the real limits: the whole suite runs as one client, and the fixed per-client allowance for page loads refuses it about one local run in four. Each test worker should look like its own client, so the suite runs at the production defaults | E1, FX3 | doing |
+| MP8 | A day-long evidence run for the fee recommendations on mainnet, scored with `fee_watch`, and tuning from it: the first run saw only four blocks, and the next-block level met its horizon in three of them. Needs the owner's agreement, since it keeps the mainnet mempool engine on for a day | MP4 | todo |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | likely explained by [#39](https://github.com/smolcars/mempool.based/pull/39): the per-address connection cap closed connections without logging; watch for a recurrence |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | done ([#30](https://github.com/smolcars/mempool.based/pull/30)) |
 | WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
