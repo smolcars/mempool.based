@@ -98,7 +98,18 @@ The validation task plugs a `UtxoLookup` into the gossip handler: `crates/ln/src
 
 ### Measured on mainnet
 
-TBD
+2026-11-12, the example program `crates/ln/examples/ln_watch.rs` on an Apple M4, release build, the default peers. Bandwidth is the process's own traffic (`nettop`), memory its physical footprint.
+
+| | |
+|---|---|
+| Initial sync | Synced 84 s after start: 36,247 channels, 13,649 nodes. The first 20 s bring 34,000 channels at 1.5–2.7 MB/s; LND peers then send at their own rate limit, about 51 kB/s |
+| Bandwidth | 49.7 MB in and 0.23 MB out for the initial sync. Afterwards 1 to 20 gossip messages a second, about 1–2 kB/s |
+| Memory | 160–195 MB, flat over 20 minutes. LDK's graph takes about 4 KB per channel; the same footprint is reached right after loading the file |
+| Graph file | 32.8 MB at 36,248 channels. Written in 0.14 s, loaded in 0.07 s |
+| Restart | Synced from the file 1.1 s after start. Catching up took 6.2 MB of gossip, quiet after a minute |
+| Peers | All three first choices connected within 3 s and stayed up for 20 minutes; restarts reconnected within 2 s. No peer dropped us, so live reconnection with backoff is proven by the tests only |
+
+**Against public figures.** Sites built on mempool.space reported about 41,000 channels and 17,400 nodes in mid-2026; CoinPaprika reported 28,900 channels and 15,900 nodes for 4 November 2026; 1ML about 20,000 active channels. Ours sits between them. The node count is lower because LDK keeps a node only while it has a channel in the graph. Of the channels, 21,600 have a policy in both directions, 5,100 in one and 9,500 none yet: LDK refuses policies older than two weeks and drops channels left without one after two weeks, so counts differ by how long each site keeps silent channels. Peers also differ (see [Sync](#sync)).
 
 ## Bounds
 
@@ -106,7 +117,7 @@ Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Until validation exist
 
 - **Ceiling.** At most `Config::max_channels` (100,000) channels; announcements of new channels beyond it are refused and `Event::CeilingReached` is sent. The check and the insert happen under one lock, so concurrent peers cannot overshoot it. Nodes enter the graph only through channels, so they are bounded by twice that.
 - **Message size.** Gossip messages over 1 KB are refused; real ones are under 500 bytes. The exception is node announcements: about 50 real nodes announce one onion address tens to a thousand times (up to 38 KB). Those are checked against their signature and kept with at most 8 distinct addresses and no unknown fields, unsigned (which only matters for relaying, and we do not relay).
-- **Memory.** So each channel and node held is bounded, and with the ceiling the graph's memory and its file are bounded: at most about TBD of memory at the ceiling. `Stats` reports the counts, and `Event::GraphSaved` the file's size.
+- **Memory.** So each channel and node held is bounded, and with the ceiling so are the graph's memory and its file. At mainnet's mix, 4 KB per channel, the ceiling is about 400 MB; filled by an attacker with the largest messages accepted, about twice that, and a file of at most 8 KB per channel. `Stats` reports the counts, and `Event::GraphSaved` the file's size.
 - **Disk.** Nothing gossip sends is written anywhere but the graph file, whose size follows from the ceiling.
 - **Range sync.** The channel ids wanted from peers are capped at the ceiling.
 - **Funding-output lookups** (the validation task) are to be deduplicated, batched (up to 300 per request) and rate-limited, so a flood of announcements cannot flood the node.
