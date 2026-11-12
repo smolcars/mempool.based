@@ -25,3 +25,32 @@ test("the home page links to the mempool's history, which switches interval in t
   );
   await expect(answered).toBeVisible();
 });
+
+// e2e.sh stores 20 minutes an hour old before the server starts, through the sampler's own writer
+// (crates/engine/examples/history_seed.rs): minute i holds 901 + i transactions, and 8 to 12 are
+// missing. The sampler's own timing is the engine's tests' to prove (docs/STORE.md). Newest first,
+// as the figures table lists them.
+const STORED = Array.from({ length: 20 }, (_, i) => 19 - i)
+  .filter((i) => i < 8 || i > 12)
+  .map((i) => String(901 + i));
+
+test("the page shows the minutes the server stored, with the gap where none was", async ({
+  page,
+}) => {
+  await page.goto("/regtest/mempool?interval=2h");
+  const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
+  await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+  await expect(page.getByText(/This server has recorded the mempool since/)).toBeVisible();
+  const figures = page.getByRole("region", { name: /The mempool's size by fee rate.*, figures/ });
+  await chart.locator("xpath=ancestor::figure").getByText("Show the figures").click();
+  // The table renders after the click: wait for it before reading it once.
+  await expect(
+    figures.getByRole("columnheader", { name: "Transactions", exact: true }),
+  ).toBeVisible();
+  const column = (await figures.locator("th").allInnerTexts()).indexOf("Transactions");
+  expect(column).toBeGreaterThan(0);
+  // The stored minutes are the oldest rows, exactly, so nothing fills the gap; a minute the server
+  // records live while the test runs is newer than all of them.
+  const counts = await figures.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
+  expect(counts.slice(-STORED.length)).toEqual(STORED);
+});

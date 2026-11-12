@@ -25,13 +25,7 @@ export default defineConfig<{ regtestRpc: RegtestRpc | null }>({
   use: { baseURL, trace: "retain-on-failure" },
   projects: [
     // Tests share one node and run in parallel, so they never change its chain.
-    {
-      name: "chromium",
-      use: devices["Desktop Chrome"],
-      testIgnore: ["*.mine.e2e.ts", "*.minute.e2e.ts"],
-    },
-    // Tests that wait for the server's first recorded minute start at once and wait beside the rest.
-    { name: "minute", use: devices["Desktop Chrome"], testMatch: "*.minute.e2e.ts" },
+    { name: "chromium", use: devices["Desktop Chrome"], testIgnore: "*.mine.e2e.ts" },
     // Tests that mine run after every other test has finished, one at a time (docs/FRONTEND.md).
     {
       name: "mines",

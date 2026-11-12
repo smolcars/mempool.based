@@ -37,10 +37,13 @@ cd "$web"
 node_modules/.bin/playwright install --only-shell chromium &
 browser_pid=$!
 bun run build --outDir "$run/dist" --emptyOutDir --logLevel warn
-(cd "$root" && cargo build --locked --quiet -p mempool-based)
+(cd "$root" && cargo build --locked --quiet -p mempool-based &&
+  cargo build --locked --quiet -p engine --example history_seed)
 echo "e2e: built at ${SECONDS}s" >&2
 bin="${CARGO_TARGET_DIR:-$root/target}/debug/mempool-based"
 case "$bin" in /*) ;; *) bin="$root/$bin" ;; esac
+# The server records its first minute 60 to 120 s after it starts, so it starts with some history.
+"$(dirname "$bin")/examples/history_seed" "$run/data"
 
 wait "$node_pid" || { cat "$run/regtest.log" >&2; exit 1; }
 echo "e2e: node ready at ${SECONDS}s" >&2
