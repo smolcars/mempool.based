@@ -20,8 +20,8 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | done ([#3](https://github.com/smolcars/mempool.based/pull/3)) |
 | N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | doing |
 | N3 | RPC client: fixed set of typed read-only methods | F0 | doing |
-| S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | doing |
-| S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | todo |
+| S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
+| S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | doing |
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | todo |
 | W1 | App shell: router with network prefixes, layout, theme and tokens, HTTP and WebSocket data layer | F0, D1 | todo |
 | W2 | Home page: latest blocks, live block push, mempool summary | W1, S2, S3 | todo |
