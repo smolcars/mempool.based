@@ -379,7 +379,7 @@ enum Answer {
 
 impl Answer {
     fn into_response(self, route: &'static str) -> Response {
-        let mut res = match self {
+        match self {
             Self::Refused(r) => {
                 let mut res = r.into_response();
                 if r.reason == "route_rate" {
@@ -398,11 +398,7 @@ impl Answer {
                 res
             }
             Self::Bad(e) => e.into_response(),
-        };
-        // The same URL may succeed a moment later.
-        res.headers_mut()
-            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        res
+        }
     }
 }
 

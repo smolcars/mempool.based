@@ -315,11 +315,16 @@ async fn cors(req: Request, next: Next) -> Response {
 }
 
 /// Last step for every response: errors through the error model, then the security headers.
+/// An error is `no-store` unless its route said otherwise: the same URL can succeed a moment later.
 async fn finish(res: Response) -> Response {
     let mut res = error::sanitize(res);
+    let failed = res.status().is_client_error() || res.status().is_server_error();
     let headers = res.headers_mut();
     for (name, value) in SECURITY_HEADERS {
         headers.insert(name, HeaderValue::from_static(value));
+    }
+    if failed && !headers.contains_key(CACHE_CONTROL) {
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     res
 }

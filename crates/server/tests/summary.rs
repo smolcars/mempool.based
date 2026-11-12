@@ -518,6 +518,25 @@ async fn hostile_parameters_never_reach_the_node() {
             "{target}"
         );
     }
+    // Refused before the handler runs: still our error model, still not cacheable.
+    let r = get(&addr, "/regtest/app/block/%FF/summary", "192.0.2.9").await;
+    assert_eq!(
+        (r.status, r.header("cache-control")),
+        (400, Some("no-store"))
+    );
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    let req = format!(
+        "POST {} HTTP/1.1\r\nHost: t\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        summary(&good)
+    );
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).await.unwrap();
+    assert!(raw.starts_with("HTTP/1.1 405"), "{raw}");
+    assert!(
+        raw.to_ascii_lowercase().contains("cache-control: no-store"),
+        "{raw}"
+    );
     assert_eq!(node.total(), 0);
 
     // An unknown block is a 404, not cached: the next request asks again.
