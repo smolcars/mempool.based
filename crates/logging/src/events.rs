@@ -319,6 +319,16 @@ pub struct RpcAuthFailed {
 }
 event!(RpcAuthFailed, "rpc_auth_failed", Error);
 
+/// The node's RPC answered for another chain than the network it is configured as: the `{NET}_*`
+/// variables point at the wrong node. Written at startup and whenever a check finds it anew.
+#[derive(Debug, Serialize)]
+pub struct RpcWrongNetwork<'a> {
+    pub network: &'static str,
+    /// `getblockchaininfo`'s `chain`, cut to 16 characters.
+    pub node_chain: &'a str,
+}
+event!(RpcWrongNetwork<'a>, "rpc_wrong_network", Error);
+
 /// The readiness check could not reach the node's RPC: at the 1st, 2nd, 4th, 8th… check in a row.
 #[derive(Debug, Serialize)]
 pub struct RpcUnreachable {
@@ -1575,6 +1585,10 @@ mod tests {
                 total: 2,
             }),
             both(&RpcAuthFailed { network: n }),
+            both(&RpcWrongNetwork {
+                network: n,
+                node_chain: "main",
+            }),
             both(&ConnectionsRefused { total: 8 }),
             both(&RpcUnreachable {
                 network: n,

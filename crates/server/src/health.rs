@@ -14,7 +14,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use logging::events::{
-    AddressIndexOff, AddressIndexOn, RpcAuthFailed, RpcReachable, RpcUnreachable,
+    AddressIndexOff, AddressIndexOn, RpcAuthFailed, RpcReachable, RpcUnreachable, RpcWrongNetwork,
 };
 use node::electrum::Event as ElectrumEvent;
 use node::esplora::{Error as EsploraError, ScriptHash, ScriptRef};
@@ -35,6 +35,8 @@ enum Rpc {
     Ok,
     /// The node refused our user and password.
     AuthFailed,
+    /// The node answered for another chain than the network configured.
+    WrongNetwork,
     /// Timeout, connection failure, a full work queue or nonsense: the label says which.
     Unreachable(&'static str),
 }
@@ -45,6 +47,7 @@ impl Rpc {
             Self::Pending => "pending",
             Self::Ok => "ok",
             Self::AuthFailed => "auth_failed",
+            Self::WrongNetwork => "wrong_network",
             Self::Unreachable(_) => "unreachable",
         }
     }
@@ -71,7 +74,7 @@ impl NodeCheck {
 }
 
 /// Checks the network's RPC now and every [`CHECK_EVERY`], forever. Logs a refused password each
-/// time it starts being refused, an unreachable node at the 1st, 2nd, 4th… failure in a row, and
+/// time it starts being refused, a node on another chain each time it is found, an unreachable node at the 1st, 2nd, 4th… failure in a row, and
 /// the first answer and each recovery. Never stops the server: the node may simply be down.
 pub async fn watch(ctx: Arc<NetworkContext>) {
     let network = ctx.config.network.name();
@@ -79,6 +82,16 @@ pub async fn watch(ctx: Arc<NetworkContext>) {
     loop {
         let was = ctx.node.get().0;
         let now = match ctx.rpc.blockchain_info().await {
+            Ok(info) if info.chain != ctx.config.network.rpc_chain() => {
+                if was != Rpc::WrongNetwork {
+                    let node_chain: String = info.chain.chars().take(16).collect();
+                    logging::emit(&RpcWrongNetwork {
+                        network,
+                        node_chain: &node_chain,
+                    });
+                }
+                Rpc::WrongNetwork
+            }
             Ok(info) => {
                 if was != Rpc::Ok {
                     logging::emit(&RpcReachable {
