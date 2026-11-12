@@ -51,6 +51,12 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
   let staleRetries = 0;
   let staleTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** A newly announced tip gets its own run of retries. */
+  const expect = (tip: { height: number; hash: string }) => {
+    expected = tip;
+    staleRetries = 0;
+  };
+
   /** Asks again in a moment, unless it has already asked enough times. */
   const retryLater = () => {
     if (staleRetries >= STALE_RETRIES) return false;
@@ -94,7 +100,11 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
     } catch (e) {
       if (signal.aborted || isAbort(e)) return;
       setError(e);
-      if (expected) retryLater();
+      if (expected && !retryLater()) {
+        // Out of retries: wait for the next announcement, which starts afresh.
+        expected = undefined;
+        staleRetries = 0;
+      }
     } finally {
       if (!signal.aborted) {
         controller = undefined;
@@ -123,7 +133,7 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
     if (m.type === "block") {
       const next = applyBlock(shown, m.block, STRIP_MAX);
       if (next === "gap") {
-        expected = { height: m.block.height, hash: m.block.id };
+        expect({ height: m.block.height, hash: m.block.id });
         refresh();
       } else if (!sameList(shown, next)) setData(next);
     } else if (m.type === "reorg") {
@@ -131,7 +141,7 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
       if (next.length !== shown.length) setData(next);
     } else if (m.tip && differsFrom(shown, m.tip)) {
       // Often the hub's answer to a block the node could not serve yet: wait for HTTP to have it.
-      expected = m.tip;
+      expect(m.tip);
       refresh();
     }
   }

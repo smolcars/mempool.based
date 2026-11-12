@@ -194,14 +194,24 @@ describe("the strip, kept live", () => {
   it("keeps asking after a failed fetch for an announced block, but not forever", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const { ws } = await open();
+      const { el, ws } = await open();
       replies["/blocks"] = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
       ws.receive({ topic: "blocks", type: "resync", tip: { height: 11, hash: fakeBlock(11).id } });
       // The first load, the resync's fetch, then eight retries.
       for (let i = 0; i < 12; i++) await vi.advanceTimersByTimeAsync(1_500);
       expect(blocksFetches()).toBe(10);
-      await vi.advanceTimersByTimeAsync(30_000);
+      // Under the socket's 30 s ping, which this fake server would leave unanswered.
+      await vi.advanceTimersByTimeAsync(6_000);
       expect(blocksFetches()).toBe(10);
+
+      // The next announcement starts afresh, even though the node still serves the old list.
+      replies["/blocks"] = () => Response.json(chain(1, 10));
+      ws.receive({ topic: "blocks", type: "resync", tip: { height: 12, hash: fakeBlock(12).id } });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(blocksFetches()).toBe(12);
+      replies["/blocks"] = () => Response.json(chain(3, 12));
+      await vi.advanceTimersByTimeAsync(1_500);
+      await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(12));
     } finally {
       vi.useRealTimers();
     }
