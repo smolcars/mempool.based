@@ -180,12 +180,20 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
     // A block announced after the projection reached it releases ours at once.
     let mut announced = ctx.hub.announced();
     loop {
+        // One held for its block goes out when the hold ends, whatever the interval.
+        let release = held.map(|h: Instant| h + super::mempool::HOLD);
         tokio::select! {
             r = announced.changed() => if r.is_err() {
                 return;
             } else if held.is_some() {
                 tick.reset_immediately();
             },
+            () = async {
+                match release {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => tick.reset_immediately(),
             d = async {
                 match &mut projected {
                     Some(sub) => sub.recv().await,

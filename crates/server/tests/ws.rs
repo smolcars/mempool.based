@@ -743,6 +743,34 @@ async fn a_block_replaced_before_the_node_serves_it_is_never_sent() {
 }
 
 #[tokio::test]
+async fn a_block_waited_for_across_a_node_reconnect_is_dropped_not_sent() {
+    let mut s = Harness::start(limits()).await;
+    let mut ws = s.connect().await;
+    ws.json().await;
+    ws.subscribe_blocks().await;
+    // Block A is announced but not served, and then the connection to the node drops: events
+    // may have been missed, a reorg among them, so A may no longer be on the chain.
+    let a = chain(s.h[2].block_hash(), 1, 50)[0];
+    s.peer.push_tip(3, &a).await;
+    asked(&s, &a, 2).await;
+    s.peer.wr.shutdown().await.unwrap();
+    s.peer = Peer::accept(&s.electrum).await;
+    s.peer.handshake(3, &a).await;
+    assert_eq!(ws.json().await["type"], "resync");
+    // Served now, A is not sent as a best-chain block: clients refetch on the resync instead.
+    let stopped = s.misses(&a);
+    add_block(&s.blocks, 3, &a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    ws.send(json!({"op": "ping"})).await;
+    assert_eq!(ws.json().await, json!({"type": "pong"}));
+    assert!(
+        s.misses(&a) <= stopped + 1,
+        "{} after {stopped}",
+        s.misses(&a)
+    );
+}
+
+#[tokio::test]
 async fn each_message_limit_closes_with_its_code() {
     let ws_limits = WsLimits {
         max_message_bytes: 64,

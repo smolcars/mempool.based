@@ -246,12 +246,18 @@ async fn follow(ctx: Arc<NetworkContext>, backfill: Backfill) {
                         stale: f.stale,
                     });
                 }
-                let announced = ctx.electrum.tip().map(|t| t.height);
-                behind = if announced.is_some_and(|h| h > f.tip) {
-                    behind.saturating_add(1)
-                } else {
-                    0
+                // Behind by height, or at the height with another block: a replacement the node's
+                // Esplora does not serve yet.
+                let lagging = match ctx.electrum.tip() {
+                    Some(t) if t.height > f.tip => true,
+                    Some(t) if t.height == f.tip => blocks::by_height(&table.store, t.height)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|row| row.hash != t.hash),
+                    _ => false,
                 };
+                behind = if lagging { behind.saturating_add(1) } else { 0 };
                 logging::emit(&BlockRowsFollowed {
                     network,
                     tip: f.tip,

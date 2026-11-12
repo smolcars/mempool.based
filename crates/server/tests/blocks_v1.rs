@@ -1127,3 +1127,47 @@ async fn a_block_served_after_the_blocks_topic_gave_up_still_reaches_the_table()
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_replacement_at_the_same_height_served_late_still_reaches_the_table() {
+    // The node's Electrum already has B at the tip's height while its Esplora, and the table,
+    // still have A there; the topic gives up on B after a second.
+    let chain = chain();
+    let dir = dir("replaced");
+    fill(&dir.0, &chain).await;
+    let (port, node) = mock(&chain).await;
+    node.follows
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let b = mine(chain[TIP as usize - 1].block_hash(), TIP, 3);
+    let (addr, _push) = electrum((TIP, b)).await;
+    let server = start_with(
+        port,
+        Some(&dir.0),
+        &[
+            ("REGTEST_ELECTRUM_ADDR", addr),
+            ("WS_BLOCK_WAIT_SECS", "1".to_owned()),
+        ],
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Then the node serves B: the table must take it, though no other block comes.
+    node.set_best(TIP, esplora(&b, TIP));
+    let id = b.block_hash().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let store = Store::open(&dir.0, "regtest", Options::default()).unwrap();
+        let row = engine::blocks::by_height(&store, TIP).await.unwrap();
+        store.close().await;
+        if row.is_some_and(|r| r.hash == b.block_hash()) {
+            let list = get(&server, &format!("{V1}/blocks")).await;
+            assert_eq!(list.json()[0]["id"], id.as_str(), "{}", list.text());
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the table never took the replacement"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    drop(dir);
+}

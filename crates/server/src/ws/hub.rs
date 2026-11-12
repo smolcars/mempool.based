@@ -236,11 +236,7 @@ pub async fn feed(
                 match event {
                     Ok(electrum::Event::Block(tip)) => f.announced(tip, since),
                     Ok(electrum::Event::Reorg { fork_height }) => f.reorg(&ctx, fork_height, since),
-                    Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
-                        // The last block is still a fair snapshot; a newer tip arrives as a
-                        // `block`, and blocks still waited for stay so.
-                        resync(&ctx, since, Snapshot::Keep);
-                    }
+                    Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => f.resynced(&ctx, since),
                     Ok(electrum::Event::Status { .. }) => {}
                     Err(RecvError::Closed) => return,
                 }
@@ -327,6 +323,19 @@ impl Feed {
             super::v1::block(ctx, &block);
         });
         ctx.summaries.new_tip(hash, since);
+    }
+
+    /// Events may have been missed, a reorg among them: blocks still waited for may have left the
+    /// chain, so they are dropped, and the block table checks the chain on its own.
+    fn resynced(&mut self, ctx: &NetworkContext, since: Instant) {
+        self.last = None;
+        let dropped = !self.pending.is_empty();
+        self.pending.clear();
+        // The last block is still a fair snapshot; a newer tip arrives as a `block`.
+        resync(ctx, since, Snapshot::Keep);
+        if dropped && let Some(t) = &ctx.blocks {
+            t.wake.notify_one();
+        }
     }
 
     /// Every block above `fork_height` left the best chain: those waited for are dropped.
