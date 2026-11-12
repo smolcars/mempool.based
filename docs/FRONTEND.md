@@ -21,6 +21,7 @@ web/
     lib/                Pure logic and hooks, no markup
       format.ts         Amounts, fee rates and bands, sizes, hashes, times
       network.ts        Networks, prefixes, `paths` for every page
+      address.ts        An address's type and networks from its form (the address page and search)
       api.ts            HTTP client and `createApi` resource
       live.ts           The WebSocket client: `useTopic`, `useLiveStatus` (see "Live data")
       blocks-topic.ts   The `blocks` topic: its messages and how to keep a block list current
@@ -32,7 +33,7 @@ web/
       theme.ts          Theme toggle state
     components/         Shared components, one CSS file each
     shell/              Header, network switch, theme toggle, band, footer, the frame around pages
-    search/submit.ts    What a search query leads to (task W6 owns it)
+    search/             What a query is (query.ts) and where it leads (search.ts); loaded on first use
     pages/<page>/       One directory per page: its routes, component, CSS and tests
 ```
 
@@ -203,7 +204,7 @@ Import from `components/`. All of them render chain data as text only.
 | `Empty title children?` | Nothing to show, and what to do about it |
 | `ErrorState title error? retry?` | What failed, the API's message, and "Try again" |
 | `Pagination page pageCount? hasNext? onPage label` | Previous and next. Esplora's cursor-paged lists pass `hasNext` instead of `pageCount` |
-| `SearchField onSearch` | The search field; the header owns the one instance |
+| `SearchField` | The search: reads the query as it is typed, opens its page on Enter or says why there is none. The header owns the one instance |
 | `Link href` | Internal link on the current network |
 
 Buttons are `<button class="btn">` (or `btn btn--accent`) with `components/Button.css`; toggles add `aria-pressed`.

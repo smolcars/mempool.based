@@ -3,6 +3,22 @@
     position: relative;
     width: 100%;
   }
+
+  /* The box is the form, so the reading sits inside it at the right and the input never runs under it. */
+  .search__field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+  }
+  .search__field:focus-within {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
   .search__icon {
     position: absolute;
     left: 12px;
@@ -17,38 +33,165 @@
     pointer-events: none;
   }
   .search input {
-    width: 100%;
-    min-height: 36px;
-    padding: var(--space-2) var(--space-3) var(--space-2) 36px;
-    border: 1px solid var(--color-line-strong);
-    border-radius: var(--radius-m);
-    background: var(--color-surface-sunken);
+    flex: 1;
+    min-width: 0;
+    align-self: stretch;
+    padding: var(--space-2) var(--space-2) var(--space-2) 36px;
+    border: 0;
+    background: none;
     font-size: var(--text-sm);
+  }
+  /* The field shows focus as a whole (above). */
+  .search input:focus {
+    outline: none;
   }
   .search input::placeholder {
     color: var(--color-text-muted);
     opacity: 1;
   }
-  .search input:focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 0;
-    border-color: transparent;
+  /* The browser's clear button would sit between the text and the reading. */
+  .search input::-webkit-search-cancel-button {
+    display: none;
   }
-  .search input[aria-invalid="true"] {
-    border-color: var(--color-negative);
+
+  /* What the query looks like, and whether Enter will act on it. */
+  .search__reading {
+    flex: none;
+    max-width: 55%;
+    overflow: hidden;
+    padding-right: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
   }
-  /* Floats under the field so a miss never moves the header. */
-  .search__hint:not(:empty) {
+  .search__reading:empty {
+    display: none;
+  }
+  .search__label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .search__label--ready {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+  }
+  .search__key,
+  .search__slash {
+    display: inline-grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 var(--space-1);
+    border: 1px solid var(--color-line-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--radius-s);
+    background: var(--color-surface);
+    color: var(--color-text-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    line-height: 1;
+  }
+  .search__key svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  /* The "/" shortcut is shown only where there is a keyboard to press it, and only at rest. */
+  .search__slash {
+    display: none;
+    margin-right: var(--space-2);
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .search__field:not(:focus-within) input:placeholder-shown ~ .search__slash {
+      display: inline-grid;
+    }
+  }
+
+  /* Fades in late, so a quick answer shows nothing. */
+  .search__busy {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    animation: search-in var(--dur-fade) linear 200ms backwards;
+  }
+  .search__pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    animation: search-pulse 900ms var(--ease-in-out) infinite alternate;
+  }
+  @keyframes search-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes search-pulse {
+    to {
+      opacity: 0.25;
+    }
+  }
+
+  /* Floats under the field so a miss never moves the header or the page. */
+  .search__panel {
     position: absolute;
-    top: calc(100% + var(--space-1));
+    top: calc(100% + var(--space-2));
     left: 0;
     right: 0;
     z-index: var(--z-tooltip);
-    padding: var(--space-2) var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
     border: 1px solid var(--color-line);
-    border-radius: var(--radius-m);
+    border-radius: var(--radius-l);
     background: var(--color-surface-raised);
     box-shadow: var(--shadow-pop);
     font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+    animation: search-drop var(--dur-quick) var(--ease-out);
+  }
+  .search__panel:focus {
+    outline: none;
+  }
+  .search__panel .btn {
+    justify-self: start;
+  }
+  @keyframes search-drop {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+  .search__title {
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+  }
+  .search__query {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    overflow-wrap: anywhere;
+  }
+  .search__finds {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-1) var(--space-4);
+    margin: var(--space-1) 0;
+    padding: var(--space-3) 0;
+    border-block: 1px solid var(--color-line);
+  }
+  .search__finds dt {
+    font-weight: var(--weight-medium);
+  }
+  .search__finds dd {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+  .search__aside {
+    color: var(--color-text-muted);
   }
 }

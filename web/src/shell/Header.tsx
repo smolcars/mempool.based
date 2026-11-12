@@ -1,10 +1,8 @@
-import { useIsRouting, useLocation, useNavigate } from "@solidjs/router";
+import { useIsRouting, useLocation } from "@solidjs/router";
 import { type Accessor, onCleanup, onMount } from "solid-js";
 import { Link } from "../components/Link";
 import { SearchField } from "../components/SearchField";
-import { type Network, onNetwork, stripNetwork } from "../lib/network";
-import { useNetwork } from "../lib/page";
-import { searchTarget } from "../search/submit";
+import { type Network, stripNetwork } from "../lib/network";
 import { Logo } from "./Logo";
 import { NetworkSwitch } from "./NetworkSwitch";
 import { ThemeToggle } from "./ThemeToggle";
@@ -17,18 +15,10 @@ const NAV = [
 ];
 
 export function Header(props: { networks: Accessor<readonly Network[] | undefined> }) {
-  const network = useNetwork();
   const location = useLocation();
-  const navigate = useNavigate();
   const isRouting = useIsRouting();
   const page = () => stripNetwork(location.pathname);
   let search: HTMLInputElement | undefined;
-
-  const onSearch = (query: string) => {
-    const target = searchTarget(query);
-    if (target) navigate(onNetwork(network(), target));
-    return target !== null;
-  };
 
   // "/" jumps to search from anywhere but a text field.
   onMount(() => {
@@ -42,6 +32,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
         return;
       e.preventDefault();
       search?.focus();
+      search?.select();
     };
     document.addEventListener("keydown", onKey);
     onCleanup(() => document.removeEventListener("keydown", onKey));
@@ -56,7 +47,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
         </Link>
         <NetworkSwitch networks={props.networks} />
         <div class="site-header__search">
-          <SearchField onSearch={onSearch} ref={(el) => (search = el)} />
+          <SearchField ref={(el) => (search = el)} />
         </div>
         <nav class="nav" aria-label="Main">
           {NAV.map((item) => (
