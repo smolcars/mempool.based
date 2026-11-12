@@ -460,6 +460,21 @@ fn finish(calls: &HeavyCalls, key: &str, call: &HeavyCall, abandon: bool) -> boo
     true
 }
 
+/// Removes a heavy call however its task ends. A task that panicked would otherwise leave its
+/// call in the map with the map's sender open, so every later request for the key would join a
+/// call that never answers.
+struct Ended {
+    calls: Arc<HeavyCalls>,
+    key: String,
+    call: HeavyCall,
+}
+
+impl Drop for Ended {
+    fn drop(&mut self) {
+        finish(&self.calls, &self.key, &self.call, false);
+    }
+}
+
 /// A heavy read. Joining an identical call already admitted costs nothing. Starting one needs a
 /// place among the network's [`HEAVY_PENDING`] and the client's [`HeavyShare`], or is refused at
 /// once with a "retry" (`503` or `429`). Joining or starting is decided under one lock. The call
@@ -595,7 +610,13 @@ where
             calls.insert(key.clone(), Arc::clone(&tx));
             let running = Arc::clone(&h.running);
             let (esplora, all) = (h.esplora.clone(), Arc::clone(&h.calls));
+            let ended = Ended {
+                calls: Arc::clone(&all),
+                key: key.clone(),
+                call: Arc::clone(&tx),
+            };
             tokio::spawn(async move {
+                let _ended = ended;
                 let slot = loop {
                     tokio::select! {
                         slot = Arc::clone(&running).acquire_owned() => break slot,
@@ -609,7 +630,6 @@ where
                     }
                 };
                 let Ok(slot) = slot else {
-                    finish(&all, &key, &tx, false);
                     return;
                 };
                 let called = Instant::now();
@@ -1135,7 +1155,14 @@ struct Done {
 /// requests in flight (`MAX_CONCURRENT_REQUESTS`) plus that set.
 #[derive(Debug, Default)]
 pub struct Flights {
-    map: Mutex<HashMap<String, Arc<OnceCell<Done>>>>,
+    map: Mutex<HashMap<String, InFlight>>,
+}
+
+/// A call in the map, and the requests holding it, counted under the map's lock.
+#[derive(Debug)]
+struct InFlight {
+    cell: Arc<OnceCell<Done>>,
+    holders: usize,
 }
 
 impl Flights {
@@ -1179,13 +1206,19 @@ impl Flights {
 
     fn join(&self, key: &str, ttl: Duration) -> Arc<OnceCell<Done>> {
         let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(cell) = map.get(key)
-            && cell.get().is_none_or(|d| d.at.elapsed() < ttl)
+        if let Some(held) = map.get_mut(key)
+            && held.cell.get().is_none_or(|d| d.at.elapsed() < ttl)
         {
-            return Arc::clone(cell);
+            held.holders += 1;
+            return Arc::clone(&held.cell);
         }
+        // An answered call is replaced; requests still holding it no longer count here.
         let cell = Arc::new(OnceCell::new());
-        map.insert(key.to_owned(), Arc::clone(&cell));
+        let held = InFlight {
+            cell: Arc::clone(&cell),
+            holders: 1,
+        };
+        map.insert(key.to_owned(), held);
         cell
     }
 
@@ -1203,6 +1236,7 @@ impl Flights {
 }
 
 /// Drops a request's hold on its entry; the last holder removes it unless it is a fresh hot answer.
+/// Holders are counted under the map's lock, so requests leaving together cannot all leave it.
 struct Leave<'a> {
     flights: &'a Flights,
     key: &'a str,
@@ -1217,12 +1251,16 @@ impl Drop for Leave<'_> {
             .map
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let Some(cell) = map.get(self.key) else {
+        // Only this request's own call: a newer one under the same key has its own holders.
+        let Some(held) = map
+            .get_mut(self.key)
+            .filter(|h| Arc::ptr_eq(&h.cell, self.cell))
+        else {
             return;
         };
-        let fresh = cell.get().is_some_and(|d| d.at.elapsed() < self.ttl);
-        // Two holders: the map and this request. Others join only under this lock.
-        if Arc::ptr_eq(cell, self.cell) && Arc::strong_count(cell) <= 2 && !fresh {
+        held.holders = held.holders.saturating_sub(1);
+        let fresh = held.cell.get().is_some_and(|d| d.at.elapsed() < self.ttl);
+        if held.holders == 0 && !fresh {
             map.remove(self.key);
         }
     }
@@ -1591,6 +1629,95 @@ mod tests {
         assert_eq!(a.unwrap().body[0], 7);
         assert!(matches!(source, Source::Upstream(_)));
         assert!(flights.is_empty());
+    }
+
+    /// The race: request A's hold is released and the map unlocked, but A has not yet let go of
+    /// its handle on the call, when request B's hold is released. Counting handles, B saw A as
+    /// still there and both left the entry behind for good.
+    #[test]
+    fn the_last_request_out_removes_the_call_whatever_the_order() {
+        let flights = Flights::default();
+        let (a, b) = (
+            flights.join("/k", Duration::ZERO),
+            flights.join("/k", Duration::ZERO),
+        );
+        let leave = |cell| Leave {
+            flights: &flights,
+            key: "/k",
+            cell,
+            ttl: Duration::ZERO,
+        };
+        drop(leave(&a));
+        assert_eq!(flights.len(), 1, "B still holds it");
+        drop(leave(&b));
+        assert!(flights.is_empty());
+        // An older call's last request never touches a newer call under the same key.
+        let old = flights.join("/k", Duration::ZERO);
+        old.set(Done {
+            at: Instant::now(),
+            answer: answer(1),
+        })
+        .unwrap();
+        let new = flights.join("/k", Duration::ZERO);
+        assert!(!Arc::ptr_eq(&old, &new), "an answered call is not joined");
+        drop(leave(&old));
+        assert_eq!(flights.len(), 1, "the newer call is still held");
+        drop(leave(&new));
+        assert!(flights.is_empty());
+        drop((a, b));
+    }
+
+    /// The same race, driven for real: requests sharing a call wake together when it answers and
+    /// leave at once on several threads. Before the fix, about 1 key in 2,000 stayed in the map.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn requests_leaving_together_leave_nothing_behind() {
+        let flights = Arc::new(Flights::default());
+        for round in 0..20_000 {
+            let tasks: Vec<_> = (0..8)
+                .map(|_| {
+                    let f = Arc::clone(&flights);
+                    tokio::spawn(async move {
+                        f.run(format!("/k{round}"), Duration::ZERO, async {
+                            for _ in 0..20 {
+                                tokio::task::yield_now().await;
+                            }
+                            answer(1)
+                        })
+                        .await
+                    })
+                })
+                .collect();
+            for t in tasks {
+                assert_eq!(t.await.unwrap().0.unwrap().body[0], 1);
+            }
+        }
+        assert!(flights.is_empty(), "{} entries left", flights.len());
+    }
+
+    #[tokio::test]
+    async fn a_heavy_call_whose_task_panics_is_removed_and_its_requests_released() {
+        let calls = Arc::new(HeavyCalls::default());
+        let (tx, mut joined) = watch::channel(None);
+        let tx: HeavyCall = Arc::new(tx);
+        calls.lock().unwrap().insert("k".into(), Arc::clone(&tx));
+        let ended = Ended {
+            calls: Arc::clone(&calls),
+            key: "k".into(),
+            call: tx,
+        };
+        let task = tokio::spawn(async move {
+            let _ended = ended;
+            panic!("boom");
+        });
+        assert!(task.await.is_err());
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "the next request starts afresh"
+        );
+        assert!(
+            joined.wait_for(Option::is_some).await.is_err(),
+            "a waiting request is told the call ended"
+        );
     }
 
     #[test]

@@ -892,3 +892,151 @@ async fn futures_join<F: std::future::Future<Output = u16> + Send + 'static>(
     }
     out
 }
+
+/// A node that counts its address calls and holds each open until the gate opens, then answers
+/// `status`.
+struct Gated {
+    url: String,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    gate: tokio::sync::watch::Sender<bool>,
+}
+
+impl Gated {
+    async fn start(status: StatusCode) -> Self {
+        use std::sync::atomic::Ordering;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (gate, open) = tokio::sync::watch::channel(false);
+        let counted = Arc::clone(&calls);
+        let app = Router::new().fallback(any(move |uri: Uri| {
+            let (counted, mut open) = (Arc::clone(&counted), open.clone());
+            async move {
+                if uri.path().starts_with("/address/") {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+                let _ = open.wait_for(|o| *o).await;
+                (status, [("content-type", "application/json")], "[]").into_response()
+            }
+        }));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Self { url, calls, gate }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits until the node has received `n` calls.
+    async fn until(&self, n: usize) {
+        while self.calls() < n {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Our server in front of this node, with `history_timeout` for history pages.
+    async fn server(&self, history_timeout: Duration) -> String {
+        let mut c = config(&self.url, false);
+        c.limits.history_timeout = history_timeout;
+        let app = App::new(&c);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(app.serve(listener, std::future::pending()));
+        addr
+    }
+}
+
+/// `n` clients asking for `target` at once.
+fn many(addr: &str, target: &str, n: usize) -> Vec<tokio::task::JoinHandle<Reply>> {
+    (0..n)
+        .map(|_| {
+            let (addr, target) = (addr.to_owned(), target.to_owned());
+            tokio::spawn(async move { get(&addr, &target).await })
+        })
+        .collect()
+}
+
+/// A client that sends its request and hangs up without reading the answer.
+async fn hang_up(addr: &str, target: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let head = format!("GET {target} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream
+}
+
+/// SECURITY.md rule 8 on the heavy routes: every client asking for one key at the same moment
+/// gets one node call, even when the client that started it hangs up before the node answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_heavy_key_costs_one_node_call_however_its_clients_come_and_go() {
+    let node = Gated::start(StatusCode::OK).await;
+    let addr = node.server(Duration::from_secs(5)).await;
+    let target = format!("/api/address/{MAIN}");
+    let first = hang_up(&addr, &target).await;
+    node.until(1).await;
+    let waiting = many(&addr, &target, 50);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The client that started the call is gone; the call is not started again for the others.
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(node.calls(), 1);
+    node.gate.send_replace(true);
+    for r in waiting {
+        let r = r.await.unwrap();
+        assert_eq!((r.status, r.text().as_str()), (200, "[]"));
+    }
+    assert_eq!(node.calls(), 1);
+    // Not a cache: once answered, the next request asks the node again.
+    assert_eq!(get(&addr, &target).await.status, 200);
+    assert_eq!(node.calls(), 2);
+}
+
+/// A call the node fails is shared with the requests that waited for it, and with no request
+/// that arrives after it ended.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_heavy_call_is_shared_only_while_it_runs() {
+    let node = Gated::start(StatusCode::INTERNAL_SERVER_ERROR).await;
+    let addr = node.server(Duration::from_secs(5)).await;
+    let target = format!("/api/address/{MAIN}");
+    let first = hang_up(&addr, &target).await;
+    node.until(1).await;
+    let waiting = many(&addr, &target, 50);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    node.gate.send_replace(true);
+    let answers = replies(waiting).await;
+    assert!(answers.iter().all(|r| r.status == 502), "{answers:?}");
+    assert_eq!(node.calls(), 1);
+    // Arriving after the failure: a call of its own, not the failure again.
+    assert_eq!(get(&addr, &target).await.status, 502);
+    assert_eq!(node.calls(), 2);
+}
+
+/// A page of history the node takes too long over: one node call, every waiting request answered
+/// `504` at the history timeout, and nothing new sent to the node while it is still working.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_heavy_call_that_times_out_is_one_node_call() {
+    let node = Gated::start(StatusCode::OK).await;
+    let addr = node.server(Duration::from_millis(600)).await;
+    let target = format!("/api/address/{MAIN}/txs");
+    let first = hang_up(&addr, &target).await;
+    node.until(1).await;
+    let waiting = many(&addr, &target, 50);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(first);
+    for r in replies(waiting).await {
+        assert_eq!(r.status, 504);
+    }
+    // The node is still working on it: a request now is refused from what it learned.
+    assert_eq!(get(&addr, &target).await.status, 504);
+    assert_eq!(node.calls(), 1);
+    node.gate.send_replace(true);
+}
+
+async fn replies(tasks: Vec<tokio::task::JoinHandle<Reply>>) -> Vec<Reply> {
+    let mut out = Vec::with_capacity(tasks.len());
+    for t in tasks {
+        out.push(t.await.unwrap());
+    }
+    out
+}
