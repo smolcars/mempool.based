@@ -92,9 +92,14 @@ describe("AuditSection", () => {
     expect(item(el, "Unseen")).toContain("1 transaction, 200 vB");
     // Expected over mined, their matched parts lined up: the mined lane starts after what only
     // the expected block had.
-    const lanes = el.querySelectorAll<HTMLElement>(".audit-bars__lane");
+    const lanes = [...el.querySelectorAll(".audit-bars__lane")];
     expect(lanes).toHaveLength(2);
-    expect(Number(lanes[1]?.style.getPropertyValue("--off"))).toBeCloseTo(47_200 / 1_006_900);
+    const matchedAt = (lane: Element | undefined) =>
+      Number(
+        lane?.querySelector<HTMLElement>(".audit-kind--matched")?.style.getPropertyValue("--x"),
+      );
+    expect(matchedAt(lanes[0])).toBeCloseTo(47_200 / 1_006_900);
+    expect(matchedAt(lanes[1])).toBe(matchedAt(lanes[0]));
     // Matched is in both lanes.
     expect(el.querySelectorAll(".audit-bars__seg")).toHaveLength(8);
     expect(el.querySelector(".audit__details button")?.textContent).toBe(

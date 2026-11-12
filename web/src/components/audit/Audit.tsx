@@ -134,23 +134,40 @@ function Bars(props: { audit: AuditTotals }) {
   const sum = (kinds: readonly Kind[]) => kinds.reduce((s, k) => s + props.audit[k].vsize, 0);
   const total = () => sum(EXPECTED_ONLY) + props.audit.matched.vsize + sum(MINED_ONLY);
   const share = (v: number) => String(total() > 0 ? v / total() : 0);
-  const Row = (p: { label: string; kinds: readonly Kind[]; offset?: number }) => (
-    <div class="audit-bars__row">
-      <span class="audit-bars__label">{p.label}</span>
-      <span class="audit-bars__track">
-        <span class="audit-bars__lane" style={{ "--off": share(p.offset ?? 0) }}>
-          <For each={p.kinds.filter((k) => props.audit[k].vsize > 0)}>
-            {(k) => (
-              <span
-                class={`audit-bars__seg audit-kind--${k}`}
-                style={{ "--w": share(props.audit[k].vsize) }}
-              />
-            )}
-          </For>
+  // Each piece is placed at its own share, so a sliver held at its minimum width overlaps its
+  // neighbour instead of pushing the matched piece out of line with the other lane's.
+  const Row = (p: { label: string; kinds: readonly Kind[]; offset?: number }) => {
+    const pieces = () => {
+      let x = p.offset ?? 0;
+      return p.kinds
+        .filter((k) => props.audit[k].vsize > 0)
+        .map((k) => {
+          const piece = { kind: k, x };
+          x += props.audit[k].vsize;
+          return piece;
+        });
+    };
+    return (
+      <div class="audit-bars__row">
+        <span class="audit-bars__label">{p.label}</span>
+        <span class="audit-bars__track">
+          <span class="audit-bars__lane">
+            <For each={pieces()}>
+              {(piece) => (
+                <span
+                  class={`audit-bars__seg audit-kind--${piece.kind}`}
+                  style={{
+                    "--x": share(piece.x),
+                    "--w": share(props.audit[piece.kind].vsize),
+                  }}
+                />
+              )}
+            </For>
+          </span>
         </span>
-      </span>
-    </div>
-  );
+      </div>
+    );
+  };
   return (
     <Show when={total() > 0}>
       <div class="audit-bars" aria-hidden="true">
