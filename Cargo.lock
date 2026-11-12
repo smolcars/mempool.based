@@ -170,6 +170,8 @@ dependencies = [
  "bitcoin",
  "node",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

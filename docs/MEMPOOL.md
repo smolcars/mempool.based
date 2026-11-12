@@ -11,6 +11,7 @@ Measurements below are from a synced mainnet node on a private network, 2026-11-
 | Model | `crates/engine/src/mempool/model.rs` | The state, the diff, removal classification and delta application. Pure: no I/O, no clock |
 | Shell | `crates/engine/src/mempool/tracker.rs` | One loop that probes, lists, fetches and publishes; the subscriber API; the events |
 | Proof | `crates/engine/examples/mempool_watch.rs` | Runs the tracker against a live node and prints its events |
+| Projected blocks | `crates/engine/src/projected/` | The node's chunks packed into the next blocks; see [Projected blocks](#projected-blocks) |
 
 ```rust
 let (tracker, task) = Tracker::start(NodeSource { rpc, esplora }, Config::default());
@@ -168,3 +169,138 @@ An event stream from rbitcoin (added, removed with a reason, a sequence number) 
 - Removal reasons become the node's own. `Evicted` splits into eviction, expiry and the rest; the cases above where a replacement is lost stop existing.
 - The input fingerprints, output counts and block window exist only to classify removals, and could be dropped: 20 bytes plus 8 per input for each transaction, and six held blocks.
 - The initial sync stays: an event stream still needs a starting snapshot, and the sequence number would let us join the two without a gap, the same way subscribers join this tracker.
+
+## Projected blocks
+
+`engine::projected` turns the tracked mempool into the blocks that would be mined next: the left half of the block strip, the answer to "which block will my transaction be in", and the basis of fee recommendations and block audits.
+
+```rust
+let (projector, task) = Projector::start(tracker.clone(), rpc, Config::default());
+let (projection, mut sub) = projector.subscribe(); // Arc<Projection>: blocks, records, totals
+while let Ok(delta) = sub.recv().await { /* delta.seq == previous + 1 */ }
+projector.position(&txid);   // its block, and the vsize and transactions ahead of it
+projector.expected(&parent); // our first block as it stood on `parent`, for auditing the block mined on it
+projector.events();          // statistics and abnormal conditions, for logging
+task.abort();
+```
+
+| Part | File | Does |
+|---|---|---|
+| Model | `crates/engine/src/projected/model.rs` | Chunks, their order, packing into blocks, summaries. Pure: no I/O, no clock |
+| Shell | `crates/engine/src/projected/projector.rs` | Follows the tracker, asks the node for changed clusters, packs off the async runtime, publishes |
+| Proof | `crates/engine/examples/projected_watch.rs` | Runs both against a live node and scores the first block against the node's template and against real blocks |
+
+### What comes from the node and what is computed
+
+rbitcoin mines by cluster-mempool chunks: each cluster is linearized and cut into chunks, and a template takes chunks best first. Its `COMPAT.md` says how its linearization differs from Core's, which is why we ask instead of linearizing ourselves.
+
+**From the node: every chunk.** `getmempoolcluster` answers a transaction's whole cluster as chunks, each with its fee, sigop-adjusted weight and members in mining order. The projector asks it, in batches, for:
+
+- every transaction the tracker adds (its cluster may now include older transactions it lifts);
+- the remaining members of the cluster of every transaction the tracker removes (the cluster may have split, or lost the child that lifted a parent);
+- a cluster whose answer named members the tracker has not shown us yet, again at the next update;
+- every cluster, once per block, right after the block's update is published. Anything we cannot see change, such as a `prioritisetransaction` on the node or a lost recheck, is corrected within a block.
+
+It asks once per cluster as far as it knows them: each answer covers its members, and later rounds ask only for what is still uncovered.
+
+**Computed: packing the chunks into blocks, by the node's own rule.** A template sorts chunks by their rate (in whole sat per 1,000 vB, rounded down, on sigop-adjusted size), then by fee, both descending; takes each chunk that still fits 3,992,000 raw weight units (4,000,000 less 8,000 for the coinbase); skips one that does not and keeps trying the rest, so small cheap transactions fill the gap at the end; leaves out chunks under `-blockmintxfee` (1 sat/kvB); and pulls in a chunk's unselected ancestors. We do the same per block, for `Config::blocks` blocks (8 by default), the last taking everything left: the "+N blocks" tile.
+
+A transaction's **effective fee rate** is the rate of its chunk. A low-fee parent lifted by a child carries the child's chunk rate and lands where the node would put it.
+
+Why not the other calls:
+
+| Call | Why not, on every change |
+|---|---|
+| `getblocktemplate` | Only the first block, and 450 ms and 4.2 MB a call (measured). At one call per update that is about 175 MB a minute, more than the tracker's own listing, for an answer we already match (below) |
+| `getmempoolfeeratediagram` | Every chunk in order, but no txids: it cannot say which transaction is where. Our chunks match it: same count at every check, and the fixture test replays its top 118 points exactly |
+| `getmempoolentry` | Has the chunk's fee and weight but not its members or order; it would have to be fetched again for every transaction whose chunk changes |
+
+### Agreement with the node
+
+Measured on mainnet, 2026-11-12, 53,000–56,500 transactions, read-only, with `projected_watch` scoring our first block against `getblocktemplate` every 30 s (only when the node's template sits on our tip) and against every block that arrived.
+
+**Against the node's template, 41 checks over 21 minutes:**
+
+| | By transaction | By weight |
+|---|---|---|
+| Raw: share of the template in our first block | mean 90.3%, lowest 80.6% | mean 93.9%, lowest 83.2% |
+| Tie-aware | mean 99.99%, lowest 99.74% | mean 99.98%, lowest 99.72% |
+
+Everything the two disagree on sits in one fee-rate class at the block boundary: thousands of chunks with the same rate and fee (0.124 sat/vB at the time), among which the node picks in hash-map order. "Tie-aware" counts a template transaction we placed one block later as agreeing when one of ours the template left out has the same rate and fee. Above the boundary our first block is the template, transaction for transaction.
+
+**Against real blocks** (share of the block that was in our first projected block just before it):
+
+| Block | By transaction | By weight | Tie-aware, by weight | Never reached our mempool | We had placed later |
+|---|---|---|---|---|---|
+| 975,521 | 65.8% | 71.7% | not measured | 0.22% of weight | not measured |
+| 975,522 | 94.9% | 95.5% | 97.6% | 0.23% | 2.1% |
+| 975,523 | 84.4% | 94.8% | 98.3% | 0% | 1.7% |
+
+A miner builds from its own mempool and its own policy, breaks the same ties its own way, and some take transactions out of band, so a real block is a looser target than the node's template.
+
+### Cost
+
+Same runs, the server and node on one private network.
+
+| | |
+|---|---|
+| First projection | 55,400 transactions: 12 cluster requests (5,571 clusters asked), 6.0 MB, 0.88 s, on top of the tracker's initial sync |
+| A typical update | one request asking about 15 clusters, a few KB, 4–6 ms; then packing, mean 19 ms, worst 172 ms, on a blocking thread |
+| Each block | one update for the block (about 17 clusters), then every cluster again: about 12 requests, 6 MB, 0.5 s |
+| Calls and bytes added to the node | 43 requests a minute and 340 KB a minute over 21 minutes with one block: about 40 KB a minute between blocks plus 6 MB a block. The tracker reads about 150 MB a minute |
+| Deltas | mean 199 records; the block's delta set 13,926 records and removed 2,664 |
+| Memory | the tracker alone 39 MB RSS; tracker and projector 80 MB at 56,469 transactions, so about 40 MB, or 700 bytes a transaction, the published projection included |
+
+Packing holds the projector's write lock, so a `position` lookup can wait for one pack. Nothing runs on the async runtime's threads but the network calls.
+
+### The records and the stream
+
+One record per transaction, 49 bytes on the wire:
+
+| Field | Bytes | Is |
+|---|---|---|
+| txid | 32 | the key |
+| block | 1 | projected block, 0 for the next; the last block holds the rest |
+| rate | 4 | effective fee rate in sat per 1,000 vB: the rate of its chunk, the node's own number |
+| vsize | 4 | sigop-adjusted virtual size |
+| fee | 8 | its own base fee in satoshis |
+
+Each block also has totals: transaction count, raw weight, vsize, fees, the lowest, median (at the middle vbyte) and highest effective rate, and the vsize in each of the ten fee bands of `docs/DESIGN.md`. A rate is banded as it prints, rounded to two decimals, so 0.1996 sat/vB takes band 2.
+
+The stream works like the tracker's: `subscribe` returns the current projection and a subscription whose first delta is the next one, deltas are numbered without gaps, and a subscriber more than 64 deltas behind gets `Lagged` and subscribes again. A delta carries the records that entered, moved to another block or changed rate (`set`), the txids that left the mempool (`removed`), both sorted by txid, and every block's new totals. Applying `removed`, then `set`, to the previous projection's records gives the next one's; a test checks this against a running tracker. Order inside a block is not in the delta: it is by rate, and a client sorts by it. Ties keep no meaningful order (see below).
+
+A new block moves nearly every record in the projected blocks one block forward: 14,000 to 25,000 records (0.7 to 1.2 MB at 49 bytes), once per block. A WebSocket hub may prefer to send a fresh snapshot then.
+
+When the tip moves, the first block of the last projection on the old tip is kept as `Expected` (six of them), so the block mined on that tip can be audited against what we expected.
+
+### Failures and odd cases
+
+| Condition | What happens |
+|---|---|
+| Empty mempool | Every block is empty, with zero totals |
+| Smaller than a block (signet, testnet4, regtest) | Everything in the first block; the rest empty |
+| A cluster request fails or answers `Busy` | The affected transactions keep their last chunks, `stale` is set on the projection and in its deltas, and nothing is asked until the backoff ends (2 s, doubling to 30 s), however often the tracker publishes. New transactions wait with the rest, placed by their own fee rate |
+| The tracker's own cycles fail (the node is down) | The last good projection stays, marked `stale` until the tracker's next good cycle |
+| A transaction left between the tracker's listing and our request | Its slot answers "not in mempool": it keeps its record until the tracker removes it |
+| Large clusters | Up to 64 transactions (rbitcoin's limit): one answer, a few KB |
+| A reorg | Handled by the tracker; transactions from disconnected blocks come back as additions and are asked about like any other |
+| The projector falls behind the tracker by more than 64 deltas | It takes a fresh snapshot, diffs it against what it has, and asks the node for every cluster again |
+
+### Limits
+
+- **Ties at the boundary.** The node breaks ties between chunks of equal rate and fee in hash-map order, which nobody outside the node can know. Mainnet mempools now hold thousands of identical chunks at one rate, and when the block boundary falls inside such a class, which of them make the first block is arbitrary. The miner's own node picks among them by its own order anyway, so no explorer can predict that part. We break ties by age.
+- **Sigops are not counted.** The template also stops at 80,000 sigop cost. We do not have each transaction's sigops; a mainnet template uses about 8,000, so the limit does not bind today.
+- **Pulling ancestors.** We pull in a chunk's earlier, unplaced chunks of the same cluster, not only its ancestors, since the answer does not say which chunks depend on which. They differ only when an earlier chunk of a cluster did not fit and a later, independent one would.
+- **`prioritisetransaction`** deltas are in the node's chunk fees and rates but not in the record's own `fee`, which is the base fee. A delta applied to a transaction whose cluster does not otherwise change shows at the next block's refresh.
+- **One update behind.** The projection follows the tracker, so it trails the node by up to one tracker cycle (about 1.5 s) plus one cluster request.
+
+### What is exposed for logging
+
+The projector logs nothing itself. `Projector::events()` yields:
+
+| Event | Fields |
+|---|---|
+| `Update` | per update: tracker deltas folded in, clusters asked, node requests, response bytes, time waiting for the node, time packing, transactions, chunks, records set and removed, `stale`, the published `seq` |
+| `FetchFailed` | the error, consecutive failures, transactions pending, the wait before the retry |
+| `Resynced` | the projector fell behind the tracker and rebuilt from a snapshot: transactions |
+| `SubscriberLagged` | how many deltas the subscriber missed |
