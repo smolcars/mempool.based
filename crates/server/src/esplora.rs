@@ -86,6 +86,8 @@ pub enum Source {
     Coalesced,
     /// It got a hot answer younger than [`HOT_TTL`]: no upstream call.
     Hot,
+    /// A block summary from the summary cache (`crate::summary`): no upstream call.
+    Cached,
 }
 
 /// What a request asks for, once its path and query have parsed.
@@ -593,7 +595,7 @@ fn txid(s: &str) -> Result<Txid, ApiError> {
     hash(s).ok_or(ApiError::bad_request("invalid txid"))
 }
 
-fn block_hash(s: &str) -> Result<BlockHash, ApiError> {
+pub(crate) fn block_hash(s: &str) -> Result<BlockHash, ApiError> {
     hash(s).ok_or(ApiError::bad_request("invalid block hash"))
 }
 

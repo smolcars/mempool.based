@@ -93,6 +93,7 @@ fn started(config: &Config, log: logging::Settings) {
         ws_max_subscriptions: config.ws.max_subscriptions,
         ws_send_queue: config.ws.send_queue,
         ws_idle_timeout_secs: config.ws.idle_timeout.as_secs(),
+        block_summary_cache_mb: l.summary_cache_bytes >> 20,
     });
     for n in &config.networks {
         logging::emit(&NetworkEnabled {

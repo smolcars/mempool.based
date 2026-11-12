@@ -42,6 +42,7 @@ Anything else (not JSON, an unknown `op`, a missing or misspelled field, an unkn
 | Message | Meaning |
 |---|---|
 | `{"topic":"blocks","type":"block","block":{…}}` | A block joined the best chain. `block` is the node's Esplora JSON for it, exactly as `GET /api/block/:hash` returns it (`id`, `height`, `previousblockhash`, `timestamp`, `tx_count`, `size`, `weight`, …). Also the snapshot sent on subscribe: the current tip's block |
+| `{"topic":"blocks","type":"summary","summary":{…}}` | A block's fee facts, exactly as `GET /app/block/:hash/summary` returns them ([`FRONTEND.md`](FRONTEND.md#block-summaries)); `summary.id` names the block. Sent after the `block` message for each new tip, once it is computed (well under a second on mainnet), and for older blocks the server fills in after a gap or at startup. Never a snapshot: a new subscriber fetches the facts of the tiles it shows over HTTP, from the batch route |
 | `{"topic":"blocks","type":"reorg","fork_height":N}` | Every block above `N` left the best chain. `block` messages for the new branch follow, in height order |
 | `{"topic":"blocks","type":"resync","tip":{"height":…,"hash":"…"}}` | Blocks may have been missed: the server lost and regained the node, or could not fetch a new block. `tip` is the best block now, or `null`. After a failed fetch it is also the snapshot, until the next `block` |
 
@@ -53,7 +54,7 @@ Anything else (not JSON, an unknown `op`, a missing or misspelled field, an unkn
 
 On `reorg`, drop blocks above `fork_height`. On `resync`, compare `tip` with what is shown and, if it differs, fetch over HTTP. After a reconnect, `hello` and the subscribe snapshot give the tip again; compare as for `resync`.
 
-A `block` message is about 500 bytes whatever the block's size: transactions are not included. The server fetches each new block's JSON once, whatever the number of subscribers.
+A `block` message is about 500 bytes whatever the block's size: transactions are not included. The server fetches each new block's JSON once, whatever the number of subscribers. A `summary` message is about 400 bytes. Key it by `summary.id`; one whose block is not shown can be dropped.
 
 ## Connection rules
 
@@ -94,7 +95,7 @@ A client closed for 1002 to 4002 has a bug; reconnecting will not help. After 40
 - **Fan-out.** A topic message is encoded once into a complete WebSocket frame (header and payload) held behind a reference count. Sending it to a subscriber puts a reference on that subscriber's bounded queue; the subscriber's writer puts the same bytes on the wire. Nothing is copied or encoded per connection.
 - **Cost per connection** is one task, its queue and its subscriptions: about 5 KB of server memory measured with 5,000 open sockets, plus kernel socket buffers. Memory grows linearly with connections. Queued messages are shared, so a full queue costs 64 references, not 64 copies.
 - **Cost per message** is one `O(subscribers)` pass of non-blocking queue pushes under the topic's lock, then one write per subscriber on its own task. Measured: about 2 ms to queue a block to 5,000 sockets, and about 35 ms until 5,000 local clients had all read it.
-- **Upstream work is shared and capped.** No client message reaches the node. The only upstream call is one Esplora block fetch per new block, made by one task per network. `hello` and the snapshots come from memory.
+- **Upstream work is shared and capped.** No client message reaches the node. The only upstream calls are one Esplora block fetch per new block, made by one task per network, and the block's summary, computed once by the summary routes' own capped worker. `hello` and the snapshots come from memory.
 - **Shutdown.** Every socket is sent `1001` and given up to `REQUEST_TIMEOUT_SECS`, counted from the signal, to finish, together with the HTTP connections. Sockets still open then are dropped, and the server waits for them to release their slots.
 - **Behind TLS.** The reverse proxy must pass `Upgrade` and `Connection` through (nginx: `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, `proxy_set_header Connection "upgrade"`) and keep idle connections open longer than `WS_IDLE_TIMEOUT_SECS / 2`, the ping interval. The page connects to `wss://` on its own host, which the Content-Security-Policy's `default-src 'self'` allows in current Chromium and Firefox. Older WebKit did not match `ws:`/`wss:` with `'self'` ([WebKit bug 201591](https://bugs.webkit.org/show_bug.cgi?id=201591)); if a Safari user cannot connect, that is the cause.
 

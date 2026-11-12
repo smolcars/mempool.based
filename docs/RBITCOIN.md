@@ -23,7 +23,7 @@ Upstream references: `COMPAT.md`, `docs/rpc.md`, `docs/lightning.md` and `docs/e
 |---|---|---|
 | Esplora REST | `--esplora-listen` | Blocks, transactions, addresses, outspends, broadcast, fee estimates |
 | Electrum TCP | `--electrum-listen` | Push: new headers, tracked scripthashes, tracked outpoints |
-| JSON-RPC | `--rpc-listen` | Mempool listing, cluster chunks, block template, block stats |
+| JSON-RPC | `--rpc-listen` | Mempool listing, cluster chunks, block template, block stats, block summaries (`getblock` verbosity 2) |
 | Address index | `--sh-index` | Address and scripthash routes. Off by default in rbitcoin; required for address pages |
 
 RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `--rpcuser` / `--rpcpassword`.

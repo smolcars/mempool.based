@@ -163,6 +163,8 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
     assert_eq!(block.tx[0].fee, None);
     assert_eq!(block.tx[1].fee, Some(Amount::from_sat(13_538)));
     assert_eq!((block.tx[1].vsize, block.tx[1].weight), (218, 870));
+    assert_eq!(block.tx[0].value, Amount::from_sat(313_975_029));
+    assert_eq!(block.tx[1].value, Amount::from_sat(62_213_389));
     assert!(block.weight <= 4_000_000);
     let stats = rpc
         .block_stats(BlockRef::Height(info.blocks))

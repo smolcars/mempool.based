@@ -126,7 +126,7 @@ impl Hub {
     }
 
     /// [`Hub::publish`] for a message caused by a node notification received at `since`.
-    fn announce(
+    pub(crate) fn announce(
         &self,
         topic: Topic,
         kind: &'static str,
@@ -202,6 +202,7 @@ async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last)
             let msg = json!({ "topic": "blocks", "type": "block", "block": block });
             ctx.hub
                 .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+            ctx.summaries.new_tip(tip.hash, since);
         }
         None => {
             last.failures = last.failures.saturating_add(1);

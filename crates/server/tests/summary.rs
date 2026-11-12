@@ -1,0 +1,531 @@
+//! The block summary routes against a mock JSON-RPC node on port 0. Nothing here reaches a node.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
+use std::collections::HashMap;
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use axum::Json;
+use axum::extract::State;
+use axum::routing::post;
+use logging::{Format, Level, Settings};
+use mempool_based::summary::{CLIENT_BURST, MAX_PENDING};
+use mempool_based::{App, Config, IMMUTABLE};
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+/// Transactions in each mock block, the coinbase included.
+const TXS: usize = 100;
+/// Bytes the server's cache counts for one mock block: header, records and fixed overhead.
+const ENTRY: usize = 8 + 20 * TXS + 512;
+
+// The node side.
+
+#[derive(Default)]
+struct Node {
+    delay: Duration,
+    /// `getblock` calls, by hash.
+    calls: Mutex<HashMap<String, usize>>,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+}
+
+impl Node {
+    fn calls(&self, hash: &str) -> usize {
+        self.calls.lock().unwrap().get(hash).copied().unwrap_or(0)
+    }
+
+    fn total(&self) -> usize {
+        self.calls.lock().unwrap().values().sum()
+    }
+}
+
+/// Answers `getblock` for any hash not starting `ff` with a block of [`TXS`] transactions:
+/// the coinbase, then fee `i * 10` sats on 100 vB. Hashes starting `ff` are unknown (`-5`).
+async fn rpc(
+    State(node): State<Arc<Node>>,
+    Json(req): Json<Value>,
+) -> (axum::http::StatusCode, Json<Value>) {
+    assert_eq!(
+        req["method"], "getblock",
+        "the summary routes call nothing else"
+    );
+    let hash = req["params"][0].as_str().unwrap().to_owned();
+    assert_eq!(req["params"][1], 2);
+    *node.calls.lock().unwrap().entry(hash.clone()).or_default() += 1;
+    let now = node.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+    node.max_in_flight.fetch_max(now, Ordering::SeqCst);
+    tokio::time::sleep(node.delay).await;
+    node.in_flight.fetch_sub(1, Ordering::SeqCst);
+    if hash.starts_with("ff") {
+        let e =
+            json!({"result": null, "error": {"code": -5, "message": "Block not found"}, "id": 0});
+        return (axum::http::StatusCode::NOT_FOUND, Json(e));
+    }
+    let tx = (0..TXS)
+        .map(|i| {
+            let mut t = json!({"txid": "00".repeat(32), "vsize": 100, "weight": 400, "size": 100,
+                "vout": [{"value": 0.0001, "n": 0}, {"value": 0.00000002, "n": 1}]});
+            if i > 0 {
+                t["fee"] = json!(i as f64 * 10.0 / 1e8);
+            }
+            t
+        })
+        .collect::<Vec<_>>();
+    let block = json!({"hash": hash, "confirmations": 1, "height": 800_000, "time": 1, "mediantime": 1,
+        "size": 1000, "strippedsize": 900, "weight": 4000, "tx": tx});
+    (
+        axum::http::StatusCode::OK,
+        Json(json!({"result": block, "error": null, "id": 0})),
+    )
+}
+
+async fn mock(delay: Duration) -> (u16, Arc<Node>) {
+    let node = Arc::new(Node {
+        delay,
+        ..Node::default()
+    });
+    let app = axum::Router::new()
+        .route("/", post(rpc))
+        .with_state(Arc::clone(&node));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (port, node)
+}
+
+/// The server on port 0 against a mock node answering after `delay`, with room for
+/// `cache_entries` summaries. Clients are told apart by `X-Real-IP`.
+async fn start(delay: Duration, cache_entries: usize) -> (String, Arc<Node>) {
+    capture();
+    let (port, node) = mock(delay).await;
+    let vars: HashMap<&str, String> = [
+        ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
+        ("REGTEST_RPC_PORT", port.to_string()),
+        ("REGTEST_RPC_USER", "u".to_owned()),
+        ("REGTEST_RPC_PASSWORD", "p".to_owned()),
+        ("REGTEST_ESPLORA_URL", "http://127.0.0.1:1".to_owned()),
+        ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1".to_owned()),
+        ("TRUSTED_PROXY_HEADER", "X-Real-IP".to_owned()),
+    ]
+    .into_iter()
+    .collect();
+    let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
+    config.limits.client_rate_per_sec = 10_000;
+    config.limits.client_burst = 10_000;
+    config.limits.client_requests = 10_000;
+    config.limits.max_requests = 10_000;
+    config.limits.summary_cache_bytes = cache_entries * ENTRY;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(App::new(&config).serve(listener, std::future::pending()));
+    (addr, node)
+}
+
+// The client side.
+
+#[derive(Debug)]
+struct Reply {
+    status: u16,
+    head: String,
+    body: Vec<u8>,
+    took: Duration,
+}
+
+impl Reply {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.head
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{name}: ")))
+    }
+
+    fn json(&self) -> Value {
+        serde_json::from_slice(&self.body).unwrap()
+    }
+}
+
+/// `GET target` from client `ip`, with the request line exactly as written.
+async fn get(addr: &str, target: &str, ip: &str) -> Reply {
+    let started = Instant::now();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let req =
+        format!("GET {target} HTTP/1.1\r\nHost: t\r\nConnection: close\r\nX-Real-IP: {ip}\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await.unwrap();
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
+    Reply {
+        status: head[9..12].parse().unwrap(),
+        head,
+        body: raw[split + 4..].to_vec(),
+        took: started.elapsed(),
+    }
+}
+
+/// A distinct, known block hash.
+fn hash(n: u32) -> String {
+    format!("{n:064x}")
+}
+
+fn summary(h: &str) -> String {
+    format!("/regtest/app/block/{h}/summary")
+}
+
+// The log, shared by every test here.
+
+#[derive(Clone)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn capture() -> &'static Capture {
+    static CAPTURE: OnceLock<Capture> = OnceLock::new();
+    CAPTURE.get_or_init(|| {
+        let c = Capture(Arc::default());
+        let settings = Settings {
+            format: Format::Json,
+            level: Level::Debug,
+        };
+        assert!(logging::init(settings, c.clone()));
+        c
+    })
+}
+
+/// The `http_request` event of the response `r`.
+async fn request_event(r: &Reply) -> Value {
+    let id = r.header("x-request-id").unwrap().to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        logging::flush(Duration::from_secs(1));
+        let raw = String::from_utf8(capture().0.lock().unwrap().clone()).unwrap();
+        if let Some(v) = raw
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .find(|v| v["event"] == "http_request" && v["request_id"] == id.as_str())
+        {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "not logged");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+// Tests.
+
+#[tokio::test]
+async fn facts_records_and_batches_are_served_and_cached_for_good() {
+    let (addr, node) = start(Duration::ZERO, 100).await;
+    let (a, b) = (hash(1), hash(2));
+
+    let r = get(&addr, &summary(&a), "192.0.2.1").await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
+    assert_eq!(r.header("content-type"), Some("application/json"));
+    let f = r.json();
+    assert_eq!(f["id"], a.as_str());
+    assert_eq!(
+        (f["height"].as_u64(), f["tx_count"].as_u64()),
+        (Some(800_000), Some(100))
+    );
+    // Fees 10, 20 … 990 sats on 100 vB each: 0.1 to 9.9 sat/vB.
+    assert_eq!(f["fees"], 49_500);
+    assert_eq!(f["vsize"], 9_900);
+    assert_eq!(f["fee_rate"]["min"], 0.1);
+    assert_eq!(f["fee_rate"]["median"], 5.0);
+    assert_eq!(f["fee_rate"]["max"], 9.9);
+    let bands: u64 = f["fee_bands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .sum();
+    assert_eq!(bands, 9_900);
+    let e = request_event(&r).await;
+    assert_eq!(
+        (e["endpoint"].as_str(), e["source"].as_str()),
+        (Some("block_summary"), Some("upstream"))
+    );
+
+    let r = get(&addr, &format!("/regtest/app/block/{a}/txs"), "192.0.2.1").await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
+    assert_eq!(r.header("content-type"), Some("application/octet-stream"));
+    assert_eq!(r.body.len(), 8 + 20 * TXS);
+    assert_eq!(r.body[..8], [1, 0, 0, 0, TXS as u8, 0, 0, 0]);
+    // The second transaction: 100 vB, 10 sats, 10 002 sats out.
+    let rec = &r.body[28..48];
+    assert_eq!(u32::from_le_bytes(rec[..4].try_into().unwrap()), 100);
+    assert_eq!(u64::from_le_bytes(rec[4..12].try_into().unwrap()), 10);
+    assert_eq!(u64::from_le_bytes(rec[12..].try_into().unwrap()), 10_002);
+    assert_eq!(request_event(&r).await["source"], "cached");
+    assert_eq!(
+        node.calls(&a),
+        1,
+        "facts and records come from one computation"
+    );
+
+    let r = get(
+        &addr,
+        &format!("/regtest/app/blocks/summary?hashes={b},{a}%2C{b}"),
+        "192.0.2.1",
+    )
+    .await;
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
+    let all = r.json();
+    let ids: Vec<&str> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [b.as_str(), a.as_str(), b.as_str()]);
+    assert_eq!((node.calls(&a), node.calls(&b)), (1, 1));
+
+    // HEAD is GET without the body.
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
+    let req = format!(
+        "HEAD {} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n",
+        summary(&a)
+    );
+    stream.write_all(req.as_bytes()).await.unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).await.unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+    assert!(raw.ends_with("\r\n\r\n"), "{raw}");
+}
+
+#[tokio::test]
+async fn identical_concurrent_requests_share_one_node_call() {
+    let (addr, node) = start(Duration::from_millis(300), 100).await;
+    let h = hash(7);
+    let tasks: Vec<_> = (0..100)
+        .map(|i| {
+            let (addr, h) = (addr.clone(), h.clone());
+            // Spread over many clients, and over both routes that need the same computation.
+            let path = if i % 2 == 0 {
+                summary(&h)
+            } else {
+                format!("/regtest/app/block/{h}/txs")
+            };
+            tokio::spawn(async move {
+                get(&addr, &path, &format!("10.0.{}.{}", i / 250, i % 250)).await
+            })
+        })
+        .collect();
+    let mut sources = HashMap::<String, usize>::new();
+    for t in tasks {
+        let r = t.await.unwrap();
+        assert_eq!(r.status, 200, "{r:?}");
+        let e = request_event(&r).await;
+        *sources
+            .entry(e["source"].as_str().unwrap().to_owned())
+            .or_default() += 1;
+    }
+    assert_eq!(node.calls(&h), 1, "{sources:?}");
+    assert_eq!(sources.get("upstream"), Some(&1), "{sources:?}");
+}
+
+#[tokio::test]
+async fn the_cache_is_bounded_and_drops_the_least_recently_used() {
+    let (addr, node) = start(Duration::ZERO, 3).await;
+    for n in 1..=3 {
+        assert_eq!(
+            get(&addr, &summary(&hash(n)), "192.0.2.2").await.status,
+            200
+        );
+    }
+    // Touch 1, then add a fourth: 2 is the least recently used and goes.
+    assert_eq!(
+        get(&addr, &summary(&hash(1)), "192.0.2.2").await.status,
+        200
+    );
+    assert_eq!(
+        get(&addr, &summary(&hash(4)), "192.0.2.2").await.status,
+        200
+    );
+    for n in [1, 3, 4] {
+        let r = get(&addr, &summary(&hash(n)), "192.0.2.2").await;
+        assert_eq!(request_event(&r).await["source"], "cached", "block {n}");
+    }
+    let r = get(&addr, &summary(&hash(2)), "192.0.2.2").await;
+    assert_eq!(request_event(&r).await["source"], "upstream");
+    assert_eq!(node.calls(&hash(2)), 2);
+    assert_eq!(node.total(), 5);
+}
+
+#[tokio::test]
+async fn computations_are_capped_and_a_full_queue_is_refused_at_once() {
+    let delay = Duration::from_millis(200);
+    let (addr, node) = start(delay, 100).await;
+    // 20 clients, each asking for a different uncached block at the same moment.
+    let tasks: Vec<_> = (0..20u32)
+        .map(|i| {
+            let addr = addr.clone();
+            tokio::spawn(async move {
+                get(&addr, &summary(&hash(100 + i)), &format!("198.51.100.{i}")).await
+            })
+        })
+        .collect();
+    let mut ok = Vec::new();
+    let mut busy = Vec::new();
+    for t in tasks {
+        let r = t.await.unwrap();
+        match r.status {
+            200 => ok.push(r),
+            503 => busy.push(r),
+            s => panic!("unexpected {s}: {r:?}"),
+        }
+    }
+    assert_eq!(ok.len(), MAX_PENDING, "the queue admits exactly its size");
+    assert_eq!(
+        node.max_in_flight.load(Ordering::SeqCst),
+        1,
+        "one getblock at a time"
+    );
+    assert_eq!(node.total(), MAX_PENDING);
+    for r in &busy {
+        assert!(r.took < delay, "refused without waiting: {:?}", r.took);
+        assert_eq!(r.json()["error"], "server busy");
+        assert_eq!(r.header("retry-after"), Some("1"));
+        assert_eq!(r.header("cache-control"), Some("no-store"));
+    }
+    assert_eq!(request_event(&busy[0]).await["refused"], "summary_busy");
+    // Run one after another, the last admitted waited for the five before it.
+    let slowest = ok.iter().map(|r| r.took).max().unwrap();
+    assert!(slowest >= delay * MAX_PENDING as u32, "{slowest:?}");
+    // A cold batch larger than the queue is refused at once, but the work it got admitted goes
+    // on into the cache, so its retry finds more of it each time and is served in the end.
+    let list: Vec<String> = (500..510).map(hash).collect();
+    let target = format!("/regtest/app/blocks/summary?hashes={}", list.join(","));
+    let first = get(&addr, &target, "198.51.100.200").await;
+    assert_eq!(first.status, 503);
+    assert!(first.took < delay);
+    let mut tries = 1;
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        tries += 1;
+        let r = get(&addr, &target, "198.51.100.200").await;
+        if r.status == 200 {
+            assert_eq!(r.json().as_array().unwrap().len(), 10);
+            break;
+        }
+        assert!(tries < 5, "{r:?}");
+    }
+    assert_eq!(
+        list.iter().map(|h| node.calls(h)).sum::<usize>(),
+        10,
+        "each block computed once"
+    );
+}
+
+#[tokio::test]
+async fn one_client_may_start_only_a_few_computations() {
+    let (addr, node) = start(Duration::ZERO, 100).await;
+    let me = "203.0.113.5";
+    for n in 0..CLIENT_BURST {
+        let r = get(&addr, &summary(&hash(200 + n)), me).await;
+        assert_eq!(r.status, 200, "{r:?}");
+    }
+    let r = get(&addr, &summary(&hash(300)), me).await;
+    assert_eq!(r.status, 429, "{r:?}");
+    assert_eq!(r.header("retry-after"), Some("2"));
+    assert_eq!(r.header("cache-control"), Some("no-store"));
+    assert_eq!(request_event(&r).await["refused"], "route_rate");
+    assert_eq!(node.calls(&hash(300)), 0);
+    // Cached blocks cost nothing and are still served; another client is not affected.
+    assert_eq!(get(&addr, &summary(&hash(200)), me).await.status, 200);
+    assert_eq!(
+        get(&addr, &summary(&hash(300)), "203.0.113.6").await.status,
+        200
+    );
+    // In a batch each uncached block counts.
+    let other = "203.0.113.7";
+    let list: Vec<String> = (400..400 + CLIENT_BURST + 1).map(hash).collect();
+    let batch = |l: &[String]| format!("/regtest/app/blocks/summary?hashes={}", l.join(","));
+    let half = CLIENT_BURST as usize / 2;
+    assert_eq!(get(&addr, &batch(&list[..half]), other).await.status, 200);
+    assert_eq!(
+        get(&addr, &batch(&list[half..2 * half]), other)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        get(&addr, &batch(&list[..2 * half]), other).await.status,
+        200
+    );
+    assert_eq!(
+        get(&addr, &batch(&list[2 * half..]), other).await.status,
+        429
+    );
+}
+
+#[tokio::test]
+async fn hostile_parameters_never_reach_the_node() {
+    let (addr, node) = start(Duration::ZERO, 100).await;
+    let good = hash(1);
+    let long = "a".repeat(10_000);
+    let eleven = [good.as_str(); 11].join(",");
+    let cases = [
+        format!("/regtest/app/block/{}/summary", &good[1..]),
+        format!("/regtest/app/block/{good}0/summary"),
+        format!("/regtest/app/block/0x{}/summary", &good[2..]),
+        format!("/regtest/app/block/{}g/summary", &good[1..]),
+        format!("/regtest/app/block/{long}/txs"),
+        format!("/regtest/app/block/%2e%2e%2f{}/summary", &good[9..]),
+        format!("/regtest/app/block/{good}/summary?asof={good}"),
+        format!("/regtest/app/block/{good}/txs?x"),
+        "/regtest/app/blocks/summary".to_owned(),
+        "/regtest/app/blocks/summary?hashes=".to_owned(),
+        format!("/regtest/app/blocks/summary?hashes={good},"),
+        format!("/regtest/app/blocks/summary?hashes={good}&hashes={good}"),
+        format!("/regtest/app/blocks/summary?hashes={eleven}"),
+        format!("/regtest/app/blocks/summary?hashes={long}"),
+    ];
+    for target in &cases {
+        let r = get(&addr, target, "192.0.2.9").await;
+        assert_eq!(r.status, 400, "{target}: {r:?}");
+        assert!(r.json()["error"].is_string());
+        assert_eq!(r.header("cache-control"), Some("no-store"), "{target}");
+    }
+    for target in [
+        format!("/regtest/app/block/{good}"),
+        format!("/regtest/app/block/{good}/summary/"),
+        format!("/regtest/app/block/{good}/other"),
+    ] {
+        assert_eq!(
+            get(&addr, &target, "192.0.2.9").await.status,
+            404,
+            "{target}"
+        );
+    }
+    assert_eq!(node.total(), 0);
+
+    // An unknown block is a 404, not cached: the next request asks again.
+    let unknown = format!("ff{}", &good[2..]);
+    for _ in 0..2 {
+        let r = get(&addr, &summary(&unknown), "192.0.2.9").await;
+        assert_eq!(r.status, 404);
+        assert_eq!(r.header("cache-control"), Some("no-store"));
+    }
+    assert_eq!(node.calls(&unknown), 2);
+}

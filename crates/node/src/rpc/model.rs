@@ -85,6 +85,9 @@ pub struct BlockTx {
     pub weight: u32,
     /// Serialized size with witness.
     pub size: u32,
+    /// Sum of the output values, from `vout`.
+    #[serde(rename = "vout", deserialize_with = "output_total")]
+    pub value: Amount,
 }
 
 /// `getblockstats`. Fees and values are in satoshis, fee rates in whole sat/vB
@@ -362,6 +365,32 @@ fn btc<'de, D: Deserializer<'de>>(d: D) -> Result<Amount, D::Error> {
 
 fn signed_btc<'de, D: Deserializer<'de>>(d: D) -> Result<SignedAmount, D::Error> {
     Ok(SignedAmount::from_sat(btc_sats(d)?))
+}
+
+/// Sums `vout[].value` without keeping the outputs.
+fn output_total<'de, D: Deserializer<'de>>(d: D) -> Result<Amount, D::Error> {
+    #[derive(Deserialize)]
+    struct Output {
+        #[serde(deserialize_with = "btc")]
+        value: Amount,
+    }
+    struct Sum;
+    impl<'de> serde::de::Visitor<'de> for Sum {
+        type Value = Amount;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a list of outputs")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Amount, A::Error> {
+            let mut total = Amount::ZERO;
+            while let Some(out) = seq.next_element::<Output>()? {
+                total = total
+                    .checked_add(out.value)
+                    .ok_or_else(|| A::Error::custom("output total out of range"))?;
+            }
+            Ok(total)
+        }
+    }
+    d.deserialize_seq(Sum)
 }
 
 fn opt_btc<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Amount>, D::Error> {
