@@ -78,19 +78,19 @@ export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => v
               class="address-stat--balance"
               label="Balance"
               ready={ready()}
-              value={<Amount sats={chain().funded_txo_sum - chain().spent_txo_sum} />}
+              value={<Amount sats={chain().funded_txo_sum - chain().spent_txo_sum} lead />}
               sub="Confirmed"
             />
             <Stat
               label="Received"
               ready={ready()}
-              value={<Amount sats={chain().funded_txo_sum} />}
+              value={<Amount sats={chain().funded_txo_sum} lead />}
               sub={plural(chain().funded_txo_count, "output", "outputs")}
             />
             <Stat
               label="Sent"
               ready={ready()}
-              value={<Amount sats={chain().spent_txo_sum} />}
+              value={<Amount sats={chain().spent_txo_sum} lead />}
               sub={plural(chain().spent_txo_count, "output", "outputs")}
             />
             <Stat

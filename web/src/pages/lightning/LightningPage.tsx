@@ -410,7 +410,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
     {
       header: "Capacity, BTC",
       numeric: true,
-      cell: (c) => <Amount sats={c.capacity} unit={false} />,
+      cell: (c) => <Amount sats={c.capacity} unit={false} short />,
     },
     {
       header: "Block",

@@ -937,6 +937,10 @@
     .tx-flow__addr--short {
       display: contents;
     }
+    /* On a phone the amount and where it went lead; the script type is in the inspector. */
+    .tx-flow__meta .tx-flow__type {
+      display: none;
+    }
     .tx-flow__addr--whole {
       display: none;
     }

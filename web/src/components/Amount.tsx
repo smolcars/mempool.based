@@ -17,6 +17,8 @@ export function Amount(props: {
   signed?: boolean;
   short?: boolean;
   approx?: boolean;
+  /** Exact, but the whole bitcoins and two decimals lead and the rest is quieter: a balance. */
+  lead?: boolean;
 }) {
   const parts = () => btcParts(props.sats);
   const direction = () => (props.signed && props.sats > 0 ? "in" : undefined);

@@ -309,7 +309,7 @@ function ChannelList(props: { rows: NodeChannel[]; closed: boolean }) {
     {
       header: "Capacity, BTC",
       numeric: true,
-      cell: (c) => <Amount sats={c.capacity} unit={false} />,
+      cell: (c) => <Amount sats={c.capacity} unit={false} short />,
     },
     ...(props.closed
       ? [

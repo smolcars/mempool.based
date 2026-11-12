@@ -82,7 +82,7 @@ function Found(props: { r: SearchResult; q: string }) {
               {
                 header: "Capacity, BTC",
                 numeric: true,
-                cell: (c) => <Amount sats={c.capacity} unit={false} />,
+                cell: (c) => <Amount sats={c.capacity} unit={false} short />,
               },
               { header: "State", cell: (c) => STATE_WORDS[c.state] ?? c.state },
             ]}

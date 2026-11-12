@@ -215,7 +215,7 @@ export function nodeColumns(by: "capacity" | "channels" | "age"): Column<RankedN
       header: "Capacity, BTC",
       numeric: true,
       optional: by === "channels",
-      cell: (n) => <Amount sats={n.capacity} unit={false} />,
+      cell: (n) => <Amount sats={n.capacity} unit={false} short />,
     },
     {
       header: "Channels",

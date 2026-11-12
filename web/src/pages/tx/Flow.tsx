@@ -272,9 +272,11 @@ export function Flow(props: {
                   </Show>
                 </span>
                 <span class="tx-flow__meta">
-                  {input.prevout?.scriptpubkey_address
-                    ? classify(input.prevout.scriptpubkey).label
-                    : ""}
+                  <span class="tx-flow__type">
+                    {input.prevout?.scriptpubkey_address
+                      ? classify(input.prevout.scriptpubkey).label
+                      : ""}
+                  </span>
                 </span>
               </li>
             )}
@@ -348,7 +350,7 @@ export function Flow(props: {
               </span>
               <span class="tx-flow__meta">
                 <Show when={out.scriptpubkey_address}>
-                  <span>{classify(out.scriptpubkey).label}</span>
+                  <span class="tx-flow__type">{classify(out.scriptpubkey).label}</span>
                 </Show>
                 <Spent
                   unspendable={whyUnspendable(props.tx, out) !== null}
