@@ -156,7 +156,6 @@
   .ln-key,
   .ln-id {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     font-size: var(--text-xs);
     white-space: nowrap;
   }
@@ -341,7 +340,6 @@
   }
   .ln-chips--mono li {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
   }
   .ln-chips__req {
     color: var(--color-text-muted);

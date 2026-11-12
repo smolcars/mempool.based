@@ -27,7 +27,6 @@
   }
   .address-head__raw {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     overflow-wrap: anywhere;
     color: var(--color-text-muted);
   }

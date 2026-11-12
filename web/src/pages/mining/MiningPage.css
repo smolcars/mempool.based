@@ -253,7 +253,7 @@
   }
   .mining-tile__height {
     font-size: var(--text-lg);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     line-height: var(--leading-tight);
   }
   .mining-tile__fee {
@@ -336,7 +336,6 @@
     border-radius: var(--radius-s);
     background: var(--color-surface-sunken);
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     overflow-wrap: anywhere;
   }
 

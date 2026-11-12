@@ -72,6 +72,23 @@ export function formatBtc(sats: number): string {
   return p ? `${p.sign}${p.whole}.${p.significant}${p.zeros}` : MISSING;
 }
 
+/**
+ * BTC to the precision a summary needs, magnitude first: whole bitcoins from 1 000 (`2 799`), two
+ * decimals from 1 (`3.15`), three significant digits below (`0.0225`, `0.00149`). Rounded to
+ * nearest; the exact amount belongs in a title or a detail page.
+ */
+export function formatBtcShort(sats: number): string {
+  if (!Number.isSafeInteger(sats)) return MISSING;
+  const btc = Math.abs(sats) / SATS_PER_BTC;
+  const sign = sats < 0 ? "−" : "";
+  if (btc === 0) return "0";
+  if (btc >= 999.5) return sign + groupDigits(btc);
+  if (btc >= 0.9995) return sign + btc.toFixed(2);
+  // Three significant digits, never written as a power of ten.
+  const decimals = Math.min(8, 2 - Math.floor(Math.log10(btc)));
+  return sign + btc.toFixed(decimals);
+}
+
 /** sats as a grouped integer: `167`, `1 250 000`. */
 export function formatSats(sats: number): string {
   return Number.isSafeInteger(sats) ? groupDigits(sats) : MISSING;
@@ -99,12 +116,17 @@ export function formatFeeRate(rate: number): string {
 }
 
 /**
- * A recommended fee rate at the node's resolution, 0.001 sat/vB: `0.101`, `12.501`. Rounded up,
- * never down, so the figure shown is never less than the rate it stands for.
+ * A recommended fee rate, printed as {@link formatFeeRate} prints but rounded up, never down, so the
+ * figure shown is never less than the rate it stands for: `0.133` → `0.14`, `12.51` → `12.6`.
  */
-export function formatFeeRatePrecise(rate: number): string {
+export function formatFeeRateUp(rate: number): string {
   if (!Number.isFinite(rate) || rate < 0) return MISSING;
-  return (Math.ceil(Number((rate * 1000).toPrecision(12))) / 1000).toFixed(3);
+  const up = (decimals: number) => Math.ceil(Number((rate * 10 ** decimals).toPrecision(12)));
+  const hundredths = up(2);
+  if (hundredths < 1000) return (hundredths / 100).toFixed(2);
+  const tenths = up(1);
+  if (tenths < 1000) return (tenths / 10).toFixed(1);
+  return groupDigits(Math.ceil(Number(rate.toPrecision(12))));
 }
 
 /** Fee rate in sat/vB from a fee in sats and a size in vB, or null when the size is not positive. */

@@ -3,19 +3,26 @@
     display: inline-flex;
   }
   .network__button {
+    position: relative;
     anchor-name: --network-switch;
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 32px;
+    min-height: 34px;
     padding: 3px var(--space-3) 3px 10px;
     border: 1px solid var(--color-line-strong);
     border-radius: var(--radius-pill);
-    background: var(--color-surface-sunken);
+    background: var(--color-surface);
     font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
+    font-weight: var(--weight-medium);
     white-space: nowrap;
     cursor: pointer;
+  }
+  /* A 44 px target around the drawn pill. */
+  .network__button::after {
+    content: "";
+    position: absolute;
+    inset: -5px -2px;
   }
   .network__button--static {
     cursor: default;
@@ -63,6 +70,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    min-height: var(--touch);
     padding: var(--space-2) var(--space-3);
     border-radius: 4px;
     font-size: var(--text-sm);

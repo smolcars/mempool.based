@@ -8,79 +8,94 @@
  */
 
 @font-face {
-  font-family: "Recursive";
-  /* Subset: Latin, Sans Linear, axes wght 300–800 and MONO 0–1 only. Rebuild steps in docs/DESIGN.md. */
+  font-family: "Recursive Mono";
+  /* Subset: Recursive's Mono Linear, wght 400–700 only. Rebuild steps in docs/DESIGN.md. */
   src: url("fonts/recursive.woff2") format("woff2");
-  font-weight: 300 800;
+  font-weight: 400 700;
   font-style: normal;
   font-display: swap;
+}
+
+/* The same file, for one character: the narrow no-break space that groups digits. Prose is set in
+   the reader's system font, and each engine draws that space at another width (WebKit's is too thin
+   to see), so it always comes from here. */
+@font-face {
+  font-family: "Recursive Gap";
+  src: url("fonts/recursive.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+202F;
 }
 
 :root {
   color-scheme: light;
 
-  /* ---- Color: limestone (light) ---- */
-  --color-bg: #e7ece9;
-  --color-surface: #fbfcfb;
+  /* ---- Color: light ---- */
+  --color-bg: #f4f6f7;
+  --color-surface: #ffffff;
   --color-surface-raised: #ffffff;
-  --color-surface-sunken: #dce3df;
-  --color-line: #c7d2ce;
-  --color-line-strong: #687d78;
-  --color-text: #10282a;
-  --color-text-muted: #4b625f;
+  --color-surface-sunken: #eef1f3;
+  --color-line: #e1e6e9;
+  --color-line-strong: #7a868d;
+  --color-text: #161b1e;
+  --color-text-muted: #56616a;
   --color-accent: #a8196b;
-  --color-accent-soft: #f6dcea;
+  --color-accent-soft: #f8e1ed;
   --color-on-accent: #ffffff;
   --color-focus: #a8196b;
   --color-positive: #1b6e43;
   --color-caution: #8a5a00;
   --color-negative: #b42318;
-  --color-scrim: rgb(16 40 42 / 0.5);
+  --color-scrim: rgb(22 27 30 / 0.5);
 
-  /* Fee bands, cheapest to dearest. Thresholds (sat/vB) live in docs/DESIGN.md. */
-  --fee-1: #4f6dcc;
-  --fee-2: #0077c3;
-  --fee-3: #0080ad;
-  --fee-4: #008688;
-  --fee-5: #008555;
-  --fee-6: #467a00;
-  --fee-7: #866100;
-  --fee-8: #9e4b00;
-  --fee-9: #aa3600;
-  --fee-10: #ab2721;
+  /* Fee bands, cheapest to dearest: one ramp, the same in both themes. Thresholds in docs/DESIGN.md. */
+  --fee-1: #7f8b92;
+  --fee-2: #708da0;
+  --fee-3: #668dac;
+  --fee-4: #608cb8;
+  --fee-5: #5c89c3;
+  --fee-6: #5d86ce;
+  --fee-7: #6182d7;
+  --fee-8: #687ce0;
+  --fee-9: #7176e7;
+  --fee-10: #7b6fed;
+
+  /* Chart series that are not fees: never a fee or status color. */
+  --series-1: #1f6f9c;
+  --series-2: #9a6412;
+  --series-3: #56616a;
 
   /* Networks */
-  --network-mainnet: #10282a;
-  --network-signet: #6d3fd8;
+  --network-mainnet: #161b1e;
+  --network-signet: #0b7285;
   --network-testnet4: #8a5a00;
-  --network-regtest: #4b625f;
+  --network-regtest: #56616a;
   --color-network: var(--network-mainnet);
 
   /* ---- Type ---- */
-  --font-sans: "Recursive", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Recursive", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --mono-on: "MONO" 1; /* font-variation-settings value that turns Recursive into its monospace cut */
+  --font-sans:
+    "Recursive Gap", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: "Recursive Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --text-xs: 0.75rem;     /* 12 */
-  --text-sm: 0.875rem;    /* 14 */
-  --text-md: 1rem;        /* 16 */
-  --text-lg: 1.1875rem;   /* 19 */
-  --text-xl: 1.4375rem;   /* 23 */
-  --text-2xl: 1.75rem;    /* 28 */
-  --text-3xl: clamp(1.75rem, 1.2rem + 2vw, 2.625rem); /* 28–42 */
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.875rem; /* 14 */
+  --text-md: 1rem; /* 16 */
+  --text-lg: 1.125rem; /* 18 */
+  --text-xl: 1.375rem; /* 22 */
+  --text-2xl: 1.75rem; /* 28 */
+  --text-3xl: clamp(1.5rem, 1.25rem + 1vw, 1.875rem); /* 24–30 */
 
-  --leading-tight: 1.15;
-  --leading-snug: 1.3;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
   --leading-body: 1.5;
 
-  --weight-light: 340;
-  --weight-regular: 420;
-  --weight-medium: 540;
-  --weight-bold: 700;
-  --weight-heavy: 790;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-bold: 600;
 
-  --tracking-tight: -0.02em;
-  --tracking-wide: 0.02em;
+  --tracking-tight: -0.01em;
 
   /* ---- Space (4 px grid) ---- */
   --space-1: 0.25rem;
@@ -94,26 +109,29 @@
 
   --page-max: 85rem;
   --gutter: clamp(1rem, 3.5vw, 2.5rem);
+  --panel-pad: clamp(1rem, 2.5vw, 1.5rem);
+  --touch: 44px; /* the least a thumb's target measures */
 
   /* ---- Shape ---- */
-  --radius-s: 2px;   /* squares in a transaction grid, swatches */
-  --radius-m: 6px;   /* controls, block tiles */
-  --radius-l: 12px;  /* panels */
+  --radius-s: 2px; /* squares in a transaction grid, swatches */
+  --radius-m: 6px; /* controls, block tiles */
+  --radius-l: 10px; /* panels */
   --radius-pill: 999px;
-  --shadow-pop: 0 1px 2px rgb(16 40 42 / 0.12), 0 8px 24px rgb(16 40 42 / 0.16);
+  --shadow-panel: 0 1px 2px rgb(22 27 30 / 0.04);
+  --shadow-pop: 0 1px 2px rgb(22 27 30 / 0.1), 0 8px 24px rgb(22 27 30 / 0.14);
 
   /* ---- Block strip ---- */
-  --tile-w: 8rem;
-  --tile-h: 9.75rem;
-  --tile-gap: 0.875rem;
+  --tile-w: 8.25rem;
+  --tile-h: 9.5rem;
+  --tile-gap: 0.75rem;
 
   /* ---- Motion ---- */
-  --dur-instant: 90ms;   /* press, toggle */
-  --dur-quick: 160ms;    /* hover, focus, tooltip */
-  --dur-base: 260ms;     /* open, expand, swap */
-  --dur-slow: 520ms;     /* layout shift of tiles, number roll */
-  --dur-block: 900ms;    /* the new-block sequence, end to end */
-  --dur-fade: 140ms;     /* the only motion kept under reduced motion */
+  --dur-instant: 90ms; /* press, toggle */
+  --dur-quick: 160ms; /* hover, focus, tooltip */
+  --dur-base: 260ms; /* open, expand, swap */
+  --dur-slow: 520ms; /* layout shift of tiles, number roll */
+  --dur-block: 900ms; /* the new-block sequence, end to end */
+  --dur-fade: 140ms; /* the only motion kept under reduced motion */
   --stagger: 45ms;
 
   --ease-out: cubic-bezier(0.2, 0.7, 0.1, 1);
@@ -125,76 +143,64 @@
   --z-toast: 30;
 }
 
-/* Dark: basalt. Same values twice, once for the OS setting and once for the forced choice. */
+/* Dark. Same values twice, once for the OS setting and once for the forced choice. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --color-bg: #0e1b1d;
-    --color-surface: #142527;
-    --color-surface-raised: #1b3033;
-    --color-surface-sunken: #0a1517;
-    --color-line: #26403f;
-    --color-line-strong: #628386;
-    --color-text: #e3ece7;
-    --color-text-muted: #93aaa4;
+    --color-bg: #121518;
+    --color-surface: #1b1f23;
+    --color-surface-raised: #252a2f;
+    --color-surface-sunken: #0e1113;
+    --color-line: #2c3237;
+    --color-line-strong: #6f7b83;
+    --color-text: #e6eaed;
+    --color-text-muted: #9aa4ab;
     --color-accent: #f27ab9;
-    --color-accent-soft: #3a1f30;
+    --color-accent-soft: #3b2230;
     --color-on-accent: #1a0a12;
     --color-focus: #f27ab9;
     --color-positive: #5fd39a;
     --color-caution: #f0b43c;
     --color-negative: #ff8a7a;
-    --color-scrim: rgb(4 10 11 / 0.6);
-    --fee-1: #6581d4;
-    --fee-2: #3f96d9;
-    --fee-3: #00a9d1;
-    --fee-4: #0ab8b9;
-    --fee-5: #37c695;
-    --fee-6: #92c851;
-    --fee-7: #debb19;
-    --fee-8: #f69900;
-    --fee-9: #fa6e1d;
-    --fee-10: #f54748;
-    --network-mainnet: #e3ece7;
-    --network-signet: #b49cff;
+    --color-scrim: rgb(5 6 7 / 0.6);
+    --series-1: #6cb0dc;
+    --series-2: #d9a24c;
+    --series-3: #9aa4ab;
+    --network-mainnet: #e6eaed;
+    --network-signet: #4fc3d9;
     --network-testnet4: #f0b43c;
-    --network-regtest: #93aaa4;
+    --network-regtest: #9aa4ab;
+    --shadow-panel: none;
     --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 28px rgb(0 0 0 / 0.45);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg: #0e1b1d;
-  --color-surface: #142527;
-  --color-surface-raised: #1b3033;
-  --color-surface-sunken: #0a1517;
-  --color-line: #26403f;
-  --color-line-strong: #628386;
-  --color-text: #e3ece7;
-  --color-text-muted: #93aaa4;
+  --color-bg: #121518;
+  --color-surface: #1b1f23;
+  --color-surface-raised: #252a2f;
+  --color-surface-sunken: #0e1113;
+  --color-line: #2c3237;
+  --color-line-strong: #6f7b83;
+  --color-text: #e6eaed;
+  --color-text-muted: #9aa4ab;
   --color-accent: #f27ab9;
-  --color-accent-soft: #3a1f30;
+  --color-accent-soft: #3b2230;
   --color-on-accent: #1a0a12;
   --color-focus: #f27ab9;
   --color-positive: #5fd39a;
   --color-caution: #f0b43c;
   --color-negative: #ff8a7a;
-  --color-scrim: rgb(4 10 11 / 0.6);
-  --fee-1: #6581d4;
-  --fee-2: #3f96d9;
-  --fee-3: #00a9d1;
-  --fee-4: #0ab8b9;
-  --fee-5: #37c695;
-  --fee-6: #92c851;
-  --fee-7: #debb19;
-  --fee-8: #f69900;
-  --fee-9: #fa6e1d;
-  --fee-10: #f54748;
-  --network-mainnet: #e3ece7;
-  --network-signet: #b49cff;
+  --color-scrim: rgb(5 6 7 / 0.6);
+  --series-1: #6cb0dc;
+  --series-2: #d9a24c;
+  --series-3: #9aa4ab;
+  --network-mainnet: #e6eaed;
+  --network-signet: #4fc3d9;
   --network-testnet4: #f0b43c;
-  --network-regtest: #93aaa4;
+  --network-regtest: #9aa4ab;
+  --shadow-panel: none;
   --shadow-pop: 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 28px rgb(0 0 0 / 0.45);
 }
 

@@ -16,7 +16,7 @@ function useFallbackFonts() {
   const root = document.documentElement;
   const tokens = getComputedStyle(root);
   for (const name of ["--font-sans", "--font-mono"]) {
-    const stack = tokens.getPropertyValue(name).replace(/["']?Recursive["']?\s*,\s*/, "");
+    const stack = tokens.getPropertyValue(name).replaceAll(/["']?Recursive [A-Za-z]+["']?\s*,\s*/g, "");
     root.style.setProperty(name, stack);
   }
 }
@@ -25,7 +25,8 @@ const root = document.getElementById("root");
 if (root) {
   watchFiles();
   // Lay text out once: in the preloaded font if it is here in time, otherwise in the fallbacks for good.
-  const font = document.fonts.load("1em Recursive").catch(() => []);
+  // Prose is the system font; the web font sets hashes, addresses, numeric columns and digit gaps.
+  const font = document.fonts.load('1em "Recursive Mono"').catch(() => []);
   const timeout = new Promise<[]>((resolve) => {
     setTimeout(() => resolve([]), FONT_WAIT_MS);
   });

@@ -27,25 +27,42 @@
       transform 2s var(--ease-out) 150ms;
   }
 
+  /* Wide: one row. Narrower than 1040 px (a tablet, a phone, a desktop at 200%): two rows, the
+     search beside the brand on the first and the network and sections on the second. */
   .site-header__inner {
     max-width: var(--page-max);
     margin-inline: auto;
-    padding: var(--space-3) var(--gutter);
+    padding: var(--space-2) var(--gutter);
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "brand network search nav theme";
     align-items: center;
-    gap: var(--space-4);
+    column-gap: var(--space-4);
+  }
+  .brand {
+    grid-area: brand;
+  }
+  .network {
+    grid-area: network;
   }
   .site-header__search {
+    grid-area: search;
     width: 100%;
     max-width: 34rem;
     justify-self: center;
+  }
+  .nav {
+    grid-area: nav;
+  }
+  .theme-toggle {
+    grid-area: theme;
   }
 
   .brand {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+    min-height: var(--touch);
     text-decoration: none;
   }
   .brand:hover {
@@ -53,14 +70,14 @@
   }
   .brand__word {
     font-size: var(--text-lg);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     letter-spacing: var(--tracking-tight);
     white-space: nowrap;
   }
 
   .logo {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     flex: none;
   }
   .logo__tile {
@@ -82,11 +99,13 @@
 
   .nav {
     display: flex;
-    gap: var(--space-1);
+    min-width: 0;
   }
   .nav a {
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-m);
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    padding: 0 var(--space-3);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
@@ -95,15 +114,15 @@
   }
   .nav a:hover {
     color: var(--color-text);
-    background: var(--color-surface-sunken);
   }
   .nav a[aria-current="page"] {
     color: var(--color-text);
-    border-radius: 0;
     box-shadow: inset 0 -2px 0 var(--color-accent);
   }
 
+  /* The target is 44 px; the drawn button stays small. */
   .icon-btn {
+    position: relative;
     display: grid;
     place-items: center;
     width: 36px;
@@ -113,6 +132,11 @@
     border-radius: var(--radius-m);
     background: none;
     cursor: pointer;
+  }
+  .icon-btn::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
   }
   .icon-btn:hover {
     background: var(--color-surface-sunken);
@@ -142,38 +166,44 @@
 
   @media (max-width: 1040px) {
     .site-header__inner {
-      grid-template-columns: auto auto 1fr auto auto;
-      row-gap: var(--space-3);
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        "brand search theme"
+        "network nav nav";
+      column-gap: var(--space-3);
+      row-gap: 2px;
+      padding-block: var(--space-1);
     }
     .site-header__search {
-      grid-column: 1 / -1;
-      grid-row: 2;
       max-width: none;
     }
+    /* The sections scroll sideways inside their row when a narrow phone cannot fit them. */
     .nav {
-      grid-column: 4;
+      overflow-x: auto;
+      scrollbar-width: none;
+      justify-self: start;
+    }
+    .nav::-webkit-scrollbar {
+      display: none;
+    }
+    .nav a {
+      padding: 0 var(--space-2);
     }
   }
+  /* Phones: the mark alone carries the brand, so the search keeps its width; the name stays for
+     screen readers. */
   @media (max-width: 640px) {
     .site-header__inner {
-      grid-template-columns: auto 1fr auto;
-      row-gap: var(--space-2);
+      padding-inline: var(--space-3);
+      column-gap: var(--space-2);
     }
-    .brand__word {
-      font-size: var(--text-md);
+    .nav a {
+      padding: 0 6px;
     }
-    .network {
-      justify-self: end;
+    .network__button {
+      padding-inline: 8px 10px;
+      gap: 6px;
     }
-    .nav {
-      grid-column: 1 / -1;
-      grid-row: 3;
-      justify-self: start;
-      margin-left: calc(-1 * var(--space-3));
-    }
-  }
-  /* Smallest phones: the mark alone carries the brand; the name stays for screen readers. */
-  @media (max-width: 380px) {
     .brand__word {
       position: absolute;
       width: 1px;

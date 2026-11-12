@@ -54,7 +54,6 @@
     font-size: var(--text-md);
     font-weight: var(--weight-regular);
     line-height: var(--leading-body);
-    font-feature-settings: "ss01", "ss02", "ss08";
     min-height: 100dvh;
   }
   #root {
@@ -64,7 +63,7 @@
   }
   h1 {
     font-size: var(--text-3xl);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     line-height: var(--leading-tight);
     letter-spacing: var(--tracking-tight);
   }
@@ -72,6 +71,28 @@
     font-size: var(--text-lg);
     font-weight: var(--weight-bold);
     line-height: var(--leading-snug);
+  }
+  h3 {
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+  }
+  /* A page's sections are panels: they lift off the page so what belongs together reads as one. */
+  :where(.panel),
+  :where(section):has(> .section__head) {
+    min-width: 0;
+    padding: var(--panel-pad);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-l);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-panel);
+  }
+  /* A panel inside a panel is a group, not another card. */
+  :where(section):has(> .section__head) :where(section):has(> .section__head) {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
   }
   a {
     color: inherit;
@@ -93,6 +114,11 @@
   }
 
   .num {
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+  /* Hashes, addresses and numeric columns: the monospace. */
+  .mono {
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums slashed-zero;
   }
   .unit {

@@ -451,7 +451,6 @@
     border-radius: var(--radius-m);
     background: var(--color-surface-sunken);
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     font-size: var(--text-xs);
     line-height: var(--leading-body);
     white-space: pre-wrap;

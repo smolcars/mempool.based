@@ -9,7 +9,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    min-height: 36px;
+    min-height: 40px;
     border: 1px solid var(--color-line-strong);
     border-radius: var(--radius-m);
     background: var(--color-surface-sunken);
@@ -40,6 +40,18 @@
     border: 0;
     background: none;
     font-size: var(--text-sm);
+  }
+  /* Phones: a full thumb's height, and 16 px text so iOS does not zoom in on focus. */
+  @media (max-width: 1040px) {
+    .search__field {
+      min-height: var(--touch);
+    }
+    .search input {
+      font-size: var(--text-md);
+    }
+    .search input::placeholder {
+      font-size: var(--text-sm);
+    }
   }
   /* The field shows focus as a whole (above). */
   .search input:focus {
@@ -173,7 +185,6 @@
   }
   .search__query {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     overflow-wrap: anywhere;
   }
   .search__finds {

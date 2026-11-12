@@ -7,7 +7,7 @@ import {
   feeRate,
   formatBtc,
   formatFeeRate,
-  formatFeeRatePrecise,
+  formatFeeRateUp,
   formatPowerOfTen,
   formatRelative,
   formatSats,
@@ -113,19 +113,24 @@ describe("BTC and sats", () => {
   });
 });
 
-describe("formatFeeRatePrecise", () => {
-  it("prints the node's resolution, rounding up, never down", () => {
-    expect(formatFeeRatePrecise(0.1)).toBe("0.100");
-    expect(formatFeeRatePrecise(0.101)).toBe("0.101");
-    expect(formatFeeRatePrecise(12.501)).toBe("12.501");
-    expect(formatFeeRatePrecise(0.1004)).toBe("0.101");
-    expect(formatFeeRatePrecise(Number.NaN)).toBe(MISSING);
+describe("formatFeeRateUp", () => {
+  it("prints as a fee rate prints, rounding up, never down", () => {
+    expect(formatFeeRateUp(0.1)).toBe("0.10");
+    expect(formatFeeRateUp(0.101)).toBe("0.11");
+    expect(formatFeeRateUp(0.133)).toBe("0.14");
+    expect(formatFeeRateUp(1.001)).toBe("1.01");
+    expect(formatFeeRateUp(9.991)).toBe("10.0");
+    expect(formatFeeRateUp(12.501)).toBe("12.6");
+    expect(formatFeeRateUp(99.95)).toBe("100");
+    expect(formatFeeRateUp(150.2)).toBe("151");
+    expect(formatFeeRateUp(Number.NaN)).toBe(MISSING);
   });
 
   it("bands a rate as it prints, when asked to", () => {
     expect(feeBand(0.199)).toBe(2);
-    expect(feeBand(0.199, formatFeeRatePrecise)).toBe(1);
-    expect(feeColor(0.2, formatFeeRatePrecise)).toBe("var(--fee-2)");
+    expect(feeBand(0.191, formatFeeRateUp)).toBe(2);
+    expect(feeBand(0.181, formatFeeRateUp)).toBe(1);
+    expect(feeColor(0.2, formatFeeRateUp)).toBe("var(--fee-2)");
   });
 });
 
