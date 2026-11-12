@@ -293,7 +293,7 @@ mod tests {
             drop(r);
             let n = self.reads.get();
             self.reads.set(n + 1);
-            self.graph.channel_failed_permanent(n << 40);
+            self.graph.channel_failed_permanent((1_000 + n) << 40);
             out
         }
     }
