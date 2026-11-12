@@ -103,8 +103,8 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 | LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | done ([#37](https://github.com/smolcars/rbitcoin-space/pull/37)); the graph is unverified until LN2 |
 | LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | done ([#48](https://github.com/smolcars/rbitcoin-space/pull/48)) |
 | LN3 | Channel opens and closes from blocks, with close classification | LN2 | done ([#61](https://github.com/smolcars/rbitcoin-space/pull/61)) |
-| LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | in review and CI ([#68](https://github.com/smolcars/rbitcoin-space/pull/68)) |
-| LN4b | The Lightning node, channel, search and ranking routes, in `/app` and in the `/api/v1/lightning` shapes | LN4a | todo |
+| LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | done ([#68](https://github.com/smolcars/rbitcoin-space/pull/68)) |
+| LN4b | The Lightning node, channel, search and ranking routes, in `/app` and in the `/api/v1/lightning` shapes | LN4a | doing |
 | W11 | Lightning pages: network statistics, node, channel, search | LN4b, W1 | todo |
 
 ## M5 — Parity and polish
@@ -121,14 +121,14 @@ Refined when M4 lands.
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | built, waiting for review (the reviewer is not starting); branch `t3/performance-benchmarks` |
-| PF1 | Count rate-limit refusals instead of logging each one: a single flooding client made the server write 911 MB of log in 30 s | Q3 | todo |
+| PF1 | Count rate-limit refusals instead of logging each one: a single flooding client made the server write 911 MB of log in 30 s | Q3 | doing |
 | PF2 | Build store-backed answers once per tip instead of per request: they cost 8 ms at 100 clients and 46 ms at 1,000 | Q3 | todo |
 | PF3 | Hold immutable node answers in memory: `/api/block/:hash` misses the 10 ms budget because it is passed through uncached | Q3 | todo |
 | PF4 | Shorten the page's request chain on slow networks: `/app/config` waits behind 15 small chunks on six connections, about 1 to 1.5 s | Q3 | todo |
 | PF5 | Document host limits for many sockets in the operator guide: delivery stalled at 10,000 sockets when the host ran short of network buffers | Q3, Q4 | todo |
 | Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | built, waiting for review ([#63](https://github.com/smolcars/rbitcoin-space/pull/63)); drop its temporary workflow-trigger commit before merge |
 | OP1 | Operator-facing gaps the guide's author found: say at startup when the node's address index is off; make store trouble visible in `/readyz` and name a full disk in the log; report the build's revision beside the version in `/healthz`; correct the 21-hour backfill estimate in `docs/CONFIG.md`; stop the Dockerfile's shared build cache producing a stale local image | Q4 | todo |
-| Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | built, waiting for review ([#66](https://github.com/smolcars/rbitcoin-space/pull/66)); real Safari not covered, hand checklist in the PR |
+| Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | done ([#66](https://github.com/smolcars/rbitcoin-space/pull/66)); real Safari not covered, hand checklist in the PR; follow-ups SB1 to SB3 |
 | SB1 | Safari runs digit groups together ("1293 WU" for "1 293 WU"): the narrow space used for grouping is missing from the font subset | Q5 | todo |
 | SB2 | Safari never recovers a page whose script failed to download: it stays at "Loading this page" because the retry does not ask again | Q5 | todo |
 | SB3 | The mining page scrolls sideways on phones on regtest (its tiny difficulty number); mainnet fits | Q5 | todo |
