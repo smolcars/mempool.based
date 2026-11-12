@@ -1,11 +1,13 @@
 //! What the block table reads from the node.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use bitcoin::{BlockHash, Transaction};
 use node::esplora::Esplora;
 use node::rpc::{self, Rpc};
 
+use super::Lister;
 use super::stats::{self, Facts};
 use super::{Row, SourceError};
 use crate::mempool::{esplora_err, rpc_err};
@@ -38,13 +40,16 @@ pub trait Source: Send + Sync + 'static {
     }
 }
 
-/// The node over Esplora (headers, coinbase txids) and JSON-RPC (totals, coinbases, blocks).
-/// Give it its own RPC client with one slot (`max_concurrent: 1`), so it can never take the
-/// slots the mempool tracker and the summary routes share.
+/// The node over Esplora (headers, coinbase txids, block listings) and JSON-RPC (totals,
+/// coinbases, and blocks where the node has no listing route). Give it its own RPC client with
+/// one slot (`max_concurrent: 1`), so it can never take the slots the mempool tracker and the
+/// summary routes share.
 #[derive(Clone)]
 pub struct NodeSource {
     pub rpc: Rpc,
     pub esplora: Esplora,
+    /// The network's, shared with the summaries.
+    pub lister: Arc<Lister>,
 }
 
 impl NodeSource {
@@ -104,7 +109,7 @@ impl Source for NodeSource {
     }
 
     async fn facts(&self, hash: BlockHash) -> Result<Option<Facts>, SourceError> {
-        match self.rpc.block(hash).await {
+        match self.lister.block(&self.rpc, &self.esplora, hash).await.0 {
             Ok(b) if b.hash == hash => Ok(Some(stats::facts(&b))),
             Ok(_) => Err(SourceError::Failed("a different block than asked".into())),
             Err(rpc::Error::Rpc { code: -5, .. }) => Ok(None),
