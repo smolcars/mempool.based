@@ -152,7 +152,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `electrum_unreachable` | warn | `network`, `attempts` | Connection attempts keep failing: at the 1st, 2nd, 4th, 8th… in a row |
 | `electrum_resynced` | info | `network` | Updates may have been missed (reconnect, or a tip jump too far to follow) |
 | `electrum_lines_skipped` | warn | `network`, `total` | The node sent lines that are not valid JSON-RPC; at a total of 1, 2, 4, 8… |
-| `chain_reorg` | warn | `network`, `fork_height` | Blocks above `fork_height` left the best chain |
+| `chain_reorg` | info | `network`, `fork_height` | Blocks above `fork_height` left the best chain. A fact about the chain, not a fault: testnet4 reorged 18 times in one 12-hour run, and nothing needs an operator |
 | `rpc_auth_failed` | error | `network` | The node refused `{NET}_RPC_USER` and `{NET}_RPC_PASSWORD`. Checked at startup and every 30 s ([`DEPLOY.md`](DEPLOY.md#health)); written when the refusals start. The server keeps running: fix the credentials. Clients see only `upstream unavailable` |
 | `rpc_unreachable` | warn | `network`, `error`, `failures` | The RPC check got no answer (`timeout`, `unavailable`, `busy`, `decode`): at the 1st, 2nd, 4th, 8th… check in a row. Look at the network, or whether the node is up |
 | `rpc_reachable` | info | `network`, `height`, `failures` | The RPC check got an answer with our credentials: the first at startup, and the first after failures or a refused password |
@@ -207,7 +207,7 @@ How the tracker and projected blocks run in the server is in [`MEMPOOL.md`](MEMP
 | `projection_resynced` | warn | `network`, `txs` | The projector fell behind the tracker and rebuilt from a snapshot |
 | `mempool_subscriber_lagged` | warn | `network`, `source`, `missed`, `total` | A reader of the `tracker`'s or the `projector`'s change stream fell behind and started over. At a total of 1, 2, 4, 8… per source and network |
 | `fees_summary` | info | `network`, `source`, `high`, `medium`, `low`, `no_rush`, `minimum`, `inflow_minutes`, `ws_messages` | Once a minute per network: the fee recommendations being served, in sat per 1,000 vB ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations)), whether they are ours (`projected`), the node's (`node`) or nothing (`none`, and the rates left out), the minutes of arrivals watched, and the `fees` messages published that minute |
-| `fees_fallback_started` | warn | `network`, `reason` | Our own recommendations stopped and the node's estimates, or nothing, are served instead. `reason` is `warming_up` (from start until five minutes of arrivals were watched), `stale` (the projection is, because the node is failing) or `engine_off` (once at start) |
+| `fees_fallback_started` | info | `network`, `reason` | Our own recommendations stopped and the node's estimates, or nothing, are served instead. `reason` is `warming_up` (from start until five minutes of arrivals were watched: after every start), `stale` (the projection is, because the node is failing) or `engine_off` (once at start). Not a warning: `stale` always follows the `mempool_poll_failed` or `projection_fetch_failed` that is one |
 | `fees_fallback_ended` | info | `network`, `duration_ms` | Our own recommendations are served again |
 
 ### Following transactions and addresses
@@ -243,7 +243,7 @@ The store is in [`STORE.md`](STORE.md); the block table's settings in [`CONFIG.m
 | `store_write_recovered` | info | `network`, `failures` | A write committed after `failures` in a row had failed |
 | `store_read_timed_out` | warn | `network`, `limit_ms` | A read ran past its limit and was stopped |
 | `block_rows_followed` | debug | `network`, `tip`, `written`, `rated`, `duration_ms` | The newest rows were checked against a new tip: rows added or replaced, rows given fee rates. Debug, since it is once per block |
-| `block_rows_reorged` | warn | `network`, `fork_height`, `stale` | Rows described blocks a reorg removed from the best chain; they were replaced or deleted |
+| `block_rows_reorged` | info | `network`, `fork_height`, `stale` | Rows described blocks a reorg removed from the best chain; they were replaced or deleted. Usually right after `chain_reorg`; alone after `electrum_resynced`, when the reorg happened while events were missed, and with a lower `fork_height` when the reorg went deeper than Electrum said |
 | `block_rows_failed` | warn | `network`, `task`, `error`, `failures` | Following the tip (`follow`) or a backfill step (`tip`, `totals`, `rates`) failed with `busy`, `too_big`, `node` or `store`, and will be retried after a pause. At the 1st, 2nd, 4th, 8th… failure in a row |
 | `block_rows_recovered` | info | `network`, `task`, `failures` | `follow` or `backfill` worked again after failures |
 | `block_backfill_progress` | info | `network`, `tip`, `rows`, `rated`, `totals_done`, `rates_done`, `totals_written`, `rates_written`, `busy_ms`, `bytes` | Every minute while the backfill works, and when it has caught up: rows in the table and how many are rated, whether each tier has reached its end, and since start the rows it added and rated, the time it spent working and the bytes it read. The rate is the difference between two lines |

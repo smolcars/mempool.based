@@ -280,7 +280,7 @@ The server writes one JSON object per line to stdout: `ts`, `level`, `event`, th
 docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 ```
 
-**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` with `warming_up` lasts five minutes.
+**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` (`info`) with `warming_up` means the node's fee estimates are served for the first five minutes. A reorg is `chain_reorg` and `block_rows_reorged` at `info`: testnet4 has several a day.
 
 **Alert on:**
 
@@ -292,7 +292,7 @@ docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 | `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
 | `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
 | `rpc_unreachable`, `electrum_unreachable`, `mempool_poll_failed`, `block_rows_failed` repeating | The node is failing or overloaded. They are logged at the 1st, 2nd, 4th, 8th… in a row, so a rising count is a long outage |
-| `store_slow_write`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full |
+| `store_slow_write`, `store_read_timed_out`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full, or the machine is overloaded: the read limit is wall-clock time, so a host that stalls for two seconds trips it even on a read that takes milliseconds ([`STORE.md`](STORE.md#using-it)) |
 | `connections_refused` | One address is holding many connections |
 | `requests_refused` every minute | Something is being refused: one address flooding, or a proxy set up wrong. Its fields tell which ([`LOGGING.md`](LOGGING.md#refusals)) |
 | `log_events_dropped` | Request lines were dropped: `queue_full`, the output (a disk, a pipe) cannot keep up; `over_budget`, the site served more than the log's ceiling ([`LOGGING.md`](LOGGING.md#for-operators)) |
