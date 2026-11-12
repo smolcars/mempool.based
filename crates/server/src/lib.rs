@@ -206,6 +206,7 @@ impl App {
                     tokio::spawn(ws::track::follow_addresses(
                         Arc::clone(&ctx.track),
                         ctx.electrum.events(),
+                        ctx.electrum.health(),
                     ));
                     report::report_electrum(network, &ctx.electrum);
                     routes

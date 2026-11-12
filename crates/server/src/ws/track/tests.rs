@@ -442,6 +442,10 @@ struct Electrum {
     /// `blockchain.scripthash.subscribe` requests received: the node's cost.
     subscribes: Arc<AtomicUsize>,
     unsubscribes: Arc<AtomicUsize>,
+    /// Milliseconds before answering a subscribe, as a slow node would.
+    delay: Arc<AtomicU64>,
+    /// Refuses connections while set, as a node that is down.
+    paused: Arc<std::sync::atomic::AtomicBool>,
     push: broadcast::Sender<String>,
     /// Drops every connection when set, as a node restart would.
     kill: broadcast::Sender<()>,
@@ -466,6 +470,8 @@ impl Electrum {
             answers: Arc::default(),
             subscribes: Arc::default(),
             unsubscribes: Arc::default(),
+            delay: Arc::default(),
+            paused: Arc::default(),
             push: broadcast::channel(64).0,
             kill: broadcast::channel(4).0,
         };
@@ -491,6 +497,9 @@ impl Electrum {
     }
 
     async fn serve(self, stream: tokio::net::TcpStream) {
+        if self.paused.load(Ordering::Relaxed) {
+            return;
+        }
         let (rd, mut wr) = stream.into_split();
         let mut lines = BufReader::new(rd).lines();
         let mut push = self.push.subscribe();
@@ -516,6 +525,8 @@ impl Electrum {
                 "blockchain.headers.subscribe" => json!({"height": 0, "hex": header_hex()}),
                 "blockchain.scripthash.subscribe" => {
                     self.subscribes.fetch_add(1, Ordering::Relaxed);
+                    let delay = self.delay.load(Ordering::Relaxed);
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
                     let sh = req["params"][0].as_str().unwrap().to_owned();
                     let a = self.answers.lock().unwrap().get(&sh).cloned();
                     match a.unwrap_or(Answer::Status(None)) {
@@ -907,13 +918,8 @@ async fn a_subscriber_arriving_at_each_stage() {
     s.settle().await;
     let mut late = Client::new(64);
     late.sub(&s, &tx_topic(a)).unwrap();
-    late.drain();
-    let v = &late.last[&tx_topic(a)];
-    assert_eq!(
-        (state(v), chain(v)),
-        ("replaced", pairs(&[(a, a2)])),
-        "the state comes at once, from the snapshot"
-    );
+    let v = late.wait(&tx_topic(a), |_| true).await;
+    assert_eq!((state(&v), chain(&v)), ("replaced", pairs(&[(a, a2)])));
 
     // After confirmation, after eviction, or never seen: unknown. The page asks its HTTP route.
     mock.mine(&[a2]);
@@ -925,16 +931,16 @@ async fn a_subscriber_arriving_at_each_stage() {
     for id in [a2, b, never] {
         let mut c = Client::new(8);
         c.sub(&s, &tx_topic(id)).unwrap();
-        c.drain();
-        assert_eq!(state(&c.last[&tx_topic(id)]), "unknown", "{id}");
+        let v = c.wait(&tx_topic(id), |_| true).await;
+        assert_eq!(state(&v), "unknown", "{id}");
     }
 
     // Unknown, then sent: it enters the mempool and the topic says so.
     let mut c = Client::new(64);
     let coming = make(&[coin(77)], 1, 7_777).compute_txid();
     c.sub(&s, &tx_topic(coming)).unwrap();
-    c.drain();
-    assert_eq!(state(&c.last[&tx_topic(coming)]), "unknown");
+    let v = c.wait(&tx_topic(coming), |_| true).await;
+    assert_eq!(state(&v), "unknown");
     {
         let mut n = mock.node();
         let t = MockTx {
@@ -1191,7 +1197,13 @@ async fn global_bounds_refuse_clearly_and_release_frees_them() {
     let a2 = format!("address:{}", crate::ws::tests::address(2));
     clients[0].sub(&s, &a1).unwrap();
     assert_eq!(clients[1].sub(&s, &a2), Err(Full));
+    // Released, but its node request still counts until it ends.
     clients[0].unsub(&s, &a1);
+    let deadline = Instant::now() + WAIT;
+    while s.track().tracked().1 > 0 {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     clients[1].sub(&s, &a2).unwrap();
     assert_eq!(s.track().tracked(), (3, 1));
 }
@@ -1235,6 +1247,7 @@ async fn addresses_signal_changes_and_say_what_the_node_refused() {
     let follow = tokio::spawn(follow_addresses(
         Arc::clone(&ctx.track),
         ctx.electrum.events(),
+        ctx.electrum.health(),
     ));
     let mock = Mock::new();
     let s = Server::on(ctx, &mock);
@@ -1282,11 +1295,16 @@ async fn addresses_signal_changes_and_say_what_the_node_refused() {
     }
     assert_eq!(c.conn.reason(), None);
 
-    // The node goes away and comes back: the address is watched again, without a client asking.
+    // The node goes away: unavailable, not a stale "watching". It comes back: watched again,
+    // with the status as it is now, without a client asking.
     let before = electrum.subscribes.load(Ordering::Relaxed);
+    electrum.paused.store(true, Ordering::Relaxed);
     let _ = electrum.kill.send(());
+    c.wait(&name(1), |v| state(v) == "unavailable").await;
+    d.wait(&name(1), |v| state(v) == "unavailable").await;
     let token = "cc".repeat(32);
     electrum.answer(paid, Answer::Status(Some(token.clone())));
+    electrum.paused.store(false, Ordering::Relaxed);
     c.wait(&name(1), |v| v["status"] == json!(token)).await;
     assert!(electrum.subscribes.load(Ordering::Relaxed) > before);
 
@@ -1570,4 +1588,103 @@ async fn five_thousand_followers_cost_the_node_nothing() {
         c.unsub(&s, &tx_topic(id));
     }
     assert_eq!(s.track().tracked().0, 0);
+}
+
+/// A socket churning addresses while the node is slow: every request in flight counts against
+/// the total, so the node never holds more than the total, and everything is released at the end.
+#[tokio::test]
+async fn address_churn_cannot_outrun_the_total() {
+    let electrum = Electrum::start().await;
+    electrum.delay.store(300, Ordering::Relaxed);
+    let ctx = context(&electrum.addr, true, |w| w.tracked_addresses_total = 2);
+    let follow = tokio::spawn(follow_addresses(
+        Arc::clone(&ctx.track),
+        ctx.electrum.events(),
+        ctx.electrum.health(),
+    ));
+    let s = Server::on(ctx, &Mock::new());
+    let name = |n: u8| format!("address:{}", crate::ws::tests::address(n));
+    // Wait for the connection, so the requests below reach the node.
+    let deadline = Instant::now() + WAIT;
+    while !s.ctx.electrum.health().borrow().ready {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let c = Client::new(64);
+    let mut refused = 0;
+    for n in 0..20 {
+        match c.sub(&s, &name(n)) {
+            Ok(()) => c.unsub(&s, &name(n)),
+            Err(Full) => refused += 1,
+        }
+        assert!(s.track().tracked().1 <= 2);
+    }
+    assert_eq!(refused, 18, "two in flight hold both places");
+    let deadline = Instant::now() + WAIT;
+    while s.track().tracked().1 > 0 || electrum.unsubscribes.load(Ordering::Relaxed) < 2 {
+        assert!(Instant::now() < deadline, "never released");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(electrum.subscribes.load(Ordering::Relaxed), 2);
+    // Resubscribing to one still in flight joins it rather than asking again.
+    c.sub(&s, &name(30)).unwrap();
+    c.unsub(&s, &name(30));
+    c.sub(&s, &name(30)).unwrap();
+    let mut c = c;
+    c.wait(&name(30), |v| state(v) == "watching").await;
+    assert_eq!(electrum.subscribes.load(Ordering::Relaxed), 3);
+    follow.abort();
+}
+
+/// The record dropped the oldest link of a chain the tracker still remembers: the topic says the
+/// link it knows, then the rest of the chain from the record.
+#[tokio::test]
+async fn a_chain_cut_by_the_record_still_reaches_its_end() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 100, 100);
+    let s = Server::start(&mock, |w| w.replacements_kept = 1);
+    s.settle().await;
+    let mut c = Client::new(64);
+    c.sub(&s, &tx_topic(a)).unwrap();
+    c.expect(&s.mempool_view(a)).await;
+    let b = mock.send(&[coin(1)], 1, 200, 100);
+    s.settle().await;
+    let cc = mock.send(&[coin(1)], 1, 300, 100);
+    s.settle().await;
+    let v = c
+        .wait(&tx_topic(a), |v| {
+            state(v) == "replaced" && chain(v).len() == 2
+        })
+        .await;
+    assert_eq!(chain(&v), pairs(&[(a, b), (b, cc)]));
+    assert_eq!(
+        v["chain"][0].get("fee"),
+        None,
+        "the link the record dropped has no figures"
+    );
+    assert_eq!(v["chain"][1]["fee"], json!(200));
+}
+
+/// A confirmation in a block that left the best chain is not kept when the transaction does not
+/// come back: the topic says it does not know.
+#[tokio::test]
+async fn a_confirmation_above_a_fork_is_forgotten() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 100, 100);
+    let s = Server::start(&mock, |_| {});
+    s.settle().await;
+    let mut c = Client::new(64);
+    c.sub(&s, &tx_topic(a)).unwrap();
+    c.expect(&s.mempool_view(a)).await;
+    mock.mine(&[a]);
+    s.settle().await;
+    c.wait(&tx_topic(a), |v| {
+        state(v) == "confirmed" && v["height"] == json!(1)
+    })
+    .await;
+    // Electrum reports blocks above 0 gone; the transaction does not return to the mempool.
+    s.track().reorged(0);
+    mock.mine(&[]);
+    s.settle().await;
+    c.wait(&tx_topic(a), |v| state(v) == "unknown").await;
 }

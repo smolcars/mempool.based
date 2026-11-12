@@ -256,14 +256,21 @@ async fn requests_are_parsed_strictly_and_subscriptions_capped() {
         Err(Close::TOO_MANY_SUBSCRIPTIONS)
     );
     assert_eq!(track.tracked(), (2, 1));
+    // Without a node connection the address is `unavailable`, under its name as the server
+    // writes it.
+    let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8_lossy(frame.as_bytes()).into_owned();
+    assert!(
+        text.contains(&format!("\"address:{}\"", address(1))),
+        "{text}"
+    );
+    assert!(text.contains("unavailable"), "{text}");
     let unsub = format!(r#"{{"op":"unsubscribe","topics":[{},{first}]}}"#, id(1));
     assert_eq!(subs.handle(&unsub, &tracked), Ok(()));
     assert_eq!(track.tracked(), (1, 0));
-    // The address's state came back under its name as the server writes it.
-    while let Ok(f) = rx.try_recv() {
-        let text = String::from_utf8_lossy(f.as_bytes()).into_owned();
-        assert!(!text.contains("BCRT1"), "{text}");
-    }
     assert_eq!(
         subs.handle(
             &format!(r#"{{"op":"unsubscribe","topics":[{}]}}"#, id(2)),

@@ -32,6 +32,18 @@ pub async fn route(
     if !ctx.track.mempool_enabled() {
         return Err(MEMPOOL_OFF);
     }
+    // The projected blocks' lock is held through a pack (up to about 170 ms on mainnet): wait
+    // for it on a blocking thread, not an async worker.
+    let body = tokio::task::spawn_blocking(move || answer(&ctx, txid))
+        .await
+        .map_err(|_| ApiError::INTERNAL)??;
+    let mut res = (StatusCode::OK, Json(body)).into_response();
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(res)
+}
+
+fn answer(ctx: &NetworkContext, txid: Txid) -> Result<Value, ApiError> {
     let (tracker, projector) = ctx.track.engines().ok_or(MEMPOOL_SYNCING)?;
     let (synced, known) = tracker.read(|m| (m.tip().is_some(), m.get(&txid).is_some()));
     if !synced {
@@ -99,7 +111,7 @@ pub async fn route(
             })
         })
         .collect();
-    let body = json!({
+    Ok(json!({
         "txid": txid,
         "stale": stale,
         "chunk": group.chunk,
@@ -107,9 +119,5 @@ pub async fn route(
         "children": children,
         "chunks": chunks,
         "txs": txs,
-    });
-    let mut res = (StatusCode::OK, Json(body)).into_response();
-    res.headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    Ok(res)
+    }))
 }
