@@ -43,6 +43,8 @@ const PAGES = [
   "/regtest/lightning/channel/1x2x3",
   "/regtest/lightning/search",
   "/regtest/lightning/rankings?by=age",
+  "/regtest/lightning/rankings?%62y=%61ge",
+  "/regtest/lightning/rankings?by&by=age",
 ];
 
 for (const path of PAGES) {

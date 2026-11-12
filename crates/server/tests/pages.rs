@@ -503,6 +503,22 @@ async fn every_kind_of_page_on_every_network_says_what_it_is() {
                 "Lightning nodes oldest first".into(),
                 format!("The 100 Lightning nodes on {chain} that have been around longest."),
             ),
+            // Names and values are read decoded, the first `by` only, as `URLSearchParams`.
+            (
+                "/lightning/rankings?by=%61ge".into(),
+                "Lightning nodes oldest first".into(),
+                format!("The 100 Lightning nodes on {chain} that have been around longest."),
+            ),
+            (
+                "/lightning/rankings?%62y=channels".into(),
+                "Lightning nodes by open channels".into(),
+                format!("The 100 Lightning nodes on {chain} with the most open channels."),
+            ),
+            (
+                "/lightning/rankings?by&by=age".into(),
+                "Lightning nodes by capacity".into(),
+                format!("The 100 Lightning nodes on {chain} with the most capacity."),
+            ),
             (
                 "/lightning/rankings?by=%3Cx%3E".into(),
                 "Lightning nodes by capacity".into(),
@@ -576,16 +592,12 @@ async fn a_lightning_node_the_graph_holds_is_named_as_its_page_names_it() {
             "1 open channel",
             "0.05000000",
         ),
-        // No alias, and one the page would change: the key's first 20 digits.
-        (3, "0303030303030303030303", "2 open channels", "0.02100000"),
-        (4, "0304040404040404040404", "1 open channel", "0.00100000"),
+        // No alias: the key's first 20 digits.
+        (3, "03030303030303030303", "2 open channels", "0.02100000"),
+        // A bidi override is cleaned to U+FFFD, as `cleanAlias` does.
+        (4, "a\u{fffd}b", "1 open channel", "0.00100000"),
     ] {
         let key = key_hex(n);
-        let title = if title.starts_with("030") {
-            &key[..20]
-        } else {
-            title
-        };
         for k in [key.clone(), key.to_uppercase()] {
             let path = format!("/regtest/lightning/node/{k}");
             let r = get(&addr, &path).await;
