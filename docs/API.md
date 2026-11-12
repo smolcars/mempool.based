@@ -661,7 +661,7 @@ Answered from an index of the verified graph that the server rebuilds every 30 s
 | `index` (reference) | An offset, 0 to 100,000, 10 channels a page | `400` |
 | `limit` (rankings) | 1 to 100, default 25, as for the channel lists above | `400` |
 
-A parameter given twice is `400`. `/app` routes refuse unknown parameters; `/api/v1` routes ignore them, like every `/api/v1` query, so cache-busting works. A node or channel we do not hold is `404` (`node not found`, `channel not found`); a page past the end is an empty list. A node is held while it has an open channel in the graph.
+A parameter given twice is `400`. `/app` routes that take parameters (search, rankings, a node's channels, the overview, which takes none) refuse unknown ones, and the others ignore a query string; `/api/v1` routes ignore unknown parameters, like every `/api/v1` query, so cache-busting works. A node or channel we do not hold is `404` (`node not found`, `channel not found`); a page past the end is an empty list. A node is held while it has an open channel in the graph.
 
 **Search** matches public keys by prefix (hex, any case) in key order, then aliases by substring (Unicode lowercase on both sides), most capacity first: at most 10 nodes. A query that parses as a channel id also returns that channel, open or closed. Its cost is a binary search and one pass over at most 13,600 aliases of at most 32 bytes, whatever the query: 0.5 ms on mainnet.
 
