@@ -5,6 +5,7 @@ import { formatDay, formatHashrate, formatMoment, formatShare } from "../../comp
 import { DataTable } from "../../components/DataTable";
 import { DifficultyAdjustment } from "../../components/Difficulty";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { groupDigits, MISSING } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
@@ -337,20 +338,30 @@ function Pools(props: {
                   {all() ? "Show the top pools only" : `Show all ${r()?.pools.length ?? 0} pools`}
                 </button>
               </Show>
-              <p class="mining-aside">
-                A pool's hashrate is its share of the blocks times the network's hashrate over the
-                same blocks. Blocks are credited by the payout address first, then by the coinbase
-                tag; ones that name no pool on the list are counted as Unknown.
-              </p>
+              <More>
+                <p>
+                  A pool's hashrate is its share of the blocks times the network's hashrate over the
+                  same blocks. Blocks are credited by the payout address first, then by the coinbase
+                  tag; ones that name no pool on the list are counted as Unknown.
+                </p>
+              </More>
             </div>
             <div class="mining-pools__shares">
-              <h3 class="mining-subtitle">Share of blocks, week by week</h3>
+              <h3 class="mining-subtitle">
+                {sharesOverTime(props.period)
+                  ? "Share of blocks, week by week"
+                  : `Share of blocks, ${props.period.words}`}
+              </h3>
               <Show
                 when={sharesOverTime(props.period)}
                 fallback={
-                  <p class="mining-aside">
-                    Shares are counted by the week. Choose 1 m or longer to see how they change.
-                  </p>
+                  <>
+                    <PeriodShares pools={r()?.pools ?? []} share={share} />
+                    <p class="mining-aside">
+                      Shares over time are counted by the week: choose 1 m or longer to see how they
+                      change.
+                    </p>
+                  </>
                 }
               >
                 <Section
@@ -390,6 +401,51 @@ function Pools(props: {
         </Show>
       </Section>
     </section>
+  );
+}
+
+/** Layers in the period's share bar: the seven biggest pools, then the rest as one. */
+const SHARE_PARTS = 7;
+
+/**
+ * The period's share of blocks as one bar, biggest pool first, in the shades the weekly chart's
+ * layers use, with each pool and its share named beside it.
+ */
+function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => number }) {
+  const parts = () => {
+    const top = props.pools
+      .slice(0, SHARE_PARTS)
+      .map((p) => ({ name: p.name, share: props.share(p) }));
+    const rest = props.pools.slice(SHARE_PARTS).reduce((sum, p) => sum + props.share(p), 0);
+    return rest > 0 ? [...top, { name: "Other pools", share: rest }] : top;
+  };
+  return (
+    <figure class="mining-period-shares">
+      <div class="mining-period-shares__bar" aria-hidden="true">
+        <For each={parts()}>
+          {(p, i) => (
+            <span
+              class={`mining-period-shares__part mining-period-shares__part--${i() + 1}`}
+              style={{ "--p": String(p.share) }}
+            />
+          )}
+        </For>
+      </div>
+      <ol class="mining-period-shares__key">
+        <For each={parts()}>
+          {(p, i) => (
+            <li>
+              <span
+                class={`mining-period-shares__swatch mining-period-shares__part mining-period-shares__part--${i() + 1}`}
+                aria-hidden="true"
+              />
+              <span class="mining-period-shares__name">{p.name}</span>
+              <span class="num">{formatShare(p.share)}</span>
+            </li>
+          )}
+        </For>
+      </ol>
+    </figure>
   );
 }
 
@@ -441,16 +497,16 @@ function Rewards(props: { period: Period; ranking: MiningData<Ranking>; network:
               label="Paid to miners"
               sub={f() ? `${groupDigits(f()?.blocks ?? 0)} blocks` : undefined}
             >
-              <Amount sats={f()?.reward ?? 0} />
+              <Amount sats={f()?.reward ?? 0} short />
             </Stat>
             <Stat label="New coins" sub="The block subsidy">
-              <Amount sats={f()?.subsidy ?? 0} />
+              <Amount sats={f()?.subsidy ?? 0} short />
             </Stat>
             <Stat label="Fees" sub={`${formatShare(f()?.feeShare ?? 0)} of the reward`}>
-              <Amount sats={f()?.fees ?? 0} />
+              <Amount sats={f()?.fees ?? 0} short />
             </Stat>
             <Stat label="Per block" sub={`${groupDigits(f()?.txs ?? 0)} transactions in all`}>
-              <Amount sats={Math.round(f()?.perBlock ?? 0)} />
+              <Amount sats={Math.round(f()?.perBlock ?? 0)} short />
             </Stat>
           </dl>
         </Section>

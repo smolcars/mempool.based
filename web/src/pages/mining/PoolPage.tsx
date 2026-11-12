@@ -162,7 +162,7 @@ function Pool(props: { network: Network; slug: string }) {
                 </Show>
               </Stat>
               <Stat label="Rewards earned" sub="In the blocks stored">
-                <Show when={s()}>{(a) => <Amount sats={Number(a().totalReward)} />}</Show>
+                <Show when={s()}>{(a) => <Amount sats={Number(a().totalReward)} short />}</Show>
               </Stat>
             </dl>
             <Show when={(s()?.pool.regexes.length ?? 0) + (s()?.pool.addresses.length ?? 0) > 0}>

@@ -15,29 +15,46 @@
     color: var(--color-text-muted);
     padding-bottom: var(--space-2);
   }
+  /* Every column keeps a gutter on both sides, so a right-aligned figure never meets the text of
+     the column after it ("0.17000000Active"); only the table's outer edges have none. */
   .table th {
     text-align: left;
     font-weight: var(--weight-medium);
     color: var(--color-text-muted);
-    padding: 0 var(--space-3) var(--space-2) 0;
+    padding: 0 var(--space-2) var(--space-2);
     white-space: nowrap;
   }
   .table td {
-    padding: var(--space-2) var(--space-3) var(--space-2) 0;
+    padding: var(--space-2);
     border-top: 1px solid var(--color-line);
     white-space: nowrap;
     font-variant-numeric: tabular-nums slashed-zero;
   }
+  .table :is(th, td):first-child {
+    padding-left: 0;
+  }
+  .table :is(th, td):last-child {
+    padding-right: 0;
+  }
   .table .table__num {
     text-align: right;
-    padding-right: 0;
-    padding-left: var(--space-3);
+  }
+  /* Numeric columns in the monospace, so figures line up digit for digit. */
+  .table td.table__num {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
   }
   .table tbody tr {
     transition: background-color var(--dur-quick) var(--ease-out);
   }
   .table tbody tr:hover {
     background: var(--color-surface-sunken);
+  }
+  /* A row's links are a thumb's height on touch screens. */
+  @media (pointer: coarse) {
+    .table td {
+      padding-block: var(--space-3);
+    }
   }
   @media (max-width: 640px) {
     .table .table__optional {

@@ -4,7 +4,7 @@ import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
-import { Strata, strataLayers } from "../../components/Strata";
+import { gaugeLayers, Strata } from "../../components/Strata";
 import { createApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { useNow } from "../../lib/clock";
@@ -94,7 +94,7 @@ function Tile(props: { block: Block; facts: BlockSummary | undefined }) {
   const now = useNow();
   const b = () => props.block;
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
-  const layers = () => (props.facts ? strataLayers(props.facts.fee_bands, full(), LAYER_MIN) : []);
+  const layers = () => (props.facts ? gaugeLayers(props.facts.fee_bands, full(), LAYER_MIN) : []);
   const rate = () => props.facts?.fee_rate ?? undefined;
   const miner = () => props.facts?.miner?.name;
   return (

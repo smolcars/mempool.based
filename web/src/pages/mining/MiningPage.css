@@ -192,12 +192,79 @@
   .mining-share__fill {
     position: absolute;
     inset: 0;
-    background: var(--color-text);
+    background: var(--series-1);
     transform-origin: left;
     transform: scaleX(var(--p));
   }
   .mining-more {
     margin-top: var(--space-3);
+  }
+
+  /* The period's shares in one bar: series-1 shades, darkest for the biggest pool. */
+  .mining-period-shares__bar {
+    display: flex;
+    height: 28px;
+    overflow: hidden;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+  }
+  .mining-period-shares__bar .mining-period-shares__part {
+    flex: var(--p) 0 0;
+    min-width: 2px;
+    border-right: 1px solid var(--color-surface);
+  }
+  .mining-period-shares__part {
+    background: color-mix(in oklab, var(--series-1) var(--mix), var(--color-surface));
+  }
+  .mining-period-shares__part--1 {
+    --mix: 100%;
+  }
+  .mining-period-shares__part--2 {
+    --mix: 82%;
+  }
+  .mining-period-shares__part--3 {
+    --mix: 66%;
+  }
+  .mining-period-shares__part--4 {
+    --mix: 52%;
+  }
+  .mining-period-shares__part--5 {
+    --mix: 40%;
+  }
+  .mining-period-shares__part--6 {
+    --mix: 30%;
+  }
+  .mining-period-shares__part--7 {
+    --mix: 22%;
+  }
+  .mining-period-shares__part--8 {
+    --mix: 12%;
+  }
+  .mining-period-shares__key {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: var(--space-1) var(--space-4);
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+  }
+  .mining-period-shares__key li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .mining-period-shares__name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mining-period-shares__swatch {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border-radius: var(--radius-s);
+    box-shadow: inset 0 0 0 1px var(--color-line);
   }
 
   .mining-rewards {

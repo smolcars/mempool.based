@@ -6,6 +6,7 @@ import { Amount } from "../../components/Amount";
 import { formatMoment, formatSi } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -86,24 +87,9 @@ function Overview(props: { network: Network }) {
           {(o) => <Now stats={o().statistics} />}
         </Show>
       </Show>
-      <History network={props.network} />
       <Show when={overview.latest}>
         {(o) => (
           <>
-            <div class="ln-pair">
-              <section aria-labelledby="ln-opened-title">
-                <SectionHeader title="Newest channels" id="ln-opened-title">
-                  By funding block
-                </SectionHeader>
-                <ChannelTable rows={o().opened} kind="opened" />
-              </section>
-              <section aria-labelledby="ln-closed-title">
-                <SectionHeader title="Newest closes" id="ln-closed-title">
-                  Seen on the chain
-                </SectionHeader>
-                <ChannelTable rows={o().closed} kind="closed" />
-              </section>
-            </div>
             <div class="ln-pair">
               <section aria-labelledby="ln-top-capacity-title">
                 <SectionHeader title="Largest nodes" id="ln-top-capacity-title">
@@ -134,9 +120,24 @@ function Overview(props: { network: Network }) {
                 </p>
               </section>
             </div>
+            <div class="ln-pair">
+              <section aria-labelledby="ln-opened-title">
+                <SectionHeader title="Newest channels" id="ln-opened-title">
+                  By funding block
+                </SectionHeader>
+                <ChannelTable rows={o().opened} kind="opened" />
+              </section>
+              <section aria-labelledby="ln-closed-title">
+                <SectionHeader title="Newest closes" id="ln-closed-title">
+                  Seen on the chain
+                </SectionHeader>
+                <ChannelTable rows={o().closed} kind="closed" />
+              </section>
+            </div>
           </>
         )}
       </Show>
+      <History network={props.network} />
     </>
   );
 }
@@ -164,7 +165,7 @@ function Now(props: { stats: Stats | null }) {
                 label="Channels"
                 sub={
                   <>
-                    Median size <Amount sats={s().med_capacity} />
+                    Median size <Amount sats={s().med_capacity} short />
                   </>
                 }
               >
@@ -177,11 +178,11 @@ function Now(props: { stats: Stats | null }) {
                 label="Capacity"
                 sub={
                   <>
-                    Average per channel <Amount sats={s().avg_capacity} />
+                    Average per channel <Amount sats={s().avg_capacity} short />
                   </>
                 }
               >
-                <Amount sats={s().capacity} />
+                <Amount sats={s().capacity} short />
               </Stat>
               <Stat label="Median fee rate" sub={`Average ${ppm(s().avg_fee_rate)}`}>
                 <span class="num">{ppm(s().med_fee_rate)}</span>
@@ -190,11 +191,14 @@ function Now(props: { stats: Stats | null }) {
                 <span class="num">{msat(s().med_base_fee_msat)}</span>
               </Stat>
             </dl>
-            <p class="ln-aside">
-              {VERIFIED_NOTE} Fee figures are what nodes charge to forward a payment, over{" "}
-              {groupDigits(s().policies)} policies; averages leave out the few over 1 000 000, which
-              refuse to route.
-            </p>
+            <p class="ln-aside">Only channels checked against the chain are counted.</p>
+            <More>
+              <p>
+                {VERIFIED_NOTE} Fee figures are what nodes charge to forward a payment, over{" "}
+                {groupDigits(s().policies)} policies; averages leave out the few over 1 000 000,
+                which refuse to route.
+              </p>
+            </More>
           </>
         )}
       </Show>
@@ -271,7 +275,11 @@ function History(props: { network: Network }) {
               aria-busy={s().interval === interval().id && !series.loading ? "false" : "true"}
             >
               <Show when={s().points.length > 0} fallback={<NothingRecorded s={s()} />}>
-                <HistoryChart s={s()} interval={interval()} />
+                <HistoryChart
+                  s={s()}
+                  interval={interval()}
+                  fit={search["interval"] === undefined}
+                />
               </Show>
             </div>
           )}
@@ -301,7 +309,13 @@ function NothingRecorded(props: { s: Series }) {
   );
 }
 
-function HistoryChart(props: { s: Series; interval: Interval }) {
+/**
+ * `fit`: the reader chose no period, so a view whose records begin inside it starts where they do
+ * rather than hatching most of its width; the sentence above says so. A period the reader chose
+ * keeps its whole width.
+ */
+function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
+  const from = () => (props.fit ? dataFrom(props.s) : undefined);
   const x = () => props.s.points.map((p) => p.time);
   const col = (f: (p: Stats) => number) => props.s.points.map(f);
   const time = () =>
@@ -323,8 +337,8 @@ function HistoryChart(props: { s: Series; interval: Interval }) {
           <Chart
             label={`Lightning channels and capacity, ${props.interval.words}`}
             x={x()}
-            domain={[props.s.from, props.s.to]}
-            dataFrom={dataFrom(props.s)}
+            domain={[from() ?? props.s.from, props.s.to]}
+            dataFrom={from() === undefined ? dataFrom(props.s) : undefined}
             gap={props.s.step}
             height={240}
             left={{ format: (v) => groupDigits(v) }}

@@ -4,7 +4,6 @@ import { useSearchParams } from "@solidjs/router";
 import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { formatSi } from "../../components/chart/scale";
-import { FeeKey } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
@@ -108,7 +107,7 @@ function MempoolHistory(props: { network: Network }) {
           {(h) => (
             <div class="mempool-busy" aria-busy={current() && !request.loading ? "false" : "true"}>
               <Show when={h().points.length > 0} fallback={<NothingRecorded h={h()} />}>
-                <Charts h={h()} interval={interval()} />
+                <Charts h={h()} interval={interval()} fit={search["interval"] === undefined} />
               </Show>
             </div>
           )}
@@ -190,9 +189,16 @@ function ChartSlot(props: { class: string; children: JSX.Element }) {
   );
 }
 
-function Charts(props: { h: History; interval: Interval }) {
+/**
+ * `fit`: the reader chose no period, so a view whose records begin inside it starts where they do
+ * rather than hatching most of its width; the coverage sentence says so. A period the reader chose
+ * keeps its whole width, the part before the records hatched.
+ */
+function Charts(props: { h: History; interval: Interval; fit: boolean }) {
+  const fitted = () => (props.fit ? dataFrom(props.h) : undefined);
   const s = createMemo(() => seriesOf(props.h));
-  const domain = () => [props.h.from, props.h.to] as const;
+  const domain = () => [fitted() ?? props.h.from, props.h.to] as const;
+  const hatchFrom = () => (fitted() === undefined ? dataFrom(props.h) : undefined);
   const time = () => pointTime(props.h.step);
   const per = () => props.h.step / 60;
   const notes = () => [
@@ -218,10 +224,13 @@ function Charts(props: { h: History; interval: Interval }) {
       <Show when={coverageSentence(props.h, props.interval.words)}>
         {(text) => (
           <p class="mempool-coverage">
-            <Show when={dataFrom(props.h) !== undefined}>
+            <Show when={hatchFrom() !== undefined}>
               <span class="mempool-coverage__swatch" aria-hidden="true" />
             </Show>
             {text()}
+            {fitted() === undefined
+              ? ""
+              : " The charts start there; a period chosen above keeps its whole width."}
           </p>
         )}
       </Show>
@@ -234,7 +243,7 @@ function Charts(props: { h: History; interval: Interval }) {
             label={`The mempool's size by fee rate, ${props.interval.words}`}
             x={s().x}
             domain={domain()}
-            dataFrom={dataFrom(props.h)}
+            dataFrom={hatchFrom()}
             gap={props.h.step}
             height={300}
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
@@ -251,7 +260,6 @@ function Charts(props: { h: History; interval: Interval }) {
             summary={sizeSummary(props.h)}
           />
         </ChartSlot>
-        <FeeKey />
       </section>
       <section class="mempool-section" aria-labelledby="mempool-flow-title">
         <SectionHeader title="Flow" id="mempool-flow-title">
@@ -265,7 +273,7 @@ function Charts(props: { h: History; interval: Interval }) {
             label={`What entered and left the mempool, ${props.interval.words}`}
             x={s().x}
             domain={domain()}
-            dataFrom={dataFrom(props.h)}
+            dataFrom={hatchFrom()}
             gap={props.h.step}
             height={200}
             left={{ format: (v) => `${formatSi(v, "vB")}/s`, zero: true }}
