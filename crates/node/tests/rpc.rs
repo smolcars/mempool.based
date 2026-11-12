@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bitcoin::{Amount, BlockHash, OutPoint, SignedAmount, Txid};
-use node::rpc::{BlockRef, Error, Limits, Rpc};
+use node::rpc::{BlockRef, Error, Limits, MAX_PREVOUTS, Rpc};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -448,4 +448,22 @@ async fn unreachable_node_is_unavailable() {
         client(port).difficulty().await,
         Err(Error::Unavailable(_))
     ));
+}
+
+#[tokio::test]
+async fn too_many_outpoints_are_refused_before_sending() {
+    let (port, log) = mock(mainnet).await;
+    let rpc = client(port);
+    let t = txid("000007b8d962b31541e6929d58b4be23835f5fe229437074287bfc4107ea1efd");
+    let outpoints: Vec<OutPoint> = (0..=MAX_PREVOUTS as u32)
+        .map(|v| OutPoint::new(t, v))
+        .collect();
+    assert_eq!(
+        rpc.tx_spending_prevout(&outpoints).await.unwrap_err(),
+        Error::RequestTooBig
+    );
+    assert!(log.reqs.lock().unwrap().is_empty());
+    rpc.tx_spending_prevout(&outpoints[..MAX_PREVOUTS])
+        .await
+        .unwrap();
 }

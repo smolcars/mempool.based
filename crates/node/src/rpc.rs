@@ -33,6 +33,9 @@ use model::{
 /// Longest node error message we keep.
 const MAX_MESSAGE: usize = 512;
 
+/// Most outpoints [`Rpc::tx_spending_prevout`] takes in one call: about 85 KB of request.
+pub const MAX_PREVOUTS: usize = 1000;
+
 /// What went wrong with an RPC call, in terms a caller can act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -52,6 +55,8 @@ pub enum Error {
     Timeout,
     /// The response body exceeded the configured size cap.
     ResponseTooBig,
+    /// More inputs than one call takes, such as over [`MAX_PREVOUTS`] outpoints. Nothing was sent.
+    RequestTooBig,
     /// The response did not decode into the expected type.
     Decode(String),
 }
@@ -66,6 +71,7 @@ impl fmt::Display for Error {
             Self::Unavailable(m) => write!(f, "rpc unavailable: {m}"),
             Self::Timeout => f.write_str("rpc request timed out"),
             Self::ResponseTooBig => f.write_str("rpc response too big"),
+            Self::RequestTooBig => f.write_str("rpc request too big"),
             Self::Decode(m) => write!(f, "rpc response did not decode: {m}"),
         }
     }
@@ -301,6 +307,7 @@ impl Rpc {
     }
 
     /// `gettxspendingprevout`: the mempool spender of each outpoint, in the order given.
+    /// At most [`MAX_PREVOUTS`] outpoints, else [`Error::RequestTooBig`].
     pub async fn tx_spending_prevout(
         &self,
         outpoints: &[OutPoint],
@@ -309,6 +316,9 @@ impl Rpc {
         struct Prevout {
             txid: Txid,
             vout: u32,
+        }
+        if outpoints.len() > MAX_PREVOUTS {
+            return Err(Error::RequestTooBig);
         }
         let prevouts: Vec<Prevout> = outpoints
             .iter()
