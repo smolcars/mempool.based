@@ -124,11 +124,11 @@ Refined when M4 lands.
 | G2 | Pool column on the blocks page; the past adjustments table and a block health graph on the mining page | C1 | todo |
 | G3 | Lightning node page: the fee histogram and the node's history chart | W11 | todo |
 | G4 | The `/rbf` page with the full-RBF filter, and recent replacements on the home page | C1b | todo |
-| G5 | Address balance chart | C1 | doing |
+| G5 | Address balance chart | C1 | done ([#79](https://github.com/smolcars/rbitcoin-space/pull/79)) |
 | G6 | Later: Lightning nodes by network type over time; a BTC/sats units switch; `/clock` | C1 | todo |
 | G7 | After the owner's decision on a broadcast page: `/tx/push`, then `/tx/preview` (needs a transaction and PSBT parser in the browser), then goggles (needs per-transaction flags from the engine) | C1 | todo; waits on the owner |
 | G8 | Owner's decisions from the audit: a broadcast page (the route is already served under its rules); package submission and test-accept (the audit recommends skipping both); fiat prices stay parked | C1 | waits on the owner |
-| RD1 | Redesign by design council (the owner's process): three independent reviewers score the site in ten categories against the explorer its readers know; a builder acts on their findings; repeat for at most five rounds or until every reviewer gives 9 in every category; one pull request at the end with every round's scores and screenshots, left open for the owner. New frontend tasks (G2, G3, G4, G6, Q1, Q2, D2) wait until it is done | SB1, PF4, G5 | doing: round 1 review of the site as it is |
+| RD1 | Redesign by design council (the owner's process): three independent reviewers score the site in ten categories against the explorer its readers know; a builder acts on their findings; repeat for at most five rounds or until every reviewer gives 9 in every category; one pull request at the end with every round's scores and screenshots, left open for the owner. New frontend tasks (G2, G3, G4, G6, Q1, Q2, D2) wait until it is done | SB1, PF4, G5 | doing: round 1 council scores were 6 to 7 overall (lowest category 5); the builder is on the round 1 build |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | done ([#70](https://github.com/smolcars/rbitcoin-space/pull/70)); results in `docs/PERFORMANCE.md`; its PR took 3 min 4 s of CI on a partly cold cache, so check the next Rust PR against the budget |
