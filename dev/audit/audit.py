@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import urllib.request
 from collections import deque
 
 IGNORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ignore.toml")
@@ -128,6 +129,26 @@ def rust(ids):
     return "\n".join(rows)
 
 
+def first_patched(ghsa, package):
+    """The releases of an npm package that fix a GitHub advisory, which bun audit does not report."""
+    headers = {"Accept": "application/vnd.github+json"}
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(f"https://api.github.com/advisories/{ghsa}", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            advisory = json.load(response)
+    except (OSError, ValueError) as e:
+        fail(f"looking up {ghsa}: {e}")
+    return sorted(
+        {
+            v["first_patched_version"]
+            for v in advisory.get("vulnerabilities") or []
+            if v.get("package") == {"ecosystem": "npm", "name": package} and v.get("first_patched_version")
+        }
+    )
+
+
 def javascript(ids):
     flags = []
     for i in sorted(ids):
@@ -135,17 +156,27 @@ def javascript(ids):
             flags += ["--ignore", i]
     # bun audit --json leaves out nothing --ignore names, so the JSON is filtered here.
     report = run_json(["bun", "audit", "--json"], WEB_DIR)
-    found = [
-        a
-        for advisories in report.values()
-        for a in advisories
-        if a.get("url", "").rsplit("/", 1)[-1] not in ids
+    rows = [
+        "| Advisory | Package | Vulnerable | Fixed in |",
+        "|---|---|---|---|",
     ]
-    if not found:
+    for package, advisories in sorted(report.items()):
+        for a in advisories:
+            ghsa = a.get("url", "").rsplit("/", 1)[-1]
+            if ghsa in ids:
+                continue
+            fixed = " or ".join(f"`{cell(v)}`" for v in first_patched(ghsa, package)) or "no fixed release"
+            rows.append(
+                f"| [{cell(ghsa)}]({cell(a['url'])}): {cell(a['title'])} ({cell(a['severity'])}) "
+                f"| `{cell(package)}` | `{cell(a['vulnerable_versions'])}` | {fixed} |"
+            )
+    if len(rows) == 2:
         return None
     # The text output names the installed version and the chain that pulls each package in.
-    text = run(["bun", "audit", *flags], WEB_DIR).stdout.strip()
-    return f"````\n{text}\n````\nA version range ending `<X` is fixed in `X`."
+    p = run(["bun", "audit", *flags], WEB_DIR)
+    if p.returncode != 1 or "github.com/advisories/" not in p.stdout:
+        fail(f"bun audit exited {p.returncode}: {p.stderr.strip()}")
+    return "\n".join(rows) + f"\n\nThe installed versions and how we depend on them:\n\n````\n{p.stdout.strip()}\n````"
 
 
 def main():
