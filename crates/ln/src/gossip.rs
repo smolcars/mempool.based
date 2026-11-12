@@ -38,7 +38,10 @@ use lightning::types::features::{InitFeatures, NodeFeatures};
 use lightning::util::ser::Writeable;
 use tokio::sync::broadcast;
 
-use crate::chain::Lookup;
+use lightning::bitcoin::TxOut;
+
+use crate::chain::{Funded, Lookup};
+use crate::closes::{Funding, Watch, program_of};
 use crate::log::LogSink;
 use crate::{Change, Config, Event};
 
@@ -193,6 +196,8 @@ pub(crate) struct Counters {
 pub(crate) struct Gossip {
     sync: GossipSync,
     pub(crate) lookup: Arc<Lookup>,
+    /// Funding outputs of verified channels, watched for closes, and the history.
+    pub(crate) watch: Watch,
     replay: Mutex<Replay>,
     chain: ChainHash,
     secp: Secp256k1<VerifyOnly>,
@@ -223,9 +228,18 @@ impl Gossip {
         events: broadcast::Sender<Event>,
     ) -> Self {
         let lookup = Arc::new(Lookup::new(config));
+        let stored = replay
+            .channels
+            .iter()
+            .map(|(scid, st)| {
+                let c = &st.announcement.contents;
+                (*scid, (c.node_id_1, c.node_id_2))
+            })
+            .collect();
         Self {
             sync: P2PGossipSync::new(graph, Some(Arc::clone(&lookup) as UtxoHook), logger),
             lookup,
+            watch: Watch::new(config.history, stored),
             replay: Mutex::new(replay),
             chain: ChainHash::using_genesis_block(config.network),
             secp: Secp256k1::verification_only(),
@@ -263,14 +277,16 @@ impl Gossip {
         self.range.lock().map_or(0, |r| r.asked.len())
     }
 
-    /// A channel's lookup succeeded and LDK added it: count it and tell subscribers.
-    pub(crate) fn admitted(&self, scid: u64) {
+    /// A channel's lookup succeeded and LDK added it: count it, watch its funding output and
+    /// tell subscribers.
+    pub(crate) fn admitted(&self, scid: u64, found: Option<(TxOut, Funded)>) {
         let nodes = self
             .graph()
             .read_only()
             .channel(scid)
             .map(|c| (c.node_one, c.node_two));
         if let Some((one, two)) = nodes {
+            self.opened(scid, (one, two), found);
             self.counters.accepted.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut t) = self.last_new_channel.lock() {
                 *t = Instant::now();
@@ -279,6 +295,24 @@ impl Gossip {
             self.changed(Change::Node(one));
             self.changed(Change::Node(two));
         }
+    }
+
+    /// Watches a verified channel's funding output; `found` is `None` for tests' trusted lookups.
+    fn opened(&self, scid: u64, nodes: (NodeId, NodeId), found: Option<(TxOut, Funded)>) {
+        let Some((out, funded)) = found else { return };
+        let Some(program) = program_of(&out.script_pubkey) else {
+            return;
+        };
+        self.watch.opened(
+            scid,
+            Funding {
+                nodes,
+                capacity: out.value.to_sat(),
+                program,
+                block: funded.block,
+                verified_at: funded.tip,
+            },
+        );
     }
 
     /// Stored channels not yet sent for checking.
@@ -411,6 +445,11 @@ impl Gossip {
         self.lookup.expect(scid, script);
         let r = self.sync.handle_channel_announcement(their_node_id, msg);
         self.lookup.expect(scid, None);
+        // Answered from the cache: LDK added it at once.
+        let found = self.lookup.take_found(scid);
+        if r.is_ok() && !known && found.is_some() {
+            self.opened(scid, (c.node_id_1, c.node_id_2), found);
+        }
         if r.is_ok() {
             if !known && let Ok(mut t) = self.last_new_channel.lock() {
                 *t = Instant::now();
@@ -562,7 +601,7 @@ impl Gossip {
         Some(contents)
     }
 
-    fn changed(&self, change: Change) {
+    pub(crate) fn changed(&self, change: Change) {
         let _ = self.changes.send(change);
     }
 

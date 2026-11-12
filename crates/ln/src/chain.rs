@@ -15,12 +15,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use lightning::bitcoin::constants::ChainHash;
-use lightning::bitcoin::{Amount, ScriptBuf, TxOut};
+use lightning::bitcoin::hashes::Hash;
+use lightning::bitcoin::{Amount, Block, BlockHash, ScriptBuf, Transaction, TxOut, Txid};
 use lightning::routing::utxo::{UtxoFuture, UtxoLookup, UtxoLookupError, UtxoResult};
-use node::esplora::model::PositionedOutput;
+use node::esplora::model::{Block as Header, Outspend, PositionedOutput};
 use node::esplora::{Error, Esplora, MAX_OUT_POSITIONS, OutPosition, OutPositions, Stamped};
 use tokio::sync::Notify;
 
+use crate::closes::{BlockRef, program_of};
 use crate::gossip::Gossip;
 use crate::{Event, Rejected};
 
@@ -42,15 +44,38 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// While only early announcements wait, the node's tip is read this often. Tests wait less.
 const TIP_EVERY: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 60 });
 
-/// Where funding outputs are looked up: rbitcoin's output-by-position routes. Implemented for
-/// [`Esplora`]; tests use a fake.
-pub trait Chain: Send + Sync + 'static {
+/// Where funding outputs are looked up (rbitcoin's output-by-position routes), and where the
+/// close-watcher reads blocks and spends. Implemented for [`Esplora`]; tests use a fake. Clones
+/// share one client.
+pub trait Chain: Clone + Send + Sync + 'static {
     /// One slot per position, in order, `None` where no output exists; stamped with the tip.
     fn outputs(
         &self,
         positions: OutPositions,
     ) -> impl Future<Output = Result<Stamped<Vec<Option<PositionedOutput>>>, Error>> + Send;
     fn tip_height(&self) -> impl Future<Output = Result<u32, Error>> + Send;
+    fn tip_hash(&self) -> impl Future<Output = Result<BlockHash, Error>> + Send;
+    /// Up to ten headers, newest first, from height `top` (or the tip) down.
+    fn headers(&self, top: Option<u32>) -> impl Future<Output = Result<Vec<Header>, Error>> + Send;
+    fn block(&self, hash: BlockHash) -> impl Future<Output = Result<Block, Error>> + Send;
+    fn block_hash(&self, height: u32) -> impl Future<Output = Result<BlockHash, Error>> + Send;
+    /// The txid at `index` in the block.
+    fn block_txid(
+        &self,
+        hash: BlockHash,
+        index: u32,
+    ) -> impl Future<Output = Result<Txid, Error>> + Send;
+    /// A confirmed transaction's block height and index in the block.
+    fn tx_position(&self, txid: Txid) -> impl Future<Output = Result<(u32, u32), Error>> + Send;
+    /// Who spent an output, and in which block.
+    fn outspend(
+        &self,
+        txid: Txid,
+        vout: u32,
+    ) -> impl Future<Output = Result<Outspend, Error>> + Send;
+    fn tx(&self, txid: Txid) -> impl Future<Output = Result<Transaction, Error>> + Send;
+    /// A transaction's fee, if the node knows its inputs' values.
+    fn tx_fee(&self, txid: Txid) -> impl Future<Output = Result<Option<u64>, Error>> + Send;
 }
 
 impl Chain for Esplora {
@@ -64,6 +89,43 @@ impl Chain for Esplora {
     async fn tip_height(&self) -> Result<u32, Error> {
         Ok(Esplora::tip_height(self).await?.value)
     }
+
+    async fn tip_hash(&self) -> Result<BlockHash, Error> {
+        Ok(Esplora::tip_hash(self).await?.value)
+    }
+
+    async fn headers(&self, top: Option<u32>) -> Result<Vec<Header>, Error> {
+        Ok(self.blocks(top).await?.value)
+    }
+
+    async fn block(&self, hash: BlockHash) -> Result<Block, Error> {
+        Ok(self.block_raw(hash).await?.value)
+    }
+
+    async fn block_hash(&self, height: u32) -> Result<BlockHash, Error> {
+        Ok(Esplora::block_hash(self, height).await?.value)
+    }
+
+    async fn block_txid(&self, hash: BlockHash, index: u32) -> Result<Txid, Error> {
+        Ok(Esplora::block_txid(self, hash, index).await?.value)
+    }
+
+    async fn tx_position(&self, txid: Txid) -> Result<(u32, u32), Error> {
+        let p = self.tx_merkle_proof(txid).await?.value;
+        Ok((p.block_height, p.pos))
+    }
+
+    async fn outspend(&self, txid: Txid, vout: u32) -> Result<Outspend, Error> {
+        Ok(self.tx_outspend(txid, vout, None).await?.value)
+    }
+
+    async fn tx(&self, txid: Txid) -> Result<Transaction, Error> {
+        Ok(self.tx_raw(txid).await?.value)
+    }
+
+    async fn tx_fee(&self, txid: Txid) -> Result<Option<u64>, Error> {
+        Ok(Esplora::tx(self, txid).await?.value.fee)
+    }
 }
 
 /// A short channel id's funding position: block height, transaction index, output index.
@@ -75,11 +137,18 @@ pub(crate) fn position(scid: u64) -> OutPosition {
     }
 }
 
+/// Where a funding output is and when it was checked: its block, and the tip of the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Funded {
+    pub(crate) block: BlockRef,
+    pub(crate) tip: u32,
+}
+
 /// What the node said about a funding position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     /// Unspent and deep enough.
-    Found(TxOut),
+    Found(TxOut, Funded),
     /// No such output: an invented channel, or one at the wrong position.
     Missing,
     /// The output exists but was spent: a closed channel still being gossiped.
@@ -101,13 +170,38 @@ pub(crate) fn classify(scid: u64, tip: u32, slot: Option<PositionedOutput>) -> O
         Some(o) if o.spent => Outcome::Spent,
         Some(_) if tip < ready_at => Outcome::Early { ready_at },
         Some(o) => match ScriptBuf::from_hex(&o.out.scriptpubkey) {
-            Ok(script_pubkey) => Outcome::Found(TxOut {
-                value: Amount::from_sat(o.out.value),
-                script_pubkey,
-            }),
+            Ok(script_pubkey) => Outcome::Found(
+                TxOut {
+                    value: Amount::from_sat(o.out.value),
+                    script_pubkey,
+                },
+                Funded {
+                    block: block_of(p.height, &o),
+                    tip,
+                },
+            ),
             Err(_) => Outcome::Missing,
         },
     }
+}
+
+/// The block of a found output. rbitcoin always gives a confirmed output's block hash and time.
+fn block_of(height: u32, o: &PositionedOutput) -> BlockRef {
+    BlockRef {
+        height,
+        hash: o.status.block_hash.unwrap_or(BlockHash::all_zeros()),
+        time: o.status.block_time.unwrap_or(0),
+    }
+}
+
+/// A spent funding output's value, program and block, for the catch-up.
+pub(crate) fn spent_output(
+    scid: u64,
+    slot: Option<&PositionedOutput>,
+) -> Option<(u64, [u8; 32], BlockRef)> {
+    let o = slot.filter(|o| o.spent && o.status.block_height == Some(position(scid).height))?;
+    let program = program_of(&ScriptBuf::from_hex(&o.out.scriptpubkey).ok()?)?;
+    Some((o.out.value, program, block_of(position(scid).height, o)))
 }
 
 /// Lookup results by short channel id, oldest evicted first, each kept for a while.
@@ -169,6 +263,8 @@ struct State {
     cache: Cache,
     /// The announcement LDK is about to look up: its channel id and the script its keys require.
     expect: Option<(u64, ScriptBuf)>,
+    /// What the cache answered for it, if it was found.
+    found: Option<(u64, TxOut, Funded)>,
     tip: Option<u32>,
     rejected: Rejected,
     failures: u32,
@@ -228,6 +324,7 @@ impl Lookup {
                     order: VecDeque::new(),
                 },
                 expect: None,
+                found: None,
                 tip: None,
                 rejected: Rejected::default(),
                 failures: 0,
@@ -253,6 +350,25 @@ impl Lookup {
     /// Called just before LDK handles an announcement: the script its bitcoin keys require.
     pub(crate) fn expect(&self, scid: u64, script: Option<ScriptBuf>) {
         self.lock().expect = script.map(|s| (scid, s));
+    }
+
+    /// The output an announcement just answered from the cache was found at, if it was.
+    pub(crate) fn take_found(&self, scid: u64) -> Option<(TxOut, Funded)> {
+        match self.lock().found.take() {
+            Some((id, out, f)) if id == scid => Some((out, f)),
+            _ => None,
+        }
+    }
+
+    /// The channel closed: any announcement of it is refused from now on, from the cache and
+    /// then by the node.
+    pub(crate) fn closed(&self, scid: u64) {
+        self.lock().cache.put(scid, Outcome::Spent);
+    }
+
+    /// The channel's close left the best chain: what the cache says of it no longer holds.
+    pub(crate) fn forget(&self, scid: u64) {
+        self.lock().cache.map.remove(&scid);
     }
 
     pub(crate) fn count(&self, f: impl FnOnce(&mut Rejected)) {
@@ -319,15 +435,15 @@ impl Lookup {
         scid: u64,
         outcome: Outcome,
         out: &mut Settled,
-        verified: &mut Vec<u64>,
+        verified: &mut Vec<(u64, TxOut, Funded)>,
     ) {
         let waiters = s.waiting.remove(&scid).unwrap_or_default();
         s.waiting_len -= waiters.len();
         let unknown = || Err(UtxoLookupError::UnknownTx);
         match outcome {
-            Outcome::Found(txout) => {
+            Outcome::Found(txout, funded) => {
                 if waiters.iter().any(|w| w.script == txout.script_pubkey) {
-                    verified.push(scid);
+                    verified.push((scid, txout.clone(), funded));
                 }
                 for w in waiters {
                     if w.script == txout.script_pubkey {
@@ -337,7 +453,7 @@ impl Lookup {
                         out.push((w.future, unknown()));
                     }
                 }
-                s.cache.put(scid, Outcome::Found(txout));
+                s.cache.put(scid, Outcome::Found(txout, funded));
             }
             Outcome::Early { ready_at } => {
                 if s.early_len + waiters.len() <= self.max_early {
@@ -378,10 +494,11 @@ impl UtxoLookup for Lookup {
             return UtxoResult::Sync(Err(UtxoLookupError::UnknownChain));
         }
         match s.cache.get(scid) {
-            Some(Outcome::Found(txout)) if txout.script_pubkey == script => {
+            Some(Outcome::Found(txout, funded)) if txout.script_pubkey == script => {
+                s.found = Some((scid, txout.clone(), funded));
                 return UtxoResult::Sync(Ok(txout));
             }
-            Some(Outcome::Found(_)) => {
+            Some(Outcome::Found(..)) => {
                 s.rejected.wrong_script += 1;
                 return unknown;
             }
@@ -502,17 +619,23 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
                 continue;
             }
         };
-        let (mut settled, mut verified) = (Vec::new(), Vec::new());
+        let (mut settled, mut verified, mut answered) = (Vec::new(), Vec::new(), Vec::new());
         {
             let mut s = lookup.lock();
             s.failures = 0;
             s.tip = Some(s.tip.map_or(tip, |t| t.max(tip)));
             for (scid, slot) in batch.iter().zip(slots) {
+                let spent = spent_output(*scid, slot.as_ref());
                 let outcome = classify(*scid, tip, slot);
+                answered.push((*scid, matches!(outcome, Outcome::Early { .. }), spent));
                 lookup.settle(&mut s, *scid, outcome, &mut settled, &mut verified);
             }
             Lookup::promote(&mut s, tip);
             s.resolving += settled.len();
+        }
+        // Before the lookups count as done, so the replay is not over before its answers are in.
+        for (scid, early, spent) in answered {
+            gossip.watch.answered(scid, early, spent);
         }
         // Resolved outside our lock: LDK takes its own graph locks here.
         let (graph, n) = (gossip.graph(), settled.len());
@@ -520,8 +643,8 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
             future.resolve_without_forwarding(graph, result);
         }
         lookup.lock().resolving -= n;
-        for scid in verified {
-            gossip.admitted(scid);
+        for (scid, out, funded) in verified {
+            gossip.admitted(scid, Some((out, funded)));
         }
         lookup.resolved.notify_one();
     }

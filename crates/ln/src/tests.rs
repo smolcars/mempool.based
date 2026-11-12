@@ -1182,6 +1182,13 @@ struct FakeNode {
     /// When each batch request arrived and how many outputs it asked for.
     batches: Mutex<Vec<(std::time::Instant, usize)>>,
     tip_reads: AtomicUsize,
+    /// The best chain from height 0, for the close-watcher. Positions not in `outputs` are read
+    /// from it.
+    blocks: Mutex<Vec<lightning::bitcoin::Block>>,
+    /// The table in `outputs` answers one request, at the tip in `tip`, then is cleared.
+    stale_once: AtomicBool,
+    /// Every request of the close-watcher, by route.
+    asked: Mutex<Vec<&'static str>>,
 }
 
 impl FakeChain {
@@ -1214,6 +1221,95 @@ impl FakeChain {
     fn batches(&self) -> Vec<(std::time::Instant, usize)> {
         self.0.batches.lock().unwrap().clone()
     }
+
+    fn ask(&self, route: &'static str) -> Result<(), NodeError> {
+        if self.0.down.load(Ordering::Relaxed) {
+            return Err(NodeError::Unavailable("down".to_owned()));
+        }
+        self.0.asked.lock().unwrap().push(route);
+        Ok(())
+    }
+
+    fn block_at(&self, height: u32) -> Option<lightning::bitcoin::Block> {
+        self.0.blocks.lock().unwrap().get(height as usize).cloned()
+    }
+
+    fn find_tx(
+        &self,
+        txid: lightning::bitcoin::Txid,
+    ) -> Option<(u32, u32, lightning::bitcoin::Transaction)> {
+        let blocks = self.0.blocks.lock().unwrap();
+        blocks.iter().enumerate().find_map(|(h, b)| {
+            b.txdata
+                .iter()
+                .position(|t| t.compute_txid() == txid)
+                .map(|i| (h as u32, i as u32, b.txdata[i].clone()))
+        })
+    }
+
+    /// The input spending an output, with its transaction and block.
+    fn spender(
+        &self,
+        out: lightning::bitcoin::OutPoint,
+    ) -> Option<(u32, lightning::bitcoin::Transaction, u32)> {
+        let blocks = self.0.blocks.lock().unwrap();
+        blocks.iter().enumerate().find_map(|(h, b)| {
+            b.txdata.iter().find_map(|t| {
+                let vin = t.input.iter().position(|i| i.previous_output == out)?;
+                Some((h as u32, t.clone(), vin as u32))
+            })
+        })
+    }
+
+    fn status(&self, height: u32) -> TxStatus {
+        let b = self.block_at(height).unwrap();
+        TxStatus {
+            confirmed: true,
+            block_height: Some(height),
+            block_hash: Some(b.block_hash()),
+            block_time: Some(u64::from(b.header.time)),
+        }
+    }
+
+    /// The output at a position of the chain in `blocks`.
+    fn derived(&self, p: &OutPosition) -> Option<PositionedOutput> {
+        let b = self.block_at(p.height)?;
+        let tx = b.txdata.get(p.index as usize)?;
+        let out = tx.output.get(p.vout as usize)?;
+        let spent = self
+            .spender(lightning::bitcoin::OutPoint::new(tx.compute_txid(), p.vout))
+            .is_some();
+        Some(PositionedOutput {
+            out: Vout {
+                scriptpubkey: out.script_pubkey.to_hex_string(),
+                scriptpubkey_asm: String::new(),
+                scriptpubkey_type: ScriptType::V0P2wsh,
+                scriptpubkey_address: None,
+                value: out.value.to_sat(),
+            },
+            spent,
+            status: self.status(p.height),
+        })
+    }
+
+    fn header(&self, height: u32) -> Option<node::esplora::model::Block> {
+        let b = self.block_at(height)?;
+        Some(node::esplora::model::Block {
+            id: b.block_hash(),
+            height,
+            version: 2,
+            timestamp: u64::from(b.header.time),
+            tx_count: b.txdata.len() as u32,
+            size: 0,
+            weight: 0,
+            merkle_root: b.header.merkle_root,
+            previousblockhash: (height > 0).then_some(b.header.prev_blockhash),
+            mediantime: 0,
+            nonce: b.header.nonce,
+            bits: 0,
+            difficulty: 0.0,
+        })
+    }
 }
 
 impl crate::Chain for FakeChain {
@@ -1229,16 +1325,22 @@ impl crate::Chain for FakeChain {
             .lock()
             .unwrap()
             .push((std::time::Instant::now(), positions.as_slice().len()));
-        let map = n.outputs.lock().unwrap();
+        let map = n.outputs.lock().unwrap().clone();
+        let tip = n.tip.load(Ordering::Relaxed);
+        if n.stale_once.swap(false, Ordering::Relaxed) {
+            n.outputs.lock().unwrap().clear();
+            let tip = n.blocks.lock().unwrap().len().saturating_sub(1) as u32;
+            n.tip.store(tip, Ordering::Relaxed);
+        }
         Ok(Stamped {
             value: positions
                 .as_slice()
                 .iter()
-                .map(|p| map.get(p).cloned())
+                .map(|p| map.get(p).cloned().or_else(|| self.derived(p)))
                 .collect(),
             tip: Some(ChainTip {
                 hash: BlockHash::all_zeros(),
-                height: n.tip.load(Ordering::Relaxed),
+                height: tip,
             }),
         })
     }
@@ -1249,6 +1351,111 @@ impl crate::Chain for FakeChain {
         }
         self.0.tip_reads.fetch_add(1, Ordering::Relaxed);
         Ok(self.0.tip.load(Ordering::Relaxed))
+    }
+
+    async fn tip_hash(&self) -> Result<BlockHash, NodeError> {
+        self.ask("tip_hash")?;
+        let blocks = self.0.blocks.lock().unwrap();
+        blocks
+            .last()
+            .map(|b| b.block_hash())
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn headers(
+        &self,
+        top: Option<u32>,
+    ) -> Result<Vec<node::esplora::model::Block>, NodeError> {
+        self.ask("headers")?;
+        let len = self.0.blocks.lock().unwrap().len() as u32;
+        let top = top.unwrap_or(u32::MAX).min(len.saturating_sub(1));
+        Ok((0..=top)
+            .rev()
+            .take(10)
+            .filter_map(|h| self.header(h))
+            .collect())
+    }
+
+    async fn block(&self, hash: BlockHash) -> Result<lightning::bitcoin::Block, NodeError> {
+        self.ask("block")?;
+        let blocks = self.0.blocks.lock().unwrap();
+        blocks
+            .iter()
+            .find(|b| b.block_hash() == hash)
+            .cloned()
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn block_hash(&self, height: u32) -> Result<BlockHash, NodeError> {
+        self.ask("block_hash")?;
+        self.block_at(height)
+            .map(|b| b.block_hash())
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn block_txid(
+        &self,
+        hash: BlockHash,
+        index: u32,
+    ) -> Result<lightning::bitcoin::Txid, NodeError> {
+        self.ask("block_txid")?;
+        let blocks = self.0.blocks.lock().unwrap();
+        let b = blocks
+            .iter()
+            .find(|b| b.block_hash() == hash)
+            .ok_or(NodeError::NotFound)?;
+        b.txdata
+            .get(index as usize)
+            .map(|t| t.compute_txid())
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn tx_position(&self, txid: lightning::bitcoin::Txid) -> Result<(u32, u32), NodeError> {
+        self.ask("tx_position")?;
+        self.find_tx(txid)
+            .map(|(h, i, _)| (h, i))
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn outspend(
+        &self,
+        txid: lightning::bitcoin::Txid,
+        vout: u32,
+    ) -> Result<node::esplora::model::Outspend, NodeError> {
+        self.ask("outspend")?;
+        let s = self.spender(lightning::bitcoin::OutPoint::new(txid, vout));
+        Ok(node::esplora::model::Outspend {
+            spent: s.is_some(),
+            txid: s.as_ref().map(|(_, t, _)| t.compute_txid()),
+            vin: s.as_ref().map(|(_, _, v)| *v),
+            status: s.map(|(h, _, _)| self.status(h)),
+        })
+    }
+
+    async fn tx(
+        &self,
+        txid: lightning::bitcoin::Txid,
+    ) -> Result<lightning::bitcoin::Transaction, NodeError> {
+        self.ask("tx")?;
+        self.find_tx(txid)
+            .map(|(_, _, t)| t)
+            .ok_or(NodeError::NotFound)
+    }
+
+    async fn tx_fee(&self, txid: lightning::bitcoin::Txid) -> Result<Option<u64>, NodeError> {
+        self.ask("tx_fee")?;
+        let Some((_, _, tx)) = self.find_tx(txid) else {
+            return Err(NodeError::NotFound);
+        };
+        let mut inputs = 0;
+        for i in &tx.input {
+            let Some((_, _, prev)) = self.find_tx(i.previous_output.txid) else {
+                return Ok(None);
+            };
+            inputs += prev.output[i.previous_output.vout as usize].value.to_sat();
+        }
+        let out: u64 = tx.output.iter().map(|o| o.value.to_sat()).sum();
+        Ok(Some(inputs - out))
     }
 }
 
@@ -1802,3 +2009,5 @@ async fn stored_channels_keep_their_place_under_the_ceiling() {
     .await;
     assert_eq!(g.counters.over_ceiling.load(Ordering::Relaxed), 2);
 }
+
+mod closes;
