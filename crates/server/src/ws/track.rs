@@ -28,8 +28,8 @@ use tokio::time::Instant;
 use super::{Conn, Frame, Hub, Snapshot, Topic};
 use crate::config::{Network, WsLimits};
 use crate::replacements::{Batch, Facts, Kept, Link, MAX_LINKS, Mined, Replacements};
-use engine::replacements::{Answer, Ask, Lookup};
 use crate::{ApiError, esplora};
+use engine::replacements::{Answer, Ask, Lookup};
 
 /// The `/app` answer while the network's mempool engine is switched off.
 pub const MEMPOOL_OFF: ApiError =

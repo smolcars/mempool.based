@@ -333,6 +333,49 @@ impl Mock {
         n.sequence += 1;
     }
 
+    /// A reorg: the top `depth` blocks leave the best chain and `blocks` follow on what is
+    /// left, each holding the transactions listed (sent before; what conflicts with them leaves
+    /// the mempool). Of what the old blocks held, only `back` returns to the mempool.
+    pub(crate) fn reorg(&self, depth: usize, back: &[Txid], blocks: &[&[Txid]]) -> Vec<BlockHash> {
+        let mut n = self.node();
+        for _ in 0..depth {
+            n.chain.pop();
+        }
+        for t in back {
+            let tx = n.sent[t].clone();
+            n.txs.push(tx);
+        }
+        n.sequence += 1;
+        let mut out = Vec::new();
+        for ids in blocks {
+            let txs: Vec<MockTx> = ids.iter().map(|i| n.sent[i].clone()).collect();
+            let spent: Vec<OutPoint> = txs
+                .iter()
+                .flat_map(|t| t.tx.input.iter().map(|i| i.previous_output))
+                .collect();
+            let conflicts: Vec<Txid> = n
+                .txs
+                .iter()
+                .filter(|m| !ids.contains(&m.id()))
+                .filter(|m| {
+                    m.tx.input
+                        .iter()
+                        .any(|i| spent.contains(&i.previous_output))
+                })
+                .map(MockTx::id)
+                .collect();
+            let gone = n.with_descendants(&conflicts);
+            n.take(&gone);
+            for t in txs {
+                if n.find(t.id()).is_none() {
+                    n.txs.push(t);
+                }
+            }
+            out.push(n.mine(ids));
+        }
+        out
+    }
+
     pub(crate) fn tip(&self) -> ChainTip {
         let n = self.node();
         ChainTip {
@@ -1818,4 +1861,144 @@ async fn a_confirmation_is_said_at_once_whatever_the_interval() {
     let v = c.wait(&topic, |v| state(v) == "confirmed").await;
     assert_eq!(v["hash"], json!(b1.to_string()));
     assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+}
+
+/// Every message on a `/api/v1/ws` connection so far, oldest first: they carry no topic.
+fn v1_frames(c: &mut Client) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Ok(f) = c.rx.try_recv() {
+        let b = f.as_bytes();
+        let at = match b[1] & 0x7F {
+            126 => 4,
+            127 => 10,
+            _ => 2,
+        };
+        out.push(serde_json::from_slice(&b[at..]).unwrap());
+    }
+    out
+}
+
+/// The block a `replaced` message's first link says its replacement is in, or `mined` itself
+/// when that is not `true`.
+fn mined_at(v: &Value) -> Value {
+    let l = &v["chain"][0];
+    if l["mined"] == json!(true) {
+        l["block"]["hash"].clone()
+    } else {
+        l["mined"].clone()
+    }
+}
+
+#[tokio::test]
+async fn a_reorg_reaches_every_reader_of_the_record() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 500, 200);
+    let s = Server::start(&mock, |_| {});
+    s.settle().await;
+    let b = mock.send(&[coin(1)], 1, 900, 200);
+    s.settle().await;
+    let (mut c, mut v1) = (Client::new(256), Client::new(256));
+    let topic = tx_topic(a);
+    c.sub(&s, &topic).unwrap();
+    s.track()
+        .subscribe(Topic::V1Tx(a), &topic, &v1.conn)
+        .unwrap();
+    let hash = |h: BlockHash| json!(h.to_string());
+
+    // Mined: the link names its block, on the topic and the route alike.
+    let b1 = mock.mine(&[b]);
+    s.settle().await;
+    let v = c.wait(&topic, |v| mined_at(v) == hash(b1)).await;
+    assert_eq!(v["chain"][0]["block"]["height"], json!(1));
+    assert_eq!(
+        replacements(&s, a).await["replaced_by"][0]["block"]["hash"],
+        hash(b1)
+    );
+
+    // The block is replaced by one that also holds the replacement: mined, at the new block,
+    // and nothing asked of the node (its Esplora here refuses every connection).
+    let b1b = mock.reorg(1, &[], &[&[b]])[0];
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) == hash(b1b)).await;
+    assert_eq!(
+        replacements(&s, a).await["replaced_by"][0]["block"]["hash"],
+        hash(b1b)
+    );
+
+    // Replaced by one without it, and it is back in the mempool: not mined.
+    mock.reorg(1, &[b], &[&[]]);
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) == json!(false)).await;
+    assert_eq!(
+        replacements(&s, a).await["replaced_by"][0]["mined"],
+        json!(false)
+    );
+
+    // Mined again, then reorged out of every block and the mempool: not mined.
+    let b2 = mock.mine(&[b]);
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) == hash(b2)).await;
+    mock.reorg(1, &[], &[&[]]);
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) == json!(false)).await;
+    let frames = v1_frames(&mut v1);
+    assert_eq!(
+        frames.last(),
+        Some(&json!({"txReplaced": {"txid": b.to_string()}})),
+        "still replaced, for the compatible socket"
+    );
+
+    // The original wins a reorg: confirmed in the new block, no longer replaced.
+    mock.reorg(0, &[], &[&[b]]);
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) != json!(false)).await;
+    let won = mock.reorg(1, &[], &[&[a]])[0];
+    s.settle().await;
+    let v = c.wait(&topic, |v| state(v) == "confirmed").await;
+    assert_eq!(v["hash"], hash(won));
+    assert_eq!(
+        replacements(&s, a).await["replaced_by"],
+        json!([]),
+        "the route agrees"
+    );
+    let deadline = Instant::now() + WAIT;
+    let mut frames = Vec::new();
+    while !frames.contains(&json!({"txConfirmed": a.to_string()})) {
+        frames.extend(v1_frames(&mut v1));
+        assert!(Instant::now() < deadline, "{frames:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_reorg_deeper_than_the_window_with_the_node_unreachable_reads_unknown() {
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 500, 200);
+    let s = Server::start(&mock, |_| {});
+    s.settle().await;
+    let b = mock.send(&[coin(1)], 1, 900, 200);
+    s.settle().await;
+    let mut c = Client::new(256);
+    let topic = tx_topic(a);
+    c.sub(&s, &topic).unwrap();
+    let b1 = mock.mine(&[b]);
+    s.settle().await;
+    for _ in 0..6 {
+        mock.mine(&[]);
+    }
+    s.settle().await;
+    c.wait(&topic, |v| mined_at(v) == json!(b1.to_string()))
+        .await;
+    // Seven blocks replaced by seven: the window cannot show where the chains part, and the
+    // node's Esplora cannot be reached to say where `b` is now.
+    let empty: [&[Txid]; 7] = [&[]; 7];
+    mock.reorg(7, &[], &empty);
+    s.settle().await;
+    let v = c.wait(&topic, |v| mined_at(v) == Value::Null).await;
+    assert_eq!(v["chain"][0]["block"], Value::Null);
+    assert_eq!(state(&v), "replaced");
+    assert_eq!(
+        replacements(&s, a).await["replaced_by"][0]["mined"],
+        Value::Null
+    );
 }

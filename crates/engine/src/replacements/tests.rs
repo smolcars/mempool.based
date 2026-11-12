@@ -466,13 +466,7 @@ async fn replacements_benchmark() {
                 Change::Link(l)
             })
             .collect();
-        db::write(
-            &t.store,
-            vec![links],
-            keep,
-        )
-        .await
-        .unwrap();
+        db::write(&t.store, vec![links], keep).await.unwrap();
     }
     let started = std::time::Instant::now();
     let loaded = db::load(&t.store, keep).await.unwrap();
@@ -687,7 +681,11 @@ async fn a_reorg_deeper_than_the_window_walks_down_and_asks() {
     let reads = check(&mut r, &node).await;
     assert_eq!(r.mined(&id(4)), Mined::No);
     assert_eq!(r.mined(&id(2)), Mined::In(Some((11, block(211)))));
-    assert_eq!(r.mined(&id(6)), Mined::In(Some((5, block(5)))), "below the fork");
+    assert_eq!(
+        r.mined(&id(6)),
+        Mined::In(Some((5, block(5)))),
+        "below the fork"
+    );
     // 4's status, the hash at 12 (gone), 2's status, the hash at 5 (held).
     assert_eq!(reads, 4);
     assert_eq!(r.asks(), None);
@@ -725,7 +723,11 @@ async fn the_cap_bounds_the_reads_of_one_reorg_and_leaves_the_rest_unknown() {
         .filter(|i| r.mined(&idn(100_000 + i)) == Mined::No)
         .count();
     // One read for the hash at 9, which was gone; one each for the first 99 replacements.
-    assert_eq!((no, unknown), (CHECKS - 1, 21), "past the cap: unknown, not guessed");
+    assert_eq!(
+        (no, unknown),
+        (CHECKS - 1, 21),
+        "past the cap: unknown, not guessed"
+    );
     assert_eq!(r.asks(), None, "and stays so");
 }
 
@@ -796,7 +798,11 @@ async fn a_restart_between_the_reorg_and_the_check_checks_after_it() {
         again.restore(l);
     }
     assert_eq!(again.mined(&id(4)), Mined::Unknown);
-    assert_eq!(again.asks(), None, "nothing is asked before the first window");
+    assert_eq!(
+        again.asks(),
+        None,
+        "nothing is asked before the first window"
+    );
     // The first window after the start cannot show where it parts from what we knew: the
     // unknown is asked, and the walk proves or disproves 12.
     again.follow(&window(&blocks));

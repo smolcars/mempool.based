@@ -137,10 +137,12 @@ fn read(r: &rusqlite::Row) -> Result<Link, SqlError> {
         by_tx,
         mined: match get::<u8>(r, 15)? {
             0 => Mined::No,
-            1 => Mined::In(r.get::<_, Option<u32>>(16)?.zip(
-                r.get::<_, Option<[u8; 32]>>(17)?
-                    .map(BlockHash::from_byte_array),
-            )),
+            1 => Mined::In(
+                r.get::<_, Option<u32>>(16)?.zip(
+                    r.get::<_, Option<[u8; 32]>>(17)?
+                        .map(BlockHash::from_byte_array),
+                ),
+            ),
             _ => Mined::Unknown,
         },
     })
