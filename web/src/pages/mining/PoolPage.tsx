@@ -120,7 +120,8 @@ function Pool(props: { network: Network; slug: string }) {
         </Show>
         <section class="mining-section" aria-labelledby="pool-stats-title">
           <SectionHeader title="Blocks found" id="pool-stats-title" />
-          {/* Its height is held, coverage note included, so the figures arriving move nothing. */}
+          {/* Its height is held, so the figures arriving move nothing. Where the stored blocks begin
+              is said once, over the chart below. */}
           <div class="pool-stats">
             <dl class="mining-rewards" aria-busy={s() ? "false" : "true"}>
               <Stat
@@ -180,7 +181,6 @@ function Pool(props: { network: Network; slug: string }) {
                 </ul>
               </details>
             </Show>
-            <CoverageNote coverage={stats.answer()?.coverage} period={ALL} />
           </div>
         </section>
         <section class="mining-section" aria-labelledby="pool-hashrate-title">

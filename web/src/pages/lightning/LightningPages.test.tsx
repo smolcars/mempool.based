@@ -190,7 +190,7 @@ describe("a node", () => {
     await shows(el, "Open channels1 807");
     expect(el.querySelector("h1")?.textContent).toBe("ACINQ");
     expect(text(el)).toContain("03864ef0");
-    expect(text(el)).toContain("The public key above is the node's identity");
+    expect(text(el)).toContain("The public key is the node's identity");
     expect(text(el)).toContain("First seen26 Feb 2019");
     expect(text(el)).toContain(
       "of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735",

@@ -139,8 +139,8 @@ export function Where(props: { position: Position | null; live: boolean; reserve
                 <p class="tx-where__text num">{words().ahead}</p>
                 <p class="tx-where__text">{words().when}</p>
                 <p class="tx-where__note">
-                  A projection from this server's view of the mempool, not a promise: miners pick
-                  their own blocks, and anything that pays more goes ahead of it.
+                  A projection, not a promise: miners pick their own blocks, and anything that pays
+                  more goes ahead of it.
                 </p>
               </>
             );

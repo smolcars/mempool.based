@@ -5,6 +5,7 @@ import { Match, Show, Switch } from "solid-js";
 import { Amount, Sats } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
@@ -184,10 +185,12 @@ function Body(props: { channel: ChannelDetail }) {
                 </p>
                 <p>{words().why}</p>
                 <Show when={x().kind === "force" && c().penalty === null}>
-                  <p class="ln-aside">
-                    Had the other end cheated, its penalty would show here once swept, if that
-                    happens within 2 016 blocks while this server watches.
-                  </p>
+                  <More label="About penalties">
+                    <p>
+                      Had the other end cheated, its penalty would show here once swept, if that
+                      happens within 2 016 blocks while this server watches.
+                    </p>
+                  </More>
                 </Show>
               </div>
               <dl class="ln-facts">
@@ -252,10 +255,12 @@ function Body(props: { channel: ChannelDetail }) {
           <Side end={c().node_one} other={c().node_two} closed={c().closed !== null} />
           <Side end={c().node_two} other={c().node_one} closed={c().closed !== null} />
         </div>
-        <p class="ln-aside">
-          Each end sets its own policy: what it charges to forward a payment across the channel to
-          the other end.
-        </p>
+        <More label="About these">
+          <p>
+            Each end sets its own policy: what it charges to forward a payment across the channel to
+            the other end.
+          </p>
+        </More>
       </section>
     </>
   );
