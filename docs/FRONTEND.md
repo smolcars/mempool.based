@@ -89,7 +89,7 @@ Internal links stay on the current network. Use `<Link href={paths.tx(txid)}>` f
 
 ### Page title
 
-Call `usePageTitle(() => "Block 975 411")`. Test networks get their name in front, and every title ends in `| mempool.based`.
+Call `usePageTitle(() => "Block 975 411")`. Test networks get their name in front, and every title ends in `| rbitcoin.space`.
 
 ## Data
 

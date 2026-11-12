@@ -1,6 +1,6 @@
-# mempool.based beside rbitcoin v0.9.2, for one network. docs/DEPLOY.md explains every choice.
+# rbitcoin.space beside rbitcoin v0.9.2, for one network. docs/DEPLOY.md explains every choice.
 # From this directory, with .env filled in from .env.example: docker compose up -d --build
-name: mempool-based
+name: rbitcoin-space
 
 x-hardened: &hardened
   read_only: true
@@ -34,7 +34,7 @@ services:
 
   server:
     <<: *hardened
-    image: ${SERVER_IMAGE:-mempool-based}
+    image: ${SERVER_IMAGE:-rbitcoin-space}
     build: ..
     env_file: .env
     environment:

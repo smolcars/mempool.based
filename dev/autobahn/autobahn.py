@@ -66,7 +66,7 @@ def start_server(work):
         "CLIENT_RATE_PER_SEC": "100000",
         "CLIENT_BURST": "100000",
     }
-    binary = os.path.join(TARGET, "release", "mempool-based")
+    binary = os.path.join(TARGET, "release", "rbitcoin-space")
     out = open(os.path.join(work, "server.log"), "w+")
     proc = subprocess.Popen([binary], env=env, stdout=out, stderr=subprocess.STDOUT)
     deadline = time.time() + 20
@@ -90,7 +90,7 @@ def main():
     cases = sys.argv[1:] or ["*"]
     log("building the echo server")
     subprocess.run(
-        ["cargo", "build", "--release", "--locked", "-p", "mempool-based",
+        ["cargo", "build", "--release", "--locked", "-p", "rbitcoin-space",
          "--features", "autobahn", "--target-dir", TARGET],
         cwd=ROOT, check=True,
     )
@@ -104,7 +104,7 @@ def main():
         net, host = [], "host.docker.internal"
     spec = {
         "outdir": "/work/reports",
-        "servers": [{"agent": "mempool.based", "url": f"ws://{host}:{port}/regtest/app/ws"}],
+        "servers": [{"agent": "rbitcoin.space", "url": f"ws://{host}:{port}/regtest/app/ws"}],
         "cases": cases,
         "exclude-cases": [],
         "exclude-agent-cases": {},
@@ -127,7 +127,7 @@ def main():
     log(f"suite took {time.time() - started:.0f} s; reports in {work}/reports")
 
     with open(os.path.join(work, "reports", "index.json")) as f:
-        results = json.load(f)["mempool.based"]
+        results = json.load(f)["rbitcoin.space"]
     counts = {}
     for case, r in results.items():
         group = case.split(".")[0]

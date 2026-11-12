@@ -7,7 +7,7 @@ set -euo pipefail
 web=$(cd "$(dirname "$0")/.." && pwd)
 root=$(dirname "$web")
 regtest="$root/dev/regtest/regtest.py"
-run=$(mktemp -d "${TMPDIR:-/tmp}/mempool-based-e2e.XXXXXX")
+run=$(mktemp -d "${TMPDIR:-/tmp}/rbitcoin-space-e2e.XXXXXX")
 # Never a node the caller set up: scenario resets the chain it is pointed at.
 export REGTEST_PROJECT="e2e-$$"
 server=""
@@ -37,10 +37,10 @@ cd "$web"
 node_modules/.bin/playwright install --only-shell chromium &
 browser_pid=$!
 bun run build --outDir "$run/dist" --emptyOutDir --logLevel warn
-(cd "$root" && cargo build --locked --quiet -p mempool-based &&
+(cd "$root" && cargo build --locked --quiet -p rbitcoin-space &&
   cargo build --locked --quiet -p engine --example history_seed)
 echo "e2e: built at ${SECONDS}s" >&2
-bin="${CARGO_TARGET_DIR:-$root/target}/debug/mempool-based"
+bin="${CARGO_TARGET_DIR:-$root/target}/debug/rbitcoin-space"
 case "$bin" in /*) ;; *) bin="$root/$bin" ;; esac
 # The server records its first minute 60 to 120 s after it starts, so it starts with some history.
 "$(dirname "$bin")/examples/history_seed" "$run/data"

@@ -5,7 +5,7 @@ What an operator runs: one image with the server and the built frontend, and a c
 ## The image
 
 ```sh
-docker build -t mempool-based .
+docker build -t rbitcoin-space .
 ```
 
 The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch and pinned by digest; all come from Docker Hub or `gcr.io`.
@@ -13,12 +13,12 @@ The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch a
 | Stage | From | Does |
 |---|---|---|
 | `web` | `oven/bun` | `bun install --frozen-lockfile` and `bun run build`. Runs on the build platform only, since the output is the same on every architecture |
-| `server` | `rust` (Debian 13) | `cargo build --release --locked -p mempool-based`. The cargo registry and `target/` are BuildKit cache mounts, so a one-file change recompiles one crate. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
-| final | `gcr.io/distroless/cc-debian13:nonroot` | The binary at `/usr/local/bin/mempool-based`, the frontend at `/srv/web`. No shell, no package manager |
+| `server` | `rust` (Debian 13) | `cargo build --release --locked -p rbitcoin-space`. The cargo registry and `target/` are BuildKit cache mounts, so a one-file change recompiles one crate. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
+| final | `gcr.io/distroless/cc-debian13:nonroot` | The binary at `/usr/local/bin/rbitcoin-space`, the frontend at `/srv/web`. No shell, no package manager |
 
 Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Everything else is configured as in [`CONFIG.md`](CONFIG.md).
 
-It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns for the SQLite store, so it runs with a read-only root filesystem and a volume at `/data`. The image does not set `DATA_DIR`; without it the server keeps no store ([`CONFIG.md`](CONFIG.md)). Its health check is the binary itself: `mempool-based healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
+It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns for the SQLite store, so it runs with a read-only root filesystem and a volume at `/data`. The image does not set `DATA_DIR`; without it the server keeps no store ([`CONFIG.md`](CONFIG.md)). Its health check is the binary itself: `rbitcoin-space healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
 
 ### Health
 
@@ -64,7 +64,7 @@ cd deploy
 cp .env.example .env
 pass=$(openssl rand -hex 32)              # or any long random string
 sed -i.bak "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env && rm .env.bak
-printf 'mempool-based:%s' "$pass" > rpc.cookie
+printf 'rbitcoin-space:%s' "$pass" > rpc.cookie
 sudo chown 10001:10001 rpc.cookie && sudo chmod 600 rpc.cookie
 docker compose up -d --build
 ```
@@ -126,7 +126,7 @@ TRUSTED_PROXY_HEADER=X-Real-IP
 TRUSTED_PROXIES=172.18.0.1                        # the compose network's gateway: see below
 ```
 
-**Which address.** The server sees the address a connection comes from inside its container, not `127.0.0.1`. A proxy on the host connecting to the published loopback port arrives from the compose network's gateway (Docker's port forwarding connects from there): often `172.18.0.1` on Linux, and on Docker Desktop for Mac a `192.168.x.1` address. Find it with `docker network inspect mempool-based_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`, or read `client` from an `http_request` event with `LOG_CLIENT_ADDR=true` and the trusted settings unset. Docker can give the network another subnet when it is recreated, so check again after `docker compose down`. A proxy running as a container on the compose network arrives from that container's address. Trusting a whole private range (`172.16.0.0/12`) also works when nothing but the proxy can reach the server on it, which the loopback-only publish ensures; never trust a range clients can connect from.
+**Which address.** The server sees the address a connection comes from inside its container, not `127.0.0.1`. A proxy on the host connecting to the published loopback port arrives from the compose network's gateway (Docker's port forwarding connects from there): often `172.18.0.1` on Linux, and on Docker Desktop for Mac a `192.168.x.1` address. Find it with `docker network inspect rbitcoin-space_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`, or read `client` from an `http_request` event with `LOG_CLIENT_ADDR=true` and the trusted settings unset. Docker can give the network another subnet when it is recreated, so check again after `docker compose down`. A proxy running as a container on the compose network arrives from that container's address. Trusting a whole private range (`172.16.0.0/12`) also works when nothing but the proxy can reach the server on it, which the loopback-only publish ensures; never trust a range clients can connect from.
 
 `X-Forwarded-For` works as well, written by a proxy that appends (nginx `$proxy_add_x_forwarded_for`, Caddy's default): the server reads the list from the right and skips the proxies it trusts, so what a client wrote at the left is ignored. With a CDN or a second proxy in front, list each hop's address in `TRUSTED_PROXIES`.
 
@@ -168,7 +168,7 @@ and in `.env`:
 ```sh
 SIGNET_RPC_HOST=signet
 SIGNET_RPC_PORT=8332
-SIGNET_RPC_USER=mempool-based
+SIGNET_RPC_USER=rbitcoin-space
 SIGNET_RPC_PASSWORD=…                     # the same as in rpc.cookie, or give signet its own secret
 SIGNET_ESPLORA_URL=/run/signet/esplora.sock
 SIGNET_ELECTRUM_ADDR=signet:50001
@@ -181,7 +181,7 @@ The server serves it under `/signet` ([`ARCHITECTURE.md`](ARCHITECTURE.md)). P2P
 The same file runs a regtest node: set `NETWORK=regtest`, `P2P_PORT=18444`, `P2P_PUBLISH=127.0.0.1:0` and `HTTP_PUBLISH=127.0.0.1:0` (Docker picks free host ports), and the six `REGTEST_*` variables in place of `MAINNET_*`. Then `docker compose -p <name> up -d --build` and `docker compose -p <name> port server 8080`. The app is at `/regtest/`. Mine with JSON-RPC from a container on the compose network:
 
 ```sh
-docker run --rm --network <name>_default curlimages/curl -su "mempool-based:$pass" \
+docker run --rm --network <name>_default curlimages/curl -su "rbitcoin-space:$pass" \
   -d '{"method":"generatetoaddress","params":[101,"bcrt1q…"]}' http://node:8332/
 ```
 

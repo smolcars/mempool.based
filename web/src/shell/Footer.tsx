@@ -5,9 +5,9 @@ export function Footer(props: { version: Accessor<string | undefined> }) {
   return (
     <footer class="site-footer">
       <div class="site-footer__inner">
-        <p>mempool.based, a block explorer for rbitcoin.</p>
+        <p>rbitcoin.space, a block explorer for rbitcoin.</p>
         <p>
-          <a href="https://github.com/smolcars/mempool.based" rel="noopener noreferrer">
+          <a href="https://github.com/smolcars/rbitcoin-space" rel="noopener noreferrer">
             Source code
           </a>
           {/* Last on the page, so its late arrival moves nothing. */}

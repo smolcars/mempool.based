@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use axum::routing::any;
 use engine::history::{self, DAY, Flow, HOUR, Level, MINUTE, Point, Totals};
 use engine::store::{Options, Store};
-use mempool_based::{App, Config};
+use rbitcoin_space::{App, Config};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -40,7 +40,7 @@ impl Drop for Dir {
 
 fn dir(name: &str) -> Dir {
     let d = std::env::temp_dir().join(format!(
-        "mempool-based-statistics-{name}-{}",
+        "rbitcoin-space-statistics-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&d);

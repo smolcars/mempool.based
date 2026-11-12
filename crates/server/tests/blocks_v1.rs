@@ -22,7 +22,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, TxMerkleNode};
 use engine::audit::{Audit, Side, Totals};
 use engine::store::{Options, Store, params};
-use mempool_based::{App, Config, IMMUTABLE};
+use rbitcoin_space::{App, Config, IMMUTABLE};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -223,7 +223,7 @@ impl Drop for Dir {
 
 fn dir(name: &str) -> Dir {
     let d = std::env::temp_dir().join(format!(
-        "mempool-based-blocks-v1-{name}-{}",
+        "rbitcoin-space-blocks-v1-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&d);

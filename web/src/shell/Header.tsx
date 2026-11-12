@@ -43,7 +43,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
       <div class="site-header__inner">
         <Link class="brand" href="/">
           <Logo />
-          <span class="brand__word">mempool.based</span>
+          <span class="brand__word">rbitcoin.space</span>
         </Link>
         <NetworkSwitch networks={props.networks} />
         <div class="site-header__search">

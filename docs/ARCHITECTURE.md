@@ -1,9 +1,9 @@
 # Architecture
 
-mempool.based is a sidecar: one Rust server beside a stock rbitcoin node, a static frontend, and a SQLite file per network. It does not embed or patch the node.
+rbitcoin.space is a sidecar: one Rust server beside a stock rbitcoin node, a static frontend, and a SQLite file per network. It does not embed or patch the node.
 
 ```text
- browser ──HTTP/WS──► mempool-based ──Esplora REST──► rbitcoin v0.9.2
+ browser ──HTTP/WS──► rbitcoin-space ─Esplora REST──► rbitcoin v0.9.2
                         │   │   │  ──Electrum TCP──►   (unmodified)
                         │   │   └──JSON-RPC────────►
                         │   └── SQLite (derived data only)
@@ -22,7 +22,7 @@ mempool.based is a sidecar: one Rust server beside a stock rbitcoin node, a stat
 
 | Crate | Path | Owns |
 |---|---|---|
-| `mempool-based` (binary) | `crates/server` | Config, HTTP routes, WebSocket hub, middleware, static file serving, wiring |
+| `rbitcoin-space` (binary) | `crates/server` | Config, HTTP routes, WebSocket hub, middleware, static file serving, wiring |
 | `node` | `crates/node` | Typed clients for rbitcoin: Esplora (TCP and unix socket), Electrum with subscriptions, JSON-RPC |
 | `engine` | `crates/engine` | Mempool tracking, projected blocks, block summaries, the SQLite store. Pure logic is kept separate from I/O so it can be unit-tested |
 | `ln` | `crates/ln` | The gossip-only LDK peer and Lightning graph tracking |

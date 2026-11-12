@@ -1,8 +1,10 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# mempool.based
+# rbitcoin.space
 
 A fast block explorer for [rbitcoin](https://github.com/rbitcoin-org/rbitcoin): live mempool, blocks, mining and Lightning.
+
+This project was called mempool.based until 2026-11-12, when its repository moved from `smolcars/mempool.based` to [`smolcars/rbitcoin-space`](https://github.com/smolcars/rbitcoin-space).
 
 > **Status: early development.** The explorer for confirmed data works on mainnet, signet and testnet4: live blocks, block, transaction and address pages, and search. The live mempool, mining history and Lightning are being built. Progress is tracked in [`docs/TODO.md`](docs/TODO.md).
 
@@ -26,7 +28,7 @@ Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustu
 ```sh
 # Build the frontend, then run the server on it
 (cd web && bun install && bun run build)
-cargo run -p mempool-based          # LISTEN_ADDR and WEB_DIR are read from the environment
+cargo run -p rbitcoin-space          # LISTEN_ADDR and WEB_DIR are read from the environment
 
 # Frontend with hot reload, proxying the server above
 (cd web && bun run dev)

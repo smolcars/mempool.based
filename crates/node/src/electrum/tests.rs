@@ -86,7 +86,7 @@ impl Peer {
 
     async fn handshake(&mut self, height: u32, tip: &Header) {
         let req = self.expect("server.version").await;
-        assert_eq!(req["params"], json!(["mempool.based", ["1.4", "1.6"]]));
+        assert_eq!(req["params"], json!(["rbitcoin.space", ["1.4", "1.6"]]));
         self.reply(&req, json!(["rbitcoin-electrs 0.9.1 electrumx", "1.6"]))
             .await;
         let req = self.expect("blockchain.headers.subscribe").await;

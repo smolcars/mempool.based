@@ -6,8 +6,8 @@ use logging::events::{
     ConfigInvalid, ListenFailed, Listening, NetworkEnabled, NoNetworks, ServerStarting,
     ServerStopped, ShutdownRequested, WebDirMissing,
 };
-use mempool_based::config::EsploraEndpoint;
-use mempool_based::{App, Config};
+use rbitcoin_space::config::EsploraEndpoint;
+use rbitcoin_space::{App, Config};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -138,7 +138,7 @@ fn started(config: &Config, log: logging::Settings) {
     }
 }
 
-/// `mempool-based healthcheck`: whether the server at `LISTEN_ADDR` answers `/healthz` with 200.
+/// `rbitcoin-space healthcheck`: whether the server at `LISTEN_ADDR` answers `/healthz` with 200.
 /// The container image has no shell or curl, so its health check runs the binary itself.
 async fn healthcheck(listen: SocketAddr) -> bool {
     let ip = match listen.ip() {
@@ -192,8 +192,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use mempool_based::config::RequestLog;
-    use mempool_based::{Limits, WsLimits};
+    use rbitcoin_space::config::RequestLog;
+    use rbitcoin_space::{Limits, WsLimits};
 
     #[tokio::test]
     async fn healthcheck_needs_a_server() {
@@ -203,7 +203,7 @@ mod tests {
             listen: addr,
             web_dir: "missing".into(),
             data_dir: None,
-            backfill: mempool_based::config::Backfill::default(),
+            backfill: rbitcoin_space::config::Backfill::default(),
             networks: Vec::new(),
             limits: Limits::default(),
             ws: WsLimits::default(),

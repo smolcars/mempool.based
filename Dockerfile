@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# The mempool.based server and its built frontend in one image. docs/DEPLOY.md explains it.
+# The rbitcoin.space server and its built frontend in one image. docs/DEPLOY.md explains it.
 # Base images are multi-arch (linux/amd64, linux/arm64) and pinned by digest.
 
 # The Rust tag must match rust-toolchain.toml. That file is not copied in: rustup would
@@ -28,12 +28,12 @@ COPY crates/ crates/
 # Cached target/ and registry: a one-file change recompiles one crate, not the dependency tree.
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-$TARGETPLATFORM,target=/src/target \
-    cargo build --release --locked -p mempool-based \
-    && cp target/release/mempool-based /mempool-based \
+    cargo build --release --locked -p rbitcoin-space \
+    && cp target/release/rbitcoin-space /rbitcoin-space \
     && mkdir /data
 
 FROM ${RUNTIME_IMAGE}
-COPY --from=server /mempool-based /usr/local/bin/mempool-based
+COPY --from=server /rbitcoin-space /usr/local/bin/rbitcoin-space
 COPY --from=web /src/web/dist /srv/web
 # The one writable place, for the SQLite store. A volume mounted here starts with this owner.
 COPY --from=server --chown=65532:65532 /data /data
@@ -43,5 +43,5 @@ EXPOSE 8080
 # distroless "nonroot": uid and gid 65532. Only /data, for a volume, is writable by it.
 USER 65532:65532
 HEALTHCHECK --interval=30s --timeout=6s --start-period=10s --start-interval=1s \
-    CMD ["/usr/local/bin/mempool-based", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/mempool-based"]
+    CMD ["/usr/local/bin/rbitcoin-space", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/rbitcoin-space"]

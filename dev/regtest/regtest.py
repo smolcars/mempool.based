@@ -31,6 +31,7 @@ def sha256(b):
     return hashlib.sha256(b).digest()
 
 
+# The project's old name stays here and in NOTE: those bytes seed every scenario hash the tests pin.
 def tag(name):
     return sha256(b"mempool.based regtest " + name.encode())
 

@@ -416,7 +416,7 @@ fn addresses_are_validated_by_our_parser_as_the_reference_answers() {
 
 #[tokio::test]
 async fn the_replacement_record_survives_a_restart_with_a_store() {
-    let dir = std::env::temp_dir().join(format!("mempool-based-c1b-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-c1b-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let path = dir.to_str().unwrap().to_owned();
     let mock = Mock::new();

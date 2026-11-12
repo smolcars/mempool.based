@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::post;
 use logging::{Format, Level, Settings};
-use mempool_based::{App, Config};
+use rbitcoin_space::{App, Config};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -107,7 +107,7 @@ async fn start(rpc_port: u16) -> String {
     .into_iter()
     .collect();
     let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
-    config.web_dir = std::env::temp_dir().join("mempool-based-no-web-dir");
+    config.web_dir = std::env::temp_dir().join("rbitcoin-space-no-web-dir");
     let app = App::new(&config);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();

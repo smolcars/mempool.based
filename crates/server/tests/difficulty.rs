@@ -25,7 +25,7 @@ use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, TxMerkleNode};
 use logging::{Format, Level, Settings};
-use mempool_based::{App, Config};
+use rbitcoin_space::{App, Config};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::TcpListener;

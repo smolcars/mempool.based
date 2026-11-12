@@ -1,6 +1,6 @@
 # Design
 
-The design language for mempool.based. The tokens live in [`design/tokens.css`](../design/tokens.css). A static prototype of the home, block and transaction pages is in [`design/prototype/`](../design/prototype/).
+The design language for rbitcoin.space. The tokens live in [`design/tokens.css`](../design/tokens.css). A static prototype of the home, block and transaction pages is in [`design/prototype/`](../design/prototype/).
 
 ## Goal
 

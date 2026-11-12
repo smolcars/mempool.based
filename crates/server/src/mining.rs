@@ -1517,7 +1517,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_block_refreshes_the_answers_asked_for() {
         let dir =
-            std::env::temp_dir().join(format!("mempool-based-mining-unit-{}", std::process::id()));
+            std::env::temp_dir().join(format!("rbitcoin-space-mining-unit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::open(&dir, "regtest", store::Options::default()).unwrap();
         fill(&store, 0..11).await;

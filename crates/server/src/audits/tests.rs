@@ -41,7 +41,7 @@ impl Setup {
     fn start(mock: &Mock) -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "mempool-based-audits-{}-{}",
+            "rbitcoin-space-audits-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::SeqCst)
         ));
