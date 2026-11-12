@@ -28,6 +28,8 @@ use tokio::net::{TcpListener, TcpStream};
 const BIG: &str = "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h";
 /// Totals answered, history slow.
 const SLOW: &str = "3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6";
+/// Above the cap, and its totals refusal takes the node half a second.
+const LATE: &str = "1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY";
 /// Everything answered at once.
 const SMALL: &str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 const TXID: &str = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
@@ -54,6 +56,9 @@ async fn mock() -> (String, Seen) {
             if history && addr != SMALL {
                 tokio::time::sleep(NODE_SLOW).await;
                 return (StatusCode::OK, "[]").into_response();
+            }
+            if tail.is_empty() && addr == LATE {
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
             if tail.is_empty() && addr != SMALL && addr != SLOW {
                 return (
@@ -205,6 +210,22 @@ async fn once_the_node_refuses_the_totals_for_size_the_history_never_reaches_it(
             .status,
         200
     );
+}
+
+#[tokio::test]
+async fn a_size_refusal_is_remembered_when_its_client_has_hung_up() {
+    let (addr, seen) = start().await;
+    let gone = tokio::time::timeout(
+        Duration::from_millis(100),
+        get(&addr, &format!("/api/address/{LATE}")),
+    )
+    .await;
+    assert!(gone.is_err(), "the client hangs up while the node works");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let r = get(&addr, &format!("/api/address/{LATE}/txs")).await;
+    assert_eq!((r.status, r.error.as_str()), TOO_LARGE);
+    assert_eq!(calls(&seen, "/txs"), 0);
+    assert_eq!(calls(&seen, LATE), 1);
 }
 
 #[tokio::test]

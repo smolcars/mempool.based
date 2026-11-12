@@ -384,21 +384,20 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
             then: Box::new(move || verdicts.learn(script, page, Verdict::Slow, Instant::now())),
         }
     });
+    // Learned in the call's own task, so a client that hangs up first does not lose it.
+    let size = verdicts::unpaged_script(&route).map(|s| (s, Arc::clone(&ctx.api.verdicts)));
     match heavy_call(ctx, client, key, deadline, move |esplora| async move {
-        esplora.raw(&call).await
+        let answer = esplora.raw(&call).await;
+        if let Some((script, verdicts)) = size
+            && matches!(&answer, Ok(raw) if Error::from_status(raw.status, &raw.body) == Error::TooLarge)
+        {
+            verdicts.learn(script, None, Verdict::TooLarge, Instant::now());
+        }
+        answer
     })
     .await
     {
-        Ok((result, source)) => {
-            if let Some(script) = verdicts::unpaged_script(&route)
-                && matches!(&result, Ok(raw) if Error::from_status(raw.status, &raw.body) == Error::TooLarge)
-            {
-                ctx.api
-                    .verdicts
-                    .learn(script, None, Verdict::TooLarge, Instant::now());
-            }
-            respond(&route, result, source)
-        }
+        Ok((result, source)) => respond(&route, result, source),
         Err(refused) => *refused,
     }
 }
