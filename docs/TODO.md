@@ -36,7 +36,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 | U1 | Move the regtest harness and compose files to the rbitcoin v0.9.2 image; confirm the scenario's hashes and the node clients are unchanged | R2, P1 | done ([#14](https://github.com/smolcars/mempool.based/pull/14)) |
 | LX1 | Switch the frontend to OXC: `oxlint` with strict rules and `oxfmt` as the only formatter, Biome removed, TypeScript options tightened, all enforced in CI. Runs when the page tasks in flight (W2–W5) have merged, before any other frontend task, because it reformats every file | W2, W3, W4, W5 | done ([#29](https://github.com/smolcars/mempool.based/pull/29)) |
-| FX2 | Harden the WebSocket hub: retry the new-block fetch quickly so a slow Esplora cannot turn a block into a resync; run a WebSocket conformance suite and a no-panic test against our hand-written framing; tag the socket-cap refusal in the request log | S3 | doing |
+| FX2 | Harden the WebSocket hub: retry the new-block fetch quickly so a slow Esplora cannot turn a block into a resync; run a WebSocket conformance suite and a no-panic test against our hand-written framing; tag the socket-cap refusal in the request log | S3 | done ([#31](https://github.com/smolcars/mempool.based/pull/31)) |
 | L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | done ([#12](https://github.com/smolcars/mempool.based/pull/12)) |
 
 ## M2 — Live mempool
@@ -80,7 +80,7 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | todo |
+| LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | doing |
 | LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | todo |
 | LN3 | Channel opens and closes from blocks, with close classification | LN2 | todo |
 | LN4 | Lightning store, statistics snapshots and API | LN3, ST1 | todo |
