@@ -3,16 +3,24 @@
 //! old our view of the chain is. It is answered from memory: the Electrum client's state, and one
 //! RPC call every [`CHECK_EVERY`] per network made by [`watch`], whatever the number of requests.
 //! The first check runs at startup, so a refused password is logged at once (`rpc_auth_failed`).
+//! It also says whether the node has its address index ([`watch_address_index`]) and whether the
+//! store's writes commit; neither counts towards `ready`, since the explorer serves without them.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use logging::events::{RpcAuthFailed, RpcReachable, RpcUnreachable};
+use logging::events::{
+    AddressIndexOff, AddressIndexOn, RpcAuthFailed, RpcReachable, RpcUnreachable,
+};
+use node::electrum::Event as ElectrumEvent;
+use node::esplora::{Error as EsploraError, ScriptHash, ScriptRef};
 use node::rpc::Error as RpcError;
 use serde_json::{Map, json};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::NetworkContext;
 
@@ -111,6 +119,91 @@ pub async fn watch(ctx: Arc<NetworkContext>) {
     }
 }
 
+/// Whether the node has its address index, as last asked: `unknown`, `on` or `off`.
+#[derive(Debug, Default)]
+pub struct AddressIndex(AtomicU8);
+
+impl AddressIndex {
+    fn label(&self) -> &'static str {
+        match self.0.load(Ordering::Relaxed) {
+            1 => "on",
+            2 => "off",
+            _ => "unknown",
+        }
+    }
+}
+
+/// A scripthash no script hashes to, so asking for its stats is one index lookup that finds
+/// nothing: the cheapest question the address routes answer.
+const NO_SCRIPT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Asks the node whether it has its address index (`--sh-index`) once Electrum is first ready,
+/// then after every reconnect, since the node may have been restarted with other flags, and every
+/// [`CHECK_EVERY`] while the question has no answer. Logs the first answer and each change.
+pub async fn watch_address_index(ctx: Arc<NetworkContext>) {
+    let Ok(probe) = NO_SCRIPT.parse::<ScriptHash>() else {
+        return;
+    };
+    // Subscribed before the first question, so a reconnect during it is still heard.
+    let mut events = ctx.electrum.events();
+    if ctx.electrum.health().wait_for(|h| h.ready).await.is_err() {
+        return;
+    }
+    let network = ctx.config.network.name();
+    loop {
+        let found = match ctx
+            .esplora
+            .script_stats(ScriptRef::ScriptHash(probe), None)
+            .await
+        {
+            Ok(_) => Some(1),
+            Err(EsploraError::AddressIndexDisabled) => Some(2),
+            // No answer says nothing about the index.
+            Err(_) => None,
+        };
+        if let Some(found) = found
+            && ctx.address_index.0.swap(found, Ordering::Relaxed) != found
+        {
+            if found == 1 {
+                logging::emit(&AddressIndexOn { network });
+            } else {
+                logging::emit(&AddressIndexOff { network });
+            }
+        }
+        let retry = tokio::time::sleep(if found.is_some() {
+            Duration::MAX
+        } else {
+            CHECK_EVERY
+        });
+        tokio::pin!(retry);
+        loop {
+            tokio::select! {
+                e = events.recv() => match e {
+                    // A lagged receiver may have missed a reconnect.
+                    Ok(ElectrumEvent::Resynced) | Err(RecvError::Lagged(_)) => break,
+                    Ok(_) => {}
+                    Err(RecvError::Closed) => return,
+                },
+                () = &mut retry => break,
+            }
+        }
+    }
+}
+
+/// The store's state for `/readyz`: `off` without `DATA_DIR`, `open_failed`, `failing` while
+/// SQLite refuses writes, else `ok`; and how long ago a write last committed.
+fn store(ctx: &NetworkContext) -> (&'static str, Option<u64>) {
+    match &ctx.blocks {
+        Some(t) => {
+            let h = t.store.write_health();
+            let state = if h.failures > 0 { "failing" } else { "ok" };
+            (state, h.last_ok.map(|t| t.elapsed().as_secs()))
+        }
+        None if ctx.data_dir => ("open_failed", None),
+        None => ("off", None),
+    }
+}
+
 /// `GET /readyz`: `200` when every enabled network's node answers RPC with our credentials and
 /// its Electrum connection is up, `503` otherwise. The body says which, per network.
 pub fn readyz(networks: &[Arc<NetworkContext>]) -> Response {
@@ -124,6 +217,7 @@ pub fn readyz(networks: &[Arc<NetworkContext>]) -> Response {
         let electrum = ctx.electrum.health().borrow().ready;
         let tip = ctx.electrum.tip();
         let ready = rpc == Rpc::Ok && electrum;
+        let (store, written) = store(ctx);
         all_ready &= ready;
         let n = json!({
             "ready": ready,
@@ -139,6 +233,10 @@ pub fn readyz(networks: &[Arc<NetworkContext>]) -> Response {
             "tip_age_secs": tip.map(|t| unix_now.saturating_sub(u64::from(t.header.time))),
             // Informational only: the explorer is ready whatever the Lightning peer is doing.
             "lightning": ctx.lightning.as_ref().map_or("off", |l| l.state()),
+            // Informational too: without them address pages, or recorded history, stop.
+            "address_index": ctx.address_index.label(),
+            "store": store,
+            "store_written_secs_ago": written,
         });
         out.insert(ctx.config.network.name().to_owned(), n);
     }

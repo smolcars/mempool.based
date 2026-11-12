@@ -68,6 +68,7 @@ fn started(config: &Config, log: logging::Settings) {
     let l = &config.limits;
     logging::emit(&ServerStarting {
         version: env!("CARGO_PKG_VERSION"),
+        revision: rbitcoin_space::REVISION,
         listen_addr: config.listen.to_string(),
         web_dir: config.web_dir.display().to_string(),
         networks: config.networks.iter().map(|n| n.network.name()).collect(),
