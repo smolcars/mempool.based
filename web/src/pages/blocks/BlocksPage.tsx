@@ -37,7 +37,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
           </Link>
           {/* Phones drop the Mined column, so the age moves under the height. */}
           <span class="blocks-heightcell__age" aria-hidden="true">
-            <TimeAgo time={b.timestamp} />
+            <TimeAgo time={b.timestamp} suffix={false} />
           </span>
         </span>
       ) : (

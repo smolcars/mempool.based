@@ -105,9 +105,14 @@
       max-width: 6.5rem;
     }
   }
+  /* The smallest phones: smaller headers and a shorter miner, so four columns of mainnet's
+     figures fit 320 px in any font. */
   @media (max-width: 360px) {
     .blocks-miner {
-      max-width: 5rem;
+      max-width: 4.25rem;
+    }
+    .blocks-page .table {
+      font-size: var(--text-xs);
     }
   }
 }
