@@ -167,6 +167,28 @@ describe("retries", () => {
     vi.useRealTimers();
   });
 
+  it("never asks a refused URL again before its Retry-After, even from a new call", async () => {
+    vi.useFakeTimers();
+    const fetch = vi
+      .fn<() => Promise<Response>>()
+      .mockResolvedValueOnce(reply(503, '{"error":"busy"}', { "retry-after": "30" }))
+      .mockResolvedValue(reply(200, "7"));
+    vi.stubGlobal("fetch", fetch);
+    // A poll abandons its call and starts another, as the home page's feeds do every few seconds.
+    const first = new AbortController();
+    const abandoned = Promise.allSettled([fetchApi("mainnet", "/x", { signal: first.signal })]);
+    await vi.advanceTimersByTimeAsync(5000);
+    first.abort();
+    await abandoned;
+    const next = Promise.allSettled([fetchApi("mainnet", "/x")]);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetch).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6000);
+    await expect(next).resolves.toStrictEqual([{ status: "fulfilled", value: 7 }]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it("says when the reader is offline rather than blaming the server", async () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("Failed to fetch");

@@ -72,6 +72,7 @@ function remember(url: string, value: unknown) {
 /** Empties the response cache. For tests. */
 export function clearApiCache(): void {
   cache.clear();
+  notBefore.clear();
 }
 
 /** A reply with the chain tip it is as of (`X-Bitcoin-Chain-Tip`); undefined when not stamped or cached. */
@@ -101,7 +102,16 @@ const ACCEPT: Record<ReplyKind, string> = {
   bytes: "application/octet-stream",
 };
 
+/**
+ * When each refused URL may be asked again, from its `Retry-After`. Kept across calls, so a poll
+ * that abandons one retry loop and starts another still waits as the server said.
+ */
+const notBefore = new Map<string, number>();
+
 async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
+  const until = notBefore.get(url) ?? 0;
+  if (until > Date.now()) await pause(until - Date.now(), signal);
+  notBefore.delete(url);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -119,7 +129,11 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   }
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null);
-    throw new ApiError(res.status, errorMessage(res.status, body), readRetryAfter(res.headers));
+    const retryAfter = readRetryAfter(res.headers);
+    if ((res.status === 503 || res.status === 429) && retryAfter !== undefined) {
+      notBefore.set(url, Date.now() + retryAfter * 1000);
+    }
+    throw new ApiError(res.status, errorMessage(res.status, body), retryAfter);
   }
   let value: unknown;
   try {
@@ -232,19 +246,25 @@ export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal)
         throw e;
       }
       // oxlint-disable-next-line no-await-in-loop -- the wait is the point
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, wait);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(abortReason(signal));
-          },
-          { once: true },
-        );
-      });
+      await pause(wait, signal);
     }
   }
+}
+
+/** Waits `ms`, or rejects with the abort reason as soon as `signal` aborts. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(abortReason(signal));
+      },
+      { once: true },
+    );
+  });
 }
 
 /**

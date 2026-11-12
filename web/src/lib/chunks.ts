@@ -20,12 +20,13 @@ export function watchStyles(): void {
 
 /**
  * Asks again for every stylesheet that failed, each through a fresh `<link>` in place of the old.
- * Resolves when all have loaded; rejects when any failed again (it is then noted again).
+ * Waits for every one to settle, so none is still loading when it answers. Resolves when all have
+ * loaded; rejects when any failed again (each such one is noted again).
  */
 export async function retryStyles(): Promise<void> {
   const links = [...failedStyles];
   failedStyles.clear();
-  await Promise.all(
+  const settled = await Promise.allSettled(
     links.map(
       (old) =>
         new Promise<void>((resolve, reject) => {
@@ -38,6 +39,8 @@ export async function retryStyles(): Promise<void> {
         }),
     ),
   );
+  const failed = settled.find((r) => r.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 /** Whether an error is a page's code or styles failing to download, as each browser words it. */
