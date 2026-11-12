@@ -80,6 +80,9 @@
     .table td {
       padding-inline: 6px;
     }
+    .table td.table__num {
+      font-size: var(--text-xs);
+    }
     /* A header such as "Fee rate, sat/vB" wraps rather than widen its column past a phone's width. */
     .table th {
       white-space: normal;
