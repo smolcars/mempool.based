@@ -336,3 +336,76 @@ async fn an_old_answer_is_withdrawn_before_waiting_on_a_node_that_hangs() {
     task.abort();
     drop(hang);
 }
+
+/// `fees` keeps the order of the mempool topics on a new block (docs/WS.md "When a block is
+/// found"): ours on another block than the one just announced waits, for at most the hold.
+#[tokio::test]
+async fn ours_waits_for_its_blocks_message_and_the_nodes_does_not() {
+    let ctx = context(true, None);
+    let parent = tip();
+    let found = ChainTip {
+        hash: BlockHash::from_byte_array([8; 32]),
+        height: parent.height + 1,
+    };
+    let on = |t: ChainTip| Answer {
+        tip: Some(t),
+        ..answer(Source::Projected)
+    };
+    let (mut published, mut held) = (None, None);
+    // Nothing announced yet: ours goes out.
+    assert!(super::serve(
+        &ctx,
+        Some(on(parent)),
+        &mut published,
+        &mut held
+    ));
+    ctx.hub.announce_tip(Some(found.hash), || {});
+    // On the parent, after the found block's message: held, though the routes serve it.
+    let parent_again = Answer {
+        rates: Rates {
+            levels: [3_000, 1_380, 628, 200],
+            minimum: 100,
+        },
+        ..on(parent)
+    };
+    assert!(!super::serve(
+        &ctx,
+        Some(parent_again.clone()),
+        &mut published,
+        &mut held
+    ));
+    assert_eq!(ctx.fees.current(), Some(parent_again.clone()));
+    assert!(held.is_some());
+    // On the found block: out at once.
+    assert!(super::serve(
+        &ctx,
+        Some(on(found)),
+        &mut published,
+        &mut held
+    ));
+    assert!(held.is_none());
+    // The node's estimates are on no block, and `unavailable` neither: never held.
+    ctx.hub
+        .announce_tip(Some(BlockHash::from_byte_array([9; 32])), || {});
+    assert!(super::serve(
+        &ctx,
+        Some(answer(Source::Node)),
+        &mut published,
+        &mut held
+    ));
+    assert!(super::serve(&ctx, None, &mut published, &mut held));
+    // An engine that never reaches the announced block is let through after the hold.
+    assert!(!super::serve(
+        &ctx,
+        Some(parent_again.clone()),
+        &mut published,
+        &mut held
+    ));
+    held = Some(Instant::now() - super::super::mempool::HOLD);
+    assert!(super::serve(
+        &ctx,
+        Some(parent_again),
+        &mut published,
+        &mut held
+    ));
+}

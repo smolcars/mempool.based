@@ -442,7 +442,7 @@ The moment a block is found is when the projected blocks matter most, and when t
 1. Electrum announces block B. The server's hint task calls `Tracker::block_found(B)`.
 2. The tracker's loop takes it as soon as the cycle in progress, if any, ends. It reads the tip from Esplora, every 25 ms for up to 3 s, until Esplora serves B or a later block. The node can announce a block some hundreds of milliseconds before it serves it ([`RBITCOIN.md`](RBITCOIN.md#rules-that-follow)). It then fetches the block into its window of six, as a cycle would, and publishes one delta. That delta removes everything the window's blocks rule out: what they contain (`Confirmed`), what spent an outpoint they spend, and those transactions' descendants (`Replaced` by the block's transaction). The delta is published even when nothing left, because a new tip is a change. No listing is made.
 3. The projector folds the delta in. It asks the node for the clusters the removed transactions belonged to (a child whose parent was mined now stands alone, or in a smaller chunk), packs, and publishes. Then, once the tracker has nothing more to fold in, it asks for every cluster again (the refresh).
-4. The WebSocket feed sends a projection on a new tip at once, without the 2 s rate limit. It holds one whose tip differs from the block the `blocks` topic last announced, for at most 3 s, so a client always sees the block first and nothing older after it.
+4. The WebSocket feed sends a projection on a new tip at once, without the 2 s rate limit, and the fee task recomputes `fees` from it at once. Both hold one whose tip differs from the block the `blocks` topic last announced, for at most 3 s, so a client always sees the block first and nothing older after it.
 
 **What keeps it right:**
 

@@ -20,10 +20,10 @@ export const FALLBACK_POLL_MS = 15_000;
 /** Messages held while a fetch is in flight; past this the fetch is simply repeated. */
 const QUEUE_MAX = 32;
 /**
- * Tip answers are cached for a second (docs/API.md), and the node may serve a new block a moment
- * after announcing it: a list behind what is known is asked for again after this, a few times.
+ * Tip answers are cached for a second (docs/API.md), so a list asked for just after a `block`
+ * message can lack it: a list behind what is known is asked for again after this, a few times.
  */
-const STALE_RETRY_MS = 1_500;
+const STALE_RETRY_MS = 1_200;
 const STALE_RETRIES = 8;
 
 export interface Feed<T> {

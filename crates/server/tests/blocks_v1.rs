@@ -18,14 +18,16 @@ use axum::extract::{Path as UrlPath, State};
 use axum::routing::{get as route_get, post};
 use axum::{Json, Router};
 use bitcoin::block::{Header, Version};
+use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, TxMerkleNode};
 use engine::audit::{Audit, Side, Totals};
 use engine::store::{Options, Store, params};
 use mempool_based::{App, Config, IMMUTABLE};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
 const V1: &str = "/regtest/api/v1";
 const TIP: u32 = 160;
@@ -124,6 +126,8 @@ struct Node {
     /// Esplora JSON by hash, stale blocks included.
     known: Mutex<HashMap<String, Value>>,
     calls: Mutex<HashMap<&'static str, usize>>,
+    /// Serves what the table's follower reads (`/blocks`): off, so the table stays as filled.
+    follows: std::sync::atomic::AtomicBool,
 }
 
 impl Node {
@@ -178,7 +182,61 @@ async fn tip_height(State(node): N) -> String {
     (node.best.lock().unwrap().len() - 1).to_string()
 }
 
+/// The coinbase every mock block has: the tag, and a payout to Foundry USA.
+fn coinbase() -> bitcoin::Transaction {
+    use bitcoin::{
+        Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute, transaction,
+    };
+    bitcoin::Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: ScriptBuf::from_bytes(TAG.to_vec()),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(5_000_010_000),
+            script_pubkey: ScriptBuf::from_bytes(hex(FOUNDRY)),
+        }],
+    }
+}
+
+/// The ten newest blocks, newest first, as `/blocks` answers.
+async fn blocks_tip(State(node): N) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !node.follows.load(std::sync::atomic::Ordering::Relaxed) {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
+    let best = node.best.lock().unwrap();
+    Json(Value::Array(best.iter().rev().take(10).cloned().collect())).into_response()
+}
+
+async fn block_txid(UrlPath((_, _)): UrlPath<(String, u32)>) -> String {
+    coinbase().compute_txid().to_string()
+}
+
+/// One call, or a batch of them as the table's follower sends.
 async fn rpc(State(node): N, Json(req): Json<Value>) -> Json<Value> {
+    if let Value::Array(calls) = &req {
+        let answers: Vec<Value> = calls
+            .iter()
+            .map(|c| {
+                let result = match c["method"].as_str() {
+                    Some("getblockstats") => {
+                        json!({"totalfee": 10_000, "subsidy": 5_000_000_000u64, "total_weight": 4000})
+                    }
+                    Some("getrawtransaction") => {
+                        json!(bitcoin::consensus::encode::serialize_hex(&coinbase()))
+                    }
+                    _ => Value::Null,
+                };
+                json!({"result": result, "error": null, "id": c["id"]})
+            })
+            .collect();
+        return Json(Value::Array(answers));
+    }
     if req["method"] != "getblock" {
         return Json(json!({"result": null, "error": null, "id": 0}));
     }
@@ -200,6 +258,8 @@ async fn mock(chain: &[Header]) -> (u16, Arc<Node>) {
     }
     let app = Router::new()
         .route("/blocks/tip/height", route_get(tip_height))
+        .route("/blocks", route_get(blocks_tip))
+        .route("/block/{hash}/txid/{i}", route_get(block_txid))
         .route("/blocks/{h}", route_get(blocks_from))
         .route("/block/{hash}", route_get(block))
         .route("/block/{hash}/status", route_get(status))
@@ -360,6 +420,11 @@ fn hex(s: &str) -> Vec<u8> {
 // The server.
 
 async fn start(port: u16, data: Option<&Path>) -> String {
+    start_with(port, data, &[]).await
+}
+
+/// [`start`] with more variables, which win over its own.
+async fn start_with(port: u16, data: Option<&Path>, extra: &[(&'static str, String)]) -> String {
     let mut vars: HashMap<&str, String> = [
         ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
         ("REGTEST_RPC_PORT", port.to_string()),
@@ -375,6 +440,7 @@ async fn start(port: u16, data: Option<&Path>) -> String {
     if let Some(d) = data {
         vars.insert("DATA_DIR", d.display().to_string());
     }
+    vars.extend(extra.iter().cloned());
     let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
     config.limits.client_rate_per_sec = 10_000;
     config.limits.client_burst = 10_000;
@@ -929,4 +995,135 @@ async fn a_table_behind_the_node_reads_its_own_blocks_by_hash() {
         (503, json!({"error": "not ready yet; retry"}))
     );
     assert_eq!(r.header("retry-after"), Some("1"));
+}
+
+// A block the node announces before it serves it (docs/RBITCOIN.md), for longer than the 3 s the
+// hub used to wait: it must still reach the table, its summary and the tip routes on its own.
+
+/// An Electrum server that answers the handshake with `tip` and then pushes each header sent on
+/// the returned channel. Its address is the first value.
+async fn electrum(tip: (u32, Header)) -> (String, mpsc::UnboundedSender<(u32, Header)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (push, mut pushes) = mpsc::unbounded_channel::<(u32, Header)>();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (rd, mut wr) = stream.into_split();
+        let mut lines = BufReader::new(rd).lines();
+        let tip_json =
+            |(h, header): (u32, Header)| json!({"height": h, "hex": serialize_hex(&header)});
+        loop {
+            tokio::select! {
+                line = lines.next_line() => {
+                    let Ok(Some(line)) = line else { return };
+                    let req: Value = serde_json::from_str(&line).unwrap();
+                    let result = match req["method"].as_str() {
+                        Some("server.version") => json!(["rbitcoin-electrs 0.9.2", "1.6"]),
+                        Some("blockchain.headers.subscribe") => tip_json(tip),
+                        _ => Value::Null,
+                    };
+                    let reply = json!({"jsonrpc": "2.0", "id": req["id"], "result": result});
+                    wr.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+                }
+                Some(next) = pushes.recv() => {
+                    let msg = json!({"jsonrpc": "2.0", "method": "blockchain.headers.subscribe",
+                        "params": [tip_json(next)]});
+                    wr.write_all(format!("{msg}\n").as_bytes()).await.unwrap();
+                }
+            }
+        }
+    });
+    (addr, push)
+}
+
+/// Announces block `TIP + 1`, has the node serve it only after `hold`, and returns how long after
+/// the announcement the table had it and the tip routes answered for it, with nothing else mined.
+async fn late_block(name: &str, hold: std::time::Duration, extra: &[(&'static str, String)]) {
+    let chain = chain();
+    let dir = dir(name);
+    fill(&dir.0, &chain).await;
+    let (port, node) = mock(&chain).await;
+    node.follows
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let tip = chain[TIP as usize];
+    let (addr, push) = electrum((TIP, tip)).await;
+    let mut vars = vec![("REGTEST_ELECTRUM_ADDR", addr)];
+    vars.extend(extra.iter().cloned());
+    let server = start_with(port, Some(&dir.0), &vars).await;
+    // The server has followed the tip before the new block comes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while get(&server, &format!("{V1}/blocks")).await.json()[0]["id"]
+        != tip.block_hash().to_string()
+    {
+        assert!(std::time::Instant::now() < deadline, "never ready");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // And has gone quiet: the next thing that makes it look again is about the new block.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let new = mine(tip.block_hash(), TIP + 1, 9);
+    let id = new.block_hash().to_string();
+    let announced = std::time::Instant::now();
+    push.send((TIP + 1, new)).unwrap();
+    tokio::time::sleep(hold).await;
+    assert_ne!(
+        get(&server, &format!("{V1}/block/{id}")).await.status,
+        200,
+        "not served yet"
+    );
+    let b = esplora(&new, TIP + 1);
+    node.best.lock().unwrap().push(b.clone());
+    node.known.lock().unwrap().insert(id.clone(), b);
+
+    let deadline = announced + hold + std::time::Duration::from_secs(10);
+    loop {
+        let list = get(&server, &format!("{V1}/blocks")).await;
+        let one = get(&server, &format!("{V1}/block/{id}")).await;
+        // The table itself, read beside the server as another process would.
+        let store = Store::open(&dir.0, "regtest", Options::default()).unwrap();
+        let row = engine::blocks::by_hash(&store, new.block_hash())
+            .await
+            .unwrap();
+        store.close().await;
+        if row.is_some()
+            && list.status == 200
+            && list.json()[0]["id"] == id.as_str()
+            && one.status == 200
+        {
+            // The table's row carries the block's facts, computed once it was served.
+            assert_eq!(
+                one.json()["extras"]["totalFees"],
+                json!(10_000),
+                "{}",
+                one.text()
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the tip routes never had the block: {} {} / {} {}",
+            list.status,
+            list.text().chars().take(120).collect::<String>(),
+            one.status,
+            one.text()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    drop(dir);
+}
+
+#[tokio::test]
+async fn a_block_served_after_the_old_three_second_bound_reaches_the_table_at_once() {
+    late_block("late", std::time::Duration::from_secs(4), &[]).await;
+}
+
+#[tokio::test]
+async fn a_block_served_after_the_blocks_topic_gave_up_still_reaches_the_table() {
+    // The topic gives up after a second and tells clients to resync; the table keeps looking.
+    late_block(
+        "later",
+        std::time::Duration::from_secs(2),
+        &[("WS_BLOCK_WAIT_SECS", "1".to_owned())],
+    )
+    .await;
 }

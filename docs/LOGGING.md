@@ -110,7 +110,7 @@ The protocol and its close codes are in [`WS.md`](WS.md).
 | `ws_origin_refused` | warn | `network`, `origin`, `host`, `total` | Upgrades refused because their `Origin` is not this site, every network together: at a total of 1, 2, 4, 8…, with the latest refused `Origin` and `Host`, each cut to 100 characters. A steady stream means another site embeds ours; refusals of our own pages mean the proxy rewrites `Host` |
 | `ws_clients_dropped` | warn | `network`, `reason`, `total` | The server closed clients for breaking a limit: `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`, `protocol_error`, `binary` or `invalid_utf8`. At a total of 1, 2, 4, 8… per reason and network |
 | `ws_closed` | debug | `network`, `api`, `code`, `reason`, `duration_ms`, `open` | Every socket close: `api` is `app` for `/app/ws` or `v1` for `/api/v1/ws`, then its close code (1006 when the connection dropped without one), the reason label (those above, or `client_closed`, `shutdown`, `connection_lost`), how long it was open, and the sockets still open |
-| `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora within 3 seconds of retrying, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
+| `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora within `WS_BLOCK_WAIT_SECS` (60 s) of its announcement, so subscribers were sent `resync`; the block table keeps looking for it. At the 1st, 2nd, 4th, 8th… failure in a row |
 
 ### Block summaries
 

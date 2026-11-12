@@ -524,7 +524,11 @@ async fn greeting_then_snapshot_then_each_block_once_with_identical_bytes() {
 
 #[tokio::test]
 async fn reorg_resync_and_missing_blocks_are_announced() {
-    let mut s = Harness::start(limits()).await;
+    let mut s = Harness::start(WsLimits {
+        block_wait: Duration::from_secs(2),
+        ..limits()
+    })
+    .await;
     let mut ws = s.connect().await;
     ws.json().await;
     ws.subscribe_blocks().await;
@@ -545,8 +549,8 @@ async fn reorg_resync_and_missing_blocks_are_announced() {
     assert_eq!(msg["type"], "block");
     assert_eq!(msg["block"]["id"], fork.block_hash().to_string());
 
-    // A block Esplora cannot serve: asked for every 25 ms for 3 s, then clients are told to
-    // resync instead.
+    // A block Esplora never serves: after `block_wait` of asking less and less often, clients
+    // are told to resync instead.
     let unknown = chain(fork.block_hash(), 1, 8)[0];
     let pushed = Instant::now();
     s.peer.push_tip(3, &unknown).await;
@@ -554,10 +558,10 @@ async fn reorg_resync_and_missing_blocks_are_announced() {
     let waited = pushed.elapsed();
     assert_eq!(msg["type"], "resync");
     assert_eq!(msg["tip"]["height"], 3);
-    assert!(waited >= Duration::from_secs(3), "{waited:?}");
-    // At most one request per 25 ms; a loaded machine may make fewer.
+    assert!(waited >= Duration::from_secs(2), "{waited:?}");
+    // Every 25 ms for the first 200 ms, then every eighth of the time waited: about 28 in 2 s.
     let misses = s.misses(&unknown);
-    assert!((2..=121).contains(&misses), "{misses} requests");
+    assert!((2..=40).contains(&misses), "{misses} requests");
     // A later subscriber gets that resync as the snapshot, not the block before it.
     let mut late = s.connect().await;
     late.json().await;
@@ -601,13 +605,141 @@ async fn a_block_esplora_serves_late_still_arrives_as_a_block() {
         assert_eq!(msg["block"]["id"], next.block_hash().to_string());
     }
     let elapsed = pushed.elapsed();
-    // One retry loop, whatever the number of clients: about one request per 25 ms.
+    // One retry loop, whatever the number of clients: at most one request per 25 ms.
     let misses = s.misses(&next);
     let most = u32::try_from(elapsed.as_millis() / 25).unwrap() + 1;
     assert!(
         (2..=most).contains(&misses),
         "{misses} requests in {elapsed:?}"
     );
+}
+
+/// Waits for the hub to have asked Esplora for `header`'s block at least `n` times.
+async fn asked(s: &Harness, header: &Header, n: u32) {
+    let deadline = Instant::now() + WAIT;
+    while s.misses(header) < n {
+        assert!(Instant::now() < deadline, "never asked for the block");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_block_goes_out_whenever_the_node_serves_it_within_the_bound() {
+    let mut s = Harness::start(limits()).await;
+    let mut ws = s.connect().await;
+    ws.json().await;
+    ws.subscribe_blocks().await;
+    let mut prev = s.h[2];
+    // Served at once, after half a second, and after five seconds: longer than the old
+    // three-second bound, which turned such a block into a `resync`.
+    for (i, delay) in [0u64, 500, 5_000].into_iter().enumerate() {
+        let height = 3 + i as u32;
+        let next = chain(prev.block_hash(), 1, 20 + i as u32)[0];
+        let pushed = Instant::now();
+        if delay == 0 {
+            add_block(&s.blocks, height, &next);
+        }
+        s.peer.push_tip(height, &next).await;
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            add_block(&s.blocks, height, &next);
+        }
+        let msg = timeout(Duration::from_secs(10), ws.json()).await.unwrap();
+        assert_eq!(msg["type"], "block", "{msg}");
+        assert_eq!(msg["block"]["id"], next.block_hash().to_string());
+        // At most an eighth of the wait late, and a request in flight.
+        let at = pushed.elapsed();
+        let late = Duration::from_millis(delay / 8 + 300);
+        assert!(
+            at < Duration::from_millis(delay) + late,
+            "{delay} ms: {at:?}"
+        );
+        prev = next;
+    }
+    // Nothing else came: no `resync`, no second copy.
+    ws.send(json!({"op": "ping"})).await;
+    assert_eq!(ws.json().await, json!({"type": "pong"}));
+}
+
+#[tokio::test]
+async fn a_burst_served_late_goes_out_in_order_and_a_subscriber_meanwhile_misses_nothing() {
+    let mut s = Harness::start(limits()).await;
+    let mut early = s.connect().await;
+    early.json().await;
+    early.subscribe_blocks().await;
+    // Three blocks announced one after another, none served yet. (Pushed faster, the client
+    // would take only the newest and ask the node for the headers between.)
+    let burst = chain(s.h[2].block_hash(), 3, 30);
+    for (i, h) in burst.iter().enumerate() {
+        s.peer.push_tip(3 + i as u32, h).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Only the oldest is asked for until it is served.
+    asked(&s, &burst[0], 2).await;
+    assert_eq!(s.misses(&burst[1]), 0);
+    // A subscriber now gets the last block sent; the burst follows as for everyone.
+    let mut late = s.connect().await;
+    late.json().await;
+    assert_eq!(late.subscribe_blocks().await["block"]["height"], 2);
+    // The node serves them out of order; they go out in order, each once.
+    add_block(&s.blocks, 5, &burst[2]);
+    add_block(&s.blocks, 4, &burst[1]);
+    add_block(&s.blocks, 3, &burst[0]);
+    for ws in [&mut early, &mut late] {
+        for (i, h) in burst.iter().enumerate() {
+            let msg = ws.json().await;
+            assert_eq!(msg["type"], "block");
+            assert_eq!(msg["block"]["id"], h.block_hash().to_string());
+            assert_eq!(msg["block"]["height"], 3 + i as u64);
+        }
+        ws.send(json!({"op": "ping"})).await;
+        assert_eq!(ws.json().await, json!({"type": "pong"}));
+    }
+}
+
+#[tokio::test]
+async fn a_block_replaced_before_the_node_serves_it_is_never_sent() {
+    let mut s = Harness::start(limits()).await;
+    let mut ws = s.connect().await;
+    ws.json().await;
+    ws.subscribe_blocks().await;
+    // Block A at height 3 is announced but never served.
+    let a = chain(s.h[2].block_hash(), 1, 40)[0];
+    s.peer.push_tip(3, &a).await;
+    asked(&s, &a, 2).await;
+    // B replaces it, and B's child follows: the node switches branches.
+    let b = chain(s.h[2].block_hash(), 2, 41);
+    s.peer.push_tip(4, &b[1]).await;
+    let req = s.peer.expect("blockchain.block.headers").await;
+    let hexes: Vec<String> = [s.h[0], s.h[1], s.h[2], b[0], b[1]]
+        .iter()
+        .map(serialize_hex)
+        .collect();
+    s.peer
+        .reply(&req, json!({"count": 5, "headers": hexes, "max": 2016}))
+        .await;
+    assert_eq!(
+        ws.json().await,
+        json!({"topic": "blocks", "type": "reorg", "fork_height": 2})
+    );
+    // A is no longer asked for; B's blocks go out once served, without waiting A out.
+    let stopped = s.misses(&a);
+    add_block(&s.blocks, 3, &b[0]);
+    add_block(&s.blocks, 4, &b[1]);
+    for (i, h) in b.iter().enumerate() {
+        let msg = timeout(Duration::from_secs(1), ws.json()).await.unwrap();
+        assert_eq!(msg["type"], "block");
+        assert_eq!(msg["block"]["id"], h.block_hash().to_string());
+        assert_eq!(msg["block"]["height"], 3 + i as u64);
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        s.misses(&a) <= stopped + 1,
+        "{} after {stopped}",
+        s.misses(&a)
+    );
+    ws.send(json!({"op": "ping"})).await;
+    assert_eq!(ws.json().await, json!({"type": "pong"}));
 }
 
 #[tokio::test]

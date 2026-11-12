@@ -17,6 +17,7 @@ use logging::events::{FeesFallbackEnded, FeesFallbackStarted, FeesSummary};
 use node::esplora::ChainTip;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{Frame, Snapshot, Topic};
@@ -89,7 +90,8 @@ pub struct Blocks {
 #[derive(Debug, Default)]
 pub struct Fees {
     answer: Mutex<Option<Answer>>,
-    blocks: Mutex<Option<Blocks>>,
+    /// Watched by the compatible socket, which sends them when they change.
+    blocks: watch::Sender<Option<Blocks>>,
     /// Unix seconds of the last request for a recommendation.
     wanted: AtomicU64,
 }
@@ -119,10 +121,12 @@ impl Fees {
     }
 
     pub fn blocks(&self) -> Option<Blocks> {
-        self.blocks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.blocks.borrow().clone()
+    }
+
+    /// Changes to [`Fees::blocks`].
+    pub fn blocks_changed(&self) -> watch::Receiver<Option<Blocks>> {
+        self.blocks.subscribe()
     }
 
     fn set(&self, a: Option<Answer>) {
@@ -130,7 +134,7 @@ impl Fees {
     }
 
     fn set_blocks(&self, b: Blocks) {
-        *self.blocks.lock().unwrap_or_else(PoisonError::into_inner) = Some(b);
+        self.blocks.send_replace(Some(b));
     }
 }
 
@@ -150,9 +154,10 @@ pub(crate) struct Engines {
     pub projector: Projector,
 }
 
-/// Keeps the network's recommendations current until shutdown: once per `WS_MEMPOOL_INTERVAL_MS`
-/// it recomputes ours from the latest projection, or falls back to the node's estimates, stores
-/// the answer for the routes and publishes the topic when it changed.
+/// Keeps the network's recommendations current until shutdown: once per `WS_MEMPOOL_INTERVAL_MS`,
+/// and at once when the projection moves to a new tip, it recomputes ours from the latest
+/// projection, or falls back to the node's estimates, stores the answer for the routes and
+/// publishes the topic when it changed.
 pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut rec: Recommender) {
     let network = ctx.config.network.name();
     let interval = ctx.sockets.limits.mempool_interval;
@@ -168,8 +173,37 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
     let mut published: Option<Value> = None;
     let mut blocks_seq = None;
     let mut messages = 0u64;
+    // The projection's changes, so one on a new tip is served at once, with the block.
+    let mut projected = engines.as_ref().map(|e| e.projector.subscribe().1);
+    let mut projected_tip = None;
+    let mut held = None;
+    // A block announced after the projection reached it releases ours at once.
+    let mut announced = ctx.hub.announced();
     loop {
         tokio::select! {
+            r = announced.changed() => if r.is_err() {
+                return;
+            } else if held.is_some() {
+                tick.reset_immediately();
+            },
+            d = async {
+                match &mut projected {
+                    Some(sub) => sub.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match (d, &engines) {
+                (Ok(d), _) => {
+                    if d.tip != projected_tip {
+                        projected_tip = d.tip;
+                        tick.reset_immediately();
+                    }
+                }
+                (Err(RecvError::Lagged(_)), Some(e)) => {
+                    projected = Some(e.projector.subscribe().1);
+                    tick.reset_immediately();
+                }
+                _ => return,
+            },
             d = async {
                 match &mut arrivals {
                     Some((_, sub)) => sub.recv().await,
@@ -234,7 +268,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     }
                 };
                 // Our own answer withdrawn, or an aged one dropped, before any wait on the node.
-                messages += u64::from(serve(&ctx, answer, &mut published));
+                messages += u64::from(serve(&ctx, answer, &mut published, &mut held));
                 if fetch {
                     asked = Some(Instant::now());
                     let fetching = node_estimates(&ctx);
@@ -245,14 +279,14 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     let mut got = tokio::time::timeout(left.min(NODE_WAIT), &mut fetching).await.ok();
                     if got.is_none() && left < NODE_WAIT {
                         let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
-                        messages += u64::from(serve(&ctx, answer, &mut published));
+                        messages += u64::from(serve(&ctx, answer, &mut published, &mut held));
                         got = tokio::time::timeout(NODE_WAIT - left, &mut fetching).await.ok();
                     }
                     if let Some(Some(r)) = got {
                         node = Some((Instant::now(), r));
                     }
                     let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
-                    messages += u64::from(serve(&ctx, answer, &mut published));
+                    messages += u64::from(serve(&ctx, answer, &mut published, &mut held));
                 }
             }
             _ = summary.tick() => {
@@ -304,19 +338,38 @@ fn node_answer(node: Option<(Instant, Rates)>, now: SystemTime, floor: u32) -> O
 
 /// Stores the answer for the routes, and publishes the topic when the message changed. Returns
 /// whether it published.
-fn serve(ctx: &NetworkContext, answer: Option<Answer>, published: &mut Option<Value>) -> bool {
+///
+/// Ours is a mempool topic on a block (docs/WS.md "When a block is found"): one on another tip
+/// than the block the `blocks` topic last announced waits for the two to agree, for at most
+/// [`HOLD`](super::mempool::HOLD) since `held`, so it never comes before that block's `block`
+/// message nor on an older block after it. The node's estimates and `unavailable` are on no block.
+fn serve(
+    ctx: &NetworkContext,
+    answer: Option<Answer>,
+    published: &mut Option<Value>,
+    held: &mut Option<Instant>,
+) -> bool {
     let msg = message(answer.as_ref());
+    let tip = answer.as_ref().and_then(|a| a.tip);
     ctx.fees.set(answer);
     if published.as_ref() == Some(&msg) {
+        *held = None;
         return false;
     }
-    ctx.hub.publish(
-        Topic::Fees,
-        &Frame::text(msg.to_string().as_bytes()),
-        Snapshot::Replace,
-    );
-    *published = Some(msg);
-    true
+    ctx.hub.in_block_order(|announced| {
+        let agrees = announced.is_none() || tip.is_none_or(|t| Some(t.hash) == announced);
+        if !agrees && held.get_or_insert_with(Instant::now).elapsed() < super::mempool::HOLD {
+            return false;
+        }
+        *held = None;
+        ctx.hub.publish(
+            Topic::Fees,
+            &Frame::text(msg.to_string().as_bytes()),
+            Snapshot::Replace,
+        );
+        *published = Some(msg);
+        true
+    })
 }
 
 /// Each projected block's totals, its size from the tracker's records.

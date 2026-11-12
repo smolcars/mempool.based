@@ -15,9 +15,10 @@ import type { ProjectedBlock, ProjectedMessage, Projection } from "../../lib/pro
 export const SLOTS = 4;
 /**
  * A projection ahead of the mined blocks shown waits this long for them before it is shown. Still
- * needed: the order the server promises holds on the socket, not for the HTTP refetch after a gap.
+ * needed: the order the server promises holds on the socket, not for the HTTP refetch after a gap,
+ * which is one `/blocks` request and, behind the server's one-second tip cache, one retry.
  */
-export const HOLD_MS = 5_000;
+export const HOLD_MS = 3_000;
 /** Tips remembered, so a block mined in a burst can still find what it was projected to be. */
 const KEPT = 8;
 const BLOCK_WEIGHT = 4_000_000;

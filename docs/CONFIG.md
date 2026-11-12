@@ -155,6 +155,7 @@ Bounds on `/app/ws` and `/api/v1/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the p
 | `WS_IDLE_TIMEOUT_SECS` | `60` | Sockets whose client vanished without closing. A socket silent for half of it is pinged, and one silent for all of it is closed with `4004` |
 | `WS_MAX_BLOCK_SUBSCRIPTIONS` | `2` | One socket holding many projected blocks' transactions, the only large topics (up to about 800 KB a snapshot). Counted inside `WS_MAX_SUBSCRIPTIONS`. Over it: close `4001` |
 | `WS_MEMPOOL_INTERVAL_MS` | `2000` | Traffic and fan-out work on the mempool topics: each sends at most one message per interval, always the latest state, so changes in between are merged. 100 to 60,000 |
+| `WS_BLOCK_WAIT_SECS` | `60` | How long the `blocks` topic waits for the node to serve a block it announced before clients are told to `resync` instead ([`WS.md`](WS.md#blocks)). The node is asked less and less often as the wait grows: about 90 requests if it never serves the block. The block table keeps looking after it, on its own retries. 1 to 600 |
 | `WS_LATEST_TXS` | `10` | Size of the `transactions` list, the newest transactions seen. At most 100 |
 | `WS_MAX_TRACKED_TXS` | `4` | One socket following many transactions (`tx:<txid>` topics). Counted inside `WS_MAX_SUBSCRIPTIONS`. Over it: close `4001` |
 | `WS_MAX_TRACKED_ADDRESSES` | `2` | One socket following many addresses (`address:<address>` topics). Counted inside `WS_MAX_SUBSCRIPTIONS`. Over it: close `4001` |

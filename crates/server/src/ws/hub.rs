@@ -1,6 +1,7 @@
 //! Topics, their subscribers and snapshots, and the `blocks` feed from Electrum.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -17,11 +18,11 @@ use super::{Close, Conn, Frame, Sockets, Topic};
 use crate::NetworkContext;
 use crate::config::Network;
 
-/// How often a new block is asked for while the node's Esplora has not caught up with its
-/// Electrum announcement (docs/RBITCOIN.md): at most one request per interval.
+/// How often a new block is asked for at first while the node's Esplora has not caught up with
+/// its Electrum announcement (docs/RBITCOIN.md): at most one request per interval.
 const BLOCK_RETRY: Duration = Duration::from_millis(25);
-/// How long a new block is waited for before clients are told to resync instead.
-const BLOCK_WAIT: Duration = Duration::from_secs(3);
+/// The longest wait between two requests for a block served late.
+const BLOCK_RETRY_MAX: Duration = Duration::from_secs(1);
 
 /// What a new subscriber to a topic is sent first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,79 +216,137 @@ impl Hub {
 }
 
 /// Feeds the `blocks` topic from the network's Electrum events until they end. One task per
-/// network; the only upstream work is one Esplora fetch loop per new block, whatever the client count.
+/// network; the only upstream work is one fetch loop for the oldest block announced and not sent
+/// yet, whatever the client count. Events are taken while a block is waited for, so a reorg drops
+/// a block that left the chain instead of waiting it out.
 pub async fn feed(
     ctx: Arc<NetworkContext>,
     mut events: tokio::sync::broadcast::Receiver<electrum::Event>,
 ) {
-    let hub = &ctx.hub;
-    let mut last = Last::default();
+    let mut f = Feed::default();
     // The first tip may have been announced before `events` was taken.
     if let Some(tip) = ctx.electrum.tip() {
-        block(&ctx, &tip, Instant::now(), &mut last).await;
+        f.announced(tip, Instant::now());
     }
     loop {
-        let event = events.recv().await;
-        let since = Instant::now();
-        match event {
-            Ok(electrum::Event::Block(tip)) => block(&ctx, &tip, since, &mut last).await,
-            Ok(electrum::Event::Reorg { fork_height }) => {
-                last.hash = None;
-                let msg = json!({ "topic": "blocks", "type": "reorg", "fork_height": fork_height });
-                hub.announce_tip(None, || {
-                    hub.announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
-                    super::v1::reorg(&ctx);
-                });
+        f.fetch_front(&ctx);
+        tokio::select! {
+            event = events.recv() => {
+                let since = Instant::now();
+                match event {
+                    Ok(electrum::Event::Block(tip)) => f.announced(tip, since),
+                    Ok(electrum::Event::Reorg { fork_height }) => f.reorg(&ctx, fork_height, since),
+                    Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
+                        // The last block is still a fair snapshot; a newer tip arrives as a
+                        // `block`, and blocks still waited for stay so.
+                        resync(&ctx, since, Snapshot::Keep);
+                    }
+                    Ok(electrum::Event::Status { .. }) => {}
+                    Err(RecvError::Closed) => return,
+                }
             }
-            Ok(electrum::Event::Resynced) | Err(RecvError::Lagged(_)) => {
-                // The last block is still a fair snapshot; a newer tip arrives as a `block`.
-                resync(&ctx, since, Snapshot::Keep);
-            }
-            Ok(electrum::Event::Status { .. }) => {}
-            Err(RecvError::Closed) => return,
+            (hash, block) = fetched(&mut f.fetch) => f.complete(&ctx, hash, block),
         }
     }
 }
+
+type Fetch = Pin<Box<dyn Future<Output = Option<Value>> + Send>>;
 
 /// What the feed remembers between events.
 #[derive(Default)]
-struct Last {
-    /// The block last announced, so a repeated tip is not sent twice.
-    hash: Option<BlockHash>,
-    /// Blocks in a row whose JSON could not be fetched.
+struct Feed {
+    /// The newest block announced, so a repeated tip is not taken twice.
+    last: Option<BlockHash>,
+    /// Blocks announced and not sent yet, oldest first, with when Electrum announced each.
+    pending: VecDeque<(Tip, Instant)>,
+    /// The fetch of the oldest of them.
+    fetch: Option<(BlockHash, Fetch)>,
+    /// Blocks in a row the node did not serve in time.
     failures: u32,
 }
 
-async fn block(ctx: &NetworkContext, tip: &Tip, since: Instant, last: &mut Last) {
-    if last.hash == Some(tip.hash) {
-        return;
-    }
-    last.hash = Some(tip.hash);
-    match fetch_block(&ctx.esplora, tip.hash).await {
-        Some(block) => {
-            last.failures = 0;
-            let msg = json!({ "topic": "blocks", "type": "block", "block": block });
-            ctx.hub.announce_tip(Some(tip.hash), || {
-                ctx.hub
-                    .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
-                super::v1::block(ctx, &block);
-            });
-            ctx.summaries.new_tip(tip.hash, since);
+impl Feed {
+    fn announced(&mut self, tip: Tip, since: Instant) {
+        if self.last == Some(tip.hash) {
+            return;
         }
-        None => {
-            last.failures = last.failures.saturating_add(1);
-            if last.failures.is_power_of_two() {
+        self.last = Some(tip.hash);
+        self.pending.push_back((tip, since));
+    }
+
+    /// Starts fetching the oldest block waited for, unless that fetch is already running.
+    fn fetch_front(&mut self, ctx: &NetworkContext) {
+        let Some((tip, since)) = self.pending.front() else {
+            self.fetch = None;
+            return;
+        };
+        if self.fetch.as_ref().is_some_and(|(h, _)| *h == tip.hash) {
+            return;
+        }
+        let deadline = *since + ctx.sockets.limits.block_wait;
+        let fetch = fetch_block(ctx.esplora.clone(), tip.hash, *since, deadline);
+        self.fetch = Some((tip.hash, Box::pin(fetch)));
+    }
+
+    /// The fetch of `hash` ended: its `block` message, or a `resync` when the node did not serve it.
+    fn complete(&mut self, ctx: &NetworkContext, hash: BlockHash, block: Option<Value>) {
+        self.fetch = None;
+        if self.pending.front().is_none_or(|(t, _)| t.hash != hash) {
+            return;
+        }
+        let Some((tip, since)) = self.pending.pop_front() else {
+            return;
+        };
+        let Some(block) = block else {
+            self.failures = self.failures.saturating_add(1);
+            if self.failures.is_power_of_two() {
                 logging::emit(&BlockUnavailable {
                     network: ctx.config.network.name(),
                     height: tip.height,
-                    hash: tip.hash.to_string(),
-                    failures: last.failures,
+                    hash: hash.to_string(),
+                    failures: self.failures,
                 });
             }
-            // A later subscriber must learn it missed this block, not get the one before.
+            // Blocks after it cannot be served before it. A later subscriber must learn it
+            // missed them, not get the block before.
+            self.pending.clear();
             ctx.hub
                 .announce_tip(None, || resync(ctx, since, Snapshot::Replace));
-        }
+            // The block table takes it on its own retries, whenever the node serves it. No
+            // summary: subscribers were told to resync, not given the block.
+            if let Some(t) = &ctx.blocks {
+                t.wake.notify_one();
+            }
+            return;
+        };
+        self.failures = 0;
+        let msg = json!({ "topic": "blocks", "type": "block", "block": block });
+        ctx.hub.announce_tip(Some(hash), || {
+            ctx.hub
+                .announce(Topic::Blocks, "block", &msg, Snapshot::Replace, since);
+            super::v1::block(ctx, &block);
+        });
+        ctx.summaries.new_tip(hash, since);
+    }
+
+    /// Every block above `fork_height` left the best chain: those waited for are dropped.
+    fn reorg(&mut self, ctx: &NetworkContext, fork_height: u32, since: Instant) {
+        self.last = None;
+        self.pending.retain(|(t, _)| t.height <= fork_height);
+        let msg = json!({ "topic": "blocks", "type": "reorg", "fork_height": fork_height });
+        ctx.hub.announce_tip(None, || {
+            ctx.hub
+                .announce(Topic::Blocks, "reorg", &msg, Snapshot::Clear, since);
+            super::v1::reorg(ctx);
+        });
+    }
+}
+
+/// The running fetch's block, when it ends; never while there is none.
+async fn fetched(fetch: &mut Option<(BlockHash, Fetch)>) -> (BlockHash, Option<Value>) {
+    match fetch {
+        Some((hash, f)) => (*hash, f.await),
+        None => std::future::pending().await,
     }
 }
 
@@ -301,11 +360,18 @@ fn resync(ctx: &NetworkContext, since: Instant, snapshot: Snapshot) {
         .announce(Topic::Blocks, "resync", &msg, snapshot, since);
 }
 
-/// The block's Esplora JSON, checked to be the block we asked for. Asked for every
-/// [`BLOCK_RETRY`] until [`BLOCK_WAIT`] has passed, so at most 120 requests per new block. The
-/// full fetch doubles as the existence check: a missing block is a short 404, and the answer is
-/// about 500 bytes, so a separate check would only add a round trip once the block is there.
-async fn fetch_block(esplora: &Esplora, hash: BlockHash) -> Option<Value> {
+/// The block's Esplora JSON, checked to be the block we asked for, fetched until `deadline`.
+/// The node can announce a block before it serves it (docs/RBITCOIN.md): asked every
+/// [`BLOCK_RETRY`] at first, then every eighth of the time waited so far, at most every
+/// [`BLOCK_RETRY_MAX`], so a late block costs at most about 90 requests over a minute and is sent
+/// at most an eighth later than it could be. The full fetch doubles as the existence check: a
+/// missing block is a short 404, and the answer is about 500 bytes.
+async fn fetch_block(
+    esplora: Esplora,
+    hash: BlockHash,
+    since: Instant,
+    deadline: Instant,
+) -> Option<Value> {
     let id = hash.to_string();
     let once = async || {
         let raw = esplora.raw(&Route::Block(hash)).await.ok()?;
@@ -321,8 +387,9 @@ async fn fetch_block(esplora: &Esplora, hash: BlockHash) -> Option<Value> {
             if let Some(block) = once().await {
                 return block;
             }
-            tokio::time::sleep_until(started + BLOCK_RETRY).await;
+            let wait = (since.elapsed() / 8).clamp(BLOCK_RETRY, BLOCK_RETRY_MAX);
+            tokio::time::sleep_until(started + wait).await;
         }
     };
-    tokio::time::timeout(BLOCK_WAIT, retry).await.ok()
+    tokio::time::timeout_at(deadline.into(), retry).await.ok()
 }

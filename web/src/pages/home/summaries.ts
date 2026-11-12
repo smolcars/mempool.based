@@ -12,7 +12,10 @@ import {
   rememberSummary,
 } from "../../lib/summary";
 
-/** A new block's summary is pushed well under a second after it; fetch it only if it is this late. */
+/**
+ * A new block's summary, its audit included, was pushed 1.6 to 3.4 s after the block on mainnet;
+ * fetch it only if it is later than this.
+ */
 export const PUSH_GRACE_MS = 4_000;
 
 /** A tile's facts: here, not yet, or given up on after the retries. */
