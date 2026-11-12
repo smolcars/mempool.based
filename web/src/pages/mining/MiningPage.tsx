@@ -105,9 +105,9 @@ function PeriodPicker(props: { period: Period }) {
                 class="mining-periods__item"
                 href={paths.mining(p.id)}
                 aria-current={p.id === props.period.id ? "page" : undefined}
-                aria-label={p.words}
               >
                 {p.label}
+                <span class="visually-hidden">: {p.words}</span>
               </Link>
             </li>
           )}

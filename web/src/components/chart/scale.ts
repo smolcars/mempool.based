@@ -130,7 +130,7 @@ export function formatMoment(t: number): string {
 /**
  * Ticks for a time axis over `[from, to]` (unix seconds), at most `max` of them, on round UTC
  * moments: hours, days, Mondays, months or years. Labels say no more than the step needs:
- * `14:00`, `3 Nov`, `Nov` (`Jan 2026` at a year's start), `2026`.
+ * `14:00` (the day, `3 Nov`, at midnight), `3 Nov`, `Nov` (`Jan 2026` at a year's start), `2026`.
  */
 export function timeTicks(
   from: number,
@@ -168,7 +168,8 @@ export function timeTicks(
       const name = MONTHS[d.getUTCMonth()] ?? "";
       return d.getUTCMonth() === 0 ? `${name} ${d.getUTCFullYear()}` : name;
     }
-    if (step.n < DAY) return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+    // Hours, with the day named at midnight so a week of them still says which day is which.
+    if (step.n < DAY && t % DAY !== 0) return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
     return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""}`;
   };
   return { ticks, label };

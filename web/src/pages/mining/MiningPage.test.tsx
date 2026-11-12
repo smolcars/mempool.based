@@ -95,7 +95,7 @@ describe("mining page", () => {
     expect(requests).toContain("/v1/mining/hashrate/1m");
     expect(requests).toContain("/v1/mining/hashrate/pools/1m");
     const current = el.querySelector("[aria-current=page]");
-    expect(current?.textContent).toBe("1 m");
+    expect(current?.textContent).toBe("1 m: the last 30 days");
   });
 
   it("says when nothing is stored for the period, and offers all time", async () => {

@@ -60,6 +60,15 @@ describe("hashrate and difficulty", () => {
     expect(s.difficulty[0]).toBeCloseTo(100);
     expect(s.difficulty.slice(1)).toStrictEqual([110, 110]);
   });
+  it("uses the current difficulty when no retarget falls in the period", () => {
+    const s = hashrateSeries({
+      hashrates: [{ timestamp: 10, avgHashrate: 1 }],
+      difficulty: [],
+      currentHashrate: 1,
+      currentDifficulty: 148,
+    });
+    expect(s.difficulty).toStrictEqual([148]);
+  });
 });
 
 describe("pool layers", () => {

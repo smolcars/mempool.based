@@ -339,6 +339,12 @@
     .mining-share__bar {
       width: 3rem;
     }
+  }
+  @media (max-width: 400px) {
+    /* The percentage alone, so rank, pool, share and blocks fit the narrowest phones. */
+    .mining-share__bar {
+      display: none;
+    }
     .pool-stats {
       min-height: 42rem;
     }

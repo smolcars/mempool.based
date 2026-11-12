@@ -8,7 +8,7 @@ import { Strata, strataLayers } from "../../components/Strata";
 import { createApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { useNow } from "../../lib/clock";
-import { formatFeeRate, formatRelative, formatUtc, groupDigits, isoTime } from "../../lib/format";
+import { formatRelative, formatUtc, groupDigits, isoTime } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
 import { type BlockSummary, fetchSummaries } from "../../lib/summary";
@@ -98,18 +98,13 @@ function Tile(props: { block: Block; facts: BlockSummary | undefined }) {
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
   const layers = () => (props.facts ? strataLayers(props.facts.fee_bands, full(), LAYER_MIN) : []);
   const rate = () => props.facts?.fee_rate ?? undefined;
-  const label = () =>
-    [
-      `Block ${groupDigits(b().height)}`,
-      `${groupDigits(b().tx_count)} transactions`,
-      rate() ? `median fee ${formatFeeRate(rate()?.median ?? 0)} sat/vB` : undefined,
-    ]
-      .filter(Boolean)
-      .join(", ");
   return (
     <li class="mining-tile">
-      <Link class="mining-tile__body" href={paths.block(b().id)} aria-label={label()}>
-        <span class="mining-tile__height num">{groupDigits(b().height)}</span>
+      <Link class="mining-tile__body" href={paths.block(b().id)}>
+        <span class="mining-tile__height num">
+          <span class="visually-hidden">Block </span>
+          {groupDigits(b().height)}
+        </span>
         <span class="mining-tile__fee num">
           <Show when={rate()} fallback={props.facts ? "No fees" : ""}>
             {(r) => <FeeRate rate={r().median} />}

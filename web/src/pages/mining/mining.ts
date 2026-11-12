@@ -251,8 +251,8 @@ export const isPoolBlocks = listOf(
 
 /**
  * Hashrate points and the difficulty in force at each, from the hashrate answer. Before the
- * first retarget in the answer, the difficulty is the one that retarget replaced; points before
- * a stretch the answer does not reach have none.
+ * first retarget in the answer, the difficulty is the one that retarget replaced; with no retarget
+ * in the answer, it is the current one throughout.
  */
 export function hashrateSeries(h: Hashrates): {
   x: number[];
@@ -262,7 +262,12 @@ export function hashrateSeries(h: Hashrates): {
   const points = sorted(h.hashrates, (a, b) => a.timestamp - b.timestamp);
   const retargets = sorted(h.difficulty, (a, b) => a.time - b.time);
   const first = retargets[0];
-  const before = first && first.adjustment > 0 ? first.difficulty / first.adjustment : null;
+  // No retarget in the answer: every point is in the current period.
+  const before = first
+    ? first.adjustment > 0
+      ? first.difficulty / first.adjustment
+      : null
+    : h.currentDifficulty;
   let k = -1;
   const difficulty = points.map((p) => {
     while (k + 1 < retargets.length && (retargets[k + 1]?.time ?? Infinity) <= p.timestamp) k++;

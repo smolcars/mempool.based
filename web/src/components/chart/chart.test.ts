@@ -79,6 +79,7 @@ describe("time ticks", () => {
     expect(ticks.length).toBeLessThanOrEqual(10);
     expect(ticks.every((t) => t % (3 * 3600) === 0)).toBe(true);
     expect(label(utc(2026, 11, 12, 6))).toBe("06:00");
+    expect(label(utc(2026, 11, 12))).toBe("12 Nov");
   });
   it("steps by Mondays over a few months", () => {
     const { ticks, label } = timeTicks(utc(2026, 9, 1), utc(2026, 11, 12), 8);

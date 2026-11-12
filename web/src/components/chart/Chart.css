@@ -169,8 +169,13 @@
   .chart__figures[open] > summary {
     margin-bottom: var(--space-3);
   }
-  .chart__figures .table-scroll {
+  /* One scrolling box, both ways, which takes focus; the table inside does not scroll itself. */
+  .chart__table {
     max-height: 22rem;
-    overflow-y: auto;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .chart__table .table-scroll {
+    overflow: visible;
   }
 }

@@ -18,7 +18,7 @@ test("regtest's mining page says what is and is not meaningful there", async ({ 
   });
   await pools.getByRole("link", { name: "See all stored history" }).click();
   await expect(page).toHaveURL(/\/regtest\/mining\?period=all$/);
-  await expect(page.getByRole("link", { name: "all time" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /all time/ })).toHaveAttribute(
     "aria-current",
     "page",
   );

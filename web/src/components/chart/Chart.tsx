@@ -522,11 +522,20 @@ export default function Chart(props: ChartProps) {
         <details class="chart__figures" onToggle={(e) => setFigures(e.currentTarget.open)}>
           <summary>Show the figures</summary>
           <Show when={figures()}>
-            <DataTable
-              caption={props.label}
-              columns={columns()}
-              rows={Array.from({ length: props.x.length }, (_, i) => props.x.length - 1 - i)}
-            />
+            {/* It scrolls, so it takes focus: the keyboard can scroll it too. */}
+            <div
+              class="chart__table"
+              // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrolling region must take focus to be scrolled by keyboard
+              tabindex="0"
+              role="region"
+              aria-label={`${props.label}, figures`}
+            >
+              <DataTable
+                caption={props.label}
+                columns={columns()}
+                rows={Array.from({ length: props.x.length }, (_, i) => props.x.length - 1 - i)}
+              />
+            </div>
           </Show>
         </details>
       </figcaption>
