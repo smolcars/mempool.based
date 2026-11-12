@@ -66,6 +66,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column) | One row per block on the best chain | Yes, by backfill |
 | `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
+| [`mempool_history`](#mempool_history) | `0004_mempool_history.sql` | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
 
 ### Adding a table
 
@@ -222,6 +223,53 @@ One row per block audited when it arrived ([`MEMPOOL.md`](MEMPOOL.md#block-audit
 | `scored_between(store, from, to)` | Score, expected fees and weight of the best chain's audited blocks in a height range, lowest first |
 | `scored_since(store, time)` | The same for the blocks stamped since a time |
 | `write(store, audit)` | Stores an audit unless the block has one |
+
+### mempool_history
+
+What the mempool looked like over time: its size, fees and fee bands through the day, the week and the year, for the mempool chart and `/api/v1/statistics` ([`API.md`](API.md#mempool-statistics)). The code is `crates/engine/src/history/`; the server runs it from `crates/server/src/statistics.rs`.
+
+**Sampling.** One task per network, started with the mempool engine when the network has a store. At every whole minute of the wall clock it reads the projection's totals (the whole mempool, exactly what the `mempool` topic sends), the node's `mempoolminfee` from the tracker's own probe, and the flow it counted on the tracker's change stream since the minute before: what entered, what left, and of that what was confirmed. It keeps the virtual size of every mempool transaction to count removals (a removal carries only the txid): about 37 bytes each in its hash table, 4.8 MB at 75,000 transactions. It asks the node nothing. A minute is left out, never stored as a guess, when:
+
+| Reason | When |
+|---|---|
+| `syncing` | The engine has not finished its first cycle, or this is the first minute after start, after a minute the engine was not live, or after a late one: the flow over it was not watched whole |
+| `stale` | The projection is stale: the node is failing and the numbers are the last good ones |
+| `lagged` | The sampler fell more than the change stream's 64 deltas behind, so the minute's flow is incomplete |
+| `late` | It read the state more than 5 s from the minute (a stalled process, a loaded machine, a clock that jumped ahead), or after the next minute had begun: the state is not that minute's and the flow would not span one minute. The minute after a late one is skipped too (as `syncing`), since its flow began off the minute |
+| `store_busy`, `store_failed` | The write queue was full (`try_write`), or the write failed |
+
+So a gap in the table is the truth: the engine was off, the node was failing, or the server was down. History starts when the server first ran with the engine on and a `DATA_DIR`.
+
+| Column | Type | Why |
+|---|---|---|
+| `level`, `time` | integer key | 0 a minute, 1 an hour, 2 a UTC day; the minute sampled (Unix seconds), or the period's start |
+| `samples` | integer | Minutes sampled in the row: 1 for a minute, at most 60 for an hour and 1,440 for a day. The coverage the routes report |
+| `count`, `vsize`, `fees` | integer | Transactions, sigop-adjusted virtual size and base fees (sats) in the mempool |
+| `min_fee` | integer | `mempoolminfee` in sat per 1,000 vB |
+| `band0` … `band9` | integer | Virtual size in each of the design's ten fee bands, by effective rate as the projected blocks band it; they sum to `vsize` |
+| `in_count`, `in_vsize`, `out_count`, `out_vsize`, `mined_count`, `mined_vsize` | integer | The flow over the minute before the sample: entered, left for any reason, and confirmed |
+
+**Every value is a sum over the row's `samples`.** A minute row holds its values as they are; an hour row the sum of its minutes. So rolling up adds rows together with nothing lost (a mean is the sum over `samples`, and flows are totals), and two roll-ups of the same period merge.
+
+**Retention.** Minutes for 8 days, hours to 400 days, days after that. The 8 days cover a week of ten-minute points, the 400 a year of eight-hour points: no interval mixes rows coarser than its points ([`API.md`](API.md#mempool-statistics)). Neither is a setting; nothing needs it.
+
+**The roll-up** runs in the writer, in the same write as every sample: the minute rows of every whole hour older than 8 days are summed into that hour's row (merged with one already there) and deleted, then the same for hour rows of whole UTC days older than 400 days. One write, so it is all or nothing: a crash or an error leaves the rows as they were, and the next minute does it again. Run twice it changes nothing. A sample for a minute whose hour or day is already rolled up (a clock that ran days ahead and was set back) is not stored, so no minute is counted twice; and when the clock goes back, the sampler drops the flow it was counting and samples again only after a whole minute past the last one it stored. With nothing to do it costs two index probes; once eight days are stored, it moves one hour of minutes an hour. After a long stop it catches up in the first write: a year of minutes took 0.56 s.
+
+**Size.** A minute row is about 93 bytes on disk (a year of minutes alone, unrolled, was 49 MB for 529,000 rows). The bound is 11,520 minute rows and 9,408 hour rows, plus one row a day beyond 400 days: ten years held 24,180 rows in 2.5 MB, and each further year adds 365 rows, about 34 KB.
+
+**Reading.** `history::series(store, interval, now)`, one read: a point per step with at least one sample, from the period's start to `now` (rows stamped later, by a clock that ran ahead, are left out) (a step with none has no point, so a chart shows a gap, not a zero), each point the sums and `samples` of its rows; the oldest stored time; and the minutes the period owes against the minutes sampled. Measured with `HISTORY_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture history_benchmark` on a table at the ten-year bound (on the machine under [Measurements](#measurements), load average 10 to 20):
+
+| Interval | Points | Median of 5 |
+|---|---|---|
+| `2h` | 121 | 0.15 ms |
+| `24h` | 1,441 | 1.3 ms |
+| `1w` | 1,009 | 5.0 ms |
+| `1m`, `3m`, `6m` | 721, 1,081, 1,081 | 5.8 to 7.6 ms |
+| `1y` | 1,096 | 12 ms |
+| `2y`, `3y`, `4y` | 730, 1,095, 730 | 13 ms |
+| `all` (ten years) | 914 | 15 ms |
+
+**Rebuildable:** no. It was observed live; deleting the file loses it.
 
 ## Pragmas
 

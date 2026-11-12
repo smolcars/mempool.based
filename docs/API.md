@@ -358,6 +358,69 @@ How each block we watched arrive compared with the block we expected on its pare
 | `scores` without a height | The 16 heights ending at the block table's top | Same as the reference |
 | `predictions` with an unknown interval | `400 invalid interval` | The reference answered every audit it had |
 
+### Mempool statistics
+
+The mempool through time, from the history table ([`STORE.md`](STORE.md#mempool_history)), never from the node: a sample a minute while the mempool engine runs, rolled into hours after 8 days and days after 400. It needs `DATA_DIR`; without a store both routes answer `503` `mempool history needs a data directory on this server`. With the engine off they serve whatever was stored before. Code: `crates/engine/src/history/` for sampling, storage and the query, `crates/server/src/statistics.rs` for the routes.
+
+| Route | Answer |
+|---|---|
+| `GET /api/v1/statistics/:interval` | `[{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}]`, newest first, the reference's shape (below) |
+| `GET /app/mempool/history/:interval` | Our own shape for our chart, with our ten bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)) |
+
+**Intervals** are exactly `2h`, `24h`, `1w`, `1m` (30 days), `3m`, `6m`, `1y` (365 days), `2y`, `3y`, `4y` or `all`; anything else is `400 invalid interval`. The reference answered `2h`, `24h`, `1w`, `1m`, `1y`, `3y` and `all` and refused `5h` (the others were not asked). Each has a fixed step, so no answer holds more than 1,460 points, and a point never mixes rows coarser than itself:
+
+| Interval | `2h` | `24h` | `1w` | `1m` | `3m` | `6m` | `1y` | `2y`, `3y` | `4y` | `all` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A point | 1 min | 1 min | 10 min | 1 h | 2 h | 4 h | 8 h | 1 day | 2 days | whole days, at most about 1,000 points from the first sample |
+| Points | 120 | 1,440 | 1,008 | 720 | 1,080 | 1,080 | 1,095 | 730, 1,095 | 730 | |
+
+Points are aligned to multiples of the step in UTC (Unix time), and the period starts at the first whole step after now less the interval, so the newest point is the step in progress. A point is the mean of the minutes sampled in it; a step with none has no point.
+
+**Fields,** observed on the reference backend and computed by us:
+
+| Field | Here |
+|---|---|
+| `added` | The point's start, Unix seconds (the reference stamps the second it sampled) |
+| `count` | Mean transactions in the mempool |
+| `vbytes_per_second` | Mean virtual size entering per second: what entered over a minute, over 60 |
+| `mempool_byte_weight` | Four times the mean virtual size. The reference's equals four times its `vsizes` summed, at every point checked. `2h` and `24h` only, as on the reference |
+| `total_fee` | Mean fees in the mempool, sats. `2h` and `24h` only, as on the reference |
+| `min_fee` | Mean `mempoolminfee`, sat/vB |
+| `vsizes` | 39 numbers: mean virtual size per fee range (below) |
+
+Whole numbers are written as integers and means to three decimals, as the reference writes its long intervals' averages.
+
+**The fee ranges.** The reference's `vsizes` are 39 whole-sat/vB ranges, read from its answers: they open `[0, 1)`, `[1, 2)`, `[2, 3)`, `[3, 4)`, `[4, 5)`, `[5, 6)`, `[6, 8)`, `[8, 10)`, `[10, 12)`, and widen from there. We keep the design's ten bands ([`DESIGN.md`](DESIGN.md#fee-scale)), with six of their nine edges under 2 sat/vB. Each band goes whole to the range that holds its lower edge:
+
+| Our bands (sat/vB) | Range |
+|---|---|
+| under 0.2, 0.2–0.3, 0.3–0.5, 0.5–1 | `[0, 1)`, index 0 |
+| 1–1.5, 1.5–2 | `[1, 2)`, index 1 |
+| 2–3 | `[2, 3)`, index 2 |
+| 3–5 | `[3, 4)`, index 3 |
+| 5–10 | `[5, 6)`, index 5 |
+| 10 and up | `[10, 12)`, index 8 |
+
+Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat/vB is exact, the ranges sum to the whole mempool, and nothing is split by a guess; but a chart of the reference's ranges shows the 3-to-5, 5-to-10 and over-10 vbytes at their lowest range. On rbitcoin's mempool that is little: in the reference's own answers for the last day, the vbytes this moves (paying 4 to 5, 6 to 10, or 12 sat/vB and up) were 0.03 % to 0.6 % of the mempool; in a nearly empty mempool (its oldest point, 0.4 MvB) 3.4 %. Ranges under 1 sat/vB, where most of it is, are one range there and four bands here; use `/app` for those. A rate is banded as it prints, at two decimals, so 0.996 sat/vB counts in `[1, 2)`; and by its effective rate (its chunk's), as the projected blocks place it.
+
+**Coverage.** History begins when the server first ran with the engine on, and has holes wherever it did not sample ([`STORE.md`](STORE.md#mempool_history) says when). The answer says so in the mining routes' headers ([above](#coverage)):
+
+| Header | Value |
+|---|---|
+| `X-Data-From-Time` | The time of the earliest point in the answer. Absent when it has none |
+| `X-Data-Complete` | `true` when every minute of the period, from its start to the last whole minute, was sampled; `false` otherwise. For `all`, the period starts at the oldest stored row |
+
+`X-Data-From-Height` is never sent, and neither are the chain-tip headers: a sample belongs to a minute, not a block.
+
+**Freshness and cost.** An answer is computed from the store on the first request after a new sample was written or the minute turned, one computation at a time per network, and both shapes of that interval with it; until then a request is a lookup in memory. A computation is one read of at most 15 ms on a table at its ten-year bound ([`STORE.md`](STORE.md#mempool_history)), so eleven intervals cost at most about a tenth of a second of one reader a minute, however many clients ask. `Cache-Control: public, max-age=1`; CORS as for `/api`.
+
+**Against the node and the reference,** mainnet, 2026-11-12, one 20-minute run of the release build with the engine on (75,000 to 77,700 transactions, read-only, no block found in the window), checked each minute against the node's `getmempoolinfo` read 0.3 s after the minute turned, and the `2h` answer then compared with the reference backend's for the same minutes:
+
+- **First sample.** The server started at 09:55, the engine synced in 19 s, the first minute (09:56) was skipped as `syncing` and every minute after was stored: 19 of 19, 09:57 to 10:15.
+- **Against the node:** `min_fee` equal at all 19. Count, virtual size and fees equal at 4; at the others we were 1 to 16 transactions (0.02 % at most) behind, with the vsize and fees of those transactions: what arrived between the projection's last update and the minute. The ten bands summed to `vsize` at every sample.
+- **Against the reference,** whose samples fall 32 s after ours: over the 18 minutes both had, its `count` was 55 to 104 higher (about 32 s of arrivals at 2.5 a second), `mempool_byte_weight` 0.03 % to 0.1 % higher and `total_fee` 0.5 % to 1.3 % higher, both growing with the mempool over those seconds. `min_fee` equal. `vsizes[0]` (under 1 sat/vB) about 5,600 vB (0.02 %) lower here and `vsizes[1]` 2,400 vB lower to 10,000 vB higher: a rate of 0.995 sat/vB prints as `1.00` and counts at 1 to 2 here, and we band by effective (chunk) rate. `vbytes_per_second` 430 to 1,160 here and 500 to 870 there, minute by minute, and 652 against 667 on average: the same arrivals, counted over minutes that start 32 s apart.
+- **Cost.** No node call: the sampler reads the engine's memory and writes about 100 bytes a minute. The routes answered in 2 to 6 ms the first time in a minute (a read and both shapes), and from memory after.
+
 ## Using it from the frontend
 
 - Call `/api/...` (mainnet) or `/<network>/api/...` with `fetch`. Same origin, so CORS does not apply.
@@ -366,5 +429,6 @@ How each block we watched arrive compared with the block we expected on its pare
 - Difficulty progress is `/api/v1/difficulty-adjustment` ([above](#difficulty-adjustment)). It changes once a block; its time fields can be counted down locally between fetches.
 - Fee recommendations come live from the `fees` WebSocket topic ([`WS.md`](WS.md#mempool-topics)), in the same unit as the other topics; `/api/v1/fees/precise` is the HTTP form.
 - Mining charts read `/api/v1/mining/…` ([above](#mining)) and must check `X-Data-From-Time` and `X-Data-Complete`: while the backfill runs, history starts later than asked.
+- The mempool chart reads `/app/mempool/history/:interval` ([`FRONTEND.md`](FRONTEND.md#mempool-history)); its body carries the same coverage.
 - Read `X-Bitcoin-Chain-Tip` to detect a tip change between two fetches of one page, and refetch the page.
 - Response bodies are chain data: render them as text, never as HTML (rule 14).

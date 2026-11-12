@@ -10,7 +10,7 @@ The server reads its configuration from the environment once, at startup. Invali
 |---|---|---|
 | `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the `listening` event shows which |
 | `WEB_DIR` | `web/dist` | The built frontend. Nothing outside it is served |
-| `DATA_DIR` | unset | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Unset, the server runs without a store: everything is asked of the node, and the block table below and the mining routes ([`API.md`](API.md#mining)) do not exist. A file that will not open is a `store_open_failed` event, and that network runs without one |
+| `DATA_DIR` | unset | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Unset, the server runs without a store: everything is asked of the node, and the block table below, the mining routes ([`API.md`](API.md#mining)) and the mempool history ([`API.md`](API.md#mempool-statistics)) do not exist. A file that will not open is a `store_open_failed` event, and that network runs without one |
 
 ## Networks
 

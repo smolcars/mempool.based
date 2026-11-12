@@ -342,20 +342,20 @@ fn replays_a_mainnet_template_and_diagram() {
 
 /// Mempool transactions as the mock node holds them: (tx, fee, vsize).
 #[derive(Default)]
-struct Node {
+pub(crate) struct Node {
     txs: Vec<(Transaction, u64)>,
     blocks: HashMap<BlockHash, Block>,
     tip: Option<ChainTip>,
     sequence: u64,
     clusters: HashMap<Txid, Cluster>,
-    fail_clusters: bool,
+    pub(crate) fail_clusters: bool,
     cluster_calls: u32,
 }
 
 #[derive(Clone, Default)]
-struct Mock(Arc<Mutex<Node>>);
+pub(crate) struct Mock(pub(crate) Arc<Mutex<Node>>);
 
-fn tx(tag: u32) -> Transaction {
+pub(crate) fn tx(tag: u32) -> Transaction {
     Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: LockTime::from_consensus(tag),
@@ -372,11 +372,11 @@ fn tx(tag: u32) -> Transaction {
     }
 }
 
-fn vsize(t: &Transaction) -> u64 {
+pub(crate) fn vsize(t: &Transaction) -> u64 {
     t.weight().to_wu().div_ceil(4)
 }
 
-fn block(prev: BlockHash, txs: &[&Transaction]) -> Block {
+pub(crate) fn block(prev: BlockHash, txs: &[&Transaction]) -> Block {
     let mut b = Block {
         header: Header {
             version: Version::TWO,
@@ -393,7 +393,7 @@ fn block(prev: BlockHash, txs: &[&Transaction]) -> Block {
 }
 
 impl Mock {
-    fn set(&self, txs: &[(&Transaction, u64)]) {
+    pub(crate) fn set(&self, txs: &[(&Transaction, u64)]) {
         let mut n = self.0.lock().unwrap();
         n.txs = txs.iter().map(|(t, f)| ((*t).clone(), *f)).collect();
         n.sequence += 1;
@@ -420,7 +420,7 @@ impl Mock {
         }
     }
 
-    fn mine(&self, b: Block, height: u32) {
+    pub(crate) fn mine(&self, b: Block, height: u32) {
         let mut n = self.0.lock().unwrap();
         n.tip = Some(ChainTip {
             hash: b.block_hash(),
