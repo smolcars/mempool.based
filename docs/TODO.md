@@ -24,7 +24,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | done ([#9](https://github.com/smolcars/mempool.based/pull/9)) |
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | done ([#22](https://github.com/smolcars/mempool.based/pull/22)) |
 | W1 | App shell: router with network prefixes, layout, theme and tokens, shared components, HTTP data layer | F0, D1 | done ([#11](https://github.com/smolcars/mempool.based/pull/11)) |
-| W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | doing |
+| W2 | Home page: latest blocks, WebSocket client and live block push, mempool summary | W1, S2, S3 | done ([#26](https://github.com/smolcars/mempool.based/pull/26)) |
 | W3 | Block page: header details, paged transaction list | W1, S2 | done ([#23](https://github.com/smolcars/mempool.based/pull/23)) |
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | done ([#24](https://github.com/smolcars/mempool.based/pull/24)) |
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | done ([#25](https://github.com/smolcars/mempool.based/pull/25)) |
@@ -35,7 +35,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
 | A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | todo |
 | U1 | Move the regtest harness and compose files to the rbitcoin v0.9.2 image; confirm the scenario's hashes and the node clients are unchanged | R2, P1 | done ([#14](https://github.com/smolcars/mempool.based/pull/14)) |
-| LX1 | Switch the frontend to OXC: `oxlint` with strict rules and `oxfmt` as the only formatter, Biome removed, TypeScript options tightened, all enforced in CI. Runs when the page tasks in flight (W2–W5) have merged, before any other frontend task, because it reformats every file | W2, W3, W4, W5 | todo |
+| LX1 | Switch the frontend to OXC: `oxlint` with strict rules and `oxfmt` as the only formatter, Biome removed, TypeScript options tightened, all enforced in CI. Runs when the page tasks in flight (W2–W5) have merged, before any other frontend task, because it reformats every file | W2, W3, W4, W5 | doing |
 | FX2 | Harden the WebSocket hub: retry the new-block fetch quickly so a slow Esplora cannot turn a block into a resync; run a WebSocket conformance suite and a no-panic test against our hand-written framing; tag the socket-cap refusal in the request log | S3 | doing |
 | L1 | Structured logging: a `logging` crate of typed events, one event per API request, no stray prints; `docs/LOGGING.md` | S1 | done ([#12](https://github.com/smolcars/mempool.based/pull/12)) |
 
@@ -54,7 +54,7 @@ Refined when M1 lands.
 | BS1 | Block summary route in `/app`: every transaction's fee and size from `getblock` verbosity 2, cached, plus the block's median fee rate and fee range | N3, S2 | doing |
 | W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | todo |
 | W8 | Mempool page: live flow, fee bands | W7 | todo |
-| DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | todo |
+| DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | doing |
 | WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
 
 ## M3 — Mining and history
@@ -63,7 +63,7 @@ Refined when M2 lands.
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | doing |
+| ST1 | SQLite store: migrations, single writer task, read-only readers | F0 | done ([#13](https://github.com/smolcars/mempool.based/pull/13)) |
 | MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | todo |
 | MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | todo |
 | MI3 | Hashrate history | MI1 | todo |
