@@ -62,8 +62,8 @@ struct RangeSync {
     /// Channel ids wanted from or requested of some peer. Bounded by the graph ceiling.
     queued: HashSet<u64>,
     /// Unannounced nodes a channel was already requested for: many never announce, and asking
-    /// again on every connection would fetch their channels each time. Graph nodes only, so
-    /// bounded by twice the ceiling.
+    /// again on every connection would fetch their channels each time. Nodes that leave the graph
+    /// are forgotten after each prune, so it stays within the graph's nodes.
     asked: HashSet<NodeId>,
 }
 
@@ -163,11 +163,21 @@ impl Gossip {
         self.sync.network_graph()
     }
 
-    /// Clears the ceiling flag once the graph is back under it, so the next hit is reported.
-    pub(crate) fn recheck_ceiling(&self) {
+    /// After a prune: forgets nodes that left the graph, so `asked` stays within it, and clears
+    /// the ceiling flag once the graph is back under it, so the next hit is reported.
+    pub(crate) fn after_prune(&self) {
+        if let Ok(mut r) = self.range.lock() {
+            let graph = self.graph().read_only();
+            r.asked.retain(|n| graph.node(n).is_some());
+        }
         if self.graph().read_only().channels().len() < self.max_channels {
             self.at_ceiling.store(false, Ordering::Relaxed);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn asked_len(&self) -> usize {
+        self.range.lock().map_or(0, |r| r.asked.len())
     }
 
     pub(crate) fn at_ceiling(&self) -> bool {

@@ -505,6 +505,47 @@ fn a_held_channel_with_unannounced_nodes_is_requested_again() {
 }
 
 #[test]
+fn nodes_asked_about_are_forgotten_when_pruned() {
+    let h = handler(5);
+    let a = key(7).public_key(&Secp256k1::new());
+    let mut features = InitFeatures::empty();
+    features.set_gossip_queries_optional();
+    let init = Init {
+        features,
+        networks: None,
+        remote_network_address: None,
+    };
+    let reply = || ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: vec![1],
+    };
+    let asked_for_1 = |h: &Handler| {
+        h.gossip.get_and_clear_pending_msg_events().iter().any(|e| {
+            matches!(e,
+            MessageSendEvent::SendShortIdsQuery { msg, .. } if msg.short_channel_ids == [1])
+        })
+    };
+    h.gossip
+        .handle_channel_announcement(None, &channel(1, 1, 2))
+        .unwrap();
+    h.gossip.peer_connected(a, &init, false).unwrap();
+    h.gossip.handle_reply_channel_range(a, reply()).unwrap();
+    assert!(asked_for_1(&h));
+
+    assert_eq!(h.gossip.asked_len(), 2);
+
+    // The channel and its unannounced nodes age out; the nodes are forgotten with them, so a
+    // peer cycling invented channels cannot grow the set.
+    let p = crate::peer::prune_graph(h.gossip.graph(), u64::from(now()) + 15 * 86400);
+    assert_eq!(p.gone_nodes, 2);
+    h.gossip.after_prune();
+    assert_eq!(h.gossip.asked_len(), 0);
+}
+
+#[test]
 fn ldk_records_are_bounded_and_rate_limited() {
     let events = broadcast::channel(64).0;
     let mut rx = events.subscribe();

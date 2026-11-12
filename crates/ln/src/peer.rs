@@ -362,7 +362,7 @@ fn prune(shared: &Shared) -> usize {
             nodes: p.gone_nodes,
         });
     }
-    shared.gossip.recheck_ceiling();
+    shared.gossip.after_prune();
     p.channels.len()
 }
 
