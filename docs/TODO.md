@@ -63,7 +63,7 @@ Refined when M1 lands.
 | FE7 | Home page follow-ups: the fee panel from our own recommendations (MP4); a tile's size in the agreed convention (serialized size in B, kB, MB); tighten the new-block workarounds once the server's order is promised (MP7) | MP4, MP7, FE5 | todo |
 | W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | done ([#40](https://github.com/smolcars/mempool.based/pull/40)) |
 | MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | doing |
-| MI6 | Give each block its miner where pages show it: the pool in the block facts and in the WebSocket's `summary` message, then on the block page and the home tiles | MI2, FE3 | todo |
+| MI6 | Give each block its miner where pages show it: the pool in the block facts, in the WebSocket's `summary` message and in a recent-blocks answer, then on the block page, the home tiles and the mining page's recent blocks | MI2, FE3 | todo |
 | FX6 | Make the browser tests reliable under the real limits: the whole suite runs as one client, and the fixed per-client allowance for page loads refuses it about one local run in four. Each test worker should look like its own client, so the suite runs at the production defaults | E1, FX3 | doing |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | likely explained by [#39](https://github.com/smolcars/mempool.based/pull/39): the per-address connection cap closed connections without logging; watch for a recurrence |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | done ([#30](https://github.com/smolcars/mempool.based/pull/30)) |
@@ -82,8 +82,8 @@ Refined when M2 lands.
 | MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
 | MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
-| W9 | Mining dashboard and pool pages | MI2, MI3 | doing |
-| W10 | Charts with uPlot | MI5 | doing (with W9) |
+| W9 | Mining dashboard and pool pages | MI2, MI3 | done ([#44](https://github.com/smolcars/mempool.based/pull/44)) |
+| W10 | Charts with uPlot | MI5 | done ([#44](https://github.com/smolcars/mempool.based/pull/44)): hand-written SVG charts, no library |
 
 ## M4 — Lightning
 
