@@ -80,7 +80,18 @@ impl Peer {
             config.log_per_second,
             events.clone(),
         ));
-        let (loaded, load) = store::load_graph(&config.data_dir, config.network, &logger);
+        let (loaded, load) = store::load_graph(
+            &config.data_dir,
+            config.network,
+            config.max_channels,
+            &logger,
+        );
+        let caught_up_at = match &load {
+            GraphLoad::Loaded { age, .. } => {
+                SystemTime::now().checked_sub(*age).unwrap_or(UNIX_EPOCH)
+            }
+            _ => UNIX_EPOCH,
+        };
         let (fresh_on_disk, resume_from) = match &load {
             GraphLoad::Loaded { age, channels, .. } if *age < FRESH_ON_DISK => {
                 let saved_at = now.saturating_sub(*age).as_secs();
@@ -144,6 +155,7 @@ impl Peer {
             Arc::clone(&shared),
             Arc::clone(&stop),
             fresh_on_disk,
+            caught_up_at,
         ));
         Ok((Self { shared, stop, task }, load))
     }
@@ -256,13 +268,19 @@ fn totals(g: &Gossip) -> Totals {
     }
 }
 
-async fn save(shared: &Arc<Shared>) -> io::Result<u64> {
+/// Writes the graph with its modification time set to `caught_up_at`, the last moment the peer
+/// was connected and caught up, which is where a restart resumes gossip from. A graph saved
+/// after a week offline is thus not mistaken for a fresh one.
+async fn save(shared: &Arc<Shared>, caught_up_at: SystemTime) -> io::Result<u64> {
     let graph = Arc::clone(shared.gossip.graph());
     let path = shared.config.data_dir.join(store::GRAPH_FILE);
     let started = Instant::now();
     let r = tokio::task::spawn_blocking(move || {
         let bytes = graph.encode();
-        store::write_atomic(&path, |f| f.write_all(&bytes))?;
+        store::write_atomic(&path, |f| {
+            f.write_all(&bytes)?;
+            f.set_modified(caught_up_at)
+        })?;
         Ok::<_, io::Error>(bytes.len() as u64)
     })
     .await
@@ -280,37 +298,78 @@ async fn save(shared: &Arc<Shared>) -> io::Result<u64> {
     r
 }
 
-/// Drops channels without an update for two weeks and reports what left as changes.
-fn prune(shared: &Shared) {
-    let graph = shared.gossip.graph();
-    let ids = |g: &Graph| -> (HashSet<u64>, HashSet<crate::NodeId>) {
-        let ro = g.read_only();
-        (
-            ro.channels().unordered_keys().copied().collect(),
-            ro.nodes().unordered_keys().copied().collect(),
-        )
+/// What a prune changed.
+pub(crate) struct Pruned {
+    /// Channels removed, or that lost a policy.
+    pub(crate) channels: Vec<u64>,
+    /// Nodes of removed channels: they lost a channel, or left with it.
+    pub(crate) nodes: HashSet<crate::NodeId>,
+    pub(crate) gone_channels: usize,
+    pub(crate) gone_nodes: usize,
+}
+
+/// Drops policies without an update for two weeks before `now_unix`, and channels left without
+/// policies, as LDK does, and finds every channel and node that changed.
+pub(crate) fn prune_graph(graph: &Graph, now_unix: u64) -> Pruned {
+    let shape = |c: &crate::ChannelInfo| (c.one_to_two.is_some(), c.two_to_one.is_some());
+    let before: Vec<_> = graph
+        .read_only()
+        .channels()
+        .unordered_iter()
+        .map(|(scid, c)| (*scid, shape(c), c.node_one, c.node_two))
+        .collect();
+    graph.remove_stale_channels_and_tracking_with_time(now_unix);
+    let ro = graph.read_only();
+    let mut p = Pruned {
+        channels: Vec::new(),
+        nodes: HashSet::new(),
+        gone_channels: 0,
+        gone_nodes: 0,
     };
-    let (channels, nodes) = ids(graph);
-    graph.remove_stale_channels_and_tracking();
-    let (channels_after, nodes_after) = ids(graph);
-    let gone_channels: Vec<u64> = channels.difference(&channels_after).copied().collect();
-    let gone_nodes: Vec<_> = nodes.difference(&nodes_after).copied().collect();
-    for c in &gone_channels {
+    for (scid, was, one, two) in before {
+        match ro.channel(scid) {
+            None => {
+                p.gone_channels += 1;
+                p.channels.push(scid);
+                p.nodes.extend([one, two]);
+            }
+            Some(c) if shape(c) != was => p.channels.push(scid),
+            Some(_) => {}
+        }
+    }
+    p.gone_nodes = p.nodes.iter().filter(|n| ro.node(n).is_none()).count();
+    p
+}
+
+/// Prunes the graph and reports the changes. Returns how many channels changed.
+fn prune(shared: &Shared) -> usize {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let p = prune_graph(shared.gossip.graph(), now);
+    for c in &p.channels {
         let _ = shared.changes.send(Change::Channel(*c));
     }
-    for n in &gone_nodes {
+    for n in &p.nodes {
         let _ = shared.changes.send(Change::Node(*n));
     }
-    if !gone_channels.is_empty() || !gone_nodes.is_empty() {
+    if !p.channels.is_empty() {
         let _ = shared.events.send(Event::Pruned {
-            channels: gone_channels.len(),
-            nodes: gone_nodes.len(),
+            channels: p.gone_channels,
+            nodes: p.gone_nodes,
         });
     }
     shared.gossip.recheck_ceiling();
+    p.channels.len()
 }
 
-async fn supervise(shared: Arc<Shared>, stop: Arc<Notify>, fresh_on_disk: bool) -> io::Result<u64> {
+async fn supervise(
+    shared: Arc<Shared>,
+    stop: Arc<Notify>,
+    fresh_on_disk: bool,
+    mut caught_up_at: SystemTime,
+) -> io::Result<u64> {
     let config = &shared.config;
     let started = Instant::now();
     let mut slots: Vec<Slot> = config
@@ -330,7 +389,9 @@ async fn supervise(shared: Arc<Shared>, stop: Arc<Notify>, fresh_on_disk: bool) 
     let (mut last_timer, mut last_stats, mut last_save) = (started, started, started);
     let mut last_prune: Option<Instant> = None;
     let mut last_totals = totals(&shared.gossip);
-    let mut saved_accepted = 0;
+    // Graph changes so far: accepted gossip plus prunes. Saved when it moved.
+    let mut pruned = 0;
+    let mut saved_changes = 0;
     let mut synced = false;
     let mut first_up: Option<Instant> = None;
 
@@ -387,19 +448,21 @@ async fn supervise(shared: Arc<Shared>, stop: Arc<Notify>, fresh_on_disk: bool) 
                 };
                 let up = slots.iter().filter(|s| matches!(s.state, State::Up(_))).count();
 
-                if !synced {
-                    let settled = |t: Instant| now.duration_since(t) >= config.sync_settle;
-                    let quiet = shared.gossip.last_new_channel.lock().map(|t| settled(*t)).unwrap_or(false);
-                    let drained = shared.gossip.range_pending() == 0;
-                    if fresh_on_disk || (channels > 0 && first_up.is_some_and(settled) && quiet && drained) {
-                        synced = true;
-                        let _ = shared.events.send(Event::Synced {
-                            after: now.duration_since(started), nodes, channels, from_disk: fresh_on_disk,
-                        });
-                    }
+                let settled = |t: Instant| now.duration_since(t) >= config.sync_settle;
+                let quiet = shared.gossip.last_new_channel.lock().map(|t| settled(*t)).unwrap_or(false);
+                let drained = shared.gossip.range_pending() == 0;
+                let caught_up = up > 0 && channels > 0 && first_up.is_some_and(settled) && quiet && drained;
+                if caught_up {
+                    caught_up_at = SystemTime::now();
+                }
+                if !synced && (fresh_on_disk || caught_up) {
+                    synced = true;
+                    let _ = shared.events.send(Event::Synced {
+                        after: now.duration_since(started), nodes, channels, from_disk: fresh_on_disk,
+                    });
                 }
                 if synced && last_prune.is_none_or(|t| now.duration_since(t) >= PRUNE_EVERY) {
-                    prune(&shared);
+                    pruned += prune(&shared) as u64;
                     last_prune = Some(now);
                 }
 
@@ -416,11 +479,12 @@ async fn supervise(shared: Arc<Shared>, stop: Arc<Notify>, fresh_on_disk: bool) 
                     last_stats = now;
                 }
 
-                let accepted = shared.gossip.counters.accepted.load(Ordering::Relaxed);
-                if now.duration_since(last_save) >= config.save_every && accepted != saved_accepted {
+                let changes = shared.gossip.counters.accepted.load(Ordering::Relaxed) + pruned;
+                if now.duration_since(last_save) >= config.save_every && changes != saved_changes {
                     // A failure is reported as an event and retried at the next period.
-                    let _ = save(&shared).await;
-                    saved_accepted = accepted;
+                    if save(&shared, caught_up_at).await.is_ok() {
+                        saved_changes = changes;
+                    }
                     last_save = now;
                 }
 
@@ -450,7 +514,7 @@ async fn supervise(shared: Arc<Shared>, stop: Arc<Notify>, fresh_on_disk: bool) 
         }
     }
     shared.pm.disconnect_all_peers();
-    save(&shared).await
+    save(&shared, caught_up_at).await
 }
 
 #[cfg(test)]

@@ -465,6 +465,39 @@ fn ldk_records_are_bounded_and_rate_limited() {
     ));
 }
 
+#[test]
+fn a_prune_reports_dropped_policies_channels_and_nodes() {
+    let h = handler(10);
+    let ann = channel(1, 1, 2);
+    h.gossip.handle_channel_announcement(None, &ann).unwrap();
+    h.gossip
+        .handle_channel_announcement(None, &channel(2, 2, 3))
+        .unwrap();
+    let dir_of = |k: u8| u8::from(id(&key(k)) != ann.contents.node_id_1);
+    let mut old = update(1, 1, dir_of(1));
+    old.contents.timestamp = now() - 13 * 86400;
+    old.signature = sign(&old.contents, &key(1));
+    h.gossip.handle_channel_update(None, &old).unwrap();
+    h.gossip
+        .handle_channel_update(None, &update(1, 2, dir_of(2)))
+        .unwrap();
+    let day = 86400;
+
+    // Two days on, channel 1's older policy is stale; the channel and channel 2 stay.
+    let p = crate::peer::prune_graph(h.gossip.graph(), u64::from(now()) + 2 * day);
+    assert_eq!(p.channels, [1]);
+    assert_eq!((p.gone_channels, p.gone_nodes), (0, 0));
+    assert!(h.gossip.graph().read_only().channel(1).is_some());
+
+    // Fifteen days on, both channels go, and every node with them.
+    let p = crate::peer::prune_graph(h.gossip.graph(), u64::from(now()) + 15 * day);
+    let mut c = p.channels.clone();
+    c.sort();
+    assert_eq!(c, [1, 2]);
+    assert_eq!((p.gone_channels, p.gone_nodes, p.nodes.len()), (2, 3, 3));
+    assert_eq!(h.gossip.graph().read_only().nodes().len(), 0);
+}
+
 // Persistence
 
 static DIRS: AtomicU32 = AtomicU32::new(0);
@@ -506,7 +539,7 @@ fn a_saved_graph_reloads_equal() {
     let bytes = h.gossip.graph().encode();
     store::write_atomic(&path, |f| std::io::Write::write_all(f, &bytes)).unwrap();
 
-    let (g, load) = store::load_graph(&dir.0, NET, &sink());
+    let (g, load) = store::load_graph(&dir.0, NET, 10, &sink());
     assert!(matches!(
         load,
         GraphLoad::Loaded {
@@ -517,18 +550,24 @@ fn a_saved_graph_reloads_equal() {
     ));
     assert!(g.unwrap() == **h.gossip.graph());
 
-    let (g, load) = store::load_graph(&dir.0, Network::Bitcoin, &sink());
+    let (g, load) = store::load_graph(&dir.0, Network::Bitcoin, 10, &sink());
     assert!(g.is_none());
     assert!(matches!(load, GraphLoad::Unreadable { .. }));
 
+    // Saved under a higher ceiling than now configured.
+    assert!(matches!(
+        store::load_graph(&dir.0, NET, 0, &sink()),
+        (None, GraphLoad::Unreadable { .. })
+    ));
+
     std::fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
     assert!(matches!(
-        store::load_graph(&dir.0, NET, &sink()).1,
+        store::load_graph(&dir.0, NET, 10, &sink()).1,
         GraphLoad::Unreadable { .. }
     ));
     std::fs::remove_file(&path).unwrap();
     assert!(matches!(
-        store::load_graph(&dir.0, NET, &sink()).1,
+        store::load_graph(&dir.0, NET, 10, &sink()).1,
         GraphLoad::Fresh
     ));
 }
@@ -549,6 +588,32 @@ fn an_interrupted_write_leaves_the_previous_file() {
         1,
         "no temporary file left"
     );
+}
+
+#[tokio::test]
+async fn a_graph_saved_while_offline_keeps_its_caught_up_time() {
+    let dir = TempDir::new();
+    let h = handler(10);
+    h.gossip
+        .handle_channel_announcement(None, &channel(1, 1, 2))
+        .unwrap();
+    let bytes = h.gossip.graph().encode();
+    let three_days_ago = SystemTime::now() - Duration::from_secs(3 * 86400);
+    store::write_atomic(&dir.0.join(store::GRAPH_FILE), |f| {
+        std::io::Write::write_all(f, &bytes)?;
+        f.set_modified(three_days_ago)
+    })
+    .unwrap();
+    // No peers: it never catches up, so the shutdown save must not look fresh.
+    let mut config = Config::new(NET, dir.0.clone());
+    config.peers.clear();
+    let (peer, _) = Peer::start(config.clone()).unwrap();
+    peer.shutdown().await.unwrap();
+    let (_, load) = store::load_graph(&dir.0, NET, 10, &sink());
+    let GraphLoad::Loaded { age, .. } = load else {
+        panic!("{load:?}")
+    };
+    assert!(age >= Duration::from_secs(3 * 86400 - 60), "{age:?}");
 }
 
 #[cfg(unix)]

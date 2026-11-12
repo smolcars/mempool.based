@@ -40,9 +40,9 @@ LDK asks each peer for gossip with a `gossip_timestamp_filter` set two weeks bac
 
 Peers' graphs differ: alone, ACINQ listed 21,600 channels and Bitfinex 30,250. Asking every peer gives the union.
 
-**"Synced"** (`Status::synced`, `Event::Synced`) means the graph is complete enough to show: every channel a peer listed has been requested and no new channel has arrived for 30 seconds, or the graph was loaded from a file younger than 13 days.
+**"Synced"** (`Status::synced`, `Event::Synced`) means the graph is complete enough to show: every channel a peer listed has been requested and no new channel has arrived for 30 seconds, or the graph was loaded from a file caught up within the last 13 days.
 
-After a restart the timestamp filter starts one day before the graph file was written instead of two weeks back, so peers that honour it resend only what is new.
+The graph file's modification time is set to the last moment the peer was **caught up**: connected, with every listed channel requested and no new channel for 30 seconds. It is not the time of writing, so a graph saved after a week offline does not pass for fresh. After a restart the timestamp filter starts one day before that moment instead of two weeks back, so peers that honour it resend only what is new.
 
 ### Peers
 
@@ -71,7 +71,7 @@ Both live in `Config::data_dir`, which the server will put beside each network's
 | `node_key` | The 32-byte identity seed. Created on first run from `/dev/urandom` with mode `0600`; a seed readable by group or others is refused at start | 32 bytes |
 | `graph` | LDK's own serialization of the network graph | about 31 MB at 30,000 channels |
 
-The graph is written every 10 minutes when it changed, and at shutdown, through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, or one that does not decode, is reported (`GraphLoad::Unreadable`) and replaced at the next save.
+The graph is written every 10 minutes when it changed (a failed write is retried at the next period), and at shutdown, through a temporary file that is synced, renamed over the old one and followed by a sync of the directory, so a crash leaves the old file or the new one, never half of one. Writing it takes about 0.1 s. At start a file for another network, one that does not decode, one larger than 4 KB per channel of the ceiling, or one holding more channels than the ceiling (saved under a higher one), is reported (`GraphLoad::Unreadable`) and replaced at the next save.
 
 ### Interface
 
@@ -102,7 +102,7 @@ TBD
 
 Gossip is untrusted input ([`SECURITY.md`](SECURITY.md)). Until validation exists, a channel costs an attacker nothing to invent, so the graph itself is bounded.
 
-- **Ceiling.** At most `Config::max_channels` (100,000) channels; announcements of new channels beyond it are refused and `Event::CeilingReached` is sent. Nodes enter the graph only through channels, so they are bounded by twice that.
+- **Ceiling.** At most `Config::max_channels` (100,000) channels; announcements of new channels beyond it are refused and `Event::CeilingReached` is sent. The check and the insert happen under one lock, so concurrent peers cannot overshoot it. Nodes enter the graph only through channels, so they are bounded by twice that.
 - **Message size.** Gossip messages over 1 KB are refused; real ones are under 500 bytes. The exception is node announcements: about 50 real nodes announce one onion address tens to a thousand times (up to 38 KB). Those are checked against their signature and kept with at most 8 distinct addresses and no unknown fields, unsigned (which only matters for relaying, and we do not relay).
 - **Memory.** So each channel and node held is bounded, and with the ceiling the graph's memory and its file are bounded: at most about TBD of memory at the ceiling. `Stats` reports the counts, and `Event::GraphSaved` the file's size.
 - **Disk.** Nothing gossip sends is written anywhere but the graph file, whose size follows from the ceiling.

@@ -110,6 +110,8 @@ pub(crate) struct Gossip {
     /// When a channel new to the graph last arrived; the sync-settled signal reads it.
     pub(crate) last_new_channel: Mutex<Instant>,
     range: Mutex<RangeSync>,
+    /// Held from the ceiling check to the insert, so concurrent peers cannot overshoot it.
+    admission: Mutex<()>,
     /// Messages of our own for the peer manager to send.
     outbox: Mutex<Vec<MessageSendEvent>>,
     changes: broadcast::Sender<Change>,
@@ -137,6 +139,7 @@ impl Gossip {
             at_ceiling: AtomicBool::new(false),
             last_new_channel: Mutex::new(Instant::now()),
             range: Mutex::new(RangeSync::default()),
+            admission: Mutex::new(()),
             outbox: Mutex::new(Vec::new()),
             changes,
             events,
@@ -409,6 +412,7 @@ impl RoutingMessageHandler for Gossip {
             msg.serialized_length(),
         )?;
         let scid = msg.contents.short_channel_id;
+        let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
         let graph = self.graph().read_only();
         let (known, len) = (graph.channel(scid).is_some(), graph.channels().len());
         drop(graph);

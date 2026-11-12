@@ -26,7 +26,8 @@ pub enum GraphLoad {
         channels: usize,
         bytes: u64,
         duration: Duration,
-        /// Time since the file was written.
+        /// Time since the peer that saved it was last connected and caught up: the file's
+        /// modification time is set to that moment, not to when it was written.
         age: Duration,
     },
     /// The file exists but could not be read or decoded. The peer starts with an empty graph and
@@ -98,9 +99,13 @@ pub(crate) fn write_atomic(
     result
 }
 
+/// Bytes of graph file allowed per channel of the ceiling; a mainnet graph uses about 900.
+const MAX_FILE_BYTES_PER_CHANNEL: u64 = 4096;
+
 pub(crate) fn load_graph(
     dir: &Path,
     network: Network,
+    max_channels: usize,
     logger: &Arc<LogSink>,
 ) -> (Option<Graph>, GraphLoad) {
     let path = dir.join(GRAPH_FILE);
@@ -116,6 +121,12 @@ pub(crate) fn load_graph(
         .and_then(|m| m.modified().ok())
         .and_then(|t| SystemTime::now().duration_since(t).ok())
         .unwrap_or_default();
+    if bytes > (max_channels as u64).saturating_mul(MAX_FILE_BYTES_PER_CHANNEL) {
+        return (
+            None,
+            unreadable("larger than the ceiling allows".to_owned()),
+        );
+    }
     let mut buf = Vec::with_capacity(usize::try_from(bytes).unwrap_or(0));
     if let Err(e) = BufReader::new(file).read_to_end(&mut buf) {
         return (None, unreadable(e.to_string()));
@@ -133,6 +144,10 @@ pub(crate) fn load_graph(
     let ro = graph.read_only();
     let (nodes, channels) = (ro.nodes().len(), ro.channels().len());
     drop(ro);
+    // Saved under a higher ceiling than the one configured now.
+    if channels > max_channels {
+        return (None, unreadable("over the ceiling".to_owned()));
+    }
     let load = GraphLoad::Loaded {
         nodes,
         channels,
