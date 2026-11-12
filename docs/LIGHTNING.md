@@ -325,7 +325,28 @@ The peer's status, the latest statistics and the series over an interval, and th
 - Per-node history over time (`/lightning/nodes/:pubkey/statistics`): only network totals are snapshotted.
 - A channel's close is lost when the history store falls past the peer's memory ([`STORE.md`](STORE.md#ln_channels)), and channels the peer stops watching (pruned) keep their row as open.
 
-MEASURED
+### Measured in the server
+
+2026-11-12, the release server on an Apple M4, mainnet only, read-only against a synced rbitcoin v0.9.2 on the same private network, mempool engine and backfill off, the default peers, an empty data directory. It ran 16 minutes, was stopped (SIGTERM) and restarted from the files it left, then ran on. Footprint is the process's physical footprint (`footprint`), sampled every 10 s; the same server with Lightning off sat at 90 MB.
+
+| | First start | Restart from the graph file |
+|---|---|---|
+| Startup | The peer started 25 ms after the server listened; three peers connected 2 s later. Nothing else waited: the first block summaries and the difficulty answer went out meanwhile | The 35 MB graph file loaded in 63 ms, inside the peer's task |
+| Graph usable | All 36,193 channels verified after 128 s; `synced` after 238 s (36,219 channels, 13,639 nodes) | 36,219 channels checked again; `synced` after 68 s |
+| Node load | 165 funding-output requests (36,220 outputs) by the sync, none after | 123 requests (36,223 outputs) |
+| History stored | One row per channel as it was verified, in step: 30,930 of 30,930 records after a minute, 36,219 rows (5.5 MB) by the sync | The 36,219 `Opened` records arrived again; the table was identical after them (same row count, capacity and funding-time sums) |
+| Footprint | 270 MB at its peak, so the peer adds about 180 MB | 380 MB at its peak while the loaded graph and the new one coexist, 345 MB steady: about 255 MB more than without Lightning |
+| Shutdown | Graph written (35 MB) in 124 ms, then the server exited | |
+
+**Steady state.** The close-watcher's requests are the tip every 10 s, a page of headers and the raw block per block, and one position request per close: 299 requests in the first 48 minutes after the restart, 5 blocks read. A statistics snapshot took 0.4 to 2.1 ms to store. The routes answered in 0.03 to 1.1 ms of server time (a list of 100 channels with aliases 1.0 ms).
+
+**Closes.** CLOSES_LINE
+
+**Against the reference.** `GET /api/v1/lightning/statistics/latest` at 13:50 UTC said 36,219 channels, 13,639 nodes, 3,232.02 BTC, average capacity 8,923,540 sats, median 1,000,000, average fee rate 981 ppm and base fee 1,439 msat, medians 130 ppm and 500 msat. mempool.space's public answer was still dated 2026-08-30 and its series were empty, so there is no same-moment figure: there it read 32,518 channels, 16,225 nodes, 3,753.7 BTC, average 11,543,473 sats, median 2,010,000, 823 ppm and 904 msat, medians 100 ppm and 500 msat. Its newest point in the three-month series, 2026-11-03, read 28,940 channels and 3,194.7 BTC. The differences:
+
+- **Channels and capacity:** we count only channels whose funding output we found unspent, six deep and paying the announced keys, as of now; they count what gossip claims, in their own database. Their own series moved from 32,500 to 28,900 channels between August and November, and the capacity agrees within 1.2 % with their November point.
+- **Nodes and their kinds:** LDK keeps a node only while it has a channel in the graph, and 6,628 of ours sent no announcement we received (so no address: `unannounced`), against their 2,022. Their database keeps nodes and their last announcement much longer. Tor, clearnet and both are counted the same way from the addresses announced.
+- **Fees:** ours leave policies over 1,000,000 ppm or 1,000,000 msat out of the averages (118 and 274 on mainnet; [`STORE.md`](STORE.md#ln_statistics)); we do not know their rule. Our medians count every policy, disabled ones included.
 
 ## Bounds
 
