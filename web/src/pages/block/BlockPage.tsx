@@ -205,9 +205,6 @@ function Fact(props: {
   );
 }
 
-/** Facts no route gives yet. */
-const pending = () => <span class="block-fact__pending">Not available yet</span>;
-
 /** The thinnest layer in the core sample, as a share of its frame (about 2 px of 400). */
 const CORE_LAYER_MIN = 0.005;
 
@@ -480,7 +477,35 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 value={b() ? <TimeUtc time={b()?.timestamp ?? 0} /> : undefined}
                 sub={b() && <TimeAgo time={b()?.timestamp ?? 0} />}
               />
-              <Fact label="Miner" wide="phone" value={b() ? pending() : undefined} />
+              <Fact
+                label="Miner"
+                wide="phone"
+                value={
+                  failed(summary) === undefined ? (
+                    sum() === undefined ? undefined : (
+                      <Show
+                        when={sum()?.miner}
+                        fallback={
+                          sum() ? (
+                            <span class="block-fact__pending">Not known on this server</span>
+                          ) : (
+                            MISSING
+                          )
+                        }
+                      >
+                        {(m) => <Link href={paths.pool(m().slug)}>{m().name}</Link>}
+                      </Show>
+                    )
+                  ) : (
+                    summaryRetry()
+                  )
+                }
+                sub={
+                  sum()?.miner?.slug === "unknown"
+                    ? "No listed payout address or tag matches"
+                    : sum()?.miner && "Matched by payout address or tag"
+                }
+              />
               <Fact
                 label="Confirmations"
                 value={

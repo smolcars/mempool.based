@@ -250,9 +250,10 @@
     color: var(--color-text-muted);
     white-space: nowrap;
   }
-  /* The miner's name, once it exists; the line is reserved now. */
+  /* The miner's name; its line is a fixed height, so the name arriving moves nothing. */
   .home-tile__pool {
-    min-height: 1.5em;
+    height: 1.5em;
+    line-height: 1.5;
     font-size: var(--text-xs);
     color: var(--color-text-muted);
     text-align: center;

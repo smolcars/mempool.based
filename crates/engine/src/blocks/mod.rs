@@ -21,7 +21,7 @@ pub mod stats;
 #[cfg(test)]
 mod tests;
 
-use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction};
+use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction, TxOut};
 use node::rpc::model::BlockTotals;
 
 pub use crate::mempool::SourceError;
@@ -37,7 +37,7 @@ pub use mining::{
     pool_counts, pool_weeks, reattribute, retargets, row_counts, span, top, work,
 };
 pub use source::{Header, NodeSource, Source};
-pub use stats::{Facts, Rates};
+pub use stats::{Facts, Miner, Rates};
 
 /// The newest blocks [`follow`] owns: it checks their rows against the node on every new tip.
 /// The backfill writes only below them, so a reorg up to this deep never races it.
@@ -140,6 +140,7 @@ impl Row {
             weight: self.paying_weight,
             fee_rate: r.fee_rate,
             fee_bands: r.fee_bands,
+            miner: Miner::of(&self.coinbase),
         })
     }
 }
@@ -150,10 +151,14 @@ impl Coinbase {
             .input
             .first()
             .map_or(&[][..], |i| i.script_sig.as_bytes());
+        Self::from_parts(tag, &tx.output)
+    }
+
+    /// From the coinbase input's script and the outputs, bounded as [`Coinbase::new`] does.
+    pub fn from_parts(tag: &[u8], outputs: &[TxOut]) -> Self {
         Self {
             tag: tag.get(..MAX_TAG).unwrap_or(tag).to_vec(),
-            payouts: tx
-                .output
+            payouts: outputs
                 .iter()
                 .filter(|o| o.value > Amount::ZERO && o.script_pubkey.len() <= MAX_SCRIPT)
                 .take(MAX_PAYOUTS)

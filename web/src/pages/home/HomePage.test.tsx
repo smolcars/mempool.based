@@ -442,6 +442,52 @@ describe("the tiles' fee facts", () => {
   });
 });
 
+describe("the tiles' miners", () => {
+  const FOUNDRY = { name: "Foundry USA", slug: "foundryusa" };
+  const pool = (el: HTMLElement, h: number) => tile(el, h)?.querySelector(".home-tile__pool");
+
+  it("names each tile's miner from the batch, under the tile and in its link", async () => {
+    summaries = (hashes) =>
+      Response.json(
+        hashes.map((h, i) =>
+          facts(h, { miner: i === 0 ? FOUNDRY : { name: "Unknown", slug: "unknown" } }),
+        ),
+      );
+    const { el } = await open();
+    await vi.waitFor(() => expect(pool(el, 10)?.textContent).toBe("Foundry USA"));
+    expect(pool(el, 9)?.textContent).toBe("Unknown");
+    // Screen readers hear it with the tile, once.
+    expect(pool(el, 10)?.getAttribute("aria-hidden")).toBe("true");
+    expect(tile(el, 10)?.querySelector("a")?.getAttribute("aria-label")).toMatch(
+      /^Block 10, mined by Foundry USA, /,
+    );
+  });
+
+  it("keeps the line empty, and its space, until the facts come or when the server does not say", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el } = await open();
+    await vi.waitFor(() => expect(tile(el, 10)?.querySelector(".strata")).not.toBeNull());
+    expect(pool(el, 10)).not.toBeNull();
+    expect(pool(el, 10)?.textContent).toBe("");
+    expect(tile(el, 10)?.querySelector("a")?.getAttribute("aria-label")).not.toContain("mined by");
+  });
+
+  it("names a new block's miner from the WebSocket's summary", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el, ws } = await open();
+    await vi.waitFor(() => expect(summaryRequests()).toHaveLength(1));
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+    expect(pool(el, 11)?.textContent).toBe("");
+    ws.receive({
+      topic: "blocks",
+      type: "summary",
+      summary: facts(fakeBlock(11).id, { miner: FOUNDRY }),
+    });
+    expect(pool(el, 11)?.textContent).toBe("Foundry USA");
+    expect(summaryRequests()).toHaveLength(1);
+  });
+});
+
 describe("the tiles' fee facts, racing", () => {
   it("keeps a pushed summary when the HTTP fallback for it fails afterwards", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

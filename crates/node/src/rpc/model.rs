@@ -4,7 +4,7 @@
 //! Keys we do not use are skipped while decoding. 8-decimal BTC values become [`Amount`] or
 //! [`SignedAmount`]; a fee rate in BTC/kvB becomes the [`Amount`] paid per 1,000 vbytes.
 
-use bitcoin::{Amount, BlockHash, SignedAmount, TxMerkleNode, Txid, Wtxid};
+use bitcoin::{Amount, BlockHash, ScriptBuf, SignedAmount, TxMerkleNode, TxOut, Txid, Wtxid};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
@@ -55,8 +55,9 @@ pub struct BlockHeader {
 }
 
 /// `getblock` with verbosity 2, reduced to what fee and size views need. Inputs, outputs
-/// and scripts are skipped while decoding.
+/// and scripts are skipped while decoding, except the first transaction's ([`Block::coinbase`]).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "RawBlock")]
 pub struct Block {
     pub hash: BlockHash,
     /// `-1` when the block is not on the active chain.
@@ -71,6 +72,140 @@ pub struct Block {
     pub previousblockhash: Option<BlockHash>,
     /// In block order, coinbase first.
     pub tx: Vec<BlockTx>,
+    /// The first transaction's input script and outputs, for telling who mined the block.
+    pub coinbase: Coinbase,
+}
+
+/// A block's coinbase as far as pool attribution needs it. Chain data written by the miner.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Coinbase {
+    /// `vin[0].coinbase`; empty when the first transaction has none.
+    pub script: ScriptBuf,
+    /// Every output, in order.
+    pub outputs: Vec<TxOut>,
+}
+
+/// [`Block`] as sent, its transactions read by [`Txs`].
+#[derive(Deserialize)]
+struct RawBlock {
+    hash: BlockHash,
+    confirmations: i64,
+    height: u32,
+    time: u32,
+    mediantime: u32,
+    size: u64,
+    strippedsize: u64,
+    weight: u64,
+    previousblockhash: Option<BlockHash>,
+    tx: Txs,
+}
+
+impl From<RawBlock> for Block {
+    fn from(b: RawBlock) -> Self {
+        Self {
+            hash: b.hash,
+            confirmations: b.confirmations,
+            height: b.height,
+            time: b.time,
+            mediantime: b.mediantime,
+            size: b.size,
+            strippedsize: b.strippedsize,
+            weight: b.weight,
+            previousblockhash: b.previousblockhash,
+            tx: b.tx.0,
+            coinbase: b.tx.1,
+        }
+    }
+}
+
+/// Every transaction as a [`BlockTx`], and the first one's [`Coinbase`] too.
+struct Txs(Vec<BlockTx>, Coinbase);
+
+/// The first transaction: a [`BlockTx`] with its input script and output scripts kept.
+#[derive(Deserialize)]
+struct FirstTx {
+    txid: Txid,
+    #[serde(default, deserialize_with = "opt_btc")]
+    fee: Option<Amount>,
+    vsize: u32,
+    weight: u32,
+    size: u32,
+    #[serde(default)]
+    vin: Vec<FirstIn>,
+    vout: Vec<FirstOut>,
+}
+
+#[derive(Deserialize)]
+struct FirstIn {
+    #[serde(default, deserialize_with = "opt_script")]
+    coinbase: Option<ScriptBuf>,
+}
+
+#[derive(Deserialize)]
+struct FirstOut {
+    #[serde(deserialize_with = "btc")]
+    value: Amount,
+    #[serde(rename = "scriptPubKey", default)]
+    script_pub_key: ScriptHex,
+}
+
+#[derive(Deserialize, Default)]
+struct ScriptHex {
+    #[serde(deserialize_with = "script")]
+    hex: ScriptBuf,
+}
+
+impl<'de> Deserialize<'de> for Txs {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = Txs;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a list of transactions")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Txs, A::Error> {
+                let mut txs = Vec::new();
+                let mut coinbase = Coinbase::default();
+                if let Some(first) = seq.next_element::<FirstTx>()? {
+                    let mut value = Amount::ZERO;
+                    for o in &first.vout {
+                        value = value
+                            .checked_add(o.value)
+                            .ok_or_else(|| A::Error::custom("output total out of range"))?;
+                    }
+                    txs.push(BlockTx {
+                        txid: first.txid,
+                        fee: first.fee,
+                        vsize: first.vsize,
+                        weight: first.weight,
+                        size: first.size,
+                        value,
+                    });
+                    coinbase = Coinbase {
+                        script: first
+                            .vin
+                            .into_iter()
+                            .next()
+                            .and_then(|i| i.coinbase)
+                            .unwrap_or_default(),
+                        outputs: first
+                            .vout
+                            .into_iter()
+                            .map(|o| TxOut {
+                                value: o.value,
+                                script_pubkey: o.script_pub_key.hex,
+                            })
+                            .collect(),
+                    };
+                }
+                while let Some(tx) = seq.next_element::<BlockTx>()? {
+                    txs.push(tx);
+                }
+                Ok(Txs(txs, coinbase))
+            }
+        }
+        d.deserialize_seq(Visit)
+    }
 }
 
 /// One transaction of [`Block`].
@@ -401,6 +536,14 @@ fn output_total<'de, D: Deserializer<'de>>(d: D) -> Result<Amount, D::Error> {
         }
     }
     d.deserialize_seq(Sum)
+}
+
+fn script<'de, D: Deserializer<'de>>(d: D) -> Result<ScriptBuf, D::Error> {
+    ScriptBuf::from_hex(&String::deserialize(d)?).map_err(D::Error::custom)
+}
+
+fn opt_script<'de, D: Deserializer<'de>>(d: D) -> Result<Option<ScriptBuf>, D::Error> {
+    script(d).map(Some)
 }
 
 fn opt_btc<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Amount>, D::Error> {

@@ -30,6 +30,23 @@ describe("isSummary", () => {
   it("accepts the server's shape, including a coinbase-only block", () => {
     expect(isSummary(summary(1))).toBe(true);
     expect(isSummary({ ...summary(1), fee_rate: null })).toBe(true);
+    const miner = { name: "Foundry USA", slug: "foundryusa" };
+    expect(isSummary({ ...summary(1), miner })).toBe(true);
+    expect(isSummary({ ...summary(1), miner: { name: "Unknown", slug: "unknown" } })).toBe(true);
+  });
+
+  it("refuses a miner whose slug could not be a pool page", () => {
+    for (const miner of [
+      null,
+      "Foundry USA",
+      { name: "Foundry USA" },
+      { name: "", slug: "foundryusa" },
+      { name: "A", slug: "../admin" },
+      { name: "A", slug: "Foundry USA" },
+      { name: "x".repeat(65), slug: "x" },
+    ]) {
+      expect(isSummary({ ...summary(1), miner })).toBe(false);
+    }
   });
 
   it("refuses anything it could not draw", () => {
