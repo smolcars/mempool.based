@@ -13,7 +13,7 @@
 //! may have closed in blocks never read (downtime, a long gap, the first start) are found by
 //! [`Watcher::check`] through the node's spend records instead, rate-limited like validation.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,11 +23,13 @@ use lightning::bitcoin::{BlockHash, OutPoint, Script, ScriptBuf, Transaction, Tx
 use lightning::ln::msgs::{ChannelUpdate, UnsignedNodeAnnouncement};
 use lightning::types::features::ChannelFeatures;
 use node::esplora::model::Block as Header;
-use node::esplora::{Error, MAX_OUT_POSITIONS, OutPositions};
+use node::esplora::{Error, OutPositions};
 use tokio::sync::broadcast;
 
-use crate::chain::{Chain, position};
+use crate::chain::{Chain, LOOKUP_BATCH, position};
 use crate::gossip::Gossip;
+use crate::pace::Pace;
+use crate::store::{Saved, Verified};
 use crate::{Change, Event, NodeId};
 
 /// New blocks read one by one, at most. Past this many the catch-up checks every watched output
@@ -45,6 +47,8 @@ const ANCHOR_SATS: u64 = 330;
 const RETRY_MIN: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// After a restart, how long the watcher waits for the replay before it reads blocks.
+const RESUME_WAIT: Duration = Duration::from_secs(120);
 
 /// A block, as a history record names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -492,6 +496,42 @@ impl Watch {
         }
     }
 
+    /// What a restart may take as answered: the newest block read, and every watched channel
+    /// not waiting to be checked again, each unspent up to that block. `None` before the first
+    /// block was read.
+    pub(crate) fn saved(&self) -> Option<Verified> {
+        let s = self.lock();
+        let last = s.seen.back()?;
+        let finding: HashSet<u64> = s.find.iter().map(|f| f.scid).collect();
+        let channels = s
+            .funding
+            .iter()
+            .filter(|(scid, _)| !s.recheck.contains(scid) && !finding.contains(scid))
+            .map(|(scid, f)| Saved {
+                scid: *scid,
+                capacity: f.capacity,
+                program: f.program,
+                block: f.block,
+            })
+            .collect();
+        Some(Verified {
+            height: last.height,
+            hash: last.hash,
+            channels,
+        })
+    }
+
+    /// Starts from the block a saved file names, as if it had just been read: the watcher reads
+    /// on from there, and the channels answered from the file are not checked again.
+    pub(crate) fn resume(&self, height: u32, hash: BlockHash) {
+        self.lock().seen.push_back(Seen {
+            height,
+            hash,
+            closes: Vec::new(),
+            penalties: Vec::new(),
+        });
+    }
+
     /// The graph file's channels were all answered: none is still to come.
     pub(crate) fn replay_done(&self) {
         let mut s = self.lock();
@@ -511,20 +551,23 @@ impl Watch {
     }
 }
 
-/// Follows the chain and runs the catch-up until the peer stops. One request at a time, at
-/// least `interval` apart; the tip is read every `tip_every`.
+/// Follows the chain and runs the catch-up until the peer stops. Requests go through the gate
+/// every Lightning request shares; the tip is read every `tip_every`.
 pub(crate) async fn run<C: Chain>(
     gossip: Arc<Gossip>,
     chain: C,
-    interval: Duration,
+    pace: Arc<Pace>,
     tip_every: Duration,
 ) {
-    let w = Watcher {
-        gossip,
-        chain,
-        interval,
-        last: Mutex::new(None),
-    };
+    let w = Watcher { gossip, chain, pace };
+    // Resumed from the block it had read before a restart: the replay first hands back the
+    // channels the saved file answers, or the blocks read meanwhile would send them all to be
+    // checked again. Bounded, since a channel handed back later is only checked again.
+    let resumed = !w.watch().lock().seen.is_empty();
+    let until = Instant::now() + RESUME_WAIT;
+    while resumed && w.gossip.replay_left() > 0 && Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     let mut next_tip = Instant::now();
     loop {
         if !w.gossip.replaying() {
@@ -570,9 +613,7 @@ pub(crate) async fn run<C: Chain>(
 struct Watcher<C> {
     gossip: Arc<Gossip>,
     chain: C,
-    interval: Duration,
-    /// When the last request started.
-    last: Mutex<Option<Instant>>,
+    pace: Arc<Pace>,
 }
 
 impl<C: Chain> Watcher<C> {
@@ -590,17 +631,12 @@ impl<C: Chain> Watcher<C> {
         &self,
         call: impl Future<Output = Result<T, Error>>,
     ) -> Result<Option<T>, &'static str> {
-        let due = self
-            .last
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .map(|t| t + self.interval);
-        if let Some(due) = due {
-            tokio::time::sleep_until(due.into()).await;
-        }
-        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         self.gossip.watch.lock().counts.requests += 1;
-        match tokio::time::timeout(REQUEST_TIMEOUT, call).await {
+        match self
+            .pace
+            .run(tokio::time::timeout(REQUEST_TIMEOUT, call))
+            .await
+        {
             Ok(Ok(v)) => Ok(Some(v)),
             Ok(Err(Error::NotFound)) => Ok(None),
             Ok(Err(e)) => Err(e.label()),
@@ -1053,7 +1089,7 @@ impl<C: Chain> Watcher<C> {
         // task takes from the front.
         let batch: Vec<u64> = {
             let s = self.watch().lock();
-            s.recheck.iter().take(MAX_OUT_POSITIONS).copied().collect()
+            s.recheck.iter().take(LOOKUP_BATCH).copied().collect()
         };
         if !batch.is_empty() {
             let positions = OutPositions::new(batch.iter().map(|s| position(*s)).collect())

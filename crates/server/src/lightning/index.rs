@@ -15,6 +15,7 @@ use engine::store::Store;
 use logging::events::{LightningFundingFailed, LightningIndexBuilt};
 
 use super::Lightning;
+use ln::Peer;
 
 /// How often the index is rebuilt: how far an answer can lag the graph, plus a build.
 pub(crate) const EVERY: Duration = Duration::from_secs(30);
@@ -184,8 +185,8 @@ pub(crate) async fn keep(
     }
 }
 
-/// Least time between two funding-txid requests: at most 20 a second, one at a time.
-const FUNDING_EVERY: Duration = Duration::from_millis(50);
+/// While validation has lookups waiting, the filler checks again this often: they go first.
+const FUNDING_YIELD: Duration = Duration::from_secs(1);
 /// Rows read, and txids stored, per round.
 const FUNDING_BATCH: usize = 300;
 /// How long a caught-up filler waits before looking for new channels.
@@ -193,9 +194,11 @@ const FUNDING_IDLE: Duration = Duration::from_secs(60);
 
 /// Asks the node for each stored channel's funding txid (`/block/:hash/txid/:index`, one small
 /// request per channel, once), so a transaction's channels are found by index. Runs in the
-/// background at a bounded rate; requests never wait for it.
+/// background through the peer's gate (one request to the node at a time for all of Lightning),
+/// and only while validation has no lookup waiting; requests never wait for it.
 pub(crate) async fn fill_funding(
     chain: node::esplora::Esplora,
+    peer: Arc<Peer>,
     store: Arc<Store>,
     l: Arc<Lightning>,
     network: &'static str,
@@ -212,10 +215,13 @@ pub(crate) async fn fill_funding(
             continue;
         };
         let mut found = Vec::with_capacity(rows.len());
+        let status = peer.status();
         for (scid, hash) in rows {
-            let started = tokio::time::Instant::now();
+            while status.borrow().validation.pending > 0 {
+                tokio::time::sleep(FUNDING_YIELD).await;
+            }
             let index = u32::try_from(scid >> 16 & 0xff_ffff).unwrap_or(0);
-            match chain.block_txid(hash, index).await {
+            match peer.paced(chain.block_txid(hash, index)).await {
                 Ok(t) => {
                     found.push((scid, hash, t.value));
                     failures = 0;
@@ -236,7 +242,6 @@ pub(crate) async fn fill_funding(
                     break;
                 }
             }
-            tokio::time::sleep_until(started + FUNDING_EVERY).await;
         }
         let stored = found.len() as u64;
         // A full write queue or a failure loses only this round's answers: asked again later.

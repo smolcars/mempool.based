@@ -162,15 +162,12 @@ fn config() -> Config {
 /// A handler with lookups and the close-watcher running against `node`.
 fn net(node: &FakeChain, config: &Config, replay: Replay) -> Net {
     let (g, _, _) = gossip(config, replay);
-    tokio::spawn(chain::run(
-        Arc::clone(&g),
-        node.clone(),
-        config.lookup_interval,
-    ));
+    let pace = pace(config);
+    tokio::spawn(chain::run(Arc::clone(&g), node.clone(), Arc::clone(&pace)));
     tokio::spawn(closes::run(
         Arc::clone(&g),
         node.clone(),
-        config.lookup_interval,
+        pace,
         config.tip_every,
     ));
     Net {

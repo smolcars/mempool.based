@@ -4,8 +4,8 @@
 //! message. A result already known (cached) is answered at once. Anything else is answered later:
 //! LDK keeps the announcement, and the channel's later updates and node announcements, waiting on
 //! a [`UtxoFuture`]; the lookup joins a queue; and one task, [`run`], sends the queue to the node in
-//! batches of up to 300 positions, one request at a time and at most one per
-//! `Config::lookup_interval`, then resolves the waiting announcements. While the queue holds
+//! batches of up to [`LOOKUP_BATCH`] positions through the gate every Lightning request shares
+//! ([`Pace`]), then resolves the waiting announcements. While the queue holds
 //! `Config::max_pending` announcements, `processing_queue_high` makes LDK hold the next gossip
 //! message of each peer and stop reading from it, so a burst is paced, not dropped.
 
@@ -16,14 +16,18 @@ use std::time::{Duration, Instant};
 
 use lightning::bitcoin::constants::ChainHash;
 use lightning::bitcoin::hashes::Hash;
-use lightning::bitcoin::{Amount, Block, BlockHash, ScriptBuf, Transaction, TxOut, Txid};
+use lightning::bitcoin::{
+    Amount, Block, BlockHash, ScriptBuf, Transaction, TxOut, Txid, WScriptHash,
+};
 use lightning::routing::utxo::{UtxoFuture, UtxoLookup, UtxoLookupError, UtxoResult};
 use node::esplora::model::{Block as Header, Outspend, PositionedOutput};
-use node::esplora::{Error, Esplora, MAX_OUT_POSITIONS, OutPosition, OutPositions, Stamped};
+use node::esplora::{Error, Esplora, OutPosition, OutPositions, Stamped};
 use tokio::sync::Notify;
 
 use crate::closes::{BlockRef, program_of};
 use crate::gossip::Gossip;
+use crate::pace::Pace;
+use crate::store::Verified;
 use crate::{Event, Rejected};
 
 /// BOLT 7: a channel is announced once its funding output is six blocks deep.
@@ -36,6 +40,9 @@ const EARLY_AHEAD: u32 = 6;
 const PENDING_SLACK: usize = 64;
 /// A first lookup waits this long so a burst of announcements goes out as one batch.
 const LINGER: Duration = Duration::from_millis(50);
+/// Positions per request (the node takes up to 300): a third of that keeps each request short,
+/// so the node's other callers never wait long behind one of ours.
+pub(crate) const LOOKUP_BATCH: usize = 100;
 /// Retry delays after a failed request: doubling from the first to the second.
 const RETRY_MIN: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(60);
@@ -377,6 +384,24 @@ impl Lookup {
         self.lock().cache.map.remove(&scid);
     }
 
+    /// Answers lookups from a saved file: each channel found, unspent up to the saved block.
+    pub(crate) fn restore(&self, v: &Verified) {
+        let mut s = self.lock();
+        for c in &v.channels {
+            let script = ScriptBuf::new_p2wsh(&WScriptHash::from_byte_array(c.program));
+            let funded = Funded {
+                block: c.block,
+                tip: v.height,
+                tip_hash: v.hash,
+            };
+            let out = TxOut {
+                value: Amount::from_sat(c.capacity),
+                script_pubkey: script,
+            };
+            s.cache.put(c.scid, Outcome::Found(out, funded));
+        }
+    }
+
     pub(crate) fn count(&self, f: impl FnOnce(&mut Rejected)) {
         f(&mut self.lock().rejected);
     }
@@ -552,7 +577,7 @@ impl UtxoLookup for Lookup {
 }
 
 /// Sends queued lookups to the node and resolves them, until the peer stops. See the module docs.
-pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Duration) {
+pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, pace: Arc<Pace>) {
     let lookup = Arc::clone(&gossip.lookup);
     let mut last: Option<Instant> = None;
     loop {
@@ -573,13 +598,15 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
                 () = tokio::time::sleep(Duration::from_secs(1)) => {}
             }
         };
-        let due = last.map_or(Instant::now(), |t| t + interval);
-        tokio::time::sleep_until((due.max(Instant::now() + LINGER)).into()).await;
+        tokio::time::sleep(LINGER).await;
         last = Some(Instant::now());
 
         if tip_only {
             lookup.lock().requests += 1;
-            match tokio::time::timeout(REQUEST_TIMEOUT, chain.tip_height()).await {
+            let tip = pace
+                .run(tokio::time::timeout(REQUEST_TIMEOUT, chain.tip_height()))
+                .await;
+            match tip {
                 Ok(Ok(tip)) => {
                     let mut s = lookup.lock();
                     s.tip = Some(tip);
@@ -591,19 +618,29 @@ pub(crate) async fn run<C: Chain>(gossip: Arc<Gossip>, chain: C, interval: Durat
             continue;
         }
 
-        let batch: Vec<u64> = {
-            let mut s = lookup.lock();
-            let n = s.order.len().min(MAX_OUT_POSITIONS);
-            let batch: Vec<u64> = s.order.drain(..n).collect();
-            s.requests += 1;
-            s.outputs += batch.len() as u64;
-            batch
-        };
-        let Some(positions) = OutPositions::new(batch.iter().map(|s| position(*s)).collect())
-        else {
+        // The batch is taken once through the gate, so what arrived while it waited goes too.
+        let (batch, answer) = pace
+            .run(async {
+                let batch: Vec<u64> = {
+                    let mut s = lookup.lock();
+                    let n = s.order.len().min(LOOKUP_BATCH);
+                    let batch: Vec<u64> = s.order.drain(..n).collect();
+                    s.requests += 1;
+                    s.outputs += batch.len() as u64;
+                    batch
+                };
+                let positions = OutPositions::new(batch.iter().map(|s| position(*s)).collect());
+                let answer = match positions {
+                    Some(p) => Some(tokio::time::timeout(REQUEST_TIMEOUT, chain.outputs(p)).await),
+                    None => None,
+                };
+                (batch, answer)
+            })
+            .await;
+        let Some(answer) = answer else {
             continue;
         };
-        let answer = match tokio::time::timeout(REQUEST_TIMEOUT, chain.outputs(positions)).await {
+        let answer = match answer {
             Ok(Ok(Stamped {
                 value,
                 tip: Some(tip),

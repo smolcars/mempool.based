@@ -31,6 +31,7 @@ mod chain;
 mod closes;
 mod gossip;
 mod log;
+mod pace;
 mod peer;
 mod store;
 
@@ -204,8 +205,11 @@ pub struct Config {
     pub log_level: Level,
     /// Most LDK records sent per second; the rest are counted in [`Event::LdkSuppressed`].
     pub log_per_second: u32,
-    /// Least time between two requests to the node for funding outputs. One request carries up to
-    /// 300 outputs, so 500 ms allows 600 lookups a second. Requests are never concurrent.
+    /// Least time between the starts of two requests to the node, for all of Lightning:
+    /// validation (100 outputs a request), the close-watcher and the server's funding txids go
+    /// through one gate, one request at a time. After each, the node is also left alone three
+    /// times as long as it took, so a slow node is asked less (`docs/LIGHTNING.md`, Load on the
+    /// node).
     pub lookup_interval: Duration,
     /// Announcements waiting for a lookup. At this many, gossip from peers waits (LDK stops
     /// reading from them) until lookups drain; nothing is dropped.
@@ -238,7 +242,7 @@ impl Config {
             sync_settle: Duration::from_secs(30),
             log_level: Level::Info,
             log_per_second: 20,
-            lookup_interval: Duration::from_millis(500),
+            lookup_interval: Duration::from_millis(250),
             max_pending: 5_000,
             max_early: 1_000,
             cache_entries: 100_000,

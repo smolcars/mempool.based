@@ -19,6 +19,7 @@ use crate::chain::{self, Chain};
 use crate::closes::{self, Opened};
 use crate::gossip::{Gossip, Graph, Replay};
 use crate::log::LogSink;
+use crate::pace::Pace;
 use crate::store::{self, GraphLoad};
 use crate::{
     Change, Closes, Config, Event, PeerAddr, PeerStatus, PublicKey, ReadOnlyNetworkGraph, Record,
@@ -58,6 +59,8 @@ pub struct Peer {
 
 struct Shared {
     config: Config,
+    /// The gate every request to the node goes through.
+    pace: Arc<Pace>,
     pm: Arc<Pm>,
     gossip: Arc<Gossip>,
     logger: Arc<LogSink>,
@@ -108,6 +111,10 @@ impl Peer {
             }
             _ => (false, None),
         };
+        // Answers saved beside the graph: only with a graph to replay, which is what asks them.
+        let verified = loaded.as_ref().and_then(|_| {
+            store::load_verified(&config.data_dir, config.network, config.max_channels)
+        });
         let replay = loaded.as_ref().map(Replay::from_graph).unwrap_or_default();
         drop(loaded);
         let graph = Arc::new(Graph::new(config.network, Arc::clone(&logger)));
@@ -120,15 +127,21 @@ impl Peer {
             changes.clone(),
             events.clone(),
         ));
+        if let Some(v) = &verified {
+            gossip.lookup.restore(v);
+            gossip.watch.resume(v.height, v.hash);
+        }
+        drop(verified);
+        let pace = Arc::new(Pace::new(config.lookup_interval));
         let lookups = tokio::spawn(chain::run(
             Arc::clone(&gossip),
             chain.clone(),
-            config.lookup_interval,
+            Arc::clone(&pace),
         ));
         let watcher = tokio::spawn(closes::run(
             Arc::clone(&gossip),
             chain,
-            config.lookup_interval,
+            Arc::clone(&pace),
             config.tip_every,
         ));
 
@@ -163,6 +176,7 @@ impl Peer {
         .0;
         let shared = Arc::new(Shared {
             config,
+            pace,
             pm,
             gossip,
             logger,
@@ -180,6 +194,13 @@ impl Peer {
             caught_up_at,
         ));
         Ok((Self { shared, stop, task }, load))
+    }
+
+    /// Runs `request` to the node through the gate Lightning's own requests share: one at a
+    /// time, at least [`Config::lookup_interval`] apart, the node left idle three times as long
+    /// as each took. For other requests on Lightning's behalf, such as funding txids.
+    pub async fn paced<F: std::future::Future>(&self, request: F) -> F::Output {
+        self.shared.pace.run(request).await
     }
 
     /// This peer's identity. It has no channels and is never announced.
@@ -330,14 +351,19 @@ fn validation(g: &Gossip, verified: usize) -> Validation {
 /// after a week offline is thus not mistaken for a fresh one.
 async fn save(shared: &Arc<Shared>, caught_up_at: SystemTime) -> io::Result<u64> {
     let graph = Arc::clone(shared.gossip.graph());
-    let path = shared.config.data_dir.join(store::GRAPH_FILE);
+    let (dir, network) = (shared.config.data_dir.clone(), shared.config.network);
+    let verified = shared.gossip.watch.saved();
     let started = Instant::now();
     let r = tokio::task::spawn_blocking(move || {
         let bytes = graph.encode();
-        store::write_atomic(&path, |f| {
+        store::write_atomic(&dir.join(store::GRAPH_FILE), |f| {
             f.write_all(&bytes)?;
             f.set_modified(caught_up_at)
         })?;
+        // Written after the graph: either file may be the older, and both stay true.
+        if let Some(v) = verified {
+            store::write_verified(&dir, network, &v)?;
+        }
         Ok::<_, io::Error>(bytes.len() as u64)
     })
     .await

@@ -269,7 +269,7 @@ async fn run(
         stalled = report(&peer, events, &l, name) => stalled,
         () = store_ln::run(Arc::clone(&store), || statistics(&peer), sampler) => false,
         () = index::keep(Arc::clone(&peer), Arc::clone(&store), Arc::clone(&l), name) => false,
-        () = index::fill_funding(chain, Arc::clone(&store), Arc::clone(&l), name) => false,
+        () = index::fill_funding(chain, Arc::clone(&peer), Arc::clone(&store), Arc::clone(&l), name) => false,
         () = l.stop.notified() => false,
     };
     if stalled {

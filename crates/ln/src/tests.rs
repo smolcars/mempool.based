@@ -1471,6 +1471,11 @@ fn funding(a: u8, b: u8) -> ScriptBuf {
     make_funding_redeemscript(&key(a + 100).public_key(&s), &key(b + 100).public_key(&s)).to_p2wsh()
 }
 
+/// The gate the peer gives its request loops, as `Peer::start` makes it.
+fn pace(config: &Config) -> Arc<crate::pace::Pace> {
+    Arc::new(crate::pace::Pace::new(config.lookup_interval))
+}
+
 fn quick(f: impl FnOnce(&mut Config)) -> Config {
     let mut c = Config::new(NET, PathBuf::new());
     c.lookup_interval = Duration::from_millis(20);
@@ -1484,7 +1489,7 @@ fn checked(config: &Config, node: &FakeChain) -> (Arc<Gossip>, broadcast::Receiv
     tokio::spawn(chain::run(
         Arc::clone(&g),
         node.clone(),
-        config.lookup_interval,
+        pace(config),
     ));
     (g, events)
 }
@@ -1671,8 +1676,8 @@ async fn a_burst_becomes_a_few_batches_within_the_rate_limit() {
     let batches = node.batches();
     let sizes: Vec<usize> = batches.iter().map(|b| b.1).collect();
     assert_eq!(sizes.iter().sum::<usize>(), 1000);
-    assert!(sizes.iter().all(|n| *n <= 300));
-    assert!(batches.len() <= 6, "{sizes:?}");
+    assert!(sizes.iter().all(|n| *n <= chain::LOOKUP_BATCH));
+    assert!(batches.len() <= 12, "{sizes:?}");
     for w in batches.windows(2) {
         assert!(
             w[1].0 - w[0].0 >= interval,
@@ -1908,7 +1913,7 @@ async fn a_stored_channel_found_early_keeps_the_replay_open_until_it_is_deep() {
     tokio::spawn(chain::run(
         Arc::clone(&g),
         node.clone(),
-        config.lookup_interval,
+        pace(&config),
     ));
     g.replay_tick(config.max_pending);
     wait_for("early", || g.lookup.snapshot().early == 1).await;
@@ -1941,7 +1946,7 @@ async fn a_newer_oversized_node_announcement_waits_for_its_stored_channel() {
     assert!(big.serialized_length() > MAX_GOSSIP_BYTES);
     assert!(g.handle_node_announcement(None, &big).is_err());
     assert_eq!(g.counters.held.load(Ordering::Relaxed), 1);
-    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    tokio::spawn(chain::run(Arc::clone(&g), fake, pace(&config)));
     g.replay_tick(config.max_pending);
     wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
     g.replay_tick(config.max_pending);
@@ -1970,7 +1975,7 @@ async fn a_forged_update_cannot_replace_a_stored_one() {
     forged.signature = sign(&forged.contents, &key(9));
     assert!(g.handle_channel_update(None, &forged).is_err());
     assert_eq!(g.counters.held.load(Ordering::Relaxed), 0);
-    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    tokio::spawn(chain::run(Arc::clone(&g), fake, pace(&config)));
     g.replay_tick(config.max_pending);
     wait_for("checked", || g.graph().read_only().channel(id).is_some()).await;
     let ro = g.graph().read_only();
@@ -1999,7 +2004,7 @@ async fn stored_channels_keep_their_place_under_the_ceiling() {
         g.handle_channel_announcement(None, &channel(c, 1, 2))
             .is_err()
     );
-    tokio::spawn(chain::run(Arc::clone(&g), fake, config.lookup_interval));
+    tokio::spawn(chain::run(Arc::clone(&g), fake, pace(&config)));
     g.replay_tick(config.max_pending);
     assert!(
         g.handle_channel_announcement(None, &channel(c, 1, 2))
