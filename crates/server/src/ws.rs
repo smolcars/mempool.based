@@ -14,6 +14,7 @@
 
 mod frame;
 mod hub;
+pub mod mempool;
 
 use std::collections::HashSet;
 use std::pin::pin;
@@ -86,24 +87,55 @@ impl Close {
     }
 }
 
-/// A topic a client can subscribe to. Later topics (mempool totals, projected blocks, a tracked
-/// transaction or address) are added here and in [`Topic::parse`].
+/// A topic a client can subscribe to. Later topics (a tracked transaction or address) are added
+/// here and in [`Topic::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Blocks,
+    /// Mempool totals.
+    Mempool,
+    /// Every projected block's totals.
+    Projected,
+    /// One projected block's transactions, in binary frames. Always below
+    /// [`mempool::TXS_TOPICS`].
+    ProjectedTxs(u8),
+    /// The newest transactions seen.
+    Transactions,
 }
+
+/// Names of the [`Topic::ProjectedTxs`] topics, by block.
+const PROJECTED_TXS: [&str; mempool::TXS_TOPICS] = [
+    "projected-txs:0",
+    "projected-txs:1",
+    "projected-txs:2",
+    "projected-txs:3",
+    "projected-txs:4",
+    "projected-txs:5",
+    "projected-txs:6",
+];
 
 impl Topic {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "blocks" => Some(Self::Blocks),
-            _ => None,
+            "mempool" => Some(Self::Mempool),
+            "projected" => Some(Self::Projected),
+            "transactions" => Some(Self::Transactions),
+            _ => PROJECTED_TXS
+                .iter()
+                .position(|n| *n == s)
+                .and_then(|i| u8::try_from(i).ok())
+                .map(Self::ProjectedTxs),
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Blocks => "blocks",
+            Self::Mempool => "mempool",
+            Self::Projected => "projected",
+            Self::Transactions => "transactions",
+            Self::ProjectedTxs(i) => PROJECTED_TXS.get(usize::from(i)).copied().unwrap_or(""),
         }
     }
 }
@@ -442,7 +474,7 @@ async fn read_loop<R: AsyncRead>(
         let Ok(text) = String::from_utf8(text) else {
             break Close::INVALID_UTF8;
         };
-        if let Err(close) = subs.handle(&text, limits.max_subscriptions) {
+        if let Err(close) = subs.handle(&text, limits) {
             break close;
         }
     };
@@ -490,7 +522,7 @@ struct Subscriptions<'a> {
 }
 
 impl Subscriptions<'_> {
-    fn handle(&mut self, text: &str, max: usize) -> Result<(), Close> {
+    fn handle(&mut self, text: &str, limits: &WsLimits) -> Result<(), Close> {
         // Echo for the conformance suite (dev/autobahn): its cases expect each message back.
         if cfg!(feature = "autobahn") {
             self.conn.send(Frame::text(text.as_bytes()));
@@ -504,7 +536,12 @@ impl Subscriptions<'_> {
                     if self.topics.contains(&topic) {
                         continue;
                     }
-                    if self.topics.len() >= max {
+                    let blocks = |t: &Topic| matches!(t, Topic::ProjectedTxs(_));
+                    if self.topics.len() >= limits.max_subscriptions
+                        || blocks(&topic)
+                            && self.topics.iter().filter(|t| blocks(t)).count()
+                                >= limits.max_block_subscriptions
+                    {
                         return Err(Close::TOO_MANY_SUBSCRIPTIONS);
                     }
                     self.topics.insert(topic);

@@ -50,6 +50,9 @@ pub struct ServerStarting<'a> {
     pub ws_max_subscriptions: usize,
     pub ws_send_queue: usize,
     pub ws_idle_timeout_secs: u64,
+    pub ws_max_block_subscriptions: usize,
+    pub ws_mempool_interval_ms: u64,
+    pub ws_latest_txs: usize,
     pub block_summary_cache_mb: usize,
     /// Left out when `DATA_DIR` is unset and the server runs without a store.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +73,8 @@ pub struct NetworkEnabled<'a> {
     /// Esplora base URL or unix socket path.
     pub esplora: String,
     pub electrum_addr: &'a str,
+    /// Whether the mempool tracker and projected blocks run (`{NET}_MEMPOOL_ENABLED`).
+    pub mempool: bool,
 }
 event!(NetworkEnabled<'a>, "network_enabled", Info);
 
@@ -472,6 +477,129 @@ pub struct BlockBackfillProgress {
 }
 event!(BlockBackfillProgress, "block_backfill_progress", Info);
 
+// The live mempool.
+
+/// The mempool tracker's first complete cycle: the initial sync.
+#[derive(Debug, Serialize)]
+pub struct MempoolSynced {
+    pub network: &'static str,
+    /// From start, failed attempts included.
+    pub duration_ms: f64,
+    pub txs: usize,
+    /// Response bytes read from the node, and calls made.
+    pub bytes: u64,
+    pub calls: u32,
+}
+event!(MempoolSynced, "mempool_synced", Info);
+
+/// The live mempool over the last minute, once a minute per network: the tracker's cycles, the
+/// projected blocks' updates and what the WebSocket topics sent.
+#[derive(Debug, Serialize)]
+pub struct MempoolSummary {
+    pub network: &'static str,
+    /// Transactions tracked now.
+    pub txs: usize,
+    pub cycles: u32,
+    /// Probes that found nothing changed and skipped the listing.
+    pub skipped: u32,
+    pub added: u64,
+    pub confirmed: u64,
+    pub replaced: u64,
+    pub evicted: u64,
+    pub vanished: u64,
+    /// The tracker's node calls and response bytes.
+    pub node_calls: u64,
+    pub node_bytes: u64,
+    pub cycle_ms_max: f64,
+    pub updates: u32,
+    /// The projector's cluster requests, clusters asked and response bytes.
+    pub cluster_calls: u64,
+    pub clusters_asked: u64,
+    pub cluster_bytes: u64,
+    pub pack_ms_max: f64,
+    /// Whether the projection is stale now.
+    pub stale: bool,
+    /// Messages published on the mempool topics, their encoded size, and the bytes queued to
+    /// subscribers (size times subscribers).
+    pub ws_messages: u64,
+    pub ws_bytes: u64,
+    pub ws_sent_bytes: u64,
+    pub ws_dropped_slow: u64,
+    pub fanout_ms_max: f64,
+}
+event!(MempoolSummary, "mempool_summary", Info);
+
+/// A tracker cycle failed and nothing from it was published. At the 1st, 2nd, 4th, 8th…
+/// failure in a row.
+#[derive(Debug, Serialize)]
+pub struct MempoolPollFailed {
+    pub network: &'static str,
+    /// `busy`, `timeout`, `unavailable`, `response_too_big`, `decode`, `auth` or `failed`.
+    pub error: &'static str,
+    pub failures: u32,
+    pub retry_in_ms: u64,
+}
+event!(MempoolPollFailed, "mempool_poll_failed", Warn);
+
+/// A tracker cycle succeeded after `failures` in a row.
+#[derive(Debug, Serialize)]
+pub struct MempoolRecovered {
+    pub network: &'static str,
+    pub failures: u32,
+}
+event!(MempoolRecovered, "mempool_recovered", Info);
+
+/// The node's `mempool_sequence` went backwards: it restarted.
+#[derive(Debug, Serialize)]
+pub struct MempoolSequenceRegressed {
+    pub network: &'static str,
+    pub from: u64,
+    pub to: u64,
+}
+event!(MempoolSequenceRegressed, "mempool_sequence_regressed", Warn);
+
+/// A cluster request for the projected blocks failed; the projection is stale until one
+/// succeeds. At the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct ProjectionFetchFailed {
+    pub network: &'static str,
+    /// As for `mempool_poll_failed`.
+    pub error: &'static str,
+    pub failures: u32,
+    /// Transactions waiting to be asked about.
+    pub pending: usize,
+    pub retry_in_ms: u64,
+}
+event!(ProjectionFetchFailed, "projection_fetch_failed", Warn);
+
+/// The projection is current again after failed cluster requests.
+#[derive(Debug, Serialize)]
+pub struct ProjectionRecovered {
+    pub network: &'static str,
+    pub failures: u32,
+}
+event!(ProjectionRecovered, "projection_recovered", Info);
+
+/// The projector fell behind the tracker and rebuilt from a fresh snapshot.
+#[derive(Debug, Serialize)]
+pub struct ProjectionResynced {
+    pub network: &'static str,
+    pub txs: usize,
+}
+event!(ProjectionResynced, "projection_resynced", Warn);
+
+/// A reader of the tracker's or the projector's change stream fell behind and started over
+/// from a snapshot. At a total of 1, 2, 4, 8… per network and source.
+#[derive(Debug, Serialize)]
+pub struct MempoolSubscriberLagged {
+    pub network: &'static str,
+    /// `tracker` or `projector`.
+    pub source: &'static str,
+    pub missed: u64,
+    pub total: u64,
+}
+event!(MempoolSubscriberLagged, "mempool_subscriber_lagged", Warn);
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -521,6 +649,9 @@ mod tests {
                 ws_max_subscriptions: 1,
                 ws_send_queue: 1,
                 ws_idle_timeout_secs: 1,
+                ws_max_block_subscriptions: 1,
+                ws_mempool_interval_ms: 1,
+                ws_latest_txs: 1,
                 block_summary_cache_mb: 1,
                 data_dir: Some("data".into()),
                 backfill_enabled: true,
@@ -532,6 +663,7 @@ mod tests {
                 rpc_addr: "node.example:1".into(),
                 esplora: "http://node.example:2".into(),
                 electrum_addr: "node.example:3",
+                mempool: true,
             }),
             both(&NoNetworks {}),
             both(&WebDirMissing {
@@ -705,6 +837,74 @@ mod tests {
                 rates_written: 2,
                 busy_ms: 1000,
                 bytes: 4096,
+            }),
+            both(&MempoolSynced {
+                network: n,
+                duration_ms: 10_400.0,
+                txs: 54_509,
+                bytes: 252_000_000,
+                calls: 229,
+            }),
+            both(&MempoolSummary {
+                network: n,
+                txs: 55_000,
+                cycles: 40,
+                skipped: 2,
+                added: 400,
+                confirmed: 3_500,
+                replaced: 3,
+                evicted: 10,
+                vanished: 1,
+                node_calls: 200,
+                node_bytes: 150_000_000,
+                cycle_ms_max: 440.0,
+                updates: 40,
+                cluster_calls: 45,
+                clusters_asked: 700,
+                cluster_bytes: 340_000,
+                pack_ms_max: 172.0,
+                stale: false,
+                ws_messages: 300,
+                ws_bytes: 900_000,
+                ws_sent_bytes: 9_000_000,
+                ws_dropped_slow: 0,
+                fanout_ms_max: 0.4,
+            }),
+            both(&MempoolPollFailed {
+                network: n,
+                error: "unavailable",
+                failures: 4,
+                retry_in_ms: 16_000,
+            }),
+            both(&MempoolRecovered {
+                network: n,
+                failures: 5,
+            }),
+            both(&MempoolSequenceRegressed {
+                network: n,
+                from: 110_704,
+                to: 54_650,
+            }),
+            both(&ProjectionFetchFailed {
+                network: n,
+                error: "busy",
+                failures: 2,
+                pending: 30,
+                retry_in_ms: 4_000,
+            }),
+            both(&ProjectionRecovered {
+                network: n,
+                failures: 2,
+            }),
+            both(&ProjectionResynced {
+                network: n,
+                txs: 55_000,
+            }),
+            both(&MempoolSubscriberLagged {
+                network: n,
+                source: "tracker",
+                missed: 3,
+                total: 1,
             }),
         ]
     }

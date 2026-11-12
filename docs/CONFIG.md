@@ -25,6 +25,14 @@ A network is enabled when all six of its variables are set, and disabled when no
 | `{NET}_ESPLORA_URL` | `http://` base URL of rbitcoin's Esplora (`--esplora-listen`), or an absolute unix socket path. The node speaks plain HTTP, so `https://` is refused. Credentials in the URL are refused, since URLs end up in logs |
 | `{NET}_ELECTRUM_ADDR` | `host:port` of rbitcoin's Electrum server (`--electrum-listen`), plain TCP |
 
+### The live mempool
+
+| Variable | Default | What it does |
+|---|---|---|
+| `{NET}_MEMPOOL_ENABLED` | `true` | `false` stops the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOOL.md#in-the-server)). The mempool topics then answer `off` ([`WS.md`](WS.md#mempool-topics)); blocks, the API and everything else keep working. Optional, unlike the six above |
+
+**Turn it off when you share a node.** With it on, every running server polls its node continuously: on mainnet about 150 MB a minute of RPC answers (one 3.6 MB `getrawmempool` a second), plus an initial sync of about 250 MB and 10 s. Several developers each running a server against the same node multiply that. Leave it on only on the server that serves the mempool, or while you work on it.
+
 ## Broadcast
 
 | Variable | Default | What it does |
@@ -95,3 +103,6 @@ Bounds on `/app/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its c
 | `WS_MAX_SUBSCRIPTIONS` | `8` | One socket subscribing to many topics. Over it: close `4001` |
 | `WS_SEND_QUEUE` | `64` | Memory held for a client that does not read. Messages waiting for it are shared, not copied. When full: close `4003`. At most 65,536 |
 | `WS_IDLE_TIMEOUT_SECS` | `60` | Sockets whose client vanished without closing. A socket silent for half of it is pinged, and one silent for all of it is closed with `4004` |
+| `WS_MAX_BLOCK_SUBSCRIPTIONS` | `2` | One socket holding many projected blocks' transactions, the only large topics (up to about 800 KB a snapshot). Counted inside `WS_MAX_SUBSCRIPTIONS`. Over it: close `4001` |
+| `WS_MEMPOOL_INTERVAL_MS` | `2000` | Traffic and fan-out work on the mempool topics: each sends at most one message per interval, always the latest state, so changes in between are merged. 100 to 60,000 |
+| `WS_LATEST_TXS` | `10` | Size of the `transactions` list, the newest transactions seen. At most 100 |

@@ -12,6 +12,7 @@ Measurements below are from a synced mainnet node on a private network, 2026-11-
 | Shell | `crates/engine/src/mempool/tracker.rs` | One loop that probes, lists, fetches and publishes; the subscriber API; the events |
 | Proof | `crates/engine/examples/mempool_watch.rs` | Runs the tracker against a live node and prints its events |
 | Projected blocks | `crates/engine/src/projected/` | The node's chunks packed into the next blocks; see [Projected blocks](#projected-blocks) |
+| In the server | `crates/server/src/ws/mempool.rs` | Runs both per network and feeds the WebSocket; see [In the server](#in-the-server) |
 
 ```rust
 let (tracker, task) = Tracker::start(NodeSource { rpc, esplora }, Config::default());
@@ -304,3 +305,17 @@ The projector logs nothing itself. `Projector::events()` yields:
 | `FetchFailed` | the error, consecutive failures, transactions pending, the wait before the retry |
 | `Resynced` | the projector fell behind the tracker and rebuilt from a snapshot: transactions |
 | `SubscriberLagged` | how many deltas the subscriber missed |
+
+## In the server
+
+`crates/server/src/ws/mempool.rs` runs one tracker and one projector per enabled network, from startup, unless `{NET}_MEMPOOL_ENABLED=false` ([`CONFIG.md`](CONFIG.md#the-live-mempool)).
+
+- **Their own node clients.** The tracker gets its own RPC and Esplora clients and the projector its own RPC client, so the byte counts in their events are theirs alone. Each RPC client allows four calls in flight: with the shared client the API uses, at most twelve of the node's sixteen work-queue slots.
+- **The tip hint.** A task follows the network's Electrum events and calls `tip_changed` on every new block or reorg, so a block's removals are seen at once instead of at the next cycle.
+- **A node down at boot.** Nothing special: the tracker retries with its backoff (2 s doubling to 30 s), the projector waits for it, and the topics publish nothing until the first complete cycle. When the node comes back the initial sync runs and the topics start. A node lost later leaves the last projection in place, marked `stale`.
+- **Shutdown.** When shutdown starts, the engines and their tasks are aborted, so no polling continues while sockets drain.
+- **The topics** (`mempool`, `projected`, `projected-txs:N`, `transactions`, in [`WS.md`](WS.md#mempool-topics)) are fed by one task per network from the latest projection and the tracker's change stream. No subscription asks the node for anything.
+- **The log.** The engines' events become typed lines ([`LOGGING.md`](LOGGING.md#the-live-mempool)): `mempool_synced` once, one `mempool_summary` a minute with the minute's totals, and a line for each abnormal condition, repeats summarised at powers of two.
+
+The mempool totals' `min_fee_rate` is the node's `mempoolminfee` from the tracker's own `getmempoolinfo` probe, which `Tracker::node_info` exposes; no extra call is made for it.
+

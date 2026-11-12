@@ -93,6 +93,10 @@ fn started(config: &Config, log: logging::Settings) {
         ws_max_subscriptions: config.ws.max_subscriptions,
         ws_send_queue: config.ws.send_queue,
         ws_idle_timeout_secs: config.ws.idle_timeout.as_secs(),
+        ws_max_block_subscriptions: config.ws.max_block_subscriptions,
+        ws_mempool_interval_ms: u64::try_from(config.ws.mempool_interval.as_millis())
+            .unwrap_or(u64::MAX),
+        ws_latest_txs: config.ws.latest_txs,
         block_summary_cache_mb: l.summary_cache_bytes >> 20,
         data_dir: config.data_dir.as_ref().map(|d| d.display().to_string()),
         backfill_enabled: config.backfill.enabled,
@@ -108,6 +112,7 @@ fn started(config: &Config, log: logging::Settings) {
                 EsploraEndpoint::Unix(path) => path.display().to_string(),
             },
             electrum_addr: &n.electrum,
+            mempool: n.mempool,
         });
     }
     if config.networks.is_empty() {

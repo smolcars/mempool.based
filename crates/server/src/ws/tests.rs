@@ -159,6 +159,15 @@ fn subscribers_get_the_snapshot_then_shared_bytes_and_slow_ones_are_closed() {
     assert!(c_rx.try_recv().is_err());
 }
 
+/// Limits with `max` subscriptions, two of them projected blocks' transactions.
+fn subs_limits(max: usize) -> WsLimits {
+    WsLimits {
+        max_subscriptions: max,
+        max_block_subscriptions: 2,
+        ..WsLimits::default()
+    }
+}
+
 #[test]
 fn requests_are_parsed_strictly_and_subscriptions_capped() {
     let hub = hub();
@@ -178,20 +187,54 @@ fn requests_are_parsed_strictly_and_subscriptions_capped() {
         r#"{"op":"unsubscribe","topics":["Blocks"]}"#,
         r#"{"op":"shout"}"#,
         r#"{"topics":["blocks"]}"#,
+        r#"{"op":"subscribe","topics":["projected-txs:7"]}"#,
+        r#"{"op":"subscribe","topics":["projected-txs:07"]}"#,
+        r#"{"op":"subscribe","topics":["projected-txs:"]}"#,
+        r#"{"op":"subscribe","topics":["projected-txs:-1"]}"#,
+        r#"{"op":"subscribe","topics":["projected-txs"]}"#,
     ] {
-        assert_eq!(subs.handle(bad, 8), Err(Close::BAD_MESSAGE), "{bad}");
+        assert_eq!(
+            subs.handle(bad, &subs_limits(8)),
+            Err(Close::BAD_MESSAGE),
+            "{bad}"
+        );
     }
-    assert_eq!(subs.handle(r#"{"op":"ping"}"#, 8), Ok(()));
+    assert_eq!(subs.handle(r#"{"op":"ping"}"#, &subs_limits(8)), Ok(()));
     assert_eq!(rx.try_recv().unwrap(), Frame::text(br#"{"type":"pong"}"#));
 
     assert_eq!(
-        subs.handle(r#"{"op":"subscribe","topics":["blocks"]}"#, 0),
+        subs.handle(r#"{"op":"subscribe","topics":["blocks"]}"#, &subs_limits(0)),
         Err(Close::TOO_MANY_SUBSCRIPTIONS)
     );
     let sub = r#"{"op":"subscribe","topics":["blocks","blocks"]}"#;
-    assert_eq!(subs.handle(sub, 1), Ok(()));
+    assert_eq!(subs.handle(sub, &subs_limits(1)), Ok(()));
     // Subscribing again is a no-op, not a second subscription.
-    assert_eq!(subs.handle(sub, 1), Ok(()));
+    assert_eq!(subs.handle(sub, &subs_limits(1)), Ok(()));
+    // Projected blocks' transactions have a cap of their own inside the total.
+    let txs = |names: &str| format!(r#"{{"op":"subscribe","topics":[{names}]}}"#);
+    let all = subs_limits(8);
+    assert_eq!(
+        subs.handle(
+            &txs(r#""mempool","projected","transactions","projected-txs:0""#),
+            &all
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        subs.handle(&txs(r#""projected-txs:6","projected-txs:0""#), &all),
+        Ok(())
+    );
+    assert_eq!(
+        subs.handle(&txs(r#""projected-txs:1""#), &all),
+        Err(Close::TOO_MANY_SUBSCRIPTIONS)
+    );
+    let swap = r#"{"op":"unsubscribe","topics":["projected-txs:6","mempool","projected","transactions","projected-txs:0"]}"#;
+    assert_eq!(subs.handle(swap, &all), Ok(()));
+    assert_eq!(subs.handle(&txs(r#""projected-txs:1""#), &all), Ok(()));
+    assert_eq!(
+        subs.handle(r#"{"op":"unsubscribe","topics":["projected-txs:1"]}"#, &all),
+        Ok(())
+    );
     assert_eq!(
         hub.publish(Topic::Blocks, &Frame::text(b"x"), Snapshot::Keep)
             .subscribers,
@@ -414,4 +457,26 @@ fn reassembly_never_holds_more_than_the_limit() {
         }
         assert_eq!(append(&mut buf, &vec![b'a'; max], max), Err(Close::TOO_BIG));
     }
+}
+
+#[test]
+fn appended_changes_follow_the_state_until_folded_into_a_new_one() {
+    let hub = hub();
+    let topic = Topic::ProjectedTxs(0);
+    hub.publish(topic, &Frame::text(b"s1"), Snapshot::Replace);
+    hub.publish(topic, &Frame::text(b"d1"), Snapshot::Append);
+    hub.publish(topic, &Frame::text(b"d2"), Snapshot::Append);
+    let (a, mut a_rx) = conn(8);
+    hub.subscribe(topic, &a);
+    for want in [&b"s1"[..], b"d1", b"d2"] {
+        assert_eq!(a_rx.try_recv().unwrap(), Frame::text(want));
+    }
+    // Folding sends nothing to existing subscribers.
+    hub.set_snapshot(topic, Frame::text(b"s2"));
+    assert!(a_rx.try_recv().is_err());
+    let (b, mut b_rx) = conn(8);
+    hub.subscribe(topic, &b);
+    assert_eq!(b_rx.try_recv().unwrap(), Frame::text(b"s2"));
+    assert!(b_rx.try_recv().is_err());
+    assert_eq!(hub.subscribers(topic), 2);
 }

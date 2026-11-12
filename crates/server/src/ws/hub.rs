@@ -31,6 +31,9 @@ pub enum Snapshot {
     Clear,
     /// This message changes nothing a new subscriber needs.
     Keep,
+    /// This message is a change to the current state: a new subscriber gets it after the state
+    /// and the changes appended before it. [`Hub::set_snapshot`] folds them into a new state.
+    Append,
 }
 
 /// The result of one [`Hub::publish`].
@@ -54,7 +57,8 @@ pub struct Hub {
 #[derive(Debug, Default)]
 struct TopicState {
     subscribers: HashMap<u64, Arc<Conn>>,
-    snapshot: Option<Frame>,
+    /// The current state, then the changes appended since: what a new subscriber is sent.
+    snapshot: Vec<Frame>,
 }
 
 impl Hub {
@@ -77,9 +81,20 @@ impl Hub {
         let mut topics = self.topics();
         let state = topics.entry(topic).or_default();
         state.subscribers.insert(conn.id, Arc::clone(conn));
-        if let Some(snapshot) = &state.snapshot {
-            conn.send(snapshot.clone());
+        for frame in &state.snapshot {
+            conn.send(frame.clone());
         }
+    }
+
+    /// Makes `frame` the topic's whole current state for new subscribers, without sending it to
+    /// anyone: for folding appended changes into one state.
+    pub fn set_snapshot(&self, topic: Topic, frame: Frame) {
+        self.topics().entry(topic).or_default().snapshot = vec![frame];
+    }
+
+    /// Subscribers of `topic` now.
+    pub fn subscribers(&self, topic: Topic) -> usize {
+        self.topics().get(&topic).map_or(0, |s| s.subscribers.len())
     }
 
     pub(super) fn unsubscribe(&self, topic: Topic, id: u64) {
@@ -95,9 +110,10 @@ impl Hub {
         let mut topics = self.topics();
         let state = topics.entry(topic).or_default();
         match snapshot {
-            Snapshot::Replace => state.snapshot = Some(frame.clone()),
-            Snapshot::Clear => state.snapshot = None,
+            Snapshot::Replace => state.snapshot = vec![frame.clone()],
+            Snapshot::Clear => state.snapshot.clear(),
             Snapshot::Keep => {}
+            Snapshot::Append => state.snapshot.push(frame.clone()),
         }
         let dropped_slow = state
             .subscribers
