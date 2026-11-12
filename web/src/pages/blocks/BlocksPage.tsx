@@ -1,21 +1,26 @@
 import { useParams } from "@solidjs/router";
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, on, onCleanup, Show, untrack } from "solid-js";
+import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
+import { FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
 import { ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
 import { createApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
-import { groupDigits, NNBSP, truncateMiddle } from "../../lib/format";
+import { groupDigits, MISSING, NNBSP, truncateMiddle } from "../../lib/format";
 import { paths } from "../../lib/network";
-import { usePageTitle } from "../../lib/page";
+import { useNetwork, usePageTitle } from "../../lib/page";
+import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
 import { fullness, parseHeight, shownParam } from "../block/chain";
 import { failed, ready, Skel } from "../block/parts";
 import "./BlocksPage.css";
 
 /** The API answers ten blocks per page. */
 const PAGE = 10;
+/** Summary requests in flight at once on this page. */
+const IN_FLIGHT = 2;
 
 /** Thousands with two decimals, for table cells whose unit is in the header: 1 607 007 → `1 607.01`. */
 export function formatThousands(n: number): string {
@@ -24,7 +29,10 @@ export function formatThousands(n: number): string {
   return `${groupDigits(Math.floor(hundredths / 100))}.${String(hundredths % 100).padStart(2, "0")}`;
 }
 
-const columns = [
+/** A row's fee facts: here, still loading, or given up on. */
+type RowFacts = BlockSummary | "failed" | undefined;
+
+const columns = (factsOf: (id: string) => RowFacts) => [
   {
     header: "Height",
     cell: (b: Block | null) =>
@@ -40,7 +48,13 @@ const columns = [
     header: "Hash",
     optional: true,
     cell: (b: Block | null) =>
-      b ? <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" /> : <Skel />,
+      b ? (
+        <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
+      ) : (
+        <span class="blocks-hash-skel">
+          <Skel />
+        </span>
+      ),
   },
   {
     header: "Mined",
@@ -50,6 +64,25 @@ const columns = [
     header: "Transactions",
     numeric: true,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
+  },
+  {
+    header: "Median fee rate, sat/vB",
+    cell: (b: Block | null) => {
+      const f = b ? factsOf(b.id) : undefined;
+      if (f === undefined) return <Skel size="s" />;
+      if (f === "failed") return MISSING;
+      return f.fee_rate ? <FeeRate rate={f.fee_rate.median} unit={false} /> : "None";
+    },
+  },
+  {
+    header: "Total fees, BTC",
+    numeric: true,
+    optional: true,
+    cell: (b: Block | null) => {
+      const f = b ? factsOf(b.id) : undefined;
+      if (f === undefined) return <Skel size="s" />;
+      return f === "failed" ? MISSING : <Amount sats={f.fees} unit={false} />;
+    },
   },
   {
     header: "Size, kB",
@@ -85,6 +118,40 @@ export default function BlocksPage() {
   });
   const [tip] = createApi<string>(() => "/blocks/tip/height", { as: "text" });
   usePageTitle(() => "Blocks");
+  const network = useNetwork();
+
+  // Each row's fee facts on its own request, two at a time, so an old page, whose blocks the server
+  // must compute one by one, fills in row by row without spending the client's whole allowance at
+  // once; busy replies (503, 429) are retried as they say.
+  const [facts, setFacts] = createSignal<ReadonlyMap<string, BlockSummary | "failed">>(new Map());
+  const put = (id: string, f: BlockSummary | "failed") => setFacts((m) => new Map([...m, [id, f]]));
+  createEffect(
+    on(
+      () => list(),
+      (rows) => {
+        const c = new AbortController();
+        onCleanup(() => c.abort());
+        const n = network();
+        const queue = (rows ?? [])
+          .map((b) => b.id)
+          .filter((id) => !knownSummary(n, id) && !(untrack(facts).get(id) instanceof Object));
+        const worker = async () => {
+          for (let id = queue.shift(); id !== undefined && !c.signal.aborted; id = queue.shift()) {
+            try {
+              // oxlint-disable-next-line no-await-in-loop -- one request at a time per worker
+              const found = await fetchSummaries(n, [id], c.signal);
+              put(id, found.get(id) ?? "failed");
+            } catch {
+              if (!c.signal.aborted) put(id, "failed");
+            }
+          }
+        };
+        for (let i = 0; i < IN_FLIGHT; i++) void worker();
+      },
+    ),
+  );
+  const factsOf = (id: string): RowFacts => facts().get(id) ?? knownSummary(network(), id);
+  const table = columns(factsOf);
 
   const list = () => {
     const l = ready(blocks);
@@ -139,7 +206,7 @@ export default function BlocksPage() {
         >
           <DataTable
             caption="Recent blocks, newest first"
-            columns={columns}
+            columns={table}
             rows={list() ?? Array.from({ length: PAGE }, () => null)}
           />
           <nav class="blocks-pager" aria-label="Block pages">

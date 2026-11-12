@@ -1,6 +1,7 @@
 // The `blocks` topic (docs/WS.md "Topics"): new blocks, reorgs and resyncs, and how to keep up.
 import type { Block } from "./esplora";
 import type { Topic } from "./live";
+import { type BlockSummary, isSummary } from "./summary";
 
 export interface ChainTip {
   height: number;
@@ -9,6 +10,7 @@ export interface ChainTip {
 
 export type BlocksMessage =
   | { type: "block"; block: Block }
+  | { type: "summary"; summary: BlockSummary }
   | { type: "reorg"; forkHeight: number }
   | { type: "resync"; tip: ChainTip | null };
 
@@ -40,6 +42,9 @@ export const blocksTopic: Topic<BlocksMessage> = {
   name: "blocks",
   parse(m) {
     if (m["type"] === "block" && isBlock(m["block"])) return { type: "block", block: m["block"] };
+    if (m["type"] === "summary" && isSummary(m["summary"])) {
+      return { type: "summary", summary: m["summary"] };
+    }
     if (m["type"] === "reorg" && isHeight(m["fork_height"])) {
       return { type: "reorg", forkHeight: m["fork_height"] };
     }

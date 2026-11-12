@@ -117,6 +117,13 @@
     height: calc(var(--fill) * 100%);
     min-height: 2px;
     border-top: 2px solid var(--color-text);
+    animation: block-core-settle var(--dur-slow) var(--ease-settle) both;
+  }
+  /* Neutral sediment until the fee layers arrive; then only the level line and its label stay. */
+  .block-core__fill::before {
+    content: "";
+    position: absolute;
+    inset: 0;
     background:
       repeating-linear-gradient(
         to top,
@@ -124,7 +131,23 @@
         color-mix(in srgb, var(--color-line-strong) 30%, transparent) 13px 14px
       ),
       color-mix(in srgb, var(--color-line) 70%, var(--color-surface-sunken));
-    animation: block-core-settle var(--dur-slow) var(--ease-settle) both;
+    transition: opacity var(--dur-slow) var(--ease-out);
+  }
+  .block-core__fill--strata::before {
+    opacity: 0;
+  }
+  /* Over the layers, the labels sit on a chip: text never stands on a fee color. */
+  .block-core__fill--strata .block-core__level,
+  .block-core__frame:has(.block-core__strata) .block-core__limit {
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-s);
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+  .block-core__strata {
+    --strata-seam: var(--color-surface-sunken);
+    position: absolute;
+    inset: 0;
   }
   .block-core__limit {
     position: absolute;
@@ -150,6 +173,9 @@
       opacity: 0;
       transform: translateY(-12px);
     }
+  }
+  .block-core .feekey {
+    margin-top: var(--space-3);
   }
   .block-core__caption {
     margin-top: var(--space-3);
@@ -195,6 +221,15 @@
     font-size: var(--text-sm);
     color: var(--color-text-muted);
     font-weight: var(--weight-regular);
+  }
+  .block-fact__retry {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .block-fact--tall .block-fact__value {

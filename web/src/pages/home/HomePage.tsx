@@ -10,6 +10,8 @@ import { createBlockFeed, createPoll } from "./feeds";
 import { MempoolPanel } from "./MempoolPanel";
 import { isFeeEstimates, isMempoolSummary, isRecentList } from "./mempool";
 import { RecentTxs } from "./RecentTxs";
+import { createSummaries } from "./summaries";
+import { DifficultyPanel } from "./DifficultyPanel";
 import "./HomePage.css";
 
 /** How often each panel asks again. Tip and mempool answers are cached for a second on the server. */
@@ -34,6 +36,7 @@ export default function HomePage() {
 function Home(props: { network: Network }) {
   const status = useLiveStatus();
   const blocks = createBlockFeed(props.network, status);
+  const facts = createSummaries(props.network, blocks.data);
   const mempool = createPoll<MempoolSummary>(
     props.network,
     "/mempool",
@@ -64,11 +67,13 @@ function Home(props: { network: Network }) {
         retry={blocks.refresh}
         status={status}
         stale={() => [blocks, mempool, recent].some((f) => nodeSilent(f.error()))}
+        facts={facts}
       />
       <div class="home-grid wrap">
         <MempoolPanel feed={mempool} />
         <FeePanel feed={fees} />
         <RecentTxs feed={recent} />
+        <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
       </div>
     </div>
   );

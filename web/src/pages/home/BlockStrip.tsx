@@ -1,19 +1,25 @@
 import {
   type Accessor,
   createEffect,
+  createMemo,
   createSignal,
   For,
+  Match,
   on,
   onCleanup,
   onMount,
   Show,
+  Switch,
   untrack,
 } from "solid-js";
+import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
+import { Strata, strataLayers } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { useNow } from "../../lib/clock";
 import type { Block } from "../../lib/esplora";
 import {
+  formatFeeRate,
   formatRelative,
   formatSize,
   formatUtc,
@@ -26,8 +32,11 @@ import { paths } from "../../lib/network";
 import { STRIP_MAX } from "./feeds";
 import { LiveIndicator } from "./LiveIndicator";
 import { type Motion, motion } from "./motion";
+import type { TileFacts } from "./summaries";
 
 const MAX_WEIGHT = 4_000_000;
+/** The thinnest layer, as a share of a tile's strata box (about 45 px): 2 px, so one transaction shows. */
+const TILE_LAYER_MIN = 0.045;
 
 /** How full a block is, as tile text: `99.9% full`, `under 1% full`. */
 export function fullness(weight: number): string {
@@ -56,6 +65,8 @@ export function BlockStrip(props: {
   status: Accessor<LiveStatus>;
   /** The node is not answering the page's requests, though the socket is up. */
   stale: Accessor<boolean>;
+  /** A mined block's fee facts, by hash. */
+  facts: (id: string) => TileFacts;
 }) {
   const now = useNow();
   const [shown, setShown] = createSignal<Block[]>();
@@ -347,7 +358,9 @@ export function BlockStrip(props: {
                     <For each={Array.from({ length: STRIP_MAX })}>{() => <SkeletonTile />}</For>
                   }
                 >
-                  <For each={shown()}>{(b) => <MinedTile block={b} now={now} />}</For>
+                  <For each={shown()}>
+                    {(b) => <MinedTile block={b} now={now} facts={props.facts(b.id)} />}
+                  </For>
                 </Show>
               </ol>
             </Show>
@@ -361,21 +374,71 @@ export function BlockStrip(props: {
   );
 }
 
-function MinedTile(props: { block: Block; now: Accessor<number> }) {
+/** A tile's two fee lines as words, for its label: median, then range. */
+export function tileFeeText(facts: TileFacts): string | undefined {
+  if (typeof facts !== "object") return undefined;
+  const r = facts.fee_rate;
+  if (!r) return "only the coinbase, no fees";
+  return `median fee ${formatFeeRate(r.median)} sat/vB, fee range ${formatFeeRate(r.min)} to ${formatFeeRate(r.max)} sat/vB`;
+}
+
+function MinedTile(props: { block: Block; now: Accessor<number>; facts: TileFacts }) {
   const b = () => props.block;
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
+  const summary = () => (typeof props.facts === "object" ? props.facts : undefined);
+  const rates = () => summary()?.fee_rate ?? undefined;
+  const layers = createMemo(() => {
+    const s = summary();
+    return s ? strataLayers(s.fee_bands, full(), TILE_LAYER_MIN) : [];
+  });
+  // Facts that arrive after the tile is drawn settle in; facts it was drawn with are simply there.
+  const settle = untrack(() => props.facts === undefined);
   const label = () =>
-    `Block ${groupDigits(b().height)}, ${formatRelative(b().timestamp, props.now())}, ${groupDigits(b().tx_count)} transactions, ${fullness(b().weight)}`;
+    [
+      `Block ${groupDigits(b().height)}`,
+      formatRelative(b().timestamp, props.now()),
+      `${groupDigits(b().tx_count)} transactions`,
+      tileFeeText(props.facts),
+      fullness(b().weight),
+    ]
+      .filter(Boolean)
+      .join(", ");
   return (
     <li class="home-tile home-tile--mined" data-id={b().id} data-height={b().height}>
       <Link class="home-tile__body" href={paths.block(b().id)} aria-label={label()}>
         <span class="home-tile__title num">{groupDigits(b().height)}</span>
-        {/* Median fee and fee range go on these two lines once a block-summary route exists. */}
-        <span class="home-tile__fee num">{formatSize(vsizeFromWeight(b().weight))}</span>
-        <span class="home-tile__range num">{fullness(b().weight)}</span>
+        <span class="home-tile__fee num">
+          <Switch fallback={<span class="home-tile__bone home-tile__bone--line" />}>
+            <Match when={rates()}>{(r) => <FeeRate rate={r().median} />}</Match>
+            <Match when={summary()}>No fees</Match>
+            <Match when={props.facts === "failed"}>{formatSize(vsizeFromWeight(b().weight))}</Match>
+          </Switch>
+        </span>
+        <span class="home-tile__range num">
+          <Switch
+            fallback={<span class="home-tile__bone home-tile__bone--line home-tile__bone--short" />}
+          >
+            <Match when={rates()}>
+              {(r) => `${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}
+            </Match>
+            <Match when={summary()}>Coinbase only</Match>
+            <Match when={props.facts === "failed"}>{fullness(b().weight)}</Match>
+          </Switch>
+        </span>
         <span class="home-tile__strata" aria-hidden="true">
-          {/* How full the block is. The fee strata fill this same box once their data exists. */}
-          <span class="home-tile__fill" style={{ "--fill": String(full()) }} />
+          {/* The neutral gauge: how full the block is, until its layers arrive and settle over it. */}
+          <Show when={layers().length === 0 || settle}>
+            <span
+              class="home-tile__fill"
+              classList={{ "home-tile__fill--gone": layers().length > 0 }}
+              style={{ "--fill": String(full()) }}
+            />
+          </Show>
+          <Show when={layers().length > 0}>
+            <span class="home-tile__layers">
+              <Strata layers={layers()} settle={settle} />
+            </span>
+          </Show>
         </span>
         <span class="home-tile__foot">
           <span class="num">{groupDigits(b().tx_count)} tx</span>

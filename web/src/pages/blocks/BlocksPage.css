@@ -25,6 +25,12 @@
     color: var(--color-text-muted);
     overflow-wrap: anywhere;
   }
+  /* As tall as the copy button the loaded hash carries, so rows keep their height when they load. */
+  .blocks-hash-skel {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+  }
   .blocks-height {
     font-weight: var(--weight-bold);
   }

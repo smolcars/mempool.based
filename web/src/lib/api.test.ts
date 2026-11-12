@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, clearApiCache, errorMessage, fetchApi, isImmutable, isNotFound } from "./api";
+import {
+  ApiError,
+  chainTip,
+  clearApiCache,
+  errorMessage,
+  fetchApi,
+  fetchStamped,
+  isImmutable,
+  isNotFound,
+  RETRY_ATTEMPTS,
+  retryDelay,
+  withRetry,
+} from "./api";
 
 function reply(status: number, body: string, headers: Record<string, string> = {}) {
   return new Response(body, { status, headers });
@@ -99,5 +111,91 @@ describe("fetchApi", () => {
       "/api/blocks",
       "/signet/api/block/ab",
     ]);
+  });
+});
+
+describe("retries", () => {
+  const busy = (status: number, after?: number) => new ApiError(status, "busy", after);
+
+  it("waits at least as long as Retry-After, backing off from 1 s to 30 s", () => {
+    const none = () => 0;
+    expect(retryDelay(busy(503, 1), 0, none)).toBe(1000);
+    expect(retryDelay(busy(503, 1), 1, none)).toBe(2000);
+    expect(retryDelay(busy(503, 1), 3, none)).toBe(8000);
+    expect(retryDelay(busy(429, 2), 0, none)).toBe(2000);
+    expect(retryDelay(busy(429, 20), 1, none)).toBe(20_000);
+    expect(retryDelay(busy(503), 5, none)).toBe(30_000);
+    // Up to a quarter more at random, so clients spread out.
+    expect(retryDelay(busy(503, 1), 0, () => 1)).toBe(1250);
+  });
+
+  it("retries only refusals that say to, and stops after a few", () => {
+    expect(retryDelay(busy(404), 0)).toBeUndefined();
+    expect(retryDelay(busy(502), 0)).toBeUndefined();
+    expect(retryDelay(busy(0), 0)).toBeUndefined();
+    expect(retryDelay(new Error("x"), 0)).toBeUndefined();
+    expect(retryDelay(busy(503, 1), RETRY_ATTEMPTS)).toBeUndefined();
+  });
+
+  it("keeps the Retry-After of a refusal on the error", async () => {
+    vi.stubGlobal("fetch", async () => reply(503, '{"error":"busy"}', { "retry-after": "1" }));
+    await expect(fetchApi("mainnet", "/x")).rejects.toMatchObject({ status: 503, retryAfter: 1 });
+  });
+
+  it("calls again after the wait, and gives up on the first other failure", async () => {
+    vi.useFakeTimers();
+    const call = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(busy(503, 1))
+      .mockRejectedValueOnce(busy(404))
+      .mockResolvedValue("ok");
+    const settled = Promise.allSettled([withRetry(call)]);
+    await vi.advanceTimersByTimeAsync(1300);
+    await expect(settled).resolves.toMatchObject([{ status: "rejected", reason: { status: 404 } }]);
+    expect(call).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("stops waiting when aborted", async () => {
+    const c = new AbortController();
+    const refused = async (): Promise<never> => {
+      throw busy(503, 30);
+    };
+    const settled = Promise.allSettled([withRetry(refused, c.signal)]);
+    c.abort();
+    await expect(settled).resolves.toMatchObject([
+      { status: "rejected", reason: { name: "AbortError" } },
+    ]);
+  });
+});
+
+describe("chain tip stamps", () => {
+  const tip = "ab".repeat(32);
+
+  it("reads a whole stamp and nothing less", () => {
+    const h = (o: Record<string, string>) => new Headers(o);
+    expect(
+      chainTip(h({ "x-bitcoin-chain-tip": tip, "x-bitcoin-chain-tip-height": "975420" })),
+    ).toStrictEqual({ hash: tip, height: 975_420 });
+    expect(chainTip(h({ "x-bitcoin-chain-tip": tip }))).toBeUndefined();
+    expect(
+      chainTip(h({ "x-bitcoin-chain-tip": "zz", "x-bitcoin-chain-tip-height": "1" })),
+    ).toBeUndefined();
+    expect(
+      chainTip(h({ "x-bitcoin-chain-tip": tip, "x-bitcoin-chain-tip-height": "-1" })),
+    ).toBeUndefined();
+  });
+
+  it("hands the stamp over with the value", async () => {
+    vi.stubGlobal("fetch", async () =>
+      reply(200, '{"progressPercent":5}', {
+        "x-bitcoin-chain-tip": tip,
+        "x-bitcoin-chain-tip-height": "12",
+      }),
+    );
+    await expect(fetchStamped("signet", "/v1/difficulty-adjustment")).resolves.toStrictEqual({
+      value: { progressPercent: 5 },
+      tip: { hash: tip, height: 12 },
+    });
   });
 });

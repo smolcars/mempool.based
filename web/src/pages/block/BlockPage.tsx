@@ -2,6 +2,7 @@ import { useParams } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
+  createResource,
   createSignal,
   For,
   type JSX,
@@ -13,16 +14,18 @@ import {
 } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
-import { FeeRate } from "../../components/FeeRate";
+import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { Hash, HashFull } from "../../components/Hash";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
+import { describeBands, Strata, strataLayers, strataTop } from "../../components/Strata";
 import { ErrorState } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
 import { createApi, fetchApi, isNotFound } from "../../lib/api";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
+  formatFeeRate,
   formatSats,
   formatSize,
   groupDigits,
@@ -32,6 +35,7 @@ import {
 } from "../../lib/format";
 import { NETWORK_NAMES, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
+import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
 import {
   blockReward,
   coinbaseTag,
@@ -192,19 +196,40 @@ function Fact(props: {
   );
 }
 
-/** Facts the public API cannot give without reading every transaction; a server route will fill them. */
+/** Facts no route gives yet. */
 const pending = () => <span class="block-fact__pending">Not available yet</span>;
+
+/** The thinnest layer in the core sample, as a share of its frame (about 2 px of 400). */
+const CORE_LAYER_MIN = 0.005;
 
 function BlockView(props: { hash?: string | undefined; height?: number | undefined }) {
   const network = useNetwork();
   const at = (suffix: string) => () => props.hash && `/block/${props.hash}${suffix}`;
   const [block, blockCtl] = createApi<Block>(at(""));
-  const [status, statusCtl] = createApi<BlockStatus>(at("/status"));
+  // Stamped: confirmations and "the newest block" both come from this one reply's tip, so they can
+  // never disagree the way a separate tip request could when a block lands between the two.
+  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
-  const [tip] = createApi<string>(() => "/blocks/tip/height", { as: "text" });
+  let summaryController: AbortController | undefined;
+  onCleanup(() => summaryController?.abort());
+  // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
+  const [summary, summaryCtl] = createResource(
+    () => (props.hash ? { hash: props.hash, network: network() } : undefined),
+    async ({ hash, network: n }): Promise<BlockSummary | null> => {
+      summaryController?.abort();
+      const c = new AbortController();
+      summaryController = c;
+      const found = await fetchSummaries(n, [hash], c.signal);
+      return found.get(hash) ?? null;
+    },
+  );
+  // Layers arrive with a settle unless this page already had them when the block was opened.
+  const settle = createMemo(() => !props.hash || !knownSummary(network(), props.hash));
 
   const b = () => ready(block);
-  const s = () => ready(status);
+  const s = () => ready(status)?.value;
+  const sum = () => ready(summary);
+  const rates = () => sum()?.fee_rate;
   const height = () => b()?.height ?? props.height;
   const stale = () => s()?.in_best_chain === false;
   usePageTitle(() => {
@@ -276,9 +301,10 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const confirmations = () => {
     const blk = b();
     const st = s();
-    const t = Number(ready(tip));
-    if (!blk || !st || !Number.isSafeInteger(t)) return undefined;
-    return st.in_best_chain ? Math.max(1, t - blk.height + 1) : 0;
+    if (!blk || !st) return undefined;
+    const t = ready(status)?.tip?.height;
+    if (!st.in_best_chain) return 0;
+    return t === undefined ? null : Math.max(1, t - blk.height + 1);
   };
   const pageError = () => failed(block) ?? failed(status);
   const retry = () => {
@@ -386,7 +412,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
         </Show>
 
         <div class="block-layout">
-          <CoreSample weight={b()?.weight} />
+          <CoreSample weight={b()?.weight} summary={sum()} settle={settle()} />
           <div class="block-side">
             <dl class="block-facts">
               <Fact
@@ -399,7 +425,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
               <Fact
                 label="Confirmations"
                 value={
-                  confirmations() === undefined ? undefined : (
+                  confirmations() === undefined ? undefined : confirmations() === null ? (
+                    MISSING
+                  ) : (
                     <span class="num">{groupDigits(confirmations() ?? 0)}</span>
                   )
                 }
@@ -421,8 +449,49 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 }
                 sub={b() && `${percent(fullness(b()?.weight ?? 0))} of the limit`}
               />
-              <Fact label="Median fee rate" value={b() ? pending() : undefined} />
-              <Fact label="Fee range" value={b() ? pending() : undefined} />
+              <Fact
+                label="Median fee rate"
+                value={
+                  failed(summary) === undefined ? (
+                    sum() === undefined ? undefined : (
+                      <Show when={rates()} fallback={sum() ? "None" : MISSING}>
+                        {(r) => <FeeRate rate={r().median} />}
+                      </Show>
+                    )
+                  ) : (
+                    <span class="block-fact__pending">
+                      Could not load.{" "}
+                      <button
+                        type="button"
+                        class="block-fact__retry"
+                        onClick={() => void summaryCtl.refetch()}
+                      >
+                        Try again
+                      </button>
+                    </span>
+                  )
+                }
+                sub={sum() && !rates() ? "Only the coinbase, which pays none" : undefined}
+              />
+              <Fact
+                label="Fee range"
+                value={
+                  failed(summary) === undefined ? (
+                    sum() === undefined ? undefined : (
+                      <Show when={rates()} fallback={MISSING}>
+                        {(r) => (
+                          <span class="num">
+                            {formatFeeRate(r().min)} – {formatFeeRate(r().max)}
+                            <span class="unit"> sat/vB</span>
+                          </span>
+                        )}
+                      </Show>
+                    )
+                  ) : (
+                    MISSING
+                  )
+                }
+              />
               <Fact
                 label="Total fees"
                 wide="phone"
@@ -648,23 +717,42 @@ const columns = [
 
 /**
  * The block as a core sample: a frame the size of the weight limit, filled to how full the block
- * is. It holds the place of the transaction map, which needs a server route, so adding the map
- * later moves nothing.
+ * is, in layers by fee rate once its summary arrives. It holds the place of the transaction map,
+ * which a later task draws, so adding the map moves nothing.
  */
-function CoreSample(props: { weight: number | undefined }) {
+function CoreSample(props: {
+  weight: number | undefined;
+  summary: BlockSummary | null | undefined;
+  settle: boolean;
+}) {
   const share = () => (props.weight === undefined ? undefined : fullness(props.weight));
+  const layers = createMemo(() => {
+    const f = share();
+    return props.summary && f !== undefined
+      ? strataLayers(props.summary.fee_bands, f, CORE_LAYER_MIN)
+      : [];
+  });
+  const described = () => (props.summary ? describeBands(props.summary.fee_bands) : []);
   return (
     <figure class="block-core">
       <div class="block-core__frame">
         <span class="block-core__limit" aria-hidden="true">
           Weight limit
         </span>
+        <Show when={layers().length > 0}>
+          <div class="block-core__strata">
+            <Strata layers={layers()} settle={props.settle} />
+          </div>
+        </Show>
         <Show when={share()} keyed>
           {(f) => (
             <div
               class="block-core__fill"
-              classList={{ "block-core__fill--high": f > 0.85 }}
-              style={{ "--fill": String(f) }}
+              classList={{
+                "block-core__fill--high": f > 0.85,
+                "block-core__fill--strata": layers().length > 0,
+              }}
+              style={{ "--fill": String(Math.max(f, strataTop(layers()))) }}
             >
               <span class="block-core__level num">{percent(f)} full</span>
             </div>
@@ -677,8 +765,13 @@ function CoreSample(props: { weight: number | undefined }) {
         <Show when={share() !== undefined} fallback={<Skel size="s" />}>
           {percent(share() ?? 0)}
         </Show>{" "}
-        of its weight limit. A map of its transactions by fee rate is not available yet.
+        of its weight limit, in layers by fee rate: each is as thick as the virtual size paying that
+        rate, the cheapest at the bottom.
+        <Show when={described().length > 0}>
+          <span class="visually-hidden"> Layers, cheapest first: {described().join("; ")}.</span>
+        </Show>
       </figcaption>
+      <FeeKey />
     </figure>
   );
 }

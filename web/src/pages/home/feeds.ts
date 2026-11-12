@@ -121,6 +121,8 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
   }
 
   function handle(m: BlocksMessage) {
+    // Fee facts are the tiles' business (summaries.ts), not the list's.
+    if (m.type === "summary") return;
     if (queue) {
       if (queue.length < QUEUE_MAX) queue.push(m);
       else again = true;

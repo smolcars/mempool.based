@@ -38,3 +38,28 @@ test("the home page fits a phone without scrolling sideways", async ({ page }) =
   ).toHaveCount(10);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
+
+test("each tile shows its block's strata and fee figures, and a coinbase-only block says so", async ({
+  page,
+}) => {
+  await page.goto("/regtest/");
+  const lane = page.getByRole("list", { name: "Mined blocks, newest first" });
+  // Blocks 106 and 107 hold the scenario's transactions; the rest only a coinbase.
+  const paying = lane.getByRole("link", { name: /^Block 106,/ });
+  await expect(paying).toHaveAccessibleName(/median fee \d+\.\d\d sat\/vB, fee range/);
+  await expect(paying.locator(".strata__layer").first()).toBeVisible();
+  await expect(paying).toContainText("sat/vB");
+  const one = lane.getByRole("link", { name: /^Block 107,/ });
+  await expect(one.locator(".strata__layer")).toHaveCount(1);
+  const empty = lane.getByRole("link", { name: /^Block 105,/ });
+  await expect(empty).toContainText("No fees");
+  await expect(empty).toContainText("Coinbase only");
+  await expect(empty.locator(".strata__layer")).toHaveCount(0);
+});
+
+test("regtest says it never adjusts its difficulty", async ({ page }) => {
+  await page.goto("/regtest/");
+  await expect(
+    page.getByRole("region", { name: "Difficulty adjustment" }).getByText(/never adjusts/),
+  ).toBeVisible();
+});

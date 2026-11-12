@@ -1,15 +1,21 @@
 // Typed HTTP client for the public API at /api (Esplora, per network prefix). docs/FRONTEND.md shows how to use it.
 import { useLocation } from "@solidjs/router";
 import { createMemo, createResource, onCleanup, type ResourceReturn } from "solid-js";
-import { apiBase, type Network, networkFromPath } from "./network";
+import type { ChainTip } from "./blocks-topic";
+import { apiBase, type Network, networkFromPath, onNetwork } from "./network";
 
-/** A failed request. `status` is the HTTP status, or 0 when no reply arrived. */
+/**
+ * A failed request. `status` is the HTTP status, or 0 when no reply arrived. `retryAfter` is the
+ * reply's `Retry-After` in seconds, when it sent one.
+ */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly retryAfter: number | undefined;
+  constructor(status: number, message: string, retryAfter?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -67,7 +73,28 @@ export function clearApiCache(): void {
   cache.clear();
 }
 
-async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<T> {
+/** A reply with the chain tip it is as of (`X-Bitcoin-Chain-Tip`); undefined when not stamped or cached. */
+export interface Stamped<T> {
+  value: T;
+  tip: ChainTip | undefined;
+}
+
+/** The tip a reply's headers name, if they name a whole one. */
+export function chainTip(headers: Headers): ChainTip | undefined {
+  const hash = headers.get("x-bitcoin-chain-tip") ?? "";
+  const height = Number(headers.get("x-bitcoin-chain-tip-height") ?? Number.NaN);
+  return /^[0-9a-f]{64}$/.test(hash) && Number.isSafeInteger(height) && height >= 0
+    ? { hash, height }
+    : undefined;
+}
+
+/** `Retry-After` in seconds; the HTTP-date form is not used by our server. */
+function readRetryAfter(headers: Headers): number | undefined {
+  const s = Number(headers.get("retry-after") ?? Number.NaN);
+  return Number.isFinite(s) && s >= 0 ? s : undefined;
+}
+
+async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -80,7 +107,7 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   }
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null);
-    throw new ApiError(res.status, errorMessage(res.status, body));
+    throw new ApiError(res.status, errorMessage(res.status, body), readRetryAfter(res.headers));
   }
   let value: unknown;
   try {
@@ -91,7 +118,12 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
   }
   if (isImmutable(res.headers.get("cache-control"))) remember(url, value);
   // The API's shapes are hand-written in esplora.ts; values are rendered as text, never as markup.
-  return value as T;
+  return { value: value as T, tip: chainTip(res.headers) };
+}
+
+function cachedOrFetch<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
+  if (cache.has(url)) return Promise.resolve({ value: cache.get(url) as T, tip: undefined });
+  return request<T>(url, kind, signal);
 }
 
 /**
@@ -103,9 +135,86 @@ export function fetchApi<T>(
   path: string,
   options: { as?: ReplyKind; signal?: AbortSignal } = {},
 ): Promise<T> {
-  const url = `${apiBase(network)}${path}`;
-  if (cache.has(url)) return Promise.resolve(cache.get(url) as T);
-  return request<T>(url, options.as ?? "json", options.signal);
+  return cachedOrFetch<T>(`${apiBase(network)}${path}`, options.as ?? "json", options.signal).then(
+    (r) => r.value,
+  );
+}
+
+/** {@link fetchApi} with the chain tip the reply is as of, to compare it with what the page knows. */
+export function fetchStamped<T>(
+  network: Network,
+  path: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Stamped<T>> {
+  return cachedOrFetch<T>(`${apiBase(network)}${path}`, "json", options.signal);
+}
+
+/** {@link fetchApi} for the app's own API under the network's `/app` (docs/FRONTEND.md). */
+export function fetchApp<T>(
+  network: Network,
+  path: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
+  return cachedOrFetch<T>(`${onNetwork(network, "")}/app${path}`, "json", options.signal).then(
+    (r) => r.value,
+  );
+}
+
+/** Retries after a refusal that says to (503, 429), this many times before giving up. */
+export const RETRY_ATTEMPTS = 6;
+const RETRY_MAX_MS = 30_000;
+
+/**
+ * How long to wait before retry `attempt` (0-based) of a failed call, or undefined when it should
+ * not be retried: only 503 and 429 are, never sooner than their `Retry-After`, backing off
+ * exponentially from 1 s to 30 s, with up to a quarter more at random so clients spread out.
+ */
+export function retryDelay(
+  error: unknown,
+  attempt: number,
+  random: () => number = Math.random,
+): number | undefined {
+  if (!(error instanceof ApiError) || (error.status !== 503 && error.status !== 429)) {
+    return undefined;
+  }
+  if (attempt >= RETRY_ATTEMPTS) return undefined;
+  const told = (error.retryAfter ?? 1) * 1000;
+  const backoff = Math.min(RETRY_MAX_MS, 1000 * 2 ** attempt);
+  return Math.round(Math.max(told, backoff) * (1 + random() / 4));
+}
+
+const abortReason = (signal: AbortSignal): Error => {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new DOMException("Aborted", "AbortError");
+};
+
+/**
+ * Runs `call` until it succeeds, retrying refusals as {@link retryDelay} says. Rejects with the
+ * last error, or with the abort reason when `signal` aborts while waiting.
+ */
+export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- each attempt waits for the one before
+      return await call();
+    } catch (e) {
+      if (signal?.aborted) throw abortReason(signal);
+      const wait = retryDelay(e, attempt);
+      if (wait === undefined) throw e;
+      // oxlint-disable-next-line no-await-in-loop -- the wait is the point
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, wait);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(abortReason(signal));
+          },
+          { once: true },
+        );
+      });
+    }
+  }
 }
 
 /**
@@ -115,8 +224,17 @@ export function fetchApi<T>(
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,
-  options: { as?: ReplyKind } = {},
-): ResourceReturn<T> {
+  options: { as?: ReplyKind; stamped: true },
+): ResourceReturn<Stamped<T>>;
+export function createApi<T>(
+  path: () => string | false | null | undefined,
+  options?: { as?: ReplyKind },
+): ResourceReturn<T>;
+/** With `stamped: true` the value comes with the chain tip it is as of, to compare across requests. */
+export function createApi<T>(
+  path: () => string | false | null | undefined,
+  options: { as?: ReplyKind; stamped?: boolean } = {},
+): ResourceReturn<T | Stamped<T>> {
   const location = useLocation();
   const network = createMemo(() => networkFromPath(location.pathname));
   let controller: AbortController | undefined;
@@ -127,12 +245,13 @@ export function createApi<T>(
       // oxlint-disable-next-line typescript/strict-boolean-expressions -- every falsy path means "no request"
       return p ? `${apiBase(network())}${p}` : false;
     },
-    (url): T | Promise<T> => {
+    (url): T | Stamped<T> | Promise<T | Stamped<T>> => {
       controller?.abort();
       controller = undefined;
-      if (cache.has(url)) return cache.get(url) as T;
+      const unwrap = (r: Stamped<T>) => (options.stamped === true ? r : r.value);
+      if (cache.has(url)) return unwrap({ value: cache.get(url) as T, tip: undefined });
       controller = new AbortController();
-      return request<T>(url, options.as ?? "json", controller.signal);
+      return request<T>(url, options.as ?? "json", controller.signal).then(unwrap);
     },
   );
 }

@@ -1,0 +1,48 @@
+@layer components {
+  .strata {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  /* A 1 px seam in the surface color between layers; set --strata-seam on a different surface. */
+  .strata__layer {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--y) * 100%);
+    height: calc(var(--h) * 100%);
+    border-top: 1px solid var(--strata-seam, var(--color-surface));
+    border-radius: 2px 2px 1px 1px;
+    background: var(--c);
+  }
+  .strata__layer--thin {
+    border-top-width: 0;
+  }
+  .strata--settle .strata__layer {
+    animation: strata-settle var(--dur-slow) var(--ease-settle) backwards;
+    animation-delay: calc(var(--i) * var(--stagger));
+  }
+  @keyframes strata-settle {
+    from {
+      opacity: 0;
+      transform: translateY(-18px);
+    }
+  }
+  /* The tokens zero every duration but the fade, so the layers fade in where they lie. */
+  @media (prefers-reduced-motion: reduce) {
+    .strata__layer--thin {
+      border-top-width: 0;
+    }
+    .strata--settle .strata__layer {
+      animation-name: strata-fade;
+      animation-duration: var(--dur-fade);
+      animation-timing-function: ease-out;
+    }
+  }
+  @keyframes strata-fade {
+    from {
+      opacity: 0;
+    }
+  }
+}

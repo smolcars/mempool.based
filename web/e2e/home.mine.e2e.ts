@@ -32,3 +32,23 @@ test("a new block lands in the strip without a reload, and a burst leaves it cor
     .poll(() => heights(page))
     .toEqual(Array.from({ length: 10 }, (_, i) => start + 6 - i));
 });
+
+test("a new block's tile fills from the WebSocket's summary, not over HTTP", async ({
+  page,
+  mine,
+}) => {
+  await page.goto("/regtest/");
+  await expect(page.getByRole("status").filter({ hasText: "Live" })).toBeVisible();
+  const lane = page.getByRole("list", { name: "Mined blocks, newest first" });
+  await expect(lane.getByRole("listitem")).toHaveCount(10);
+  const asked: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/app/blocks/summary")) asked.push(r.url());
+  });
+  const [hash = ""] = await mine(1);
+  const tile = lane.getByRole("link").first();
+  await expect(tile).toHaveAttribute("href", `/regtest/block/${hash}`);
+  // Well before the page would fall back to asking over HTTP.
+  await expect(tile).toHaveAccessibleName(/median fee|only the coinbase/, { timeout: 3_000 });
+  expect(asked.filter((u) => u.includes(hash))).toEqual([]);
+});
