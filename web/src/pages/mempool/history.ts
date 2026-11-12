@@ -1,0 +1,230 @@
+// The mempool's history (`/app/mempool/history/:interval`, docs/FRONTEND.md "Mempool history"):
+// its shape, a check, the intervals, and what the page says about it. Pure.
+import { formatMoment } from "../../components/chart/scale";
+import { formatSize, groupDigits } from "../../lib/format";
+
+export const INTERVALS = [
+  { id: "2h", label: "2 h", words: "the last 2 hours" },
+  { id: "24h", label: "24 h", words: "the last 24 hours" },
+  { id: "1w", label: "1 w", words: "the last week" },
+  { id: "1m", label: "1 m", words: "the last month" },
+  { id: "3m", label: "3 m", words: "the last 3 months" },
+  { id: "6m", label: "6 m", words: "the last 6 months" },
+  { id: "1y", label: "1 y", words: "the last year" },
+  { id: "2y", label: "2 y", words: "the last 2 years" },
+  { id: "3y", label: "3 y", words: "the last 3 years" },
+  { id: "4y", label: "4 y", words: "the last 4 years" },
+  { id: "all", label: "All", words: "all of history" },
+] as const;
+
+export type Interval = (typeof INTERVALS)[number];
+export const DEFAULT_INTERVAL = "24h";
+
+/** The interval a `?interval=` value names; the default for anything else. */
+export function parseInterval(value: unknown): Interval {
+  const id: unknown = Array.isArray(value) ? (value as unknown[])[0] : value;
+  return (
+    INTERVALS.find((p) => p.id === id) ??
+    INTERVALS.find((p) => p.id === DEFAULT_INTERVAL) ??
+    INTERVALS[1]
+  );
+}
+
+export interface Point {
+  time: number;
+  samples: number;
+  count: number;
+  vsize: number;
+  fees: number;
+  /** sat per 1,000 vB */
+  min_fee_rate: number;
+  /** vB in each of the ten fee bands, cheapest first */
+  bands: number[];
+  in_count: number;
+  in_vsize: number;
+  out_count: number;
+  out_vsize: number;
+  mined_count: number;
+  mined_vsize: number;
+}
+
+export interface History {
+  interval: string;
+  from: number;
+  to: number;
+  step: number;
+  first: number | null;
+  minutes: number;
+  sampled: number;
+  complete: boolean;
+  points: Point[];
+}
+
+const NUMBERS = [
+  "time",
+  "samples",
+  "count",
+  "vsize",
+  "fees",
+  "min_fee_rate",
+  "in_count",
+  "in_vsize",
+  "out_count",
+  "out_vsize",
+  "mined_count",
+  "mined_vsize",
+] as const;
+
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+function isPoint(v: unknown): v is Point {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as Record<string, unknown>;
+  const bands = p["bands"];
+  return (
+    NUMBERS.every((k) => finite(p[k])) &&
+    Array.isArray(bands) &&
+    bands.length === 10 &&
+    bands.every((b) => finite(b))
+  );
+}
+
+/** Whether a reply is a history answer the page can draw. */
+export function isHistory(v: unknown): v is History {
+  if (typeof v !== "object" || v === null) return false;
+  const h = v as Record<string, unknown>;
+  const points = h["points"];
+  return (
+    finite(h["from"]) &&
+    finite(h["to"]) &&
+    finite(h["step"]) &&
+    h["step"] > 0 &&
+    (h["first"] === null || finite(h["first"])) &&
+    finite(h["minutes"]) &&
+    finite(h["sampled"]) &&
+    typeof h["complete"] === "boolean" &&
+    Array.isArray(points) &&
+    points.every((p) => isPoint(p))
+  );
+}
+
+/** A whole number of minutes in words: `1 minute`, `1 439 minutes`. */
+const minutes = (n: number) => `${groupDigits(n)} ${n === 1 ? "minute" : "minutes"}`;
+
+/** A share of the period, never rounded up to whole: `15%`, `under 1%`, `99%`. */
+function share(part: number, whole: number): string {
+  if (whole <= 0) return "0%";
+  const pct = (part / whole) * 100;
+  if (pct > 0 && pct < 1) return "under 1%";
+  return `${Math.floor(pct)}%`;
+}
+
+/**
+ * How much of the period the answer holds, in a sentence; undefined when every minute is there.
+ * Say since when when recording began inside the period, or always for all of history (which owes
+ * only the minutes since then), so a short history is not mistaken for a quiet mempool.
+ */
+export function coverageSentence(h: History, words: string): string | undefined {
+  if (h.points.length === 0) return undefined;
+  const pct = share(h.sampled, h.minutes);
+  if (h.first !== null && h.interval === "all") {
+    const since = `This server has recorded the mempool since ${formatMoment(h.first)}`;
+    return h.complete
+      ? `${since}, every minute of it.`
+      : `${since}, and holds ${minutes(h.sampled)} of the ${minutes(h.minutes)} since then (${pct}).`;
+  }
+  if (h.complete) return undefined;
+  const held = `${minutes(h.sampled)} of the ${minutes(h.minutes)} in ${words} (${pct})`;
+  if (h.first !== null && h.first > h.from) {
+    return `This server has recorded the mempool since ${formatMoment(h.first)}, so this view holds ${held}.`;
+  }
+  return `This view holds ${held}. The gaps are times this server was not recording.`;
+}
+
+/**
+ * Where the hatch for "not recorded yet" ends: the start of the step that holds the first record,
+ * since that step's point is drawn at its start; undefined when that is not inside the period.
+ */
+export function dataFrom(h: History): number | undefined {
+  if (h.first === null) return undefined;
+  const start = Math.floor(h.first / h.step) * h.step;
+  return start > h.from ? start : undefined;
+}
+
+/** How a point's time reads: to the minute for steps under a day, else the day. */
+export function pointTime(step: number): (t: number) => string {
+  return step < 86_400 ? formatMoment : (t) => formatMoment(t).replace(/, \d\d:\d\d UTC$/, "");
+}
+
+/** The figures the charts draw, one array per series, `null` nowhere: a missing step has no point. */
+export function seriesOf(h: History) {
+  const ps = h.points;
+  const perSecond = (vb: number) => vb / 60;
+  return {
+    x: ps.map((p) => p.time),
+    vsize: ps.map((p) => p.vsize),
+    count: ps.map((p) => p.count),
+    floor: ps.map((p) => p.min_fee_rate / 1000),
+    samples: ps.map((p) => p.samples),
+    bands: Array.from({ length: 10 }, (_, k) => ps.map((p) => p.bands[k] ?? 0)),
+    entered: ps.map((p) => perSecond(p.in_vsize)),
+    mined: ps.map((p) => perSecond(p.mined_vsize)),
+    otherwise: ps.map((p) => perSecond(Math.max(0, p.out_vsize - p.mined_vsize))),
+  };
+}
+
+/**
+ * The flow over the whole answer, weighted by the minutes behind each point: what came in, what
+ * blocks took and what left otherwise, in vB a second, and whether that filled or drained it.
+ */
+export function netFlow(
+  h: History,
+): { entered: number; mined: number; otherwise: number; net: number } | undefined {
+  let n = 0;
+  let entered = 0;
+  let mined = 0;
+  let out = 0;
+  for (const p of h.points) {
+    n += p.samples;
+    entered += p.in_vsize * p.samples;
+    mined += p.mined_vsize * p.samples;
+    out += p.out_vsize * p.samples;
+  }
+  if (n === 0) return undefined;
+  const s = 60 * n;
+  return {
+    entered: entered / s,
+    mined: mined / s,
+    otherwise: Math.max(0, out - mined) / s,
+    net: (entered - out) / s,
+  };
+}
+
+/** A rate of virtual size: `2 340 vB/s`, `14.6 kvB/s`. */
+export const rateText = (vbs: number): string => `${formatSize(vbs, "vB")}/s`;
+
+/** The flow in one sentence: whether the mempool filled or drained, and by how much. */
+export function flowSentence(h: History, words: string): string | undefined {
+  const f = netFlow(h);
+  if (!f) return undefined;
+  const parts = `${rateText(f.entered)} arrived, blocks took ${rateText(f.mined)} and ${rateText(f.otherwise)} left otherwise`;
+  // Under 1 vB/s either way is noise against thousands arriving.
+  if (Math.abs(f.net) < 1) return `Over ${words}, ${parts}: the mempool held steady.`;
+  const dir = f.net > 0 ? "filled" : "drained";
+  return `Over ${words}, ${parts}: the mempool ${dir} by ${rateText(Math.abs(f.net))} on average.`;
+}
+
+/** The size chart in words, for a screen reader. */
+export function sizeSummary(h: History): string {
+  const ps = h.points;
+  const first = ps[0];
+  const last = ps.at(-1);
+  if (!first || !last) return "No data.";
+  const at = pointTime(h.step);
+  if (ps.length === 1) {
+    return `The mempool held ${formatSize(first.vsize)} in ${groupDigits(first.count)} transactions at ${at(first.time)}.`;
+  }
+  const lo = ps.reduce((a, b) => (b.vsize < a.vsize ? b : a));
+  const hi = ps.reduce((a, b) => (b.vsize > a.vsize ? b : a));
+  return `The mempool went from ${formatSize(first.vsize)} at ${at(first.time)} to ${formatSize(last.vsize)} at ${at(last.time)}; smallest ${formatSize(lo.vsize)} at ${at(lo.time)}, largest ${formatSize(hi.vsize)} at ${at(hi.time)}.`;
+}

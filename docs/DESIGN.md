@@ -414,6 +414,25 @@ Decided while building it, where the layout above left it open:
 - **A pool's page** has its name as the title (dataset text), its site as a plain link only when it is `http` or `https`, its blocks and shares, its weekly share and hashrate, and its blocks 25 at a time.
 - **Nothing moves as it loads.** Each section holds the height its content will take; the coverage notes on a pool's page sit below its figures.
 
+### Mempool history (not in the prototype)
+
+```text
+Mempool history                     [2 h | 24 h | 1 w | … | 4 y | All]
+(coverage sentence, with the hatch as its swatch, when minutes are missing)
+Waiting, by fee rate ════════════════════════════════ One point a minute
+readout: time, total, transactions, lowest accepted, each band
+[stacked areas in the fee colors, cheapest at the bottom; total as a line]
+fee key
+Flow ═══════════════════════════════════════════════════ vB a second
+Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
+[line: arrived; stacked shades: mined, left otherwise]
+```
+
+- **The mempool is the core sample laid on its side,** as pool shares are, but its layers are fee bands, so here they take the fee colors: color still carries fee and nothing else. The layer under the pointer turns the accent.
+- **Flow is its own chart,** not a second axis on the first: its units are a rate, and the question it answers (filling or draining) is read from where the line sits against the layers. A sentence above gives the period's answer in words.
+- **Honest about coverage,** as the mining charts are: the hatch before the first record, a break wherever a step was not sampled (a lone minute is a sliver), and a sentence saying how many of the period's minutes are here and since when.
+- **Eleven intervals** wrap into two even rows on a phone.
+
 ### Lightning (not in the prototype)
 
 ```text

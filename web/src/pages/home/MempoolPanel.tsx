@@ -2,9 +2,11 @@ import { createMemo, createSignal, Show, For } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
+import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
 import { formatFeeRate, formatSize, groupDigits } from "../../lib/format";
+import { paths } from "../../lib/network";
 import type { Feed } from "./feeds";
 import { type FeeBandShare, type MempoolFigures, sharesOf } from "./mempool";
 
@@ -40,7 +42,9 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
 
   return (
     <section class="home-mempool" aria-labelledby="mempool-title">
-      <SectionHeader title="Mempool" id="mempool-title" />
+      <SectionHeader title="Mempool" id="mempool-title">
+        <Link href={paths.mempool()}>Mempool history</Link>
+      </SectionHeader>
       <Show
         when={m() ?? props.feed.error() === undefined}
         fallback={

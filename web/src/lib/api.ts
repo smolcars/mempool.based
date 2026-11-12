@@ -241,8 +241,10 @@ export function retryDelay(
     exhausted.has(error) ||
     // Every 503 carries Retry-After, but these refusals are about the address and the server's
     // setup, which a retry cannot change (docs/API.md, "Error bodies" and "Mining"; the mempool
-    // engine switched off, docs/FRONTEND.md).
-    /too large|index is disabled|needs a block table|switched off/i.test(error.message)
+    // engine switched off and mempool history without a data directory, docs/FRONTEND.md).
+    /too large|index is disabled|needs a block table|needs a data directory|switched off/i.test(
+      error.message,
+    )
   ) {
     return undefined;
   }
