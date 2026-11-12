@@ -79,7 +79,7 @@ All of these need `--sh-index` on the node. Unpaged stats and `/utxo` answer 503
 | `GET /mempool` | Count, vsize, total fee, fee histogram | rbitcoin Esplora | planned | M1 | node | 220 ms on mainnet; cache for a second or two |
 | `GET /mempool/txids` | Every mempool txid | rbitcoin Esplora | planned | M1 | doc | Not fetched: 3.6 MB on mainnet. Cache hard or prefer the paged form |
 | `GET /mempool/txids/page[/:last_txid]` | Txids in sorted pages | rbitcoin Esplora | planned | M1 | node | 670 KB a page |
-| `GET /mempool/recent` | The last few accepted transactions, compact | rbitcoin Esplora | planned | M1 | node | A ring of 32; not a change feed |
+| `GET /mempool/recent` | The last few accepted transactions, compact | rbitcoin Esplora | planned | M1 | node | Returns 10 entries; not a change feed |
 | `GET /fee-estimates` | Fee rate by confirmation target, 28 targets | rbitcoin Esplora | planned | M1 | node | rbitcoin's 10-minute inclusion product with sub-sat precision. Values differ from mempool.space's (target 1 read 2.18 here and 1 there at the same moment); keys match |
 
 ## Parameters and headers
