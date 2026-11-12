@@ -336,6 +336,36 @@ pub struct BlockSummariesRefused {
 }
 event!(BlockSummariesRefused, "block_summaries_refused", Warn);
 
+// Derived data.
+
+/// The difficulty-adjustment answer was recomputed for a new tip: once per block (and reorg) per
+/// network. After failures, this line is the recovery.
+#[derive(Debug, Serialize)]
+pub struct DifficultyComputed {
+    pub network: &'static str,
+    pub height: u32,
+    pub next_retarget_height: u32,
+    /// Expected change at the next retarget, in percent, as of this computation.
+    pub difficulty_change: f64,
+    /// The node fetches.
+    pub duration_ms: f64,
+}
+event!(DifficultyComputed, "difficulty_computed", Info);
+
+/// The difficulty-adjustment answer could not be recomputed; the last one is still served.
+/// Written at the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct DifficultyRefreshFailed {
+    pub network: &'static str,
+    /// The tip the refresh was for.
+    pub height: u32,
+    /// `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `tip_moved`,
+    /// `wrong_height` or `invalid_bits`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(DifficultyRefreshFailed, "difficulty_refresh_failed", Warn);
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -499,6 +529,19 @@ mod tests {
                 network: n,
                 reason: "summary_busy",
                 total: 8,
+            }),
+            both(&DifficultyComputed {
+                network: n,
+                height: 975_523,
+                next_retarget_height: 975_744,
+                difficulty_change: -6.9,
+                duration_ms: 12.5,
+            }),
+            both(&DifficultyRefreshFailed {
+                network: n,
+                height: 975_523,
+                error: "timeout",
+                failures: 2,
             }),
         ]
     }

@@ -8,7 +8,7 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `GET /v1/difficulty-adjustment` | Progress through the epoch, expected change, estimated retarget time, blocks left | Esplora headers and block times; engine | planned | M3 | ref | Cheap: one header at the epoch start plus the tip. Could move to M1 for the home page |
+| `GET /v1/difficulty-adjustment` | Progress through the epoch, expected change, estimated retarget time, blocks left | Esplora: the first blocks of this period and the last, once per new tip; engine | served | M2 | ref | Same fields, order and types. Projects from block timestamps, so `timeAvg` and `difficultyChange` differ from the reference; regtest reports no change ([`API.md`](../API.md#difficulty-adjustment)) |
 | `GET /v1/prices` | Latest BTC price in seven fiat currencies | Store, from a price feed | planned | M3 | ref | Off switch per [`PLAN.md`](../PLAN.md) |
 | `GET /v1/historical-price[?currency=&timestamp=]` | Price history, or the price nearest a time, plus exchange rates | Store | planned | M3 | ref | The unfiltered form is 300 KB |
 | `GET /v1/validate-address/:address` | Validity, script, witness version and program | Our own address parser; rbitcoin `validateaddress` matches field for field | planned | M5 | ref | Parse locally; no node call needed |

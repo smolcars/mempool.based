@@ -3,8 +3,10 @@
 //! [`App::new`] builds everything: per-network routes from [`network_routes`] mounted under each
 //! enabled network's prefix, `/healthz`, the frontend, and the limits around all of it.
 
+mod api_v1;
 mod app_config;
 pub mod config;
+pub mod difficulty;
 pub mod error;
 pub mod esplora;
 pub mod limits;
@@ -79,6 +81,8 @@ pub struct NetworkContext {
     pub summaries: summary::Summaries,
     pub hub: ws::Hub,
     pub sockets: Arc<ws::Sockets>,
+    /// Kept current by [`difficulty::run`]; read by `/api/v1/difficulty-adjustment`.
+    pub difficulty: difficulty::Difficulty,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -109,6 +113,7 @@ impl NetworkContext {
             electrum: node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum)),
             hub: ws::Hub::new(config.network, Arc::clone(sockets)),
             sockets: Arc::clone(sockets),
+            difficulty: difficulty::Difficulty::default(),
         })
     }
 }
@@ -121,6 +126,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/block/{hash}/summary", get(summary::facts))
         .route("/app/block/{hash}/txs", get(summary::txs))
         .route("/app/blocks/summary", get(summary::batch))
+        .merge(api_v1::routes())
 }
 
 /// The whole application, ready to serve.
@@ -157,6 +163,7 @@ impl App {
                     let events = ctx.electrum.events();
                     tokio::spawn(ws::feed(Arc::clone(&ctx), events));
                     tokio::spawn(summary::worker(Arc::clone(&ctx)));
+                    tokio::spawn(difficulty::run(Arc::clone(&ctx), ctx.electrum.events()));
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()

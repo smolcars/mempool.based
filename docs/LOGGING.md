@@ -119,3 +119,10 @@ The routes are in [`FRONTEND.md`](FRONTEND.md#block-summaries). Each request is 
 | `block_summaries_refused` | warn | `network`, `reason`, `total` | Requests for uncached blocks were refused: `summary_busy` (the network's queue was full) or `route_rate` (one client over its share). At a total of 1, 2, 4, 8… per reason and network |
 
 Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503`.
+
+### Derived data
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `difficulty_computed` | info | `network`, `height`, `next_retarget_height`, `difficulty_change`, `duration_ms` | The difficulty-adjustment answer ([`API.md`](API.md#difficulty-adjustment)) was recomputed for a new tip: once per block or reorg per network. `difficulty_change` is the expected change in percent at that moment; `duration_ms` is the node fetches |
+| `difficulty_refresh_failed` | warn | `network`, `height`, `error`, `failures` | It could not be recomputed for the tip at `height`, so the last answer is still served: at the 1st, 2nd, 4th, 8th… failure in a row. `error` is `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `tip_moved` (Esplora answered for another tip than the one being computed: a block or reorg in between; retried), `wrong_height` or `invalid_bits`. The next `difficulty_computed` is the recovery |
