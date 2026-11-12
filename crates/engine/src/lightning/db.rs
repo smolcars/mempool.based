@@ -13,7 +13,7 @@ use super::{
     Level, NodePast, Open, Past, Penalty, Point, Series, Span, Stats,
 };
 use crate::history::Rolled;
-use crate::store::{Error, Sql, SqlError, Store, params};
+use crate::store::{Error, Read, Sql, SqlError, Store, params};
 
 /// Opens a channel: inserts it, or makes the stored row match and clears any close, which the
 /// chain no longer holds. A row that already matches is not written again. The funding txid
@@ -203,7 +203,7 @@ fn row(r: &rusqlite::Row) -> Result<Channel, SqlError> {
 /// Up to `limit` channels, newest funding first.
 pub async fn opened(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             Ok(sql
                 .prepare(concat!(
                     "SELECT ",
@@ -220,7 +220,7 @@ pub async fn opened(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> 
 /// Up to `limit` closed channels, newest close first.
 pub async fn closed(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             Ok(sql
                 .prepare(concat!(
                     "SELECT ",
@@ -237,7 +237,7 @@ pub async fn closed(store: &Store, limit: usize) -> Result<Vec<Channel>, Error> 
 /// One channel by its short channel id.
 pub async fn channel(store: &Store, scid: u64) -> Result<Option<Channel>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             Ok(sql
                 .prepare(concat!(
                     "SELECT ",
@@ -259,7 +259,7 @@ pub async fn node_closed(
     limit: usize,
 ) -> Result<(u64, Vec<Channel>), Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             let id = node.to_vec();
             let total = sql
                 .prepare(
@@ -286,7 +286,7 @@ pub async fn node_closed(
 /// lookups per txid.
 pub async fn by_txids(store: &Store, txids: Vec<Txid>) -> Result<Vec<Channel>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             let mut out: Vec<Channel> = Vec::new();
             let mut funded = sql.prepare(concat!(
                 "SELECT ",
@@ -317,7 +317,7 @@ pub async fn by_txids(store: &Store, txids: Vec<Txid>) -> Result<Vec<Channel>, E
 /// A node's channels as stored, open and closed: what its past is rebuilt from.
 pub async fn node_spans(store: &Store, node: [u8; 33]) -> Result<Vec<Span>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             Ok(sql
                 .prepare(
                     "SELECT open_time, close_time, capacity FROM ln_channels \
@@ -341,7 +341,7 @@ pub async fn node_spans(store: &Store, node: [u8; 33]) -> Result<Vec<Span>, Erro
 /// of the index the live graph cannot give. One pass over the table.
 pub async fn past(store: &Store) -> Result<Past, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             let start: Option<i64> = sql
                 .prepare("SELECT min(time) FROM ln_statistics")?
                 .query_row([], |r| r.get(0))?;
@@ -384,7 +384,7 @@ pub async fn unfunded(
     limit: usize,
 ) -> Result<Vec<(u64, BlockHash)>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             Ok(sql
                 .prepare(
                     "SELECT scid, open_hash FROM ln_channels WHERE open_txid IS NULL AND scid > ?1 \
@@ -544,7 +544,7 @@ fn point(r: &rusqlite::Row) -> Result<Point, SqlError> {
 /// The newest stored row: a snapshot, or after a long stop the newest hour or day.
 pub async fn latest(store: &Store) -> Result<Option<Point>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             let mut newest = sql.prepare(concat!(
                 "SELECT time, ",
                 stat_columns!(),
@@ -564,7 +564,7 @@ pub async fn latest(store: &Store) -> Result<Option<Point>, Error> {
 /// The series for `interval` as of `now`, in one read. Steps are never finer than a snapshot.
 pub async fn series(store: &Store, interval: Interval, now: u64) -> Result<Series, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Lightning, move |sql| {
             let mut first = None;
             let mut oldest = sql.prepare("SELECT min(time) FROM ln_statistics WHERE level = ?1")?;
             for level in [Level::Day, Level::Hour, Level::Minute] {

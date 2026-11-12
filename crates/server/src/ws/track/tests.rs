@@ -689,6 +689,17 @@ pub(crate) fn context_in(
     data_dir: Option<&str>,
     tweak: impl FnOnce(&mut WsLimits),
 ) -> Arc<NetworkContext> {
+    context_with(electrum, esplora, mempool, data_dir, |c| tweak(&mut c.ws))
+}
+
+/// [`context_in`] with any part of the configuration changed.
+pub(crate) fn context_with(
+    electrum: &str,
+    esplora: &str,
+    mempool: bool,
+    data_dir: Option<&str>,
+    tweak: impl FnOnce(&mut Config),
+) -> Arc<NetworkContext> {
     let mut vars: HashMap<&str, &str> = [
         ("REGTEST_RPC_HOST", "127.0.0.1"),
         ("REGTEST_RPC_PORT", "1"),
@@ -709,7 +720,7 @@ pub(crate) fn context_in(
     let mut config = Config::from_vars(|k| vars.get(k).map(|v| (*v).to_owned())).unwrap();
     config.ws.mempool_interval = Duration::from_millis(20);
     config.ws.position_interval = Duration::from_millis(200);
-    tweak(&mut config.ws);
+    tweak(&mut config);
     let sockets = Sockets::new(&config.ws, Duration::from_secs(1));
     Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap())
 }

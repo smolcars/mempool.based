@@ -144,6 +144,7 @@ The node refuses an address's totals and unspent outputs at once when it has mor
 - **Memory is bounded.** Per network at most 4,096 verdicts of about 100 bytes, each kept 5 minutes; when full, expired ones go first, then the one closest to expiring. Each verdict is learned from a node call, so the cost limit bounds how fast the table fills, and many distinct huge addresses cost one cheap totals call each.
 - **The frontend** asks for an address's first history page once its totals have answered (or after a second), and never after a "too large" totals answer; it then says once, at the top, that the address has more history than the server adds up and draws none of the sections it cannot fill ([`FRONTEND.md`](FRONTEND.md#live-data)).
 - **Logged** as refusals, counted in `requests_refused` with the reasons `history_too_large` and `history_slow`, never one line per request ([`LOGGING.md`](LOGGING.md#refusals)).
+- **The `/api/v1/ws` address follow** reads the same first page ([`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws)). It skips an address with a verdict, and a read of its that runs past 5 s teaches one, so following a huge address there does not make the node read it again and again.
 
 ## Broadcast
 

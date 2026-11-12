@@ -9,7 +9,7 @@ use rusqlite::types::Type;
 use super::stats::Rates;
 use super::{Coinbase, Rated, Row, hash_bytes};
 use crate::mining::pools;
-use crate::store::{Error, OptionalExtension, Sql, SqlError, Store, params};
+use crate::store::{Error, OptionalExtension, Read, Sql, SqlError, Store, params};
 
 /// Most rows [`page`] returns at once.
 pub const MAX_PAGE: u32 = 1000;
@@ -225,7 +225,7 @@ fn read_row(r: &rusqlite::Row) -> Result<Row, SqlError> {
 /// The row at `height`.
 pub async fn by_height(store: &Store, height: u32) -> Result<Option<Row>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             Ok(sql
                 .prepare(select!("WHERE height = ?1"))?
                 .query_row(params![height], read_row)
@@ -242,7 +242,7 @@ pub async fn by_hash(store: &Store, hash: BlockHash) -> Result<Option<Row>, Erro
 /// The rows of these blocks, in the order asked; `None` where there is none.
 pub async fn by_hashes(store: &Store, hashes: Vec<BlockHash>) -> Result<Vec<Option<Row>>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             let mut stmt = sql.prepare(select!("WHERE hash = ?1"))?;
             let mut out = Vec::with_capacity(hashes.len());
             for h in &hashes {
@@ -263,7 +263,7 @@ pub async fn page(store: &Store, below: Option<u32>, limit: u32) -> Result<Vec<R
     let below = below.map_or(i64::MAX, i64::from);
     let limit = limit.min(MAX_PAGE);
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             let mut stmt =
                 sql.prepare(select!("WHERE height < ?1 ORDER BY height DESC LIMIT ?2"))?;
             let rows = stmt.query_map(params![below, limit], read_row)?;
@@ -282,7 +282,7 @@ pub async fn pool_page(
 ) -> Result<Vec<Row>, Error> {
     let limit = limit.min(MAX_PAGE);
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             let mut stmt = sql.prepare(select!(
                 "WHERE pool = ?1 AND height >= ?2 AND height < ?3 ORDER BY height DESC LIMIT ?4"
             ))?;
@@ -301,7 +301,7 @@ pub async fn heights_between(
     to: u64,
 ) -> Result<Option<(u32, u32)>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             let (lo, hi): (Option<i64>, Option<i64>) = sql
                 .prepare(
                     "SELECT min(height), max(height) FROM blocks WHERE time BETWEEN ?1 AND ?2",
@@ -358,7 +358,7 @@ pub async fn periods(store: &Store, from: u32, to: u32, by: Period) -> Result<Ve
         Period::Blocks(n) => n.max(1),
     };
     store
-        .read(move |sql| {
+        .read(Read::Blocks, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT CASE WHEN ?3 = 0 THEN time / 86400 ELSE height / ?3 END AS k, count(*), \
                  min(height), max(height), min(time), max(time), sum(tx_count), sum(size), \

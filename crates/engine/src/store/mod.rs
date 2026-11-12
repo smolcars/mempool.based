@@ -77,6 +77,41 @@ impl Versions {
 }
 
 /// Something an operator may want recorded. Passed to [`Options::observer`].
+/// What a read is for: named when it times out, so the log says which read was slow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Read {
+    /// Block rows by height, hash or page.
+    Blocks,
+    /// The block table's row and rated counts: a full scan.
+    BlockCounts,
+    /// The newest rows, compared with a new tip.
+    BlockFollow,
+    /// The backfill's own reads: gaps, the highest row, the next unrated rows.
+    Backfill,
+    /// Mining pages: pools, hashrate, difficulty.
+    Mining,
+    Audit,
+    MempoolHistory,
+    Replacements,
+    Lightning,
+}
+
+impl Read {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blocks => "blocks",
+            Self::BlockCounts => "block_counts",
+            Self::BlockFollow => "block_follow",
+            Self::Backfill => "backfill",
+            Self::Mining => "mining",
+            Self::Audit => "audit",
+            Self::MempoolHistory => "mempool_history",
+            Self::Replacements => "replacements",
+            Self::Lightning => "lightning",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Event<'a> {
     /// A migration was applied while opening.
@@ -86,8 +121,8 @@ pub enum Event<'a> {
         elapsed: Duration,
         queue_depth: usize,
     },
-    /// A read ran past [`Options::read_time_limit`] and was stopped.
-    ReadTimedOut { limit: Duration },
+    /// A read ran past [`Options::read_time_limit`] and was stopped. `read` says which.
+    ReadTimedOut { read: Read, limit: Duration },
     /// A write failed in SQLite, at the 1st, 2nd, 4th… failure in a row. `kind` is from
     /// [`failure_kind`]; `detail` is SQLite's own message, for the log and never for a client.
     WriteFailed {
@@ -295,6 +330,9 @@ pub struct Store {
     readers: Arc<Readers>,
     options: Options,
     versions: Arc<Versions>,
+    /// Tests: reads of this kind time out at once.
+    #[cfg(test)]
+    pub(crate) time_out: Mutex<Option<Read>>,
 }
 
 struct Readers {
@@ -455,6 +493,8 @@ impl Store {
             readers,
             options,
             versions,
+            #[cfg(test)]
+            time_out: Mutex::new(None),
         })
     }
 
@@ -516,11 +556,19 @@ impl Store {
     /// a runtime thread. Waits for a free connection. Once `f` has run for
     /// [`Options::read_time_limit`], its running statement and any later one fail, and the read
     /// returns [`Error::TimedOut`]; this holds even if the caller stops waiting.
-    pub async fn read<T, F>(&self, f: F) -> Result<T, Error>
+    pub async fn read<T, F>(&self, read: Read, f: F) -> Result<T, Error>
     where
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
     {
+        #[cfg(test)]
+        if *self.time_out.lock().unwrap_or_else(|e| e.into_inner()) == Some(read) {
+            (self.options.observer)(&Event::ReadTimedOut {
+                read,
+                limit: self.options.read_time_limit,
+            });
+            return Err(Error::TimedOut);
+        }
         let permit = self
             .readers
             .permits
@@ -553,7 +601,7 @@ impl Store {
             readers.put(conn);
             drop(permit);
             if result.is_err() && past(deadline) {
-                observer(&Event::ReadTimedOut { limit });
+                observer(&Event::ReadTimedOut { read, limit });
                 return Err(Error::TimedOut);
             }
             result

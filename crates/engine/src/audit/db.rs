@@ -6,7 +6,7 @@ use rusqlite::types::Type;
 use serde::Serialize;
 
 use super::{Audit, Side, Tally, Totals, decode, encode};
-use crate::store::{Error, OptionalExtension, SqlError, Store, params};
+use crate::store::{Error, OptionalExtension, Read, SqlError, Store, params};
 
 /// The totals' columns, as [`read_totals`] reads them from index 0.
 macro_rules! select {
@@ -140,7 +140,7 @@ pub async fn write(store: &Store, a: Audit) -> Result<bool, Error> {
 /// One block's audit with its listed transactions.
 pub async fn by_hash(store: &Store, hash: BlockHash) -> Result<Option<Audit>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Audit, move |sql| {
             Ok(sql
                 .prepare(select!(", txs", "WHERE hash = ?1"))?
                 .query_row(params![&hash.as_byte_array()[..]], read_full)
@@ -152,7 +152,7 @@ pub async fn by_hash(store: &Store, hash: BlockHash) -> Result<Option<Audit>, Er
 /// The totals of each block's audit, in order, without the lists.
 pub async fn by_hashes(store: &Store, hashes: Vec<BlockHash>) -> Result<Vec<Option<Audit>>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Audit, move |sql| {
             let mut stmt = sql.prepare(select!("", "WHERE hash = ?1"))?;
             let mut out = Vec::with_capacity(hashes.len());
             for h in &hashes {
@@ -182,7 +182,7 @@ fn read_scored(r: &rusqlite::Row) -> Result<Scored, SqlError> {
 /// is no longer the table's block at its height is left out.
 pub async fn scored_between(store: &Store, from: u32, to: u32) -> Result<Vec<Scored>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Audit, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT a.hash, a.height, a.time, a.match_rate, a.expected_fees, \
                  a.expected_weight FROM audits a JOIN blocks b ON b.height = a.height \
@@ -208,7 +208,7 @@ pub struct PoolHealth {
 /// pages are, so a block that left the best chain counts for nobody.
 pub async fn pool_health(store: &Store, from: u32, to: u32) -> Result<Vec<PoolHealth>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Audit, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT b.pool, count(*), avg(a.match_rate) FROM audits a JOIN blocks b                  ON b.height = a.height AND b.hash = a.hash WHERE a.height BETWEEN ?1 AND ?2                  GROUP BY b.pool ORDER BY b.pool",
             )?;
@@ -227,7 +227,7 @@ pub async fn pool_health(store: &Store, from: u32, to: u32) -> Result<Vec<PoolHe
 /// Scores of the best chain's blocks stamped at or after `since` (Unix seconds), lowest first.
 pub async fn scored_since(store: &Store, since: u64) -> Result<Vec<Scored>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Audit, move |sql| {
             let mut stmt = sql.prepare(
                 "SELECT a.hash, a.height, a.time, a.match_rate, a.expected_fees, \
                  a.expected_weight FROM audits a JOIN blocks b ON b.height = a.height \

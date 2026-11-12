@@ -47,7 +47,7 @@ fn open(dir: &Path, migrations: &[Migration]) -> Result<Store, OpenError> {
 
 async fn version(store: &Store) -> i64 {
     store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("PRAGMA user_version")?
                 .query_row([], |r| r.get(0))?)
@@ -58,7 +58,7 @@ async fn version(store: &Store) -> i64 {
 
 async fn count(store: &Store) -> i64 {
     store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM items")?
                 .query_row([], |r| r.get(0))?)
@@ -188,7 +188,7 @@ async fn fresh_database_gets_every_migration_and_wal() {
     assert_eq!(*applied.lock().unwrap(), [M1.0, M2.0]);
     assert_eq!(version(&store).await, 2);
     let mode: String = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("PRAGMA journal_mode")?
                 .query_row([], |r| r.get(0))?)
@@ -259,7 +259,7 @@ async fn a_failed_migration_rolls_back_alone() {
     let store = open(&dir.0, &[M1]).unwrap();
     assert_eq!(version(&store).await, 1);
     let half: i64 = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM sqlite_schema WHERE name = 'half'")?
                 .query_row([], |r| r.get(0))?)
@@ -334,7 +334,7 @@ async fn readers_cannot_write() {
     let dir = TempDir::new();
     let store = open(&dir.0, &[M1]).unwrap();
     let result = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("INSERT INTO items (label) VALUES ('x')")?
                 .execute([])?)
@@ -595,7 +595,14 @@ async fn a_slow_read_is_interrupted_and_the_connection_reused() {
         readers: 1,
         read_time_limit: Duration::from_millis(100),
         observer: Arc::new(move |e| {
-            if matches!(e, Event::ReadTimedOut { .. }) {
+            // The event names the read that ran too long.
+            if matches!(
+                e,
+                Event::ReadTimedOut {
+                    read: Read::Audit,
+                    ..
+                }
+            ) {
                 seen.fetch_add(1, Ordering::Relaxed);
             }
         }),
@@ -604,7 +611,7 @@ async fn a_slow_read_is_interrupted_and_the_connection_reused() {
     let store = Store::open_with(&dir.0, "regtest", options, &[M1]).unwrap();
     let start = Instant::now();
     let endless = store
-        .read(|sql| {
+        .read(Read::Audit, |sql| {
             Ok(sql
                 .prepare("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c")?
                 .query_row([], |r| r.get::<_, i64>(0))?)
@@ -635,7 +642,7 @@ async fn the_time_limit_holds_across_statements() {
     let start = Instant::now();
     // No statement runs when the limit passes; the next one must still be stopped.
     let late = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             std::thread::sleep(Duration::from_millis(150));
             Ok(sql
                 .prepare(ENDLESS)?
@@ -653,7 +660,7 @@ async fn a_cancelled_read_still_stops_and_frees_its_connection() {
     let store = Store::open_with(&dir.0, "regtest", one_reader(100), &[M1]).unwrap();
     let cancelled = tokio::time::timeout(
         Duration::from_millis(20),
-        store.read(|sql| {
+        store.read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare(ENDLESS)?
                 .query_row([], |r| r.get::<_, i64>(0))?)
@@ -674,7 +681,7 @@ async fn the_time_limit_stops_many_short_statements() {
     let store = Store::open_with(&dir.0, "regtest", one_reader(20), &[M1]).unwrap();
     // Each statement is far too short to reach the progress handler on its own.
     let fresh: Result<(), _> = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             loop {
                 sql.prepare("SELECT 1")?
                     .query_row([], |r| r.get::<_, i64>(0))?;
@@ -683,7 +690,7 @@ async fn the_time_limit_stops_many_short_statements() {
         .await;
     assert!(matches!(fresh, Err(Error::TimedOut)), "{fresh:?}");
     let reused: Result<(), _> = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             let mut one = sql.prepare("SELECT 1")?;
             loop {
                 one.query_row([], |r| r.get::<_, i64>(0))?;
@@ -807,7 +814,7 @@ async fn a_read_cannot_leave_a_snapshot_open() {
     let dir = TempDir::new();
     let store = Store::open_with(&dir.0, "regtest", one_reader(2000), &[M1]).unwrap();
     store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             sql.prepare("BEGIN")?.execute([])?;
             Ok(sql
                 .prepare("SELECT count(*) FROM items")?
@@ -868,7 +875,7 @@ async fn acknowledged_writes_survive_a_kill() {
 
     let store = open(&dir.0, &[M1]).unwrap();
     let ids: Vec<i64> = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             let mut stmt = sql.prepare("SELECT id FROM items ORDER BY id")?;
             let ids = stmt
                 .query_map([], |r| r.get(0))?
@@ -938,7 +945,7 @@ async fn bulk_insert_benchmark() {
                 let start = Instant::now();
                 let found = if range {
                     store
-                        .read(move |sql| {
+                        .read(Read::Blocks, move |sql| {
                             let mut stmt = sql.prepare(
                                 "SELECT height, fees, fee_median FROM blocks
                                  WHERE height BETWEEN ?1 AND ?1 + 99",
@@ -951,7 +958,7 @@ async fn bulk_insert_benchmark() {
                 } else {
                     let hash = block_hash(height as u64);
                     store
-                        .read(move |sql| {
+                        .read(Read::Blocks, move |sql| {
                             Ok(sql
                                 .prepare("SELECT height FROM blocks WHERE hash = ?1")?
                                 .query_row(params![hash], |r| r.get::<_, i64>(0))
@@ -1244,7 +1251,7 @@ async fn the_version_is_none_while_a_write_to_the_table_is_open() {
     let after = store.version(&[Table::Blocks]).unwrap();
     assert_ne!(after, before);
     let seen: i64 = store
-        .read(|sql| {
+        .read(Read::Blocks, |sql| {
             Ok(sql
                 .prepare("SELECT count(*) FROM blocks")?
                 .query_row([], |r| r.get(0))?)

@@ -5,7 +5,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 
 use super::{Change, Facts, Link, Mined};
-use crate::store::{Error, Sql, SqlError, Store, params};
+use crate::store::{Error, Read, Sql, SqlError, Store, params};
 
 const INSERT: &str = "INSERT OR REPLACE INTO replacements (txid, by, seen, fee, vsize, weight, \
     value, time, rbf, by_fee, by_vsize, by_weight, by_value, by_time, by_rbf, mined, height, \
@@ -151,7 +151,7 @@ fn read(r: &rusqlite::Row) -> Result<Link, SqlError> {
 /// The newest `keep` links, oldest first, to put back into a record.
 pub async fn load(store: &Store, keep: usize) -> Result<Vec<Link>, Error> {
     store
-        .read(move |sql| {
+        .read(Read::Replacements, move |sql| {
             let mut out = sql
                 .prepare(LOAD)?
                 .query_map(params![int(keep as u64)], read)?

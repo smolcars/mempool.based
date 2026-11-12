@@ -71,8 +71,9 @@ impl BlockTable {
                 duration_ms: ms(*elapsed),
                 queue_depth: *queue_depth,
             }),
-            store::Event::ReadTimedOut { limit } => logging::emit(&StoreReadTimedOut {
+            store::Event::ReadTimedOut { read, limit } => logging::emit(&StoreReadTimedOut {
                 network,
+                read: read.label(),
                 limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
             }),
             store::Event::WriteFailed {
@@ -169,11 +170,15 @@ fn start_backfill(ctx: &Arc<NetworkContext>, backfill: Backfill, reorgs: Reorgs)
 fn report(network: Network, e: &Event) {
     let network = network.name();
     match e {
-        Event::Progress(p) => logging::emit(&BlockBackfillProgress {
+        Event::Progress {
+            progress: p,
+            counted,
+        } => logging::emit(&BlockBackfillProgress {
             network,
             tip: p.tip,
-            rows: p.rows,
-            rated: p.rated,
+            // Left out rather than repeated: two lines' difference must be real progress.
+            rows: counted.then_some(p.rows),
+            rated: counted.then_some(p.rated),
             totals_done: p.totals_done,
             rates_done: p.rates_done,
             totals_written: p.totals_written,
