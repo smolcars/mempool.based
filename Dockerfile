@@ -28,12 +28,14 @@ ARG SOURCE_REVISION=unknown
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+# A workspace member: cargo reads every member's manifest even to build one package.
+COPY dev/load/ dev/load/
 # Cached target/ and registry: a change recompiles our own crates, never the dependency tree.
 # Cargo trusts a cached output newer than its sources' mtimes, and a context's mtimes need not
 # be newer (`git archive` stamps every file with its commit's time), so they are made new here.
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-$TARGETPLATFORM,target=/src/target \
-    find Cargo.toml Cargo.lock crates -exec touch {} + \
+    find Cargo.toml Cargo.lock crates dev -exec touch {} + \
     && cargo build --release --locked -p rbitcoin-space \
     && cp target/release/rbitcoin-space /rbitcoin-space \
     && mkdir /data
