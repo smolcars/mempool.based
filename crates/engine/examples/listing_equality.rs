@@ -82,7 +82,9 @@ async fn main() {
         heights.extend(list.split(',').map(|h| h.parse::<u32>().unwrap()));
     } else {
         let spread = num("SPREAD", if mainnet { 150 } else { 40 });
-        heights.extend((0..spread).map(|i| (u64::from(tip) * u64::from(i) / u64::from(spread)) as u32));
+        heights.extend(
+            (0..spread).map(|i| (u64::from(tip) * u64::from(i) / u64::from(spread)) as u32),
+        );
         let recent = num("RECENT", if mainnet { 20 } else { 10 });
         heights.extend(tip.saturating_sub(recent - 1)..=tip);
         if mainnet {
@@ -116,26 +118,39 @@ async fn main() {
         let b = rpc.block(hash).await.unwrap();
         let (tb, bb) = (t0.elapsed(), rpc.bytes_received() - b0);
         let a = a.unwrap();
-        (route_time, route_bytes, rpc_time, rpc_bytes) =
-            (route_time + ta, route_bytes + ba, rpc_time + tb, rpc_bytes + bb);
+        (route_time, route_bytes, rpc_time, rpc_bytes) = (
+            route_time + ta,
+            route_bytes + ba,
+            rpc_time + tb,
+            rpc_bytes + bb,
+        );
         txs += a.tx.len();
         empty += usize::from(a.tx.len() == 1);
         let same = a == b && derived(&a) == derived(&b);
         if !same {
             differ += 1;
             println!("DIFFERS {h} {hash}");
-            if (a.height, a.time, a.mediantime, a.size, a.weight, a.previousblockhash)
-                != (b.height, b.time, b.mediantime, b.size, b.weight, b.previousblockhash)
-            {
-                println!("  header: route {a:?}\n  getblock {b:?}");
-            }
-            if a.coinbase != b.coinbase {
-                println!("  coinbase: route {:?}\n  getblock {:?}", a.coinbase, b.coinbase);
+            let bare = |x: &Block| Block {
+                tx: Vec::new(),
+                ..x.clone()
+            };
+            if bare(&a) != bare(&b) {
+                println!(
+                    "  header or coinbase: route {:?}\n  getblock {:?}",
+                    bare(&a),
+                    bare(&b)
+                );
             }
             if a.tx.len() != b.tx.len() {
                 println!("  {} rows against {}", a.tx.len(), b.tx.len());
             }
-            for (i, (x, y)) in a.tx.iter().zip(&b.tx).enumerate().filter(|(_, (x, y))| x != y).take(5) {
+            for (i, (x, y)) in
+                a.tx.iter()
+                    .zip(&b.tx)
+                    .enumerate()
+                    .filter(|(_, (x, y))| x != y)
+                    .take(5)
+            {
                 println!("  tx {i}: route {x:?}\n        getblock {y:?}");
             }
         }
