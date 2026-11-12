@@ -110,6 +110,7 @@ mod tests {
             web_dir: "missing".into(),
             networks: Vec::new(),
             limits: Limits::default(),
+            broadcast: false,
         };
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(App::new(&config).serve(listener, async {
