@@ -85,19 +85,19 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with FE6's live transaction and address pages, which follow their subject over the WebSocket:
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with FE8's block audit, whose page listens to the WebSocket while a block's facts load:
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
 | Home | 20 | 4 | 1 | 2 |
 | Blocks | 17 | 13 | 0 | 2 |
-| Block | 23 | 6 | 0 | 5 |
+| Block | 23 | 6 | 1 | 5 |
 | Transaction | 16 | 4 | 1 | 3 |
 | Address | 20 | 5 | 1 | 4 |
 | Mining | 21 | 6 | 0 | 4 |
 | Lightning | 10 | 1 | 0 | 1 |
 
-An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
+Opening a block's audit list adds two files and one API request. An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
 
 | Limit | Default | Derivation |
 |---|---|---|

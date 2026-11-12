@@ -41,6 +41,7 @@ web/
     components/         Shared components, one CSS file each
       txgrid/           The transaction grid: decoder, layout, animation, WebGL2 renderer (see "Transaction grid")
       chart/            Time-series charts in SVG: scales, ticks, paths, the component (see "Charts")
+      audit/            A block's audit: the block page's section, its list loaded on demand, the reader (see "Block audits")
     shell/              Header, network switch, theme toggle, band, footer, the frame around pages
     search/             What a query is (query.ts) and where it leads (search.ts); loaded on first use
     pages/<page>/       One directory per page: its routes, component, CSS and tests
@@ -213,6 +214,13 @@ The totals, the same object as the facts' `audit` (which leaves out `id`, `heigh
 - `txs` lists every transaction in a category other than `matched`, the most telling first (`missing`, `unseen`, `added`, `displaced`, `conflicted`, `fresh`), highest rate first within each, at most 1,000. `complete` is `false` when that cap cut the list. `kind` is the category. `rate` is sat per 1,000 vB: the rate we placed it at for the expected kinds, its own fee over its size for `added` and `unseen`. `first_seen` (Unix seconds) is our node's accept time, present only for expected kinds still in our mempool after the block. Matched transactions are not listed: draw them from the block's own records (`/txs`) and the txids from `/api/block/:hash/txids`.
 - No audit is a state to show, not an error: "not audited: this server was not watching when it was mined" (or the projection was stale). It never appears later.
 
+**In the frontend** (`components/audit/`). `model.ts` reads the totals with `readAudit(summary.audit)`, which gives `null` for `null`, a missing field (an older server) or a shape it cannot draw, and the detail route with `readAuditDetail`, which drops entries it cannot read. It also holds each category's name and plain-words meaning (`CATEGORIES`), the same words as [`MEMPOOL.md`](MEMPOOL.md#categories): use them wherever a category is named. `formatMatchRate` prints the score as sent, two decimals, never rounded up.
+
+- **The block page** shows `AuditSection` below the map and facts, from the summary it already has: the match rate, the expected block against the mined one (transactions, virtual size, fees), the two laid side by side with their matched parts lined up, and every category with its count and size ("None" when empty). Without an audit it says so in one muted line, with no figures. A new block's facts can reach the page over the WebSocket before its own request answers, so while the facts are on their way the page listens to `blocks` and takes a `summary` for its block from there.
+- **The list** (`AuditList.tsx`) is a lazy chunk, fetched with `/app/block/:hash/audit` only when the reader asks. It shows one category at a time, the server's most telling first, each transaction linked to its page, and says when the server cut it at 1,000 and how many of a category it lists.
+- **The blocks list** has a "Match rate, %" column, blank for a block without an audit.
+- **The grid is not tinted by category.** Its records have no txids, so marking audited transactions would mean fetching every txid of the block, and color in the grid carries fee and nothing else ([`DESIGN.md`](DESIGN.md#principles)). The list is the way in.
+
 **Caching.** An audit is fixed once written: success is immutable, and a `404` is `no-store` but final in practice.
 
 **Cost.** One indexed read, no node call; at most about 60 KB of JSON for a capped list.
@@ -338,6 +346,7 @@ Import from `components/`. All of them render chain data as text only.
 | `Strata layers settle? from?` | A block's fee bands as stacked layers, cheapest at the bottom, filling the box it is put in. Compute `layers` with `strataLayers(fee_bands, fill, min)`: `fill` is how full the block is, `min` the thinnest layer as a share of the box (about 2 px). `settle` drops the layers in, cheapest first; `from` grows each layer out of the same band's layer in another set (a projected block becoming the mined one), a band it lacks from nothing; reduced motion fades either. Decorative: give the figures, or `describeBands(fee_bands)`, as text beside it |
 | `DifficultyAdjustment network tip` | The difficulty period's progress bar and the expected, next and previous change, refetched when `tip` (a block hash) changes. On regtest it says the network never retargets. The home and mining pages put it in their own section |
 | `Chart …` | A time-series chart in SVG, in `components/chart/`. Load it with `lazy()`; see "Charts" |
+| `AuditSection hash audit error? retry?` | A block's audit, in `components/audit/`: `audit` is the totals from `readAudit`, `null` for none, undefined while loading; its list loads lazily (see "Block audits") |
 | `TxGrid txs capacity label txid highlight? onState?` | Transactions as packed squares in WebGL2, in `components/txgrid/`. Load it with `lazy()`; see "Transaction grid" |
 | `Hash value href? head? tail? copy? copyLabel?` | Hash or address, shortened in the middle, linked when given a `paths` result, with copy |
 | `HashFull value copyLabel?` | A page subject's hash in full, grouped by eight, with copy |

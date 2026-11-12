@@ -14,6 +14,8 @@ import {
 } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
+import { AuditSection } from "../../components/audit/Audit";
+import { readAudit } from "../../components/audit/model";
 import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { Hash, HashFull } from "../../components/Hash";
@@ -26,6 +28,7 @@ import type { GridState } from "../../components/txgrid/TxGrid";
 import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
 import type { GridTx } from "../../components/txgrid/layout";
 import { createApi, createRequest, fetchApi, fetchApp, isNotFound } from "../../lib/api";
+import { blocksTopic } from "../../lib/blocks-topic";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
   feeRate,
@@ -36,9 +39,15 @@ import {
   truncateMiddle,
   vsizeFromWeight,
 } from "../../lib/format";
+import { useTopic } from "../../lib/live";
 import { NETWORK_NAMES, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
-import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
+import {
+  type BlockSummary,
+  fetchSummaries,
+  knownSummary,
+  rememberSummary,
+} from "../../lib/summary";
 import {
   blockReward,
   coinbaseTag,
@@ -251,7 +260,12 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
 
   const b = () => ready(block);
   const s = () => ready(status)?.value;
-  const sum = () => ready(summary);
+  // A new block's facts, and its audit, may come over the WebSocket before the request answers.
+  const [pushed, setPushed] = createSignal<BlockSummary>();
+  const sum = () => {
+    const p = pushed();
+    return ready(summary) ?? (p && p.id === props.hash ? p : undefined);
+  };
   const rates = () => sum()?.fee_rate;
   const height = () => b()?.height ?? props.height;
   const stale = () => s()?.in_best_chain === false;
@@ -685,6 +699,24 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
           </div>
         </div>
 
+        <Show when={props.hash && sum() === undefined}>
+          <SummaryListener
+            onSummary={(pushedSummary) => {
+              if (pushedSummary.id !== props.hash) return;
+              rememberSummary(network(), pushedSummary);
+              setPushed(pushedSummary);
+            }}
+          />
+        </Show>
+        {/* Below the fold on every screen, so its height settling when the facts arrive moves
+            nothing the reader sees. */}
+        <AuditSection
+          hash={props.hash}
+          audit={sum() === undefined ? undefined : readAudit(sum()?.audit)}
+          error={failed(summary) !== undefined}
+          retry={() => summaryCtl.refetch()}
+        />
+
         <section class="block-txs" aria-labelledby="block-txs-title">
           <SectionHeader title="Transactions" id="block-txs-title">
             <span class="num" aria-live="polite">
@@ -755,6 +787,18 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
       </div>
     );
   }
+}
+
+/** Hears the `blocks` topic while mounted, for a block whose facts have not arrived yet. */
+function SummaryListener(props: { onSummary: (s: BlockSummary) => void }) {
+  useTopic(blocksTopic, {
+    message: (m) => {
+      if (m.type === "summary") props.onSummary(m.summary);
+    },
+    // The facts are being asked for over HTTP anyway.
+    resync: () => undefined,
+  });
+  return null;
 }
 
 const vsize = (tx: Transaction) =>

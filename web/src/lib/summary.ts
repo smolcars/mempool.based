@@ -36,6 +36,8 @@ export interface BlockSummary {
   fee_bands: number[];
   /** Absent from a server that does not name miners. */
   miner?: Miner;
+  /** The block's audit totals, null without one; absent from an older server. Read with `readAudit`. */
+  audit?: unknown;
 }
 
 /** The batch route takes at most this many hashes. */
