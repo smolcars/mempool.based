@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 
 const BUDGET = 100 * 1024;
 // The shell, boot.js, the font, the entry's scripts and styles, and the home page's code and styles.
-const MAX_FILES = 11;
+const MAX_FILES = 10;
 const HOME_CHUNK = /^HomePage-[\w-]+\.js$/;
 const dist = new URL("../dist/", import.meta.url);
 const assets = new URL("assets/", dist);

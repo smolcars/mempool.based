@@ -42,17 +42,17 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rolldownOptions: {
       output: {
-        // The live channel, the topics the home page reads, the small components every main page
-        // uses and what they import (Solid's runtime among it) travel as one file, loaded with the
-        // shell. Split by which pages share them, they were 14 more files on a cold page, and on a
-        // slow network each waits its turn for one of the browser's six connections. The tokens and
-        // global styles go in it too: its stylesheet is linked first, so it must set the cascade
-        // layer order before any component's layer appears (`bun run size` checks).
+        // The shell (the entry module and everything it imports, Solid's runtime among it), the
+        // live channel, the topics the home page reads and the small components most pages use
+        // travel as one file, loaded with the shell. Split by which pages share them, they were 14
+        // more files on a cold page, and on a slow network each waits its turn for one of the
+        // browser's six connections. With the entry module in it, all the shell's styles are one
+        // stylesheet as well: the only one index.html links, and the one that sets the layer order.
         codeSplitting: {
           groups: [
             {
               name: "app",
-              test: /(\/design\/tokens\.css|\/src\/styles\/global\.css|\/src\/(lib\/(live|blocks-topic|projected-topic|clock)\.ts|components\/(Amount|DataTable|FeeRate|Hash|SectionHeader|Strata|Time)\.tsx))$/,
+              test: /\/src\/(index\.tsx|lib\/(live|blocks-topic|projected-topic|clock)\.ts|components\/(Amount|DataTable|FeeRate|Hash|SectionHeader|Strata|Time)\.tsx)$/,
             },
           ],
         },
