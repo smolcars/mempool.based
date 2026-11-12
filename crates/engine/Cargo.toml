@@ -11,6 +11,7 @@ publish.workspace = true
 node.workspace = true
 
 bitcoin.workspace = true
+rusqlite.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
