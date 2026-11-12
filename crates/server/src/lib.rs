@@ -37,7 +37,7 @@ use axum::http::header::{
     ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_SECURITY_POLICY,
     HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -408,22 +408,14 @@ pub(crate) fn is_api(path: &str) -> bool {
 /// `/api` is a public API that web wallets call from other origins. Nothing in it depends on
 /// cookies or other ambient credentials, so any origin may read it, broadcast included. Outermost,
 /// so refusals from the limits (429, 503, 504) are readable cross-origin too. A preflight is
-/// answered here once `serve` has admitted it under its own limits; one it refused goes on to
-/// [`limits::limit`] to be answered as the refusal.
+/// answered by [`limits::limit`] once admitted under its own limits; here it gets its headers.
 async fn cors(req: Request, next: Next) -> Response {
     if !is_api(req.uri().path()) {
         return next.run(req).await;
     }
-    let preflight = req.method() == Method::OPTIONS
-        && !matches!(
-            req.extensions().get::<limits::Checked>(),
-            Some(limits::Checked::Refused(..))
-        );
-    let mut res = if preflight {
-        finish(StatusCode::NO_CONTENT.into_response()).await
-    } else {
-        next.run(req).await
-    };
+    let preflight = req.method() == Method::OPTIONS;
+    let mut res = next.run(req).await;
+    let preflight = preflight && res.extensions().get::<limits::Refused>().is_none();
     api_headers(res.headers_mut(), preflight);
     res
 }

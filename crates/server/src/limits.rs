@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, HeaderName, Method};
+use axum::http::{HeaderMap, HeaderName, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -451,6 +451,10 @@ pub async fn limit(State(limiter): State<Arc<Limiter>>, mut req: Request, next: 
             }
         }
     };
+    // An admitted API preflight needs nothing more: `cors` adds its headers.
+    if req.method() == Method::OPTIONS && crate::is_api(req.uri().path()) {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     let mut res = admitted(&limiter, addr, req, next).await;
     if res.extensions().get::<Refused>().is_some() {
         res.extensions_mut().insert(who);
