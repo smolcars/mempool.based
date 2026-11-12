@@ -61,12 +61,15 @@ export function BalanceChart(props: {
   let started = false;
   let busy = false;
   let again = false;
-  /** The newest page joined to what is loaded, or everything again when they do not meet. */
+  /**
+   * The newest page joined to what is loaded; when they do not meet (more new transactions than a
+   * page holds), that page alone, anchored: two requests at most, never the whole history again.
+   */
   const update = async () => {
     const old = history;
     if (old === undefined) return loadHistory(base, fetch);
-    const page = readRows((await fetch(`${base}/txs/summary`)).value);
-    return advance(old, page) ?? loadHistory(base, fetch);
+    const first = await fetch(`${base}/txs/summary`);
+    return advance(old, readRows(first.value)) ?? loadHistory(base, fetch, 1, first);
   };
   // One job at a time; a change heard meanwhile runs one update after it, never a second chain.
   const work = async () => {

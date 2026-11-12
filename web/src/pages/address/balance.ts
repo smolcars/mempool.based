@@ -61,20 +61,22 @@ const sum = (rows: readonly TxSummary[]) => rows.reduce((s, r) => s + r.value, 0
 const confirmed = (rows: readonly TxSummary[]) => rows.filter((r) => r.height > 0);
 
 /**
- * The newest history, at most {@link MAX_PAGES} pages, every page as of the first's block. When
- * it stops short of the first transaction (the cap, or a later page that failed), the address's
- * totals as of that block anchor it.
+ * The newest history, at most `pages` pages, every page as of the first's block. When it stops
+ * short of the first transaction (the cap, or a later page that failed), the address's totals as
+ * of that block anchor it. `given` is the first page when it is already in.
  */
 export async function loadHistory(
   base: string,
   fetch: (path: string) => Promise<Stamped<unknown>>,
+  pages = MAX_PAGES,
+  given?: Stamped<unknown>,
 ): Promise<History> {
-  const first = await fetch(`${base}/txs/summary`);
+  const first = given ?? (await fetch(`${base}/txs/summary`));
   const tip = first.tip?.hash;
   const pin = tip === undefined ? "" : `?asof=${tip}`;
   let page = readRows(first.value);
   const rows = [...page];
-  for (let asked = 1; page.length >= SUMMARY_PAGE && asked < MAX_PAGES; asked++) {
+  for (let asked = 1; page.length >= SUMMARY_PAGE && asked < pages; asked++) {
     const last = page.at(-1)?.txid ?? "";
     try {
       // oxlint-disable-next-line no-await-in-loop -- each page continues after the last one's final row
@@ -103,7 +105,7 @@ export async function loadHistory(
 /**
  * The history after a change: the fresh first page joined to the rows already loaded, with the
  * balance carried by what is new and what left (a reorg). Undefined when the page does not meet
- * what is loaded, so the whole history is loaded again.
+ * what is loaded; the page is then anchored on its own.
  */
 export function advance(old: History, fresh: readonly TxSummary[]): History | undefined {
   const page = confirmed(fresh);
@@ -121,7 +123,8 @@ export function advance(old: History, fresh: readonly TxSummary[]): History | un
   }
   const added = page.slice(0, j);
   const gone = old.rows.slice(0, k);
-  const joined = [...added, ...old.rows.slice(k)];
+  // The page's own rows where it overlaps: a block re-mined at the same height has a new time.
+  const joined = [...page, ...old.rows.slice(k + page.length - j)];
   const rows = joined.slice(0, MAX_ROWS);
   return {
     rows,

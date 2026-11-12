@@ -168,6 +168,17 @@ describe("loadHistory", () => {
     expect(h.complete).toBe(true);
   });
 
+  it("anchors a page already in on its own, with one request, after a gap too wide to join", async () => {
+    const rows = Array.from({ length: 5000 }, (_, i) => row(5000 - i, 100));
+    const n = node(rows, 99_999, 5000);
+    const first = await n.fetch(`${BASE}/txs/summary`);
+    n.asked.length = 0;
+    const h = await loadHistory(BASE, n.fetch, 1, first);
+    expect(n.asked).toStrictEqual([`${BASE}?asof=${TIP}`]);
+    expect(h).toMatchObject({ complete: false, balance: 99_999, total: 5000 });
+    expect(h.rows).toHaveLength(SUMMARY_PAGE);
+  });
+
   it("refuses to anchor a partial history to totals of an unknown block", async () => {
     const rows = Array.from({ length: 300 }, (_, i) => row(300 - i, 100));
     const n = node(rows);
@@ -197,6 +208,15 @@ describe("advance", () => {
     expect(h?.rows).toHaveLength(39);
     expect(h?.balance).toBe(4000 - 200 + 5);
     expect(h?.total).toBe(39);
+  });
+
+  it("takes the page's own block times where it overlaps what is loaded", () => {
+    // Block 40 was replaced at the same height by one with another time.
+    const remined = { ...full[0], time: 1 } as TxSummary;
+    const h = advance(loaded, [remined, ...full.slice(1, SUMMARY_PAGE)]);
+    expect(h?.rows[0]?.time).toBe(1);
+    expect(h?.rows).toHaveLength(40);
+    expect(h?.balance).toBe(4000);
   });
 
   it("takes a short page as the whole history", () => {
