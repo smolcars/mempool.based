@@ -803,6 +803,48 @@ pub struct MiningFailed {
 }
 event!(MiningFailed, "mining_failed", Warn);
 
+// Mempool history.
+
+/// Rows of mempool history aged into coarser ones: minutes into hours, hours into days. About
+/// once an hour per network while sampling.
+#[derive(Debug, Serialize)]
+pub struct MempoolHistoryRolledUp {
+    pub network: &'static str,
+    pub minutes: usize,
+    pub hours: usize,
+    /// The whole write: the minute's sample and the roll-up.
+    pub duration_ms: f64,
+}
+event!(MempoolHistoryRolledUp, "mempool_history_rolled_up", Info);
+
+/// Minutes left out of the mempool history, at the 1st, 2nd, 4th, 8th… in a row: `syncing`,
+/// `stale`, `lagged`, `late`, `store_busy` or `store_failed`, for the latest.
+#[derive(Debug, Serialize)]
+pub struct MempoolHistorySkipped {
+    pub network: &'static str,
+    pub reason: &'static str,
+    pub skipped: u32,
+}
+event!(MempoolHistorySkipped, "mempool_history_skipped", Info);
+
+/// A minute was sampled again after `skipped` in a row were not.
+#[derive(Debug, Serialize)]
+pub struct MempoolHistoryResumed {
+    pub network: &'static str,
+    pub skipped: u32,
+}
+event!(MempoolHistoryResumed, "mempool_history_resumed", Info);
+
+/// The mempool history could not be read for a request: `timed_out` past the store's read
+/// limit, or `store`. At the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct MempoolHistoryFailed {
+    pub network: &'static str,
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(MempoolHistoryFailed, "mempool_history_failed", Warn);
+
 // Following transactions and addresses. Never a txid or an address: the log must not record
 // what people look at.
 
@@ -1246,6 +1288,26 @@ mod tests {
                 network: n,
                 task: "refresh",
                 error: "timed_out",
+                failures: 1,
+            }),
+            both(&MempoolHistoryRolledUp {
+                network: n,
+                minutes: 60,
+                hours: 0,
+                duration_ms: 1.2,
+            }),
+            both(&MempoolHistorySkipped {
+                network: n,
+                reason: "stale",
+                skipped: 4,
+            }),
+            both(&MempoolHistoryResumed {
+                network: n,
+                skipped: 5,
+            }),
+            both(&MempoolHistoryFailed {
+                network: n,
+                error: "store",
                 failures: 1,
             }),
             both(&TrackingSummary {

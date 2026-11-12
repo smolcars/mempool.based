@@ -189,3 +189,14 @@ The routes and what they cache are in [`API.md`](API.md#mining).
 | `pools_reattributed` | info | `network`, `rows`, `changed`, `duration_ms` | Every row's pool was recomputed because the build's pool list or rules differ from the ones the table was attributed with (also on the first start after the column was added). The mining routes answer once it is done |
 | `mining_refreshed` | debug | `network`, `tip`, `from`, `answers`, `duration_ms` | The answers clients have asked for were recomputed for a changed table: once a block, and at most once a minute while the backfill adds rows. `from` is the lowest height of the stored history they cover. Debug, since it is once per block |
 | `mining_failed` | warn | `network`, `task`, `error`, `failures` | Mining answers could not be computed from the table (`task`: `reattribute`, `refresh` or `request`; `error`: `timed_out` past the store's read limit, or `store`). The last answers are still served. At the 1st, 2nd, 4th, 8th… failure in a row |
+
+### Mempool history
+
+The sampler and its table are in [`STORE.md`](STORE.md#mempool_history), the routes in [`API.md`](API.md#mempool-statistics). A healthy network writes one `mempool_history_skipped` and one `mempool_history_resumed` at start (the first minute's flow was not watched whole), then one `mempool_history_rolled_up` an hour once eight days are stored.
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `mempool_history_rolled_up` | info | `network`, `minutes`, `hours`, `duration_ms` | A sample's write also aged rows into coarser ones: `minutes` minute rows into hours, `hours` hour rows into days. `duration_ms` is the whole write |
+| `mempool_history_skipped` | info | `network`, `reason`, `skipped` | Minutes left out of the history, at the 1st, 2nd, 4th, 8th… in a row, with the latest `reason`: `syncing` (the engine's first cycle, or the first minute after it started or came back), `stale` (the node is failing), `lagged` (the sampler fell behind the change stream), `late` (it woke after the next minute had begun), `store_busy` (the write queue was full) or `store_failed` |
+| `mempool_history_resumed` | info | `network`, `skipped` | A minute was stored again after `skipped` in a row were not |
+| `mempool_history_failed` | warn | `network`, `error`, `failures` | A history route could not read the table (`timed_out` past the store's read limit, or `store`). At the 1st, 2nd, 4th, 8th… failure in a row |

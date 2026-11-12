@@ -90,6 +90,7 @@ pub fn start(ctx: &Arc<NetworkContext>) {
     let (projector, projector_task) =
         Projector::start(tracker.clone(), projector_rpc, projected::Config::default());
     let mut tasks = run(ctx, &tracker, &projector);
+    tasks.extend(crate::statistics::start(ctx, &tracker, &projector));
     tasks.push(tracker_task);
     tasks.push(projector_task);
     abort_on_shutdown(ctx, tasks);

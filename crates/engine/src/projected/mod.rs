@@ -23,4 +23,4 @@ pub use model::{
 pub use projector::{ClusterSource, Config, Event, Expected, Projector, Subscription, UpdateStats};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

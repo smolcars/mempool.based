@@ -253,6 +253,32 @@ For the transaction page: who it will be mined with, and what replaced what. Per
 - Each link: `seen` is when the server saw it (Unix seconds); `fee`, `vsize` and `rate` are the replaced transaction's own, `by_*` the replacement's, `null` when the replacement was confirmed in the block that removed the original. At most 32 links each way; `truncated` says there were more.
 - Empty lists mean the server saw no replacement since it started, not that there was none. `503` with the mempool engine switched off; `400` for a malformed txid.
 
+#### Mempool history
+
+For the mempool chart: the mempool's size by fee band through the day, the week and the year, and what flowed through it. Per network, under its `/app` (`crates/server/src/statistics.rs`), from the server's history table, never the node ([`STORE.md`](STORE.md#mempool_history)). The public form in the reference's shape is `/api/v1/statistics/:interval` ([`API.md`](API.md#mempool-statistics)); this one keeps our ten bands, which the public one cannot.
+
+| Route | Answer |
+|---|---|
+| `GET /app/mempool/history/:interval` | `interval` is `2h`, `24h`, `1w`, `1m`, `3m`, `6m`, `1y`, `2y`, `3y`, `4y` or `all`; anything else is `400` |
+
+```json
+{"interval":"2h","from":1794471360,"to":1794478503,"step":60,"first":1794477420,
+ "minutes":119,"sampled":18,"complete":false,
+ "points":[…,
+  {"time":1794478500,"samples":1,"count":77664,"vsize":35034159,"fees":12561492,"min_fee_rate":100,
+   "bands":[31473971,42955,44248,93275,1645692,162368,510336,793829,206603,60882],
+   "in_count":111,"in_vsize":32392,"out_count":7,"out_vsize":2054,"mined_count":0,"mined_vsize":0}]}
+```
+
+A mainnet server 18 minutes after its first sample (keys are sent in another order).
+
+- `points` are oldest first, one per `step` seconds (60 for `2h` and `24h`, 600 for `1w`, 3,600 for `1m`, up to whole days for `all`; never more than 1,460). `time` is the step's start, Unix seconds. **A step the server did not sample has no point**: draw a gap where consecutive `time`s differ by more than `step`, never a line across it and never a zero.
+- Every value is the **mean over the minutes sampled in the point**, and `samples` says how many (at most `step / 60`). A point with fewer samples than that is partly covered; it is still a fair mean of what was seen.
+- `count`, `vsize` (sigop-adjusted vB) and `fees` (sats) are the whole mempool. `bands` is the virtual size in each of the ten fee bands of [`DESIGN.md`](DESIGN.md#fee-scale), cheapest first, by effective rate: stack them, colored with the fee scale, and they sum to `vsize`. `min_fee_rate` is the node's minimum, sat per 1,000 vB like every rate the WebSocket sends (`100` is 0.1 sat/vB).
+- The flow is per minute: `in_count` and `in_vsize` entered the mempool, `out_count` and `out_vsize` left it for any reason, and `mined_count` and `mined_vsize` are the part of what left that a block confirmed. Arrival in vB/s is `in_vsize / 60`. Over a minute, `vsize` moves by about what entered less what left (the totals come from the projected blocks, a moment behind the flow).
+- **Coverage.** `first` is the oldest time stored (`null` with none): history begins when the server first ran with its mempool engine on. `from` and `to` are the period answered; `minutes` is how many whole minutes it owes and `sampled` how many it has; `complete` is `true` only when none is missing. The same is in `X-Data-From-Time` and `X-Data-Complete`. Say "since …" when `first` is after `from`, and show holes as holes.
+- A new sample lands each minute, about a second after the minute turns; polling a chart every minute is plenty. `Cache-Control: public, max-age=1`. `503` with `Retry-After: 1` when the server has no data directory (`mempool history needs a data directory on this server`; no retry helps) or its store is busy; an empty `points` with `first: null` when it has stored nothing yet.
+
 ### Live data
 
 `lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms (unsubscribes before it subscribes, so switching between capped topics never holds one too many), and ignores message types it does not know. Binary frames are read as `ArrayBuffer`s and offered to every subscribed topic that has a `binary` reader; the others never see them. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.
