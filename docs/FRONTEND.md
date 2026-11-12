@@ -19,6 +19,9 @@ web/
       format.ts         Amounts, fee rates and bands, sizes, hashes, times
       network.ts        Networks, prefixes, `paths` for every page
       api.ts            HTTP client and `createApi` resource
+      live.ts           The WebSocket client: `useTopic`, `useLiveStatus` (see "Live data")
+      blocks-topic.ts   The `blocks` topic: its messages and how to keep a block list current
+      fakes.ts          Test stand-ins: a fake WebSocket and made-up blocks
       esplora.ts        Types for the Esplora replies pages use
       page.ts           `useNetwork`, `usePageTitle`
       clock.ts          Shared ticking clock for relative times
@@ -102,7 +105,33 @@ During development, `bun run dev` proxies `/api`, `/app` and `/healthz` to the R
 
 `GET /app/config` answers `{"networks": ["mainnet", "signet"], "version": "0.1.0"}`: the enabled networks in server order, and the server version. It is server-wide, so it is served at the root only, whichever networks are enabled (`crates/server/src/app_config.rs`). The shell reads it once for the network switch and the footer. If the root's network (mainnet) is disabled, the shell moves to the same page on the first enabled network.
 
-Live data will come from the WebSocket at `/app/ws`, which does not exist yet.
+### Live data
+
+`lib/live.ts` holds one WebSocket per tab and network to `/app/ws` ([`WS.md`](WS.md)). It opens while any component is subscribed to a topic and closes when none is. It checks the greeting's protocol version and network, subscribes after it, reconnects with exponential backoff and jitter (0.5 to 30 s), resubscribes, pings every 30 s to find a dead socket, sends subscription changes at most every 250 ms, and ignores binary frames and message types it does not know. A hidden tab keeps its socket; a socket that drops while hidden, or while the browser is offline, waits until the tab is visible and online again. After close codes 1002–4002 or a greeting from another protocol version it stops for good: the page is out of date.
+
+A topic is a name and a parser. Write one per topic in `lib/`, as `blocks-topic.ts` does; the client never changes for a new topic:
+
+```ts
+export const mempoolTopic: Topic<MempoolMessage> = {
+  name: "mempool",
+  // Return undefined for a type or shape this page does not know: it is ignored.
+  parse: (m) => (m.type === "delta" && isDelta(m.delta) ? { type: "delta", delta: m.delta } : undefined),
+};
+```
+
+A component uses it for as long as it is mounted, on the page's network:
+
+```ts
+useTopic(blocksTopic, {
+  message: (m) => { /* every message, in order; the first is the topic's current state */ },
+  resync: () => { /* the socket reconnected and messages may be lost: refetch over HTTP */ },
+});
+const status = useLiveStatus(); // "connecting" | "live" | "reconnecting" | "offline"
+```
+
+- **Load over HTTP, then keep up over the socket.** The socket only reports changes. Fetch the state with `fetchApi`, apply messages on top, and treat a gap, a `resync` message that disagrees and the `resync` handler the same way: fetch again. Messages that arrive while that fetch is in flight are held and replayed on its answer (`pages/home/feeds.ts`, `createBlockFeed`).
+- **Say when it is not live.** While `status()` is not `live`, poll what the socket would have sent, no faster than every few seconds, and tell the reader (the home page's indicator).
+- In tests, stub the global `WebSocket` with `FakeSocket` from `lib/fakes.ts` and play the server: `FakeSocket.last().hello()`, `.receive({...})`, `.drop(1006)`.
 
 ## Shared components
 
@@ -186,5 +215,15 @@ test("a block page shows its height", async ({ page }) => {
 - **`chain`** in `e2e/fixtures.ts` is the scenario's manifest: tip, block hashes, txids and addresses of every script type. They are the same on every run.
 - **Every test fails on a console error, an uncaught exception or a Content-Security-Policy violation** on any page it opens. The fixture does this by itself. If your test causes an error on purpose, such as a request that is meant to 404, name it: `test.use({ consoleErrorsAllowed: [/status of 404/] })`. A CSP violation cannot be allowed.
 - **Find elements by role and text,** as a reader would (`getByRole`, `getByText`), not by class names.
-- **Tests share one node and run in parallel, so never mine.** A new block changes the tip every other test reads. The broadcast test in `api.e2e.ts` adds one transaction to the mempool, so do not assert the mempool's exact size. A test that needs a different chain needs its own node; raise it in your PR rather than mining in the shared one.
+- **Tests share one node and run in parallel, so only `*.mine.e2e.ts` files mine.** A new block changes the tip every other test reads. Playwright runs those files in a separate `mines` project that starts after every other test has finished and runs one test at a time; only there does the `mine(n)` fixture work (it returns the new block hashes). Anything else that changes the chain belongs there too. The broadcast test in `api.e2e.ts` adds one transaction to the mempool, so do not assert the mempool's exact size.
+
+  ```ts
+  test("a new block lands without a reload", async ({ page, mine }) => {
+    await page.goto("/regtest/");
+    const [hash] = await mine(1);
+    const strip = page.getByRole("list", { name: "Mined blocks, newest first" });
+    await expect(strip.getByRole("link").first()).toHaveAttribute("href", `/regtest/block/${hash}`);
+  });
+  ```
+
 - **Keep the suite fast.** Browser tests cover what only a browser can show: that the page renders real data, links work and nothing errors. Logic belongs in unit tests.

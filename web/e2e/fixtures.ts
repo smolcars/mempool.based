@@ -3,7 +3,39 @@ import { test as base, expect } from "@playwright/test";
 
 export { expect };
 
-export const test = base.extend<{ consoleErrorsAllowed: RegExp[]; noConsoleErrors: undefined }>({
+/** The regtest node's JSON-RPC, which only the `mines` project is given (playwright.config.ts). */
+export interface RegtestRpc {
+  url: string;
+  user: string;
+  password: string;
+}
+
+// P2WSH of OP_TRUE, the harness's anyone-can-spend miner script (docs/REGTEST.md).
+const MINER = "raw(00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260)";
+
+export const test = base.extend<{
+  consoleErrorsAllowed: RegExp[];
+  noConsoleErrors: undefined;
+  regtestRpc: RegtestRpc | null;
+  mine: (blocks: number) => Promise<string[]>;
+}>({
+  regtestRpc: [null, { option: true }],
+  // Mines blocks on the run's node and returns their hashes. Only `*.mine.e2e.ts` files may: they
+  // run after every other test, so no test ever sees the chain change under it.
+  mine: async ({ request, regtestRpc }, use) => {
+    await use(async (blocks) => {
+      if (!regtestRpc) {
+        throw new Error('only *.mine.e2e.ts tests may mine (docs/FRONTEND.md "Browser tests")');
+      }
+      const res = await request.post(regtestRpc.url, {
+        headers: { authorization: `Basic ${btoa(`${regtestRpc.user}:${regtestRpc.password}`)}` },
+        data: { jsonrpc: "1.0", id: 1, method: "generatetodescriptor", params: [blocks, MINER] },
+      });
+      const body = (await res.json()) as { result: string[] | null; error: unknown };
+      if (!body.result) throw new Error(`mining failed: ${JSON.stringify(body.error)}`);
+      return body.result;
+    });
+  },
   // Console errors a test causes on purpose, such as a fetch that fails. CSP violations never pass.
   consoleErrorsAllowed: [[], { option: true }],
   // Runs around every test: a console error, an uncaught exception or a CSP violation on any
