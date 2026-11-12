@@ -1,96 +1,325 @@
-# Deploying
+# Running rbitcoin.space
 
-What an operator runs: one image with the server and the built frontend, and a compose file that runs it beside rbitcoin v0.9.2 on the same host. Same host matters: rbitcoin serves its bulk `/internal/*` Esplora routes only on a unix-socket listener ([`RBITCOIN.md`](RBITCOIN.md)), and a socket can only be shared on one machine.
+The operator's guide: how to put the explorer beside an rbitcoin node, behind TLS, and keep it running and upgraded. Read it top to bottom the first time. Settings are listed once, in [`CONFIG.md`](CONFIG.md); this guide links there instead of repeating them.
 
-## The image
+What you run is one image, `ghcr.io/smolcars/rbitcoin-space`, holding the server and the built frontend, and [`deploy/compose.yml`](../deploy/compose.yml), which runs it beside rbitcoin v0.9.2. Every command below was run as written, on Docker 29.8 with Compose v5.5, against a regtest node; the [mainnet values](#run-it-beside-the-node) are what differs.
 
-```sh
-docker build -t rbitcoin-space .
-```
+## What you need
 
-The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch and pinned by digest; all come from Docker Hub or `gcr.io`.
+### The node
 
-| Stage | From | Does |
+rbitcoin at **v0.9.2**, the version this release was built and tested against. The compose file runs one for you; if you bring your own, it needs these switched on:
+
+| Flag | The explorer uses it for | Without it |
 |---|---|---|
-| `web` | `oven/bun` | `bun install --frozen-lockfile` and `bun run build`. Runs on the build platform only, since the output is the same on every architecture |
-| `server` | `rust` (Debian 13) | `cargo build --release --locked -p rbitcoin-space`. The cargo registry and `target/` are BuildKit cache mounts, so a one-file change recompiles one crate. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
-| final | `gcr.io/distroless/cc-debian13:nonroot` | The binary at `/usr/local/bin/rbitcoin-space`, the frontend at `/srv/web`. No shell, no package manager |
+| `--esplora-listen` | Blocks, transactions, addresses, spends, broadcast, fee estimates: most of what a page shows | Nothing works |
+| `--electrum-listen` | Being told about new blocks and about changes to followed addresses and transactions | Nothing is live, and `/readyz` stays `503` |
+| `--rpc-listen` with `--rpc-cookie-file` | The live mempool, projected blocks, block statistics and the backfill. The cookie file holds `user:password`; rbitcoin has no `--rpcuser` | No mempool, no block table, no mining pages |
+| `--sh-index` | Address pages and the address and scripthash API routes | Those answer `503` `address index is disabled on this server`; everything else works. It is off by default in rbitcoin |
 
-Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Everything else is configured as in [`CONFIG.md`](CONFIG.md).
+Esplora and Electrum have no authentication. Never let anything but the server reach them. The [interfaces and what the explorer relies on](RBITCOIN.md) are documented separately.
 
-It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns for the SQLite store, so it runs with a read-only root filesystem and a volume at `/data`. The image does not set `DATA_DIR`; without it the server keeps no store ([`CONFIG.md`](CONFIG.md)). Its health check is the binary itself: `rbitcoin-space healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. It prints nothing. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
+### The host
 
-### Health
+Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node needs what rbitcoin needs for the chain; the server needs little:
 
-| Route | Answers | Use it for |
-|---|---|---|
-| `/healthz` | `200` `{"status":"ok","version":…}` while the process serves HTTP. Never asks the node | Liveness: restart the container if it fails. The image's health check |
-| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp; and `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`), which does not count towards `ready` | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+| | Expect |
+|---|---|
+| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` (32 MB) per network as the block summary cache fills, and more with open WebSockets: 64 MB at the peak with 5,000 |
+| CPU | Under 3% of one core on mainnet with one client; 8% with 5,000 WebSockets open |
+| Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)) |
+| Network | Nothing published but the node's P2P port and, through the proxy, 443 |
 
-Lightning is left out of readiness on purpose: the explorer serves blocks, transactions and the mempool whatever the Lightning peer does, and a first sync takes minutes. Watch `lightning` (or `/app/lightning/status`) to know when the Lightning pages have data.
+## Run it beside the node
 
-`/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds whatever the traffic. The startup check is also how a wrong RPC password shows up: as an `rpc_auth_failed` event at once, not as an `unavailable` request later ([`LOGGING.md`](LOGGING.md#node-clients)). Neither route is logged when it passes.
+### Same host, with the compose file
 
-The image's health check stays on `/healthz`, and the compose file adds none of its own. The node is the usual reason for not being ready, and it can take hours to sync; restarting the server would not help, and Docker's restart policy ignores health anyway. Point whatever routes users to the server at `/readyz`.
-
-[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
-
-linux/amd64 and linux/arm64 both build from the same Dockerfile, natively on each. [`image.yml`](../.github/workflows/image.yml) builds both after every merge to `master`, starts the image read-only with no capabilities until it reports healthy, and validates the compose file. It is not part of the pull-request checks and publishes nothing; publishing comes with the release workflow.
-
-Measured on an Apple Silicon Mac, base images already pulled: 12 MB compressed, cold build 16 s, rebuild after changing one Rust file 2 s, after changing one frontend file 1 s. The amd64 build under emulation took 172 s cold.
-
-## Logs
-
-The server and rbitcoin log to stdout and stderr only; nothing is written to a log file inside either container, and the read-only root filesystem would refuse it anyway. Read them with `docker compose logs`. Rotation and shipping belong to Docker's logging driver: the default `json-file` driver does not rotate, so set `max-size` and `max-file` in the daemon's `daemon.json`, or use `journald` or `local`.
-
-## The compose file
-
-[`deploy/compose.yml`](../deploy/compose.yml) runs two services for one network.
+The layout this guide assumes, and the one the compose file builds:
 
 ```text
- internet ── reverse proxy (TLS) ──► server :8080 ─┬─ unix socket ──► node  Esplora + /internal/*
+ internet ── reverse proxy (TLS) ──► server :8080 ─┬─ unix socket ──► node  Esplora
                                                    ├─ TCP 8332 ─────► node  JSON-RPC
                                                    └─ TCP 50001 ────► node  Electrum
  bitcoin peers ──────────────────────────────────────────────────────► node  P2P (published)
 ```
 
-| Service | Image | Talks to |
-|---|---|---|
-| `node` | rbitcoin v0.9.2, pinned by digest. `RBITCOIN_IMAGE` overrides it | Esplora on a unix socket in the `esplora-socket` volume; RPC on 8332 and Electrum on 50001, both on the private compose network; P2P on `P2P_PORT`, the only thing published |
-| `server` | Built from this repo's `Dockerfile`. `SERVER_IMAGE` names another | Mounts `esplora-socket` read-only; RPC and Electrum at `node` |
+The node's Esplora is a unix socket, so it is on no network at all; RPC and Electrum are on the compose network only. The socket also carries rbitcoin's bulk `/internal/*` routes, which exist on no TCP listener ([`RBITCOIN.md`](RBITCOIN.md#what-it-does-not-give-us)).
 
-### Run it
+Get the compose file at the release you run (the newest on the [releases page](https://github.com/smolcars/rbitcoin-space/releases)), make an RPC password, and start both:
 
 ```sh
-cd deploy
-cp .env.example .env
-pass=$(openssl rand -hex 32)              # or any long random string
+VERSION=0.1.0
+git clone --depth 1 --branch "v$VERSION" https://github.com/smolcars/rbitcoin-space.git
+cd rbitcoin-space/deploy
+cp .env.example .env && chmod 600 .env
+pass=$(openssl rand -hex 32)
 sed -i.bak "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env && rm .env.bak
+echo "SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space:$VERSION" >> .env
+touch rpc.cookie && chmod 600 rpc.cookie
 printf 'rbitcoin-space:%s' "$pass" > rpc.cookie
-sudo chown 10001:10001 rpc.cookie && sudo chmod 600 rpc.cookie
-docker compose up -d --build
+sudo chown 10001:10001 rpc.cookie
+docker compose up -d
 ```
 
-`sed -i.bak` works with both GNU and BSD (macOS) `sed`, whose bare `-i` differ. `.env` and `rpc.cookie` are git-ignored. The node reads the RPC user and password from `rpc.cookie` (rbitcoin has no `--rpcuser`; `--rpc-cookie-file` takes `user:password` for HTTP Basic, with no newline). The server reads the same pair from `MAINNET_RPC_USER` and `MAINNET_RPC_PASSWORD`. The cookie is a file and not compose `content`, because compose cannot copy content into a container whose root filesystem is read-only.
+- The node reads the user and password from `rpc.cookie` (`user:password`, no newline), as its uid 10001, and refuses to start if others may read the file; the server reads the same pair from `MAINNET_RPC_USER` and `MAINNET_RPC_PASSWORD`. `.env` and `rpc.cookie` are git-ignored.
+- Without `SERVER_IMAGE`, compose builds the image from the checkout instead of pulling it.
+- The server listens on `127.0.0.1:8080` (`HTTP_PUBLISH` changes it), for the reverse proxy on the same host. Nothing outside the host can reach it.
+- The node keeps its chain in the `node-data` volume, and the first mainnet sync takes as long as rbitcoin takes. The site serves what the node has meanwhile, and [`/readyz`](#health) says how far behind it is.
+- `docker compose logs -f server` follows the server's log.
 
-The server listens on `127.0.0.1:8080` on the host (`HTTP_PUBLISH` changes it). The node keeps its chain in the `node-data` volume; the first mainnet sync takes as long as rbitcoin takes. The server keeps its SQLite store in the `server-data` volume, with `DATA_DIR=/data` set by the compose file over anything in `.env`. A new volume starts empty and owned by the server's uid, and the block table's backfill fills it from the node, newest blocks first: about 21 hours for every block's totals on mainnet at the default pace, and 38 for the last year's fee rates ([`STORE.md`](STORE.md#backfill)). `BACKFILL_ENABLED=false` in `.env` pauses it; it resumes on the next start. Back the volume up as [`STORE.md`](STORE.md#backup-and-recovery) says, or drop it and let the backfill rebuild it.
+### The node on another host
 
-### Hardening, and why
+Run the server alone and give it the node's addresses:
 
-| Choice | Applies to | Why |
+```sh
+docker run -d --name rbitcoin-space --restart unless-stopped --log-driver local \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --env-file server.env -e DATA_DIR=/data -v rbitcoin-space-data:/data \
+  -p 127.0.0.1:8080:8080 ghcr.io/smolcars/rbitcoin-space:0.1.0
+```
+
+with `server.env` holding the six `MAINNET_*` variables ([`CONFIG.md`](CONFIG.md#networks)), `MAINNET_ESPLORA_URL` an `http://` address such as `http://node.internal:3000`. What differs:
+
+- **The node's Esplora, Electrum and RPC are on a network.** None of them encrypts, and the first two do not authenticate. Put them on a private network or a tunnel (WireGuard, SSH) that only the server's host can reach.
+- **Every node call crosses it.** With the mempool engine on, the server reads about 150 MB a minute of RPC answers on mainnet ([`CONFIG.md`](CONFIG.md#the-live-mempool)): about 9 GB an hour between the two hosts. The backfill's old blocks are mostly round trips, so it runs slower over a network ([`STORE.md`](STORE.md#backfill)).
+- **No bulk routes.** rbitcoin's `/internal/*` routes are only on its unix socket. Today the server calls none of them, so nothing is lost yet; a later release may use them when they are there.
+
+### Try it on regtest first
+
+The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In `.env`, in place of the mainnet lines:
+
+```sh
+NETWORK=regtest
+P2P_PORT=18444
+P2P_PUBLISH=127.0.0.1:0
+HTTP_PUBLISH=127.0.0.1:0
+REGTEST_RPC_HOST=node
+REGTEST_RPC_PORT=8332
+REGTEST_RPC_USER=rbitcoin-space
+REGTEST_RPC_PASSWORD=…                    # the password in rpc.cookie
+REGTEST_ESPLORA_URL=/run/esplora/esplora.sock
+REGTEST_ELECTRUM_ADDR=node:50001
+```
+
+`127.0.0.1:0` lets Docker choose free host ports; `docker compose port server 8080` prints the server's. The app is at `/regtest/`. Mine blocks with JSON-RPC from a container on the compose network:
+
+```sh
+docker run --rm --network rbitcoin-space_default curlimages/curl:8.11.1 -su "rbitcoin-space:$pass" \
+  -d '{"method":"generatetoaddress","params":[101,"bcrt1qft5p2uhsdcdc3l2ua4ap5qqfg4pjaqlp250x7us7a8qqhrxrxfsqseac85"]}' http://node:8332/
+```
+
+`docker compose down -v` removes the chain and the store.
+
+## Health
+
+| Route | Answers | Use it for |
 |---|---|---|
-| `read_only: true` | both | Nothing can be written outside the volumes, so a compromised process cannot drop files or alter its binary. Each writes only its own `/data` volume |
-| `cap_drop: [ALL]` | both | Neither binds a port below 1024 or needs any other privilege |
-| `no-new-privileges` | both | A setuid binary cannot raise privileges. Neither image has one; this keeps it so |
-| Non-root users | both | The server runs as 65532, the node as 10001, as their images set |
-| Only P2P published | node | RPC and Electrum listen on the compose network, Esplora on a socket. The browser never reaches the node ([`SECURITY.md`](SECURITY.md) rule 1) |
-| Server on loopback | server | Reached through the reverse proxy alone. The example trusts no proxy header until you set one up ([below](#tls-and-the-reverse-proxy)) |
-| Socket volume is tmpfs, owner 10001, mode 0750 | both | The socket never outlives the stack, and only the node's uid and group can enter the directory |
-| `group_add: ["10001"]` | server | rbitcoin creates the socket mode 0660 owned by 10001:10001. The server joins that group to connect, instead of running as the node's uid |
-| Socket volume read-only | server | Connecting to a socket needs no write access to its directory |
-| Credentials in `.env` and `rpc.cookie` | both | Nothing secret is in an image or in `compose.yml`. The image carries no configuration beyond `LISTEN_ADDR` and `WEB_DIR` |
-| `stop_grace_period: 5m` | node | rbitcoin flushes its store on SIGTERM |
-| Images pinned by digest | node | The tag cannot be moved under a running deployment |
+| `/healthz` | `200` `{"status":"ok","version":…}` while the process serves HTTP. Never asks the node | Liveness. It is the image's own health check, so `docker compose ps` shows `healthy` |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp; and `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`), which does not count towards `ready` | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs` |
+
+```sh
+curl -s http://127.0.0.1:8080/readyz
+```
+
+`/readyz` costs the node nothing per request: it reads the Electrum client's state and the last RPC check, which each network makes at startup and every 30 seconds. Neither route is logged when it passes. `/readyz` says nothing about the store or the address index; [watch the log](#watching-it) for those.
+
+Lightning is left out of readiness on purpose: the explorer serves blocks, transactions and the mempool whatever the Lightning peer does, and a first sync takes minutes. Watch `lightning` (or `/app/lightning/status`) to know when the Lightning pages have data.
+
+The compose file adds no health check of its own and restarts on exit, not on health. The usual reason for not being ready is the node, which can take hours to sync, and restarting the server would not help.
+
+## TLS and the reverse proxy
+
+Put a reverse proxy on the host in front of `127.0.0.1:8080`. Three things matter, and each is easy to get wrong:
+
+1. **Compress `/api` and `/app` answers in the proxy.** The server does not compress what it computes; only the frontend's files come precompressed. Uncompressed, a list of blocks is about four times larger on the wire.
+2. **Tell the server who the client is**, or every visitor shares the proxy's rate limits. The server reads the client's address from a header only when you name the header and the proxy's address ([below](#client-addresses)); until then it ignores the header, so a client cannot choose its own address ([`SECURITY.md`](SECURITY.md) rule 7).
+3. **Serve it over HTTPS, on the same origin as the WebSocket.** Browsers switch some features off on plain HTTP anywhere but `localhost`, the clipboard API among them (the copy buttons fall back to an older way there), and anything on the path can read or change the pages. And `/app/ws` refuses an upgrade whose `Origin` is not the page's own host and port, so the proxy must pass the browser's `Host` through unchanged ([`SECURITY.md`](SECURITY.md) rule 21).
+
+### Caddy
+
+[Caddy](https://caddyserver.com/docs/install) gets and renews the certificate itself, proxies WebSockets and passes `Host` through by default. The whole site:
+
+```caddyfile
+explorer.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+}
+```
+
+- `encode` compresses `application/json` and the other text types, and leaves the frontend's precompressed files alone.
+- `header_up X-Real-IP {remote_host}` overwrites whatever `X-Real-IP` the client sent with the address Caddy saw.
+
+This was tested with Caddy 2.11.9, with a certificate from a file in place of an automatic one (`tls cert.pem key.pem` inside the site block).
+
+### Any other proxy
+
+It must:
+
+| Do | Why | nginx, for example (not tested here) |
+|---|---|---|
+| Terminate TLS and redirect HTTP to HTTPS | [Point 3](#tls-and-the-reverse-proxy) | `listen 443 ssl`, `return 301 https://$host$request_uri` |
+| Forward every path unchanged, every network prefix included | The app, `/api`, `/app` and `/signet/…` are one site | `location / { proxy_pass http://127.0.0.1:8080; }` |
+| Pass `Host` as the browser sent it, port included | The WebSocket origin check compares `Origin` with it | `proxy_set_header Host $http_host;` |
+| Upgrade WebSockets on `/app/ws` and `/api/v1/ws`, under every prefix | Live blocks, mempool and followed transactions | `proxy_http_version 1.1;` and the `Upgrade` and `Connection` headers |
+| Keep an idle WebSocket open for at least 60 s | The server pings a quiet socket every 30 s (`WS_IDLE_TIMEOUT_SECS`) | `proxy_read_timeout` is 60 s by default |
+| Overwrite the client-address header, or append to `X-Forwarded-For` | [Client addresses](#client-addresses) | `proxy_set_header X-Real-IP $remote_addr;` |
+| Compress `application/json` | [Point 1](#tls-and-the-reverse-proxy) | `gzip on; gzip_types application/json;` |
+| Accept request bodies of 1 MB | A broadcast transaction may be 800,000 hex characters ([`API.md`](API.md#broadcast)) | `client_max_body_size` is 1 MB by default |
+
+A CDN in front must also honour the server's `Cache-Control` headers: confirmed blocks are cacheable for long, live answers are `no-store`.
+
+### Client addresses
+
+Once the proxy runs, tell the server two things in `.env`: the header the proxy writes, and the address the proxy's connections arrive from **as the server sees them**, inside its container. That is not `127.0.0.1`: a proxy on the host reaches the published port through the compose network's gateway. Find it:
+
+```sh
+docker network inspect rbitcoin-space_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+```
+
+A worked example. The command printed `172.18.0.1`, and Caddy writes `X-Real-IP` as above. Add to `.env`:
+
+```sh
+TRUSTED_PROXY_HEADER=X-Real-IP
+TRUSTED_PROXIES=172.18.0.1
+LOG_CLIENT_ADDR=true                       # only while you check; it is off for privacy
+```
+
+and apply it with `docker compose up -d`. Now load the site from your own machine and look at the `client` in the server's log:
+
+```sh
+docker compose logs --no-log-prefix server | grep '"http_request"' | tail -n 3
+```
+
+It must be your own address. If it is the gateway, the server is not reading the header: check both settings. Then remove `LOG_CLIENT_ADDR` and run `docker compose up -d` again.
+
+How the address is found, `X-Forwarded-For` and chains of proxies are in [`CONFIG.md`](CONFIG.md#client-addresses). Two cautions:
+
+- Docker may give the network another subnet when it is recreated, after `docker compose down`. Check the gateway again after one.
+- Anything on the host that connects to the published port comes from the same gateway and is trusted like the proxy. That is why the port stays on loopback: the host is part of the proxy's trust. Never trust a range that clients can connect from.
+
+### Check it
+
+From any machine, against your domain:
+
+```sh
+curl -s -o /dev/null -H 'Accept-Encoding: zstd, gzip' -w '%{http_code} %header{content-encoding}\n' \
+  https://explorer.example.com/api/blocks                  # 200 zstd: compressed
+curl -s -o /dev/null --max-time 3 -w '%{http_code}\n' --http1.1 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Origin: https://explorer.example.com' \
+  https://explorer.example.com/app/ws                      # 101: the WebSocket upgrades
+```
+
+The second prints `101` and then waits until `--max-time`, because the socket stays open. A `403` there means the proxy changed `Host` ([below](#when-it-goes-wrong)).
+
+## The data directory
+
+The server keeps one SQLite file per network, `<network>.sqlite`, with `-wal` and `-shm` beside it while it runs. In the compose setup it is the `rbitcoin-space_server-data` volume, mounted at `/data`. It holds only what the server derived or observed, never a copy of what the node stores ([`STORE.md`](STORE.md)):
+
+| Kept | Rebuilt if lost |
+|---|---|
+| One row per block: totals, fee rates, miner | Yes, by the backfill |
+| Block audits: what we expected against what was mined | No: observed as each block arrived |
+| Mempool history, a sample a minute, rolled into hours and days | No |
+| The replacement record: what replaced what, and when it was first seen | No |
+| With Lightning on: the record of channels opened and closed, and in `lightning/<network>/` the peer's node key and graph | The graph by a fresh sync of a few minutes; the closed channels no |
+
+So deleting it costs the backfill's time, and loses for good the audits, the mempool chart's past and the replacement history. The node is untouched either way.
+
+**Size on mainnet:** the block table is about 220 bytes a block, about 215 MB for the whole chain; audits add about 150 MB a year; the mempool history stays under 3 MB, and the replacement record at about 2 MB. The write-ahead log can add up to 64 MB.
+
+**Back it up while it runs** with SQLite's own backup, from a throwaway container (the image has no shell or `sqlite3`):
+
+```sh
+mkdir -p backup
+docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/backup":/backup alpine:3 \
+  sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 -readonly /data/mainnet.sqlite ".backup /backup/mainnet.sqlite"'
+```
+
+It is a consistent copy from one read snapshot, and the server keeps writing meanwhile. Copying the `.sqlite` file alone while the server runs can give a corrupt copy, because recent writes live in the `-wal` file.
+
+**Restore** with the server stopped, removing the old `-wal` and `-shm`:
+
+```sh
+docker compose stop server
+docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/backup":/backup:ro alpine:3 \
+  sh -c 'rm -f /data/mainnet.sqlite-wal /data/mainnet.sqlite-shm && cp /backup/mainnet.sqlite /data/ && chown 65532:65532 /data/mainnet.sqlite'
+docker compose start server
+```
+
+## The first start
+
+On its first start with an empty store the server runs the **backfill**: it fills the block table from the node, newest blocks first, with every block's totals and the last year's fee rates. The table is its progress, so it resumes where it stopped after any restart.
+
+- **How long.** On mainnet at the default pace, a full run measured about 430 blocks a minute at its start: about a day and a half for every block's totals, then fee rates for the year after that. The measured costs per era are in [`STORE.md`](STORE.md#backfill).
+- **What it reads.** Totals are small: about 1.2 GB from the node for the whole chain. Fee rates are not: each block's costs a 10 MB `getblock`, about 550 GB for the year. The node does that work, so a node on the same host matters here.
+- **Gentler.** `BACKFILL_BUSY_PERCENT` (default 50) is the share of time its one call keeps the node busy; lower is gentler and slower. `BACKFILL_FEE_RATE_DEPTH` (default 52560, a year) is how far back fee rates go; `0` skips them, and the block facts route then computes older blocks' rates on demand.
+- **Pause it** with `BACKFILL_ENABLED=false` in `.env` and `docker compose up -d`; set it back to resume. All three are in [`CONFIG.md`](CONFIG.md#block-table).
+- **Progress** is a `block_backfill_progress` line every minute: `rows` and `rated` against `tip`.
+
+Meanwhile the site works: blocks, transactions and addresses come from the node, the newest 100 rows follow the tip from the start, and mining charts and lists cover the rows filled so far, saying where their history starts. The mempool chart starts empty and fills a minute at a time; block audits start with the first block the server watches arrive.
+
+## Watching it
+
+### The log
+
+The server writes one JSON object per line to stdout: `ts`, `level`, `event`, then the event's fields. Every event is listed in [`LOGGING.md`](LOGGING.md). Docker keeps it; the compose file uses the `local` logging driver, which rotates it. Read it with:
+
+```sh
+docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
+```
+
+**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request (`LOG_REQUESTS=failures` keeps only the refused and failed ones). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` with `warming_up` lasts five minutes.
+
+**Alert on:**
+
+| Event or check | Means |
+|---|---|
+| Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `store_open_failed`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
+| `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
+| `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
+| `rpc_unreachable`, `electrum_unreachable`, `mempool_poll_failed`, `block_rows_failed` repeating | The node is failing or overloaded. They are logged at the 1st, 2nd, 4th, 8th… in a row, so a rising count is a long outage |
+| `store_slow_write`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full |
+| `connections_refused`, `log_events_dropped` | One address is holding many connections; the log cannot keep up |
+
+### Memory and CPU
+
+`docker stats` shows both. The figures to expect are [above](#the-host); memory grows with open WebSockets and the block summary cache, not with time.
+
+## Upgrading
+
+**Tags.** Each release is published once as `ghcr.io/smolcars/rbitcoin-space:X.Y.Z`, never moved, and as `latest`, which moves to the newest release. Pin `X.Y.Z` in `SERVER_IMAGE`; `latest` would upgrade the store whenever compose pulls. Every image is for linux/amd64 and linux/arm64 and carries a signed record of the commit and workflow that built it:
+
+```sh
+gh attestation verify oci://ghcr.io/smolcars/rbitcoin-space:0.1.0 --repo smolcars/rbitcoin-space
+```
+
+**Migrations run by themselves and are one-way.** A new release may add tables to the store; it applies them at start, each once, and logs a `store_migration_applied` line for each. An older release refuses a store a newer one has migrated: `store_open_failed`, and that network runs without a store. So **back up before upgrading**.
+
+To upgrade, read the release's notes, then:
+
+```sh
+VERSION=0.2.0
+git fetch --depth 1 origin tag "v$VERSION" && git checkout "v$VERSION"
+mkdir -p backup                             # then the backup command above
+sed -i.bak "s|^SERVER_IMAGE=.*|SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space:$VERSION|" .env && rm .env.bak
+docker compose up -d
+docker compose logs --no-log-prefix server | grep store_migration_applied
+```
+
+Run them from `deploy/`. If the server then stops with `config_invalid`, the new release refuses a setting the old one accepted: the line names it, and the release notes say what changed. It stops before it opens the store, so nothing is migrated until the setting is fixed. Checking out the tag also brings that release's compose file, which may pin a newer rbitcoin; compose then recreates the node too, and the node flushes its state on the way down (it has five minutes).
+
+**Rolling back** is the same with the old version, then [restoring](#the-data-directory) the backup you took before the upgrade if the new release migrated the store. What the server observed between the backup and the rollback (audits, mempool history, replacements) is lost. Without a backup, delete `mainnet.sqlite` instead: the old release starts empty and backfills again.
+
+## Switching features
+
+All of these are in [`CONFIG.md`](CONFIG.md); change `.env` and run `docker compose up -d`.
+
+- **Broadcast:** `BROADCAST_ENABLED=false` turns off `POST /api/tx`, the only write the server makes to the node.
+- **The live mempool,** per network: `MAINNET_MEMPOOL_ENABLED=false` stops the mempool tracker, projected blocks, fee recommendations of our own, mempool history and block audits for that network. Blocks and everything else keep working, and the node is spared about 150 MB a minute of RPC on mainnet.
+- **Limits** (rate limits, WebSocket caps, timeouts) have safe defaults derived from what the pages load ([`CONFIG.md`](CONFIG.md#limits)). Raise the per-client ones if many of your users share one address.
 
 ### Lightning
 
@@ -98,51 +327,9 @@ Off unless `MAINNET_LIGHTNING_ENABLED=true` is in `.env` ([`CONFIG.md`](CONFIG.m
 
 It keeps a 32-byte node key and its graph (about 33 MB on mainnet) in `/data/lightning/mainnet/` on the `server-data` volume, beside the SQLite file that holds its history. The key is created on first start, readable by the server's user only; it identifies the peer to the nodes it dials and holds no funds. Deleting the directory costs a fresh sync (about 4 minutes and 50 MB of download on mainnet); deleting the SQLite file loses the record of closed channels ([`STORE.md`](STORE.md#ln_channels)). Memory: plan for 250 to 330 MB more with Lightning on (measured in [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server)).
 
-### TLS and the reverse proxy
-
-TLS is out of scope for the compose file. Put a reverse proxy (Caddy, nginx, …) on the host in front of `127.0.0.1:8080`.
-
-**Until you do, leave `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES` unset**, as `.env.example` ships them. Every client is then counted by the address it connects from, and a header it sends changes nothing.
-
-Once the proxy runs, tell the server two things ([`CONFIG.md`](CONFIG.md#client-addresses)): the header the proxy writes the client's address to, and the address the proxy's connections arrive from. The header is honoured only on connections from that address; the server refuses to start with one setting and not the other.
-
-The proxy must **overwrite** the header (or append to it), never pass on what the client sent. These lines do:
-
-```nginx
-# nginx, in the location that proxies to the server
-proxy_set_header X-Real-IP $remote_addr;          # overwrites anything the client sent
-proxy_set_header Host $http_host;                 # as the browser sent it, port included: the
-                                                  # WebSocket origin check compares against it
-proxy_http_version 1.1;
-proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";
-```
-
-```caddyfile
-# Caddy: reverse_proxy already passes Host through and appends to X-Forwarded-For
-explorer.example {
-    reverse_proxy 127.0.0.1:8080 {
-        header_up X-Real-IP {remote_host}         # overwrites anything the client sent
-    }
-}
-```
-
-with, in `.env`:
-
-```sh
-TRUSTED_PROXY_HEADER=X-Real-IP
-TRUSTED_PROXIES=172.18.0.1                        # the compose network's gateway: see below
-```
-
-**Which address.** The server sees the address a connection comes from inside its container, not `127.0.0.1`. A proxy on the host connecting to the published loopback port arrives from the compose network's gateway (Docker's port forwarding connects from there): often `172.18.0.1` on Linux, and on Docker Desktop for Mac a `192.168.x.1` address. Find it with `docker network inspect rbitcoin-space_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`, or read `client` from an `http_request` event with `LOG_CLIENT_ADDR=true` and the trusted settings unset. Docker can give the network another subnet when it is recreated, so check again after `docker compose down`. A proxy running as a container on the compose network arrives from that container's address. Trusting a whole private range (`172.16.0.0/12`) also works when nothing but the proxy can reach the server on it, which the loopback-only publish ensures; never trust a range clients can connect from.
-
-`X-Forwarded-For` works as well, written by a proxy that appends (nginx `$proxy_add_x_forwarded_for`, Caddy's default): the server reads the list from the right and skips the proxies it trusts, so what a client wrote at the left is ignored. With a CDN or a second proxy in front, list each hop's address in `TRUSTED_PROXIES`.
-
-Anything else on the host that connects to the published port arrives from the same gateway, so it is trusted like the proxy: the host is part of the proxy's trust. Clients elsewhere cannot reach the port, and a client of the proxy cannot get past it, since the proxy overwrites the header.
-
 ### Add a network
 
-The compose file runs one node. For a second network, copy the `node` service with its own name, volumes and network, and give the server that network's six variables. For signet beside mainnet:
+The compose file runs one node. For a second network, add a node service with its own name, volumes and network, and give the server that network's six variables. For signet beside mainnet, in `compose.yml`:
 
 ```yaml
 services:
@@ -182,15 +369,89 @@ SIGNET_ESPLORA_URL=/run/signet/esplora.sock
 SIGNET_ELECTRUM_ADDR=signet:50001
 ```
 
-The server serves it under `/signet` ([`ARCHITECTURE.md`](ARCHITECTURE.md)). P2P ports: mainnet 8333, signet 38333, testnet4 48333, regtest 18444.
+The server serves it under `/signet` ([`ARCHITECTURE.md`](ARCHITECTURE.md#networks)). P2P ports: mainnet 8333, signet 38333, testnet4 48333, regtest 18444.
 
-### Try it on regtest
+## Security checklist
 
-The same file runs a regtest node: set `NETWORK=regtest`, `P2P_PORT=18444`, `P2P_PUBLISH=127.0.0.1:0` and `HTTP_PUBLISH=127.0.0.1:0` (Docker picks free host ports), and the six `REGTEST_*` variables in place of `MAINNET_*`. Then `docker compose -p <name> up -d --build` and `docker compose -p <name> port server 8080`. The app is at `/regtest/`. Mine with JSON-RPC from a container on the compose network:
+From [`SECURITY.md`](SECURITY.md), for the operator:
+
+- [ ] The node's RPC, Esplora and Electrum are reachable by the server only: on the compose network and the socket, or a private network. Only P2P is published.
+- [ ] The server's port is on loopback (`HTTP_PUBLISH` unchanged) and reached only through the proxy.
+- [ ] The site is served over HTTPS, and HTTP redirects to it.
+- [ ] `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES` are set only once the proxy overwrites the header, `TRUSTED_PROXIES` names the proxy's address and nothing clients can reach, and the [check](#client-addresses) showed your own address.
+- [ ] `LOG_CLIENT_ADDR` is off, unless you mean to keep a record of who looked at what.
+- [ ] `.env` and `rpc.cookie` are readable by their owners only, and the password is long and random.
+- [ ] The limits are at their defaults or raised for a stated reason; none is switched off (none can be).
+- [ ] `BROADCAST_ENABLED=false` if you do not want the site to relay transactions.
+- [ ] The image is pinned to a version, and you watch the releases for security fixes.
+
+Report a vulnerability privately through [GitHub's security advisories](https://github.com/smolcars/rbitcoin-space/security/advisories/new) on this repository.
+
+## When it goes wrong
+
+Read the log as [above](#the-log) and `/readyz`.
+
+| Symptom | The log says | Do |
+|---|---|---|
+| The server stops at once | `config_invalid` with the variable's name (never its value) | Fix that variable. A network needs all six of its variables or none ([`CONFIG.md`](CONFIG.md#networks)) |
+| Pages load but nothing from the chain; `/readyz` `503` with `rpc` `unreachable` | `rpc_unreachable`, `electrum_unreachable` and `mempool_poll_failed` with `unavailable`, repeating | The node is down or its address is wrong: `docker compose ps`, `docker compose logs node`, then the `*_HOST`, `*_PORT` and `*_ADDR` settings |
+| `/readyz` `503` with `rpc` `auth_failed` | `rpc_auth_failed` (an `error`), then `mempool_poll_failed` with `auth` | The password in `.env` and the one in `rpc.cookie` differ. Make them equal and `docker compose up -d --force-recreate` |
+| Address pages show an error; everything else works | `http_request` with `status` `503` and `endpoint` `script_stats` or `script_txs` | The node runs without `--sh-index`, which rbitcoin leaves off by default. Turn it on, as the compose file does |
+| Visitors get `429`, on pages they barely used | `http_request` with `refused` `client_rate` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up, or `TRUSTED_PROXIES` is not the address the proxy arrives from. Check with `LOG_CLIENT_ADDR=true` |
+| The store stopped: no mining history, audits or mempool chart | `store_open_failed` with `database or disk is full`, or `block_rows_failed` with `store` while running | The disk is full. Free space and `docker compose restart server`. Block rows are retried and filled in; the minutes of mempool history missed meanwhile are a gap |
+| The store stopped after a rollback | `store_open_failed` with `database schema version 5 is newer than this build supports (2)` | An older release cannot open a store a newer one migrated. [Restore the backup](#upgrading) or delete the file |
+| Live updates never arrive; the home page does not move | `ws_origin_refused` with the `origin` and `host` it compared | The proxy changes `Host`. Pass it through as the browser sent it, port included |
+| Same, but nothing about the WebSocket in the server's log | No `http_request` with route `/app/ws` | The proxy does not forward the upgrade. See [any other proxy](#any-other-proxy) |
+| `docker compose up` or a pull hangs on a host nobody is logged in to | | A Docker credential helper (`credsStore` in `~/.docker/config.json`: a keychain, `pass`, `secretservice`) is waiting for an unlock prompt. The release image needs no login: pull with `DOCKER_CONFIG` pointing at a directory whose `config.json` sets no `credsStore` |
+| The disk fills with logs | | Logs rotate under the compose file's `local` driver (100 MB a container). A container started another way uses Docker's default `json-file`, which does not rotate |
+
+## Reference: the image
 
 ```sh
-docker run --rm --network <name>_default curlimages/curl -su "rbitcoin-space:$pass" \
-  -d '{"method":"generatetoaddress","params":[101,"bcrt1q…"]}' http://node:8332/
+docker build -t rbitcoin-space .
 ```
 
-`docker compose -p <name> down -v` removes the chain. If `docker pull` from ghcr.io does not work on your machine, load the rbitcoin image another way and set `RBITCOIN_IMAGE=ghcr.io/rbitcoin-org/rbitcoin:0.9.2`, since a loaded image has no digest to match.
+The [`Dockerfile`](../Dockerfile) has three stages. Base images are multi-arch and pinned by digest; all come from Docker Hub or `gcr.io`.
+
+| Stage | From | Does |
+|---|---|---|
+| `web` | `oven/bun` | `bun install --frozen-lockfile` and `bun run build`. Runs on the build platform only, since the output is the same on every architecture |
+| `server` | `rust` (Debian 13) | `cargo build --release --locked -p rbitcoin-space`. The cargo registry and `target/` are BuildKit cache mounts, so a one-file change recompiles one crate. The Rust tag must match `rust-toolchain.toml`, which is not copied in |
+| final | `gcr.io/distroless/cc-debian13:nonroot` | The binary at `/usr/local/bin/rbitcoin-space`, the frontend at `/srv/web`. No shell, no package manager |
+
+Defaults inside the image: `LISTEN_ADDR=0.0.0.0:8080` and `WEB_DIR=/srv/web`. Everything else is configured as in [`CONFIG.md`](CONFIG.md). It does not set `DATA_DIR`; without it the server keeps no store.
+
+It runs as uid and gid 65532, needs no capabilities, and writes only to `/data`, an empty directory it owns, so it runs with a read-only root filesystem and a volume at `/data`. Its health check is the binary itself: `rbitcoin-space healthcheck` asks the server at `LISTEN_ADDR` for `/healthz` and exits 0 on a 200, 1 otherwise. With `LISTEN_ADDR` port 0 there is nothing to check; do not use port 0 in a container.
+
+[`.dockerignore`](../.dockerignore) is an allow-list: only `Cargo.toml`, `Cargo.lock`, `crates/`, `web/` (without `node_modules/` and `dist/`) and the parts of `design/` the app imports (`tokens.css`, `logo.svg`, `fonts/`) reach the build. `.env`, `target/` and everything else stay out.
+
+Check those claims on any image:
+
+```sh
+docker image inspect -f '{{.Config.User}}' ghcr.io/smolcars/rbitcoin-space:0.1.0      # 65532:65532
+c=$(docker create ghcr.io/smolcars/rbitcoin-space:0.1.0)
+docker export "$c" | tar -t | grep -E '^(usr/)?(local/)?s?bin/.'                         # usr/local/bin/rbitcoin-space, alone
+docker rm "$c"
+```
+
+Measured 2026-11-12: 51 MB unpacked, 16.6 MB compressed for amd64 and 17.0 MB for arm64. A cold build takes about 2 minutes on GitHub's runners, 18 s on an Apple Silicon Mac with the base images pulled. The [release workflow](CI.md#releases) builds and publishes both architectures.
+
+### Hardening in the compose file, and why
+
+| Choice | Applies to | Why |
+|---|---|---|
+| `read_only: true` | both | Nothing can be written outside the volumes, so a compromised process cannot drop files or alter its binary. Each writes only its own `/data` volume |
+| `cap_drop: [ALL]` | both | Neither binds a port below 1024 or needs any other privilege |
+| `no-new-privileges` | both | A setuid binary cannot raise privileges. Neither image has one; this keeps it so |
+| Non-root users | both | The server runs as 65532, the node as 10001, as their images set |
+| Only P2P published | node | RPC and Electrum listen on the compose network, Esplora on a socket. The browser never reaches the node ([`SECURITY.md`](SECURITY.md) rule 1) |
+| Server on loopback | server | Reached through the reverse proxy alone. No proxy header is trusted until you set one up ([above](#client-addresses)) |
+| Socket volume is tmpfs, owner 10001, mode 0750 | both | The socket never outlives the stack, and only the node's uid and group can enter the directory |
+| `group_add: ["10001"]` | server | rbitcoin creates the socket mode 0660 owned by 10001:10001. The server joins that group to connect, instead of running as the node's uid |
+| Socket volume read-only | server | Connecting to a socket needs no write access to its directory |
+| Credentials in `.env` and `rpc.cookie` | both | Nothing secret is in an image or in `compose.yml`. The cookie is a file and not compose `content`, because compose cannot copy content into a container whose root filesystem is read-only |
+| `local` logging driver | both | Docker's default `json-file` never rotates; `local` keeps five files of 20 MB |
+| `stop_grace_period: 5m` | node | rbitcoin flushes its store on SIGTERM |
+| Images pinned by digest | node | The tag cannot be moved under a running deployment |
+
+If `docker pull` from ghcr.io does not work on your machine, load the rbitcoin image another way and set `RBITCOIN_IMAGE=ghcr.io/rbitcoin-org/rbitcoin:0.9.2`, since a loaded image has no digest to match.

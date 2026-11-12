@@ -160,6 +160,8 @@ For all of mainnet (975,000 blocks), extrapolated era by era:
 | Both, interleaved as the backfill runs them | 19 h | 550 GB | totals complete after about 21 h, everything after about 38 h |
 | Fee rates for all of history | about 9.7 days | | why the default is a year |
 
+**Observed** on a full mainnet run started on 2026-11-12 at the default 50%: about 430 blocks a minute at its start, slower than the estimate above. If that pace held, every block's totals would take about a day and a half, not 21 hours.
+
 **What it costs the node per hour** at 50%: one call from the backfill for half the hour, so 30 minutes of one of the node's 16 RPC work slots, and nothing while the other four shared slots are busy, since it never uses them. While it rates recent blocks it reads about 7 GB an hour (one 10 MB `getblock` every 5 s), most of it the node's JSON encoding; once the year is rated, about 80 MB an hour, and when caught up, one `getblockstats` and a coinbase lookup per new block. Old blocks' totals are mostly round trips: `/block/:hash/txid/0` is one request per block, about 8 ms over the network measured and far less on the node's own host.
 
 Unfiltered `getblockstats` took about 1 s per recent block (its UTXO statistics), forty times the filtered call; the backfill never asks for them ([`RBITCOIN.md`](RBITCOIN.md)).

@@ -1,5 +1,5 @@
 # rbitcoin.space beside rbitcoin v0.9.2, for one network. docs/DEPLOY.md explains every choice.
-# From this directory, with .env filled in from .env.example: docker compose up -d --build
+# From this directory, with .env filled in from .env.example: docker compose up -d
 name: rbitcoin-space
 
 x-hardened: &hardened
@@ -7,6 +7,9 @@ x-hardened: &hardened
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   restart: unless-stopped
+  # Docker's default json-file driver never rotates; local keeps five files of 20 MB.
+  logging:
+    driver: local
 
 services:
   node:
@@ -34,6 +37,8 @@ services:
 
   server:
     <<: *hardened
+    # A release, ghcr.io/smolcars/rbitcoin-space:<version>, set in .env. Unset, compose builds
+    # the image from this checkout.
     image: ${SERVER_IMAGE:-rbitcoin-space}
     build: ..
     env_file: .env

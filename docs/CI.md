@@ -29,7 +29,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
 | `ci-ok` | always | Fails if any job above failed |
 
-Outside the PR path, daily and when a lockfile changes on `master`: the [dependency audit](#dependency-audit) (`audit.yml`). Weekly: the browser tests in [other browsers](#other-browsers) (`browsers.yml`). After merge to `master`: the full Docker image build on both architectures (`image.yml`).
+Outside the PR path, daily and when a lockfile changes on `master`: the [dependency audit](#dependency-audit) (`audit.yml`). Weekly: the browser tests in [other browsers](#other-browsers) (`browsers.yml`). After merge to `master`, and on a version tag: the [release workflow](#releases) (`release.yml`).
 
 ## Dependency audit
 
@@ -59,6 +59,28 @@ python3 -I dev/audit/audit.py   # exit 0: clean; 1: the issue's Markdown on stdo
 `browsers.yml` runs `bun run e2e` in Playwright's WebKit and Firefox, each at desktop and phone width: four jobs at once ([`FRONTEND.md`](FRONTEND.md#other-engines)). It runs every Monday and on manual dispatch (`gh workflow run browsers.yml`), never on a pull request, whose budget has no room for it. Its token reads only. Its jobs restore the cargo cache the `e2e` job saves on `master` and save none of their own; each engine's browser build is cached under the Playwright version, and its system libraries come from apt on every run. Each job times out at 20 minutes.
 
 A failure here means a page broke in an engine Chromium hides, or a test assumed Chromium. It is not Safari on a Mac or an iPhone: Playwright builds its own WebKit, here on Linux, so a green run does not replace a look in real Safari.
+
+## Releases
+
+`release.yml` builds the server's image ([`DEPLOY.md`](DEPLOY.md#reference-the-image)) for linux/amd64 and linux/arm64, each natively on a runner of its architecture, and joins them into one multi-architecture image. Never on a pull request.
+
+| Trigger | Does |
+|---|---|
+| A push to `master` touching anything that goes into the image, `deploy/` or the workflow; a manual dispatch, on any ref, a tag's included | A dry run: build, check and join both architectures. Publishes nothing |
+| A pushed tag `vX.Y.Z` | The same, then publishes the image and creates the release |
+
+| Job | Permissions | Does |
+|---|---|---|
+| `build`, once per architecture | `contents: read` | Fails a tag that is not `v` and the version in `Cargo.toml` (the server reports that version). `docker build` with the OCI `source`, `revision`, `version` and `licenses` labels. Checks the image runs as 65532, holds no program but the server and no `.env`, `rpc.cookie` or `.git`, and turns healthy started read-only with no capabilities, and that `deploy/compose.yml` validates. Saves the image as an artifact |
+| `join` | none | With `skopeo` and `jq`, which GitHub's Ubuntu runners have: copies both images into one OCI layout, gzipping their layers, and writes an image index over them, annotated like the labels. Takes the image for its own platform back out of the index and runs it until healthy. Writes each platform's compressed size to the run's summary, and uploads the layout |
+| `publish`, pushed tags only | `packages: write`, `id-token: write`, `attestations: write` | One at a time across all tags. Refuses a version already in the registry, so re-running an old release changes nothing, and stops on any registry error other than "not there". Pushes exactly that layout to `ghcr.io/<owner>/<repo>` as `X.Y.Z`, and as `latest` when it is the newest version there, with its digests unchanged, checks the registry's digest is the joined index's, and attests its provenance with GitHub's `attest-build-provenance` (signed through Sigstore, pushed beside the image) |
+| `release`, pushed tags only | `contents: write` | Creates the GitHub release: the image and its digest, how to verify the attestation, a pointer to the upgrade steps, then GitHub's generated list of changes |
+
+The only token is the built-in `GITHUB_TOKEN`; third-party actions are pinned by commit. Every job has a timeout. There is no layer cache between runs: the Dockerfile's cache mounts live only as long as the runner, and a cold build of both architectures fits in a few minutes.
+
+Measured on 2026-11-12, a dry run with no cache: `build` 1 min 47 s on amd64 and 2 min 0 s on arm64, side by side, `join` 13 s, 2 min 22 s from start to end. Each image is about 17 MB compressed.
+
+**To release:** set `version` in the root `Cargo.toml` to the new version in a PR, merge it, then tag that commit `vX.Y.Z` on `master` and push the tag. A pushed tag cannot be taken back quietly: the release is public at once. After the first release, check in the package's settings on GitHub that the image is public and linked to this repository, since a new package can start private, and operators pull it without logging in.
 
 ## Test layers
 
