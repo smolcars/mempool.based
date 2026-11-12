@@ -1,17 +1,22 @@
 // The projected side of the block strip as a pure model: which projection to show against the
 // mined blocks on screen, as which tiles, and what a newly mined block was projected to be.
 //
-// The `blocks` topic and the `projected` topic arrive in any order, up to a second or two apart.
-// So a projection is always read against the mined blocks shown: one made on a block that is no
-// longer the tip is shifted by the blocks mined since (its block 1 is now next), and one made on
-// a block the strip has not shown yet is held back for a moment, so the tile people were watching
-// is still there to cross the line when that block lands.
+// The server sends a block's `block` message before any projection on it (docs/WS.md "When a block
+// is found"), so on the socket the strip always has the block first, and the projection on its
+// parent is still here to say what the block was projected to be. A projection is still read
+// against the mined blocks shown: one made on a block that is no longer the tip is shifted by the
+// blocks mined since (its block 1 is now next), and one made on a block the strip has not shown
+// yet is held back for a moment. That happens only while the strip catches up over HTTP (a gap, a
+// reconnect), so the tile people were watching is still there to cross the line when it lands.
 import type { Block } from "../../lib/esplora";
 import type { ProjectedBlock, ProjectedMessage, Projection } from "../../lib/projected-topic";
 
 /** Tiles left of the "now" line: three blocks and one for everything after them. */
 export const SLOTS = 4;
-/** A projection ahead of the mined blocks shown waits this long for them before it is shown. */
+/**
+ * A projection ahead of the mined blocks shown waits this long for them before it is shown. Still
+ * needed: the order the server promises holds on the socket, not for the HTTP refetch after a gap.
+ */
 export const HOLD_MS = 5_000;
 /** Tips remembered, so a block mined in a burst can still find what it was projected to be. */
 const KEPT = 8;

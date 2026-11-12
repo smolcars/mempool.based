@@ -3,8 +3,10 @@ import { mount } from "../../components/test-utils";
 import { clearApiCache } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { FakeSocket, fakeBlock } from "../../lib/fakes";
+import { groupDigits } from "../../lib/format";
 import { type BlockSummary, clearSummaries } from "../../lib/summary";
 import HomePage from "./HomePage";
+import { FEES_CONFIRM_MS, FEES_POLL_MS } from "./fees";
 import { PACE_MS } from "./RecentTxs";
 
 const chain = (from: number, to: number, branch = "a") =>
@@ -20,7 +22,20 @@ const MEMPOOL = {
     [0.15, 500],
   ],
 };
-const FEES = { "1": 5.2, "3": 1.1, "6": 0.5, "144": 0.12 };
+/** A `fees` message: rates fastest first, in sat per 1,000 vB as on the wire. */
+const feesMsg = (source: "projected" | "node", [high, medium, low, noRush]: number[]) => ({
+  topic: "fees",
+  type: "fees",
+  source,
+  tip: source === "projected" ? { height: 10, hash: fakeBlock(10).id } : null,
+  levels: [
+    { name: "high", blocks: 1, minutes: 10, rate: high },
+    { name: "medium", blocks: 3, minutes: 30, rate: medium },
+    { name: "low", blocks: 6, minutes: 60, rate: low },
+    { name: "no_rush", blocks: 144, minutes: 1440, rate: noRush },
+  ],
+  min_fee_rate: 100,
+});
 const RECENT = [{ txid: "c".repeat(64), fee: 300, vsize: 150, value: 12_345 }];
 
 let replies: Record<string, () => Response>;
@@ -52,7 +67,6 @@ beforeEach(() => {
   replies = {
     "/blocks": () => Response.json(blocksServed),
     "/mempool": () => Response.json(MEMPOOL),
-    "/fee-estimates": () => Response.json(FEES),
     "/mempool/recent": () => Response.json(RECENT),
   };
   serve();
@@ -61,10 +75,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The mined tiles on screen, not the ones fading out. */
 const tileHeights = (el: HTMLElement) =>
-  [...el.querySelectorAll<HTMLElement>(".home-strip__lane > li[data-height]")].map((li) =>
-    Number(li.dataset["height"]),
-  );
+  [
+    ...el.querySelectorAll<HTMLElement>(
+      ".home-strip__lane > li[data-height]:not(.home-tile--leaving)",
+    ),
+  ].map((li) => Number(li.dataset["height"]));
 const blocksFetches = () => requests.filter((p) => p === "/blocks").length;
 
 /** The server says it does not track this network's mempool: every mempool topic is off. */
@@ -93,8 +110,9 @@ describe("home page", () => {
     expect(el.querySelector(".home-live")?.textContent).toContain("Connecting");
   });
 
-  it("shows the blocks, the mempool, the node's estimates and the latest transactions", async () => {
-    const { el } = await open();
+  it("shows the blocks, the mempool, the fees and the latest transactions", async () => {
+    const { el, ws } = await open();
+    ws.receive(feesMsg("node", [5200, 1100, 500, 120]));
     expect(tileHeights(el)).toStrictEqual(chain(1, 10).map((b) => b.height));
     expect(el.querySelector(".home-tile--mined a")?.getAttribute("href")).toBe(
       `/regtest/block/${fakeBlock(10).id}`,
@@ -102,7 +120,7 @@ describe("home page", () => {
     await vi.waitFor(() => expect(el.querySelector(".home-stats")?.textContent).toContain("3"));
     expect(el.querySelector(".home-stats")?.textContent).toContain("1\u202F500 vB");
     expect(el.querySelector(".home-stats")?.textContent).toContain("≈ 1 block");
-    expect(el.querySelector(".home-ladder__list")?.textContent).toContain("5.20");
+    expect(el.querySelector(".home-ladder__list")?.textContent).toContain("5.200");
     expect(el.querySelector(".home-fees__note")?.textContent).toContain("node's own estimates");
     await vi.waitFor(() =>
       expect(el.querySelector(".home-recent tbody")?.textContent).toContain("cccccccc"),
@@ -117,21 +135,20 @@ describe("home page", () => {
     const el = mount(() => <HomePage />, "/regtest/");
     FakeSocket.last().hello();
     mempoolOff(FakeSocket.last());
-    await vi.waitFor(() => expect(el.querySelectorAll('[role="alert"]')).toHaveLength(4));
+    FakeSocket.last().receive({ topic: "fees", type: "unavailable" });
+    await vi.waitFor(() => expect(el.querySelectorAll('[role="alert"]')).toHaveLength(3));
     expect(el.textContent).toContain("Could not load the latest blocks");
     expect(el.textContent).toContain("Upstream unavailable.");
     expect(el.textContent).toContain("Could not load the mempool");
-    expect(el.textContent).toContain("Could not load fee estimates");
+    expect(el.textContent).toContain("No recommendation right now");
   });
 
   it("shows an empty mempool as empty, not as missing", async () => {
     replies["/mempool"] = () =>
       Response.json({ count: 0, vsize: 0, total_fee: 0, fee_histogram: [] });
-    replies["/fee-estimates"] = () => Response.json({});
     replies["/mempool/recent"] = () => Response.json([]);
     const { el } = await open();
     await vi.waitFor(() => expect(el.textContent).toContain("Nothing is waiting"));
-    expect(el.textContent).toContain("The node has no fee estimates yet");
     expect(el.textContent).toContain("No transactions are waiting");
     expect(el.querySelector(".home-stats")?.textContent).toContain("empty");
   });
@@ -166,12 +183,25 @@ describe("the strip, kept live", () => {
     expect(blocksFetches()).toBe(fetched);
   });
 
-  it("refetches over HTTP on a gap", async () => {
-    const { el, ws } = await open();
-    blocksServed = chain(4, 13);
-    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
-    await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
-    expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
+  it("refetches over HTTP on a gap, and shows ten blocks while the ones it drops fade out", async () => {
+    // The tests have no motion tokens, so a leaving tile's fade lasts 0 ms and its ghost goes at a
+    // timer's whim: a read could find it or not. Give the fade a length, so it is always there.
+    document.documentElement.style.setProperty("--dur-slow", "10s");
+    try {
+      const { el, ws } = await open();
+      blocksServed = chain(4, 13);
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
+      await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
+      expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
+      // The three it dropped fade where they stood: hidden from readers, not links to follow.
+      const ghosts = [
+        ...el.querySelectorAll<HTMLElement>(".home-strip__lane > .home-tile--leaving"),
+      ];
+      expect(ghosts.map((g) => Number(g.dataset["height"]))).toStrictEqual([3, 2, 1]);
+      expect(ghosts.every((g) => g.getAttribute("aria-hidden") === "true" && g.inert)).toBe(true);
+    } finally {
+      document.documentElement.style.removeProperty("--dur-slow");
+    }
   });
 
   it("refetches on a resync whose tip differs, and not on one that matches", async () => {
@@ -390,8 +420,26 @@ describe("the tiles' fee facts", () => {
   it("keeps the gauge and the block's size when the facts cannot be had", async () => {
     const { el } = await open();
     const t = tile(el, 10) as HTMLElement;
-    await vi.waitFor(() => expect(t.querySelector(".home-tile__fee")?.textContent).toBe("250 vB"));
+    await vi.waitFor(() => expect(t.querySelector(".home-tile__fee")?.textContent).toBe("250 B"));
     expect(t.querySelector(".home-tile__range")?.textContent).toBe("under 1% full");
+  });
+
+  it("gives a block's size as its serialized size, in B, kB or MB", async () => {
+    const sizes = [9_999, 10_000, 999_994, 999_995, 1_690_000];
+    blocksServed = chain(1, 10);
+    for (const [i, size] of sizes.entries()) Object.assign(blocksServed[i] ?? {}, { size });
+    const { el } = await open();
+    const shown = () =>
+      [10, 9, 8, 7, 6].map((h) => tile(el, h)?.querySelector(".home-tile__fee")?.textContent);
+    await vi.waitFor(() =>
+      expect(shown()).toStrictEqual([
+        "9\u202F999 B",
+        "10.00 kB",
+        "999.99 kB",
+        "1.00 MB",
+        "1.69 MB",
+      ]),
+    );
   });
 
   it("fills a new block's tile from the WebSocket, without asking HTTP", async () => {
@@ -660,17 +708,17 @@ describe("the live mempool", () => {
       ws.receive(MEMPOOL_MSG);
       ws.receive(txsMsg([1, 2]));
       ws.receive(projectedMsg(10));
+      ws.receive(feesMsg("projected", [2001, 1031, 126, 100]));
       await vi.advanceTimersByTimeAsync(8_000);
       expect(count("/blocks")).toBe(1);
-      expect(count("/fee-estimates")).toBe(1);
       expect(summaryRequests()).toHaveLength(1);
       expect(count("/mempool")).toBe(0);
       expect(count("/mempool/recent")).toBe(0);
-      // A new tip asks for the estimates again, and only them.
+      expect(count("/v1/fees/precise")).toBe(0);
+      // A new tip asks for none of the panels: their topics bring what changed.
       ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
       await vi.advanceTimersByTimeAsync(100);
-      expect(count("/fee-estimates")).toBe(2);
-      expect(count("/mempool")).toBe(0);
+      expect(count("/v1/fees/precise") + count("/mempool") + count("/mempool/recent")).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -700,6 +748,8 @@ describe("the live mempool", () => {
       "0.4",
     ]);
     expect(el.querySelector(".home-recent tbody")?.textContent).toContain("dddddddd");
+    expect(el.querySelector(".home-recent tbody")?.textContent).toContain("250 vB");
+    expect(el.querySelector(".home-recent thead")?.textContent).toContain("Virtual size");
     expect(el.querySelectorAll(".home-recent tbody tr")).toHaveLength(2);
   });
 
@@ -927,3 +977,319 @@ describe("the projected tiles", () => {
     expect(mined.querySelector(".strata--morph")).toBeNull();
   });
 });
+
+const feeList = (el: HTMLElement) =>
+  [...el.querySelectorAll(".home-ladder__item")].map((i) => i.textContent);
+const feeNote = (el: HTMLElement) => el.querySelector(".home-fees__note")?.textContent ?? "";
+
+describe("the fee panel", () => {
+  it("shows the server's own recommendation at the node's resolution, slowest first", async () => {
+    const { el, ws } = await open(true);
+    ws.receive(feesMsg("projected", [2001, 1031, 199, 100]));
+    expect(feeList(el)).toStrictEqual([
+      "No rushwithin a day0.100 sat/vB",
+      "Lowwithin an hour0.199 sat/vB",
+      "Mediumwithin 30 min1.031 sat/vB",
+      "Highnext block2.001 sat/vB",
+    ]);
+    // Colored by the figure shown: 0.199 is below the 0.2 band, though it rounds to 0.20.
+    const swatches = [...el.querySelectorAll<HTMLElement>(".home-ladder__list .fee__swatch")];
+    expect(swatches.map((s) => s.style.getPropertyValue("--swatch"))).toStrictEqual([
+      "var(--fee-1)",
+      "var(--fee-1)",
+      "var(--fee-5)",
+      "var(--fee-7)",
+    ]);
+    const pins = [...el.querySelectorAll<HTMLElement>(".home-ladder__pin")];
+    expect(pins.map((p) => p.style.getPropertyValue("--c"))).toStrictEqual([
+      "var(--fee-1)",
+      "var(--fee-1)",
+      "var(--fee-5)",
+      "var(--fee-7)",
+    ]);
+    expect(pins.map((p) => p.querySelector(".home-ladder__pin-value")?.textContent)).toStrictEqual([
+      "0.100",
+      "0.199",
+      "1.031",
+      "2.001",
+    ]);
+    expect(feeNote(el)).toContain("read from the projected blocks");
+    expect(feeNote(el)).not.toContain("node");
+    expect(count("/v1/fees/precise")).toBe(0);
+  });
+
+  it("says when the figures are the node's estimates rather than its own", async () => {
+    const { el, ws } = await open(true);
+    ws.receive(feesMsg("node", [1500, 1000, 1000, 120]));
+    expect(feeList(el)[3]).toBe("Highnext block1.500 sat/vB");
+    expect(feeNote(el)).toBe(
+      "The node's own estimates, in sat/vB: this server cannot make its own recommendation right now.",
+    );
+  });
+
+  it("follows each update on the topic, and shows no number when the answer is withdrawn", async () => {
+    const { el, ws } = await open(true);
+    ws.receive(feesMsg("node", [1500, 1000, 1000, 120]));
+    ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
+    expect(feeList(el)[3]).toBe("Highnext block3.000 sat/vB");
+    expect(feeNote(el)).toContain("read from the projected blocks");
+    ws.receive({ topic: "fees", type: "unavailable" });
+    const panel = el.querySelector(".home-fees") as HTMLElement;
+    expect(panel.textContent).toContain("No recommendation right now");
+    expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
+    expect(panel.querySelectorAll(".home-ladder__pin--none")).toHaveLength(4);
+    // A malformed message changes nothing.
+    ws.receive({ ...feesMsg("projected", [3000, 2000, 1000, 100]), levels: [] });
+    expect(panel.textContent).toContain("No recommendation right now");
+    ws.receive(feesMsg("projected", [1200, 1100, 1000, 100]));
+    expect(feeList(el)[3]).toBe("Highnext block1.200 sat/vB");
+  });
+
+  it("waits with empty places, not a number, before the first answer", async () => {
+    const { el } = await open(true);
+    expect(el.querySelector(".home-ladder__list")?.getAttribute("aria-busy")).toBe("true");
+    expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
+  });
+
+  it("drops the topic's answer when the socket drops, and asks over HTTP until it is back", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let reply = () =>
+        Response.json({
+          fastestFee: 5.2,
+          halfHourFee: 1.1,
+          hourFee: 0.5,
+          economyFee: 0.12,
+          minimumFee: 0.1,
+        });
+      replies["/v1/fees/precise"] = () => reply();
+      const { el, ws } = await open(true);
+      ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
+      ws.drop(1006);
+      // The node's estimates carry no chain tip: marked as the node's.
+      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block5.200 sat/vB"));
+      expect(feeNote(el)).toContain("node's own estimates");
+      expect(count("/v1/fees/precise")).toBe(1);
+      // Ours carries the tip it was projected on.
+      reply = () =>
+        Response.json(
+          { fastestFee: 2.5, halfHourFee: 1.1, hourFee: 0.5, economyFee: 0.12, minimumFee: 0.1 },
+          {
+            headers: {
+              "x-bitcoin-chain-tip": fakeBlock(10).id,
+              "x-bitcoin-chain-tip-height": "10",
+            },
+          },
+        );
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
+      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block2.500 sat/vB"));
+      expect(feeNote(el)).toContain("read from the projected blocks");
+      // A failed ask shows no number rather than the last one.
+      reply = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
+      await vi.waitFor(() =>
+        expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation"),
+      );
+      // Back: the snapshot is the topic's answer, and the asking stops. Greet the next socket as it
+      // opens: one left unanswered for 10 s is given up on.
+      const sockets = FakeSocket.all.length;
+      for (let i = 0; i < 120 && FakeSocket.all.length === sockets; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      FakeSocket.last().hello();
+      FakeSocket.last().receive(feesMsg("projected", [4000, 2000, 1000, 100]));
+      expect(feeList(el)[3]).toBe("Highnext block4.000 sat/vB");
+      const asked = count("/v1/fees/precise");
+      // A whole poll interval, ending before the fake socket's unanswered ping would drop it.
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + 5_000);
+      expect(count("/v1/fees/precise")).toBe(asked);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes down an HTTP answer the next ask cannot confirm, while the server refuses", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let ok = true;
+      replies["/v1/fees/precise"] = () =>
+        ok
+          ? Response.json({
+              fastestFee: 5.2,
+              halfHourFee: 1.1,
+              hourFee: 0.5,
+              economyFee: 0.12,
+              minimumFee: 0.1,
+            })
+          : Response.json(
+              { error: "no fee recommendation" },
+              { status: 503, headers: { "retry-after": "1" } },
+            );
+      const { el, ws } = await open(true);
+      ws.drop(1006);
+      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block5.200 sat/vB"));
+      // The server withdraws its answer: every ask is refused, and retried, from now on.
+      ok = false;
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + FEES_CONFIRM_MS);
+      expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
+      for (let i = 0; i < 6; i++) {
+        await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
+        expect(el.querySelector(".home-fees")?.textContent).not.toContain("5.200");
+      }
+      // Once the retries give up, it says there is no answer.
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.waitFor(() =>
+        expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation"),
+      );
+      // And keeps saying so through the asks that follow, without flickering back to waiting.
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + FEES_CONFIRM_MS);
+      expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks over HTTP when the topic says nothing 5 s after the socket is up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      replies["/v1/fees/precise"] = () =>
+        Response.json({ error: "upstream unavailable" }, { status: 502 });
+      const { el } = await open(true);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(count("/v1/fees/precise")).toBe(0);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(count("/v1/fees/precise")).toBe(1);
+      await vi.waitFor(() =>
+        expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/** What the strip shows: mined heights, projected keys and the next tile's figures. */
+function strip(el: HTMLElement) {
+  const tiles = projectedTiles(el);
+  return {
+    mined: tileHeights(el),
+    projected: tiles.map((t) => Number(t.dataset["key"])),
+    next: tiles[0]?.querySelector(".home-tile__foot")?.textContent ?? "",
+  };
+}
+const descending = (from: number, n: number) => Array.from({ length: n }, (_, i) => from - i);
+
+describe("the strip, in the order the server promises (docs/WS.md)", () => {
+  it("a block, then the projection on it, then its summary: one crossing, nothing mined left behind", async () => {
+    summaries = (hashes) => Response.json(hashes.map((h) => facts(h)));
+    const { el, ws } = await open(true);
+    ws.receive(projectedMsg(10, 8, 3000));
+    expect(strip(el)).toStrictEqual({
+      mined: descending(10, 10),
+      projected: [11, 12, 13, 14],
+      next: `${groupDigits(3000)} tx`,
+    });
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+    // At once: block 11 crosses as what was projected for it, the old second block is next.
+    expect(strip(el)).toStrictEqual({
+      mined: descending(11, 10),
+      projected: [12, 13, 14, 15],
+      next: `${groupDigits(3000)} tx`,
+    });
+    expect(tile(el, 11)?.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
+    expect(projectedTiles(el)[0]?.querySelector(".home-tile__fee")?.textContent).toBe(
+      "~7.00 sat/vB",
+    );
+    // The projection on 11: the same tiles, its own figures.
+    const nextTile = projectedTiles(el)[0];
+    ws.receive(projectedMsg(11, 8, 2000));
+    expect(strip(el)).toStrictEqual({
+      mined: descending(11, 10),
+      projected: [12, 13, 14, 15],
+      next: `${groupDigits(2000)} tx`,
+    });
+    expect(projectedTiles(el)[0]).toBe(nextTile);
+    ws.receive({ topic: "blocks", type: "summary", summary: facts(fakeBlock(11).id) });
+    await vi.waitFor(() =>
+      expect(tile(el, 11)?.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB"),
+    );
+    expect(strip(el).mined).toStrictEqual(descending(11, 10));
+  });
+
+  it("a burst: each block and the projection on it in turn, each block shown once", async () => {
+    const { el, ws } = await open(true);
+    ws.receive(projectedMsg(10, 8, 3000));
+    for (const h of [11, 12, 13]) {
+      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(h) });
+      expect(strip(el).mined).toStrictEqual(descending(h, 10));
+      expect(strip(el).projected).toStrictEqual([h + 1, h + 2, h + 3, h + 4]);
+      ws.receive(projectedMsg(h, 8, 1000 * h));
+      expect(strip(el)).toStrictEqual({
+        mined: descending(h, 10),
+        projected: [h + 1, h + 2, h + 3, h + 4],
+        next: `${groupDigits(1000 * h)} tx`,
+      });
+    }
+    // Each crossed as what the projection before it said: the next block of the one on its parent.
+    for (const h of [11, 12, 13]) {
+      expect(tile(el, h)?.querySelector(".home-tile__foot")?.textContent).toContain(
+        `~${groupDigits(h === 11 ? 3000 : 1000 * (h - 1))} tx`,
+      );
+    }
+  });
+
+  it("a reconnect that missed blocks: the new projection waits until the strip has them", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { el, ws } = await open(true);
+      ws.receive(projectedMsg(10, 8, 3000));
+      let release: (() => void) | undefined;
+      replies["/blocks"] = () => Response.json(chain(3, 12));
+      const served = serveHeld("/blocks", (r) => (release = r));
+      ws.drop(1006);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const again = FakeSocket.last();
+      again.hello();
+      // The snapshots: the tip, two blocks on, then the projection on it.
+      again.receive({ topic: "blocks", type: "block", block: fakeBlock(12) });
+      again.receive(projectedMsg(12, 8, 1000));
+      await vi.waitFor(() => expect(release).toBeDefined());
+      // Held: the strip still ends at 10, so the projection on 10 stays beside it.
+      expect(strip(el)).toStrictEqual({
+        mined: descending(10, 10),
+        projected: [11, 12, 13, 14],
+        next: `${groupDigits(3000)} tx`,
+      });
+      release?.();
+      await vi.waitFor(() => expect(strip(el).mined).toStrictEqual(descending(12, 10)));
+      expect(strip(el)).toStrictEqual({
+        mined: descending(12, 10),
+        projected: [13, 14, 15, 16],
+        next: `${groupDigits(1000)} tx`,
+      });
+      // Both crossed as projected on 10: its next block and the one after.
+      expect(tile(el, 11)?.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
+      expect(tile(el, 12)?.querySelector(".home-tile__fee")?.textContent).toBe("~7.00 sat/vB");
+      expect(served()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/** Serves `path` as `replies` does, but holds each answer until `hold` is given its release. */
+function serveHeld(path: string, hold: (release: () => void) => void): () => number {
+  let n = 0;
+  vi.stubGlobal("fetch", async (url: string) => {
+    const p = url.replace(/^\/(regtest|signet)\/api/, "");
+    requests.push(p);
+    if (p === path) {
+      n += 1;
+      await new Promise<void>((resolve) => {
+        hold(resolve);
+      });
+    }
+    return (replies[p] ?? (() => Response.json({ error: "not found" }, { status: 404 })))();
+  });
+  return () => n;
+}

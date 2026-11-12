@@ -180,9 +180,9 @@ function ProjectedView(props: { index: number }) {
 
   // ---- When the chain moves: say so once, politely ----
   const change = () => state().change;
-  // On mainnet the tip can move one projection before the mined transactions leave the block (the
-  // tracker's listing and tip are not read at once, docs/MEMPOOL.md). So on a page with a map the
-  // moment waits for the block's new picture, a snapshot from that projection on, or FOUND_WAIT_MS.
+  // The block's new picture follows the projection on it at once (docs/WS.md), but it can be large:
+  // on a page with a map the moment waits for it, a snapshot from that projection on, or
+  // FOUND_WAIT_MS, so it is never told over the old map.
   const [shown, setShown] = createSignal<number>();
   let wait: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(wait));

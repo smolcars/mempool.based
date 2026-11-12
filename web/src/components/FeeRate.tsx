@@ -1,19 +1,30 @@
 import { For } from "solid-js";
-import { FEE_KEY_BOUNDS, feeColor, formatFeeRate } from "../lib/format";
+import { FEE_KEY_BOUNDS, feeColor, formatFeeRate, formatFeeRatePrecise } from "../lib/format";
 import "./FeeRate.css";
 
 /**
  * A fee rate with its band's swatch. The color is taken from the printed value, so it always
- * agrees with the number. `approx` prefixes `~` for projected values. `unit={false}` hides the
+ * agrees with the number. `approx` prefixes `~` for projected values. `precise` prints a
+ * recommendation at the node's resolution ({@link formatFeeRatePrecise}). `unit={false}` hides the
  * unit from sight only, as for {@link Amount}.
  */
-export function FeeRate(props: { rate: number; unit?: boolean; approx?: boolean }) {
+export function FeeRate(props: {
+  rate: number;
+  unit?: boolean;
+  approx?: boolean;
+  precise?: boolean;
+}) {
+  const print = () => (props.precise ? formatFeeRatePrecise : formatFeeRate);
   return (
     <span class="fee">
-      <span class="fee__swatch" style={{ "--swatch": feeColor(props.rate) }} aria-hidden="true" />
+      <span
+        class="fee__swatch"
+        style={{ "--swatch": feeColor(props.rate, print()) }}
+        aria-hidden="true"
+      />
       <span class="num">
         {props.approx ? "~" : ""}
-        {formatFeeRate(props.rate)}
+        {print()(props.rate)}
       </span>
       <span class={{ unit: true, "visually-hidden": props.unit === false }}> sat/vB</span>
     </span>

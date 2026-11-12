@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   bandShares,
-  estimateFor,
-  isFeeEstimates,
   isMempoolSummary,
   isRecentList,
   ladderPos,
@@ -44,17 +42,6 @@ describe("lowestRate", () => {
       ]),
     ).toBe(0.127);
     expect(lowestRate([])).toBeUndefined();
-  });
-});
-
-describe("estimateFor", () => {
-  const est = { "1": 2.7, "2": 0.7, "3": 0.29, "6": 0.23, "144": 0.13, "1008": 0.11 };
-  it("takes the exact target, else the nearest shorter one", () => {
-    expect(estimateFor(est, 1)).toBe(2.7);
-    expect(estimateFor(est, 6)).toBe(0.23);
-    expect(estimateFor(est, 100)).toBe(0.23);
-    expect(estimateFor({ "2": 1 }, 1)).toBeUndefined();
-    expect(estimateFor({}, 144)).toBeUndefined();
   });
 });
 
@@ -166,8 +153,6 @@ describe("reply checks", () => {
     expect(isMempoolSummary({ count: 1, vsize: 2, total_fee: 3, fee_histogram: [["1", 2]] })).toBe(
       false,
     );
-    expect(isFeeEstimates({ "1": 2.5, "144": 1 })).toBe(true);
-    expect(isFeeEstimates({ fast: 2 })).toBe(false);
     expect(isRecentList([{ txid: "a".repeat(64), fee: 1, vsize: 1, value: 1 }])).toBe(true);
     expect(isRecentList([{ txid: "<b>", fee: 1, vsize: 1, value: 1 }])).toBe(false);
   });

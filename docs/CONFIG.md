@@ -85,11 +85,11 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with FE8's block audit, whose page listens to the WebSocket while a block's facts load, and after the mempool history page made `FeeRate` a chunk of its own (two more files on most pages):
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 with FE8's block audit, whose page listens to the WebSocket while a block's facts load, after the mempool history page made `FeeRate` a chunk of its own (two more files on most pages), and after the home page's fee panel moved to the `fees` topic (one API request fewer):
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
-| Home | 22 | 4 | 1 | 2 |
+| Home | 22 | 3 | 1 | 1 |
 | Blocks | 19 | 13 | 0 | 2 |
 | Block | 25 | 6 | 1 | 5 |
 | Transaction | 18 | 4 | 1 | 3 |

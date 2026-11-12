@@ -24,7 +24,6 @@ import {
   formatUtc,
   groupDigits,
   isoTime,
-  vsizeFromWeight,
 } from "../../lib/format";
 import type { LiveStatus } from "../../lib/live";
 import type { ProjectedBlock } from "../../lib/projected-topic";
@@ -640,7 +639,7 @@ function MinedTile(props: {
               {(p) => <FeeRate rate={p().medianRate} approx />}
             </Match>
             <Match when={summary()}>No fees</Match>
-            <Match when={facts() === "failed"}>{formatSize(vsizeFromWeight(b().weight))}</Match>
+            <Match when={facts() === "failed"}>{formatSize(b().size, "B")}</Match>
           </Switch>
         </span>
         <span class="home-tile__range num">
