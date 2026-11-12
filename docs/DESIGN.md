@@ -304,7 +304,7 @@ Transaction  (✓ Confirmed)
 └───────────────────────────────────────────┘ └──────────────────────┘
 ```
 
-Long input or output lists collapse after ten, with a "Show all" control.
+Long input or output lists collapse after ten; each "Show more" adds a hundred, and the hidden rest travels as one ribbon, so a transaction with thousands of outputs never renders them all at once.
 
 ### Address (not in the prototype)
 
