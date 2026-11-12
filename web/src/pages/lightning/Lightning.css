@@ -430,3 +430,29 @@
     }
   }
 }
+
+@layer pages {
+  /* A channel's two ends side by side under its capacity. */
+  .ln-between {
+    display: grid;
+    gap: var(--space-1);
+    font-size: var(--text-md);
+    font-weight: var(--weight-regular);
+  }
+  /* The two ends' terms in one table, read across. */
+  .ln-policies th[scope="row"] {
+    width: 34%;
+    padding-right: var(--space-3);
+    color: var(--color-text-muted);
+    font-weight: var(--weight-regular);
+    white-space: normal;
+  }
+  .ln-policies td {
+    white-space: normal;
+    vertical-align: top;
+  }
+  .ln-policies thead th {
+    vertical-align: bottom;
+    white-space: normal;
+  }
+}

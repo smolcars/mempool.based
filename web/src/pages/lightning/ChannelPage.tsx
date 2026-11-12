@@ -1,7 +1,8 @@
 // One Lightning channel: its ends and what each charges, where it was funded, and how it closed
 // and how sure that is (docs/LIGHTNING.md "How a close is classified").
 import { useParams } from "@solidjs/router";
-import { Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
@@ -125,6 +126,12 @@ function Body(props: { channel: ChannelDetail }) {
         <dl class="ln-stats">
           <Stat label="Capacity">
             <Amount sats={c().capacity} />
+          </Stat>
+          <Stat label="Between">
+            <span class="ln-between">
+              <NodeName node={c().node_one} />
+              <NodeName node={c().node_two} />
+            </span>
           </Stat>
         </dl>
         <dl class="ln-facts">
@@ -251,9 +258,35 @@ function Body(props: { channel: ChannelDetail }) {
             )}
           </Show>
         </SectionHeader>
-        <div class="ln-sides">
-          <Side end={c().node_one} other={c().node_two} closed={c().closed !== null} />
-          <Side end={c().node_two} other={c().node_one} closed={c().closed !== null} />
+        {/* One table, so the two ends' terms can be read across: a column for each end. */}
+        <div class="table-scroll">
+          <table class="table ln-policies">
+            <caption class="visually-hidden">What each end charges to forward a payment</caption>
+            <thead>
+              <tr>
+                <th scope="col">
+                  <span class="visually-hidden">Term</span>
+                </th>
+                <th scope="col">
+                  <NodeName node={c().node_one} />
+                </th>
+                <th scope="col">
+                  <NodeName node={c().node_two} />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={POLICY_ROWS}>
+                {(row) => (
+                  <tr>
+                    <th scope="row">{row.label}</th>
+                    <td>{policyCell(c().node_one, row, c().closed !== null)}</td>
+                    <td>{policyCell(c().node_two, row, c().closed !== null)}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
         </div>
         <More label="About these">
           <p>
@@ -266,54 +299,45 @@ function Body(props: { channel: ChannelDetail }) {
   );
 }
 
-function Side(props: { end: End; other: End; closed: boolean }) {
+type Policy = NonNullable<End["policy"]>;
+
+/** The terms an end sets, as the rows of the two ends' table. */
+const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }[] = [
+  { label: "Fee rate", value: (p) => <span class="num">{ppm(p.fee_rate)}</span> },
+  { label: "Base fee", value: (p) => <span class="num">{msat(p.base_fee_msat)}</span> },
+  {
+    label: "Time lock delta",
+    value: (p) => <span class="num">{groupDigits(p.cltv_delta)} blocks</span>,
+  },
+  {
+    label: "Payments forwarded",
+    value: (p) => (
+      <span class="num">
+        {msat(p.min_htlc_msat)} to {msat(p.max_htlc_msat)}
+      </span>
+    ),
+  },
+  {
+    label: "Forwarding",
+    value: (p) => (
+      <>
+        {p.enabled ? "Enabled" : "Disabled"}
+        <span class="ln-fact__sub">
+          Updated <TimeAgo time={p.last_update} />
+        </span>
+      </>
+    ),
+  },
+];
+
+/** One end's term, or why it has none: said once, in the first row. */
+function policyCell(end: End, row: (typeof POLICY_ROWS)[number], closed: boolean): JSX.Element {
+  const p = end.policy;
+  if (p) return row.value(p);
+  if (row !== POLICY_ROWS[0]) return <span class="muted">–</span>;
   return (
-    <div class="ln-side">
-      <h3>
-        <NodeName node={props.end} />
-      </h3>
-      <Show
-        when={props.end.policy}
-        fallback={
-          <p class="ln-aside">
-            {props.closed
-              ? "A closed channel has no policy."
-              : "This end has sent no policy that this server holds."}
-          </p>
-        }
-      >
-        {(p) => (
-          <dl class="ln-facts">
-            <div class="ln-fact">
-              <dt>Fee rate</dt>
-              <dd class="num">{ppm(p().fee_rate)}</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Base fee</dt>
-              <dd class="num">{msat(p().base_fee_msat)}</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Time lock delta</dt>
-              <dd class="num">{groupDigits(p().cltv_delta)} blocks</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Payments forwarded</dt>
-              <dd class="num">
-                {msat(p().min_htlc_msat)} to {msat(p().max_htlc_msat)}
-              </dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Forwarding</dt>
-              <dd>
-                {p().enabled ? "Enabled" : "Disabled"}
-                <span class="ln-fact__sub">
-                  Updated <TimeAgo time={p().last_update} />
-                </span>
-              </dd>
-            </div>
-          </dl>
-        )}
-      </Show>
-    </div>
+    <span class="muted">
+      {closed ? "None: the channel is closed" : "None sent that this server holds"}
+    </span>
   );
 }

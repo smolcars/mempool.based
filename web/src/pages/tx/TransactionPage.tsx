@@ -788,9 +788,13 @@ function Body(props: {
     }
     return statusWord() ? (steps()[1]?.title ?? "") : "";
   };
-  /** Confirmed, nothing replaced or reorganised: the steps say no more than the summary does. */
+  /**
+   * Confirmed, or waiting in the mempool, with nothing replaced or reorganised: the steps say no
+   * more than the summary and where it waits do, so they shrink to one line.
+   */
   const settled = () =>
-    confirmed() && props.shown.kind === "confirmed" && props.reorged === undefined;
+    props.reorged === undefined &&
+    ((confirmed() && props.shown.kind === "confirmed") || props.shown.kind === "mempool");
 
   return (
     <>

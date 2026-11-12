@@ -964,6 +964,10 @@
     .tx-summary__item--amount .amount {
       white-space: normal;
     }
+    /* The last fact takes the row it would otherwise sit in alone. */
+    .tx-summary__item:last-child {
+      grid-column: 1 / -1;
+    }
     .tx-facts--single .tx-fact,
     .tx-inspector .tx-fact {
       grid-template-columns: 7rem minmax(0, 1fr);

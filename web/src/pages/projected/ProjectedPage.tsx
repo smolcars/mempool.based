@@ -17,6 +17,7 @@ import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { Pagination } from "../../components/Pagination";
 import { SectionHeader } from "../../components/SectionHeader";
 import { describeBands, Strata, strataLayers, strataTop } from "../../components/Strata";
@@ -259,24 +260,28 @@ function ProjectedView(props: { index: number }) {
           </span>
           <LiveState status={status()} stale={stale()} off={off()} />
         </div>
+        {/* One line says what this is; how it changes is a tap away. */}
         <p class="projected-head__lede">
-          <Show
-            when={!isRest}
-            fallback="Everything still waiting beyond the seven blocks ahead: transactions that pay too little to fit in them for now. It shrinks as blocks are found and grows as transactions arrive."
-          >
+          <Show when={!isRest} fallback="Everything still waiting beyond the seven blocks ahead.">
             <Show when={height()} fallback="A block that is not mined yet.">
               {(h) => (
                 <>
-                  If it were mined now, block <span class="num">{groupDigits(h())}</span> would hold
-                  these transactions.{" "}
+                  What block <span class="num">{groupDigits(h())}</span> would hold if it were mined
+                  now.
                 </>
               )}
             </Show>
-            {index === 0
-              ? "It changes as transactions arrive and outbid each other, and the miner who finds it builds their own, usually much the same."
-              : `They pay too little to fit in ${positionName(index - 1, true)}, and will move up as blocks are found.`}
           </Show>
         </p>
+        <More label="How this changes">
+          <p>
+            {isRest
+              ? "Transactions that pay too little to fit in the seven blocks ahead for now. It shrinks as blocks are found and grows as transactions arrive."
+              : index === 0
+                ? "It changes as transactions arrive and outbid each other, and the miner who finds it builds their own, usually much the same."
+                : `They pay too little to fit in ${positionName(index - 1, true)}, and will move up as blocks are found.`}
+          </p>
+        </More>
       </header>
 
       <p class="visually-hidden" role="status">
@@ -733,9 +738,7 @@ function CoreSample(props: {
           <Show when={fill() !== undefined && !empty()}>
             It would fill ~{percent(fill() ?? 0)} of the weight limit.{" "}
           </Show>
-          Each rectangle is a transaction, its area its virtual size, shaded by the rate it would be
-          mined at, the dearest at the top left. Newcomers drop in; what is outbid or leaves fades
-          where it stood.{" "}
+          One rectangle a transaction, by size and the rate it would be mined at.{" "}
           {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
           <a href="#projected-txs-title" rel="external">
             Every transaction is in the list below.
