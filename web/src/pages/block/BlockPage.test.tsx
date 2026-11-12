@@ -596,14 +596,20 @@ describe("BlocksPage", () => {
       height: from - i,
     }));
 
-  it("lists the newest blocks and pages back", async () => {
-    serve({ "/blocks": { body: list(975_420) }, "/blocks/tip/height": { body: "975420" } });
+  it("lists the newest 25 blocks from three of the API's answers and pages back", async () => {
+    serve({
+      "/blocks": { body: list(975_420) },
+      "/blocks/975410": { body: list(975_410) },
+      "/blocks/975400": { body: list(975_400) },
+      "/blocks/tip/height": { body: "975420" },
+    });
     const el = open("/blocks");
     await until(() =>
       expect(text(el.querySelector("tbody tr td .blocks-height") as Element)).toBe("975 420"),
     );
-    expect(el.querySelectorAll("tbody tr")).toHaveLength(10);
-    expect(el.querySelector('a[rel="next"]')?.getAttribute("href")).toBe("/blocks/975410");
+    await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(25));
+    expect(text(el.querySelectorAll("tbody tr .blocks-height")[24] as Element)).toBe("975 396");
+    expect(el.querySelector('a[rel="next"]')?.getAttribute("href")).toBe("/blocks/975395");
     expect(el.querySelector('a[rel="prev"]')).toBeNull();
   });
 
@@ -611,7 +617,7 @@ describe("BlocksPage", () => {
     serve({ "/blocks/5": { body: list(5) }, "/blocks/tip/height": { body: "975420" } });
     const el = open("/blocks/5");
     await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(6));
-    expect(el.querySelector('a[rel="prev"]')?.getAttribute("href")).toBe("/blocks/15");
+    expect(el.querySelector('a[rel="prev"]')?.getAttribute("href")).toBe("/blocks/30");
     expect(el.querySelector('a[rel="next"]')).toBeNull();
   });
 
@@ -620,6 +626,7 @@ describe("BlocksPage", () => {
     const rows = list(975_420);
     const table: typeof replies = {
       "/blocks": { body: rows },
+      "/blocks/975410": { body: [] },
       "/blocks/tip/height": { body: "975420" },
     };
     for (const [i, b] of rows.entries()) {
@@ -647,6 +654,7 @@ describe("BlocksPage", () => {
     const rows = list(975_420);
     const table: typeof replies = {
       "/blocks": { body: rows },
+      "/blocks/975410": { body: [] },
       "/blocks/tip/height": { body: "975420" },
     };
     for (const [i, b] of rows.entries()) {

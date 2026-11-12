@@ -8,7 +8,7 @@ import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
 import { ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
-import { createApi } from "../../lib/api";
+import { createApi, createRequest, fetchApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { formatSize, groupDigits, MISSING, NNBSP, truncateMiddle } from "../../lib/format";
 import { paths } from "../../lib/network";
@@ -18,8 +18,9 @@ import { fullness, parseHeight, shownParam } from "../block/chain";
 import { failed, ready, Skel } from "../block/parts";
 import "./BlocksPage.css";
 
-/** The API answers ten blocks per page. */
-const PAGE = 10;
+/** Blocks on a page: the API answers ten at a time, so a page is three of its answers, cut. */
+const PAGE = 25;
+const API_PAGE = 10;
 /** Summary requests in flight at once on this page. */
 const IN_FLIGHT = 2;
 
@@ -148,14 +149,31 @@ const columns = (factsOf: (id: string) => RowFacts) => [
   },
 ];
 
-/** `/blocks` and `/blocks/:from`: recent blocks, newest first, ten to a page. */
+/** `/blocks` and `/blocks/:from`: recent blocks, newest first, 25 to a page. */
 export default function BlocksPage() {
   const params = useParams<{ from?: string }>();
   const from = createMemo(() => (params.from === undefined ? undefined : parseHeight(params.from)));
-  const [blocks, blocksCtl] = createApi<Block[]>(() => {
-    const f = from();
-    return f !== null && (f === undefined ? "/blocks" : `/blocks/${f}`);
-  });
+  const network0 = useNetwork();
+  const [blocks, blocksCtl] = createRequest(
+    () => {
+      const f = from();
+      return f !== null && { from: f, network: network0() };
+    },
+    async ({ from: f, network: n }, signal) => {
+      // Ten at a time, each answer continuing below the last, until a page's worth or the genesis.
+      const out: Block[] = [];
+      let path = f === undefined ? "/blocks" : `/blocks/${f}`;
+      while (out.length < PAGE) {
+        // oxlint-disable-next-line no-await-in-loop -- each answer says where the next starts
+        const part = await fetchApi<Block[]>(n, path, { signal });
+        out.push(...part);
+        const last = part.at(-1);
+        if (part.length < API_PAGE || last === undefined || last.height === 0) break;
+        path = `/blocks/${last.height - 1}`;
+      }
+      return out.slice(0, PAGE);
+    },
+  );
   const [tip] = createApi<string>(() => "/blocks/tip/height", { as: "text" });
   usePageTitle(() => "Blocks");
   const network = useNetwork();
