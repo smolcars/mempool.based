@@ -379,7 +379,7 @@ describe("TransactionPage", () => {
     expect(text(el)).toContain("Effective fee rate12.4 sat/vB");
     const group = el.querySelector(".tx-group") as Element;
     expect(text(group)).toContain(
-      "On its own it pays 1.00 sat/vB, but its child pays enough to lift the group to 12.4 sat/vB.",
+      "On its own it pays 1.00 sat/vB, but its child pays enough to lift the group to 12.4 sat/vB as a whole.",
     );
     expect(text(group)).toContain("child pays for parent");
     expect(group.querySelector("a")?.getAttribute("href")).toBe(`/tx/${SPENDER}`);

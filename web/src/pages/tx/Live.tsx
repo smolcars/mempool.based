@@ -181,15 +181,18 @@ export function Group(props: { relatives: Relatives; txid: string; rate: number 
     if (eff === undefined || own === null || !ratesDiffer(eff, own)) {
       return <>A miner takes it together with {who()}, at one rate for the group.</>;
     }
+    // Each sentence ends in words, so a rate's swatch never strands the full stop on a line.
+    const pays = others().length === 1 ? "pays" : "pay";
     return eff > own ? (
       <>
-        On its own it pays <FeeRate rate={own} />, but {who()} pays enough to lift the group to{" "}
-        <FeeRate rate={eff} />.
+        On its own it pays <FeeRate rate={own} />, but {who()} {pays} enough to lift the group to{" "}
+        <FeeRate rate={eff} /> as a whole.
       </>
     ) : (
       <>
-        On its own it pays <FeeRate rate={own} />, but it spends coins from {who()}, which pays
-        less, so the group is mined at <FeeRate rate={eff} />.
+        On its own it pays <FeeRate rate={own} />, but it can only be mined with the unconfirmed
+        transactions whose coins it spends, which pay less: the group is mined at{" "}
+        <FeeRate rate={eff} /> as a whole.
       </>
     );
   };
