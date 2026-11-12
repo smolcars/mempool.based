@@ -68,7 +68,7 @@ impl fmt::Debug for Secret {
 /// Where the node's Esplora REST server listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EsploraEndpoint {
-    /// `http://` or `https://` base URL, without a trailing slash.
+    /// `http://` base URL, without a trailing slash.
     Http(String),
     /// Absolute path of a unix socket.
     Unix(PathBuf),
@@ -134,6 +134,8 @@ pub struct Config {
     /// Enabled networks, in [`Network::ALL`] order.
     pub networks: Vec<NetworkConfig>,
     pub limits: Limits,
+    /// Whether `POST /api/tx` is served (`BROADCAST_ENABLED`).
+    pub broadcast: bool,
 }
 
 impl Config {
@@ -191,11 +193,18 @@ impl Config {
             );
         }
 
+        let broadcast = match var("BROADCAST_ENABLED").as_deref() {
+            None | Some("true") => true,
+            Some("false") => false,
+            Some(_) => return Err("BROADCAST_ENABLED must be true or false".into()),
+        };
+
         Ok(Self {
             listen,
             web_dir,
             networks,
             limits,
+            broadcast,
         })
     }
 }
@@ -263,7 +272,7 @@ fn network_config(
     let port = parse_port(&port).ok_or_else(|| format!("{p}_RPC_PORT is not a port number"))?;
     let esplora = parse_esplora(&esplora).ok_or_else(|| {
         format!(
-            "{p}_ESPLORA_URL must be an http(s) URL without credentials, or an absolute unix socket path"
+            "{p}_ESPLORA_URL must be a plain http URL without credentials, or an absolute unix socket path"
         )
     })?;
     if !matches!(host_port(&electrum), Some((_, Some(_)))) {
@@ -329,12 +338,12 @@ fn parse_esplora(s: &str) -> Option<EsploraEndpoint> {
     if s.starts_with('/') {
         return Some(EsploraEndpoint::Unix(PathBuf::from(s)));
     }
-    let rest = s
-        .strip_prefix("http://")
-        .or_else(|| s.strip_prefix("https://"))?;
+    // The node speaks plain HTTP; the client has no TLS.
+    let rest = s.strip_prefix("http://")?;
     let authority = rest.split('/').next().unwrap_or_default();
     // Credentials in the URL would end up in logs; whitespace and control bytes have no place in a URL.
     let ok = host_port(authority).is_some()
+        && node::esplora::Endpoint::parse(s).is_ok()
         && !s
             .bytes()
             .any(|b| b.is_ascii_whitespace() || b.is_ascii_control());
@@ -404,7 +413,7 @@ mod tests {
     fn ip_literals_and_ports_are_accepted() {
         let mut v = signet();
         v[0].1 = "::1";
-        v[4].1 = "https://[::1]:3002/api";
+        v[4].1 = "http://[::1]:3002/api";
         v[5].1 = "[::1]:60601";
         assert!(parse(&v).is_ok());
         v[0].1 = "[2001:db8::1]";
@@ -434,6 +443,8 @@ mod tests {
             (0, "host/path"),
             (0, "user@host"),
             (4, "ftp://x"),
+            (4, "https://node.example"),
+            (4, "http://node.example:3000/?x=1"),
             (4, "http://user:pw@host"),
             (4, "relative/socket"),
             (4, "http://"),
@@ -473,6 +484,9 @@ mod tests {
             assert!(e.contains("CLIENT_BURST"), "{e}");
         }
         assert!(parse(&[("TRUSTED_PROXY_HEADER", "bad header")]).is_err());
+        assert!(parse(&[]).unwrap().broadcast);
+        assert!(!parse(&[("BROADCAST_ENABLED", "false")]).unwrap().broadcast);
+        assert!(parse(&[("BROADCAST_ENABLED", "no")]).is_err());
         assert!(parse(&[("MAX_CONNECTIONS", "99999999")]).is_err());
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");

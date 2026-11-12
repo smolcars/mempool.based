@@ -43,6 +43,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the pieces fit together |
 | [`docs/PLAN.md`](docs/PLAN.md) | Milestones and what each one delivers |
 | [`docs/TODO.md`](docs/TODO.md) | The task list and its current state |
+| [`docs/API.md`](docs/API.md) | The public Esplora API at `/api` and how it differs from the node |
 | [`docs/COMPAT.md`](docs/COMPAT.md) | Feature parity with mempool.space |
 | [`docs/RBITCOIN.md`](docs/RBITCOIN.md) | What we rely on from rbitcoin, with measurements |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model and the rules that follow from it |

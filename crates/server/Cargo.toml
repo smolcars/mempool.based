@@ -12,6 +12,7 @@ engine.workspace = true
 node.workspace = true
 
 axum.workspace = true
+bitcoin.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util.workspace = true
 serde_json.workspace = true

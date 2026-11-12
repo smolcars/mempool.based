@@ -1,0 +1,582 @@
+//! The `/api` pass-through against a mock node on port 0. Nothing here reaches a real node.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::Router;
+use axum::body::Bytes;
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
+use mempool_based::esplora::{BROADCAST_BURST, LIVE, MAX_TX_BYTES};
+use mempool_based::{App, Config, IMMUTABLE, Limits};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+const H: &str = "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054";
+const TIP: &str = "00000000000000000000ec095818efb89e40f794c13326dbbdec38e1de395193";
+/// A legacy (no witness) transaction: one input spending a null outpoint, one empty output.
+const TX: &str = concat!(
+    "01000000",
+    "01",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "ffffffff",
+    "0100",
+    "ffffffff",
+    "01",
+    "0000000000000000",
+    "00",
+    "00000000"
+);
+
+/// Requests the mock node received: method, path and query, body.
+type Seen = Arc<Mutex<Vec<(Method, String, Bytes)>>>;
+
+/// A stand-in for rbitcoin's Esplora: canned answers, every request recorded, each answered
+/// after `delay` so concurrent requests overlap.
+async fn mock(delay: Duration) -> (String, Seen) {
+    let seen: Seen = Arc::default();
+    let log = Arc::clone(&seen);
+    let app = Router::new().fallback(any(move |method: Method, uri: Uri, body: Bytes| {
+        let log = Arc::clone(&log);
+        async move {
+            let pq = uri
+                .path_and_query()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            log.lock()
+                .unwrap()
+                .push((method.clone(), pq.clone(), body.clone()));
+            tokio::time::sleep(delay).await;
+            answer(&method, &pq, &body)
+        }
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, seen)
+}
+
+fn answer(method: &Method, pq: &str, body: &[u8]) -> Response {
+    let stamp = [
+        ("x-bitcoin-chain-tip", TIP.to_owned()),
+        ("x-bitcoin-chain-tip-height", "800001".to_owned()),
+        ("x-powered-by", "rbitcoin-esplora/0.9.1".to_owned()),
+        ("cache-control", "public, no-transform".to_owned()),
+    ];
+    let text = [("content-type", "text/plain; charset=utf-8")];
+    let json = [("content-type", "application/json")];
+    let octets = [("content-type", "application/octet-stream")];
+    fn with(h: &[(&'static str, &str)], extra: &[(&'static str, String)]) -> HeaderMap {
+        let mut m = HeaderMap::new();
+        for (k, v) in h {
+            m.insert(*k, v.parse().unwrap());
+        }
+        for (k, v) in extra {
+            m.insert(*k, v.parse().unwrap());
+        }
+        m
+    }
+    match (method.as_str(), pq) {
+        ("GET", "/blocks/tip/height") => (with(&text, &stamp), "800001").into_response(),
+        ("GET", "/fee-estimates") => (with(&json, &[]), r#"{"1":2.5,"6":1.0}"#).into_response(),
+        ("GET", p) if p == format!("/tx/{H}") => (
+            with(&json, &stamp),
+            format!(r#"{{"txid":"{H}","status":{{"confirmed":false}}}}"#),
+        )
+            .into_response(),
+        ("GET", p) if p == format!("/tx/{H}/raw") => {
+            let bytes = bitcoin::hex::FromHex::from_hex(TX)
+                .map(|v: Vec<u8>| v)
+                .unwrap();
+            (with(&octets, &stamp), bytes).into_response()
+        }
+        ("GET", p) if p == format!("/block/{H}/raw") => {
+            (with(&octets, &stamp), vec![0u8, 1, 2, 255]).into_response()
+        }
+        ("GET", p) if p.starts_with("/address/") => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            with(&text, &[]),
+            "scripthash index disabled (start with --sh-index)",
+        )
+            .into_response(),
+        ("GET", p) if p.starts_with("/scripthash/") => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            with(&text, &[]),
+            "internal error at /var/lib/rbitcoin/db",
+        )
+            .into_response(),
+        ("POST", "/tx") if body == TX.as_bytes() => (with(&text, &[]), H).into_response(),
+        ("POST", "/tx") => (
+            StatusCode::BAD_REQUEST,
+            with(&text, &[]),
+            "durable: /var/lib/rbitcoin/mempool.db locked",
+        )
+            .into_response(),
+        ("POST", p) if p.starts_with("/block-heights/txs/outs") => {
+            (with(&json, &stamp), "[null,null]").into_response()
+        }
+        _ => (StatusCode::NOT_FOUND, with(&text, &stamp), "Not Found").into_response(),
+    }
+}
+
+fn config(esplora: &str, broadcast: bool) -> Config {
+    let mut vars = HashMap::new();
+    for net in ["MAINNET", "SIGNET"] {
+        for (k, v) in [
+            ("RPC_HOST", "127.0.0.1"),
+            ("RPC_PORT", "1"),
+            ("RPC_USER", "u"),
+            ("RPC_PASSWORD", "p"),
+            ("ESPLORA_URL", esplora),
+            ("ELECTRUM_ADDR", "127.0.0.1:1"),
+        ] {
+            vars.insert(format!("{net}_{k}"), v.to_owned());
+        }
+    }
+    vars.insert(
+        "BROADCAST_ENABLED".into(),
+        if broadcast { "true" } else { "false" }.into(),
+    );
+    let mut c = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
+    c.web_dir = std::env::temp_dir().join("mempool-based-no-web-dir");
+    c.limits = Limits {
+        client_burst: 10_000,
+        client_rate_per_sec: 10_000,
+        client_connections: 10_000,
+        client_requests: 10_000,
+        max_requests: 10_000,
+        ..Limits::default()
+    };
+    c
+}
+
+/// Starts the server against a fresh mock node; returns the server address and the mock's log.
+async fn start(delay: Duration, broadcast: bool) -> (String, Seen) {
+    let (url, seen) = mock(delay).await;
+    let app = App::new(&config(&url, broadcast));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    (addr, seen)
+}
+
+#[derive(Debug)]
+struct Reply {
+    status: u16,
+    head: String,
+    body: Vec<u8>,
+}
+
+impl Reply {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.head
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("{name}: ")))
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    /// Our own error body: `{"error": message}`.
+    fn error(&self) -> String {
+        let v: serde_json::Value = serde_json::from_slice(&self.body).unwrap();
+        v["error"].as_str().unwrap().to_owned()
+    }
+}
+
+/// Sends the request line exactly as written, so hostile targets reach the server unaltered.
+async fn send(addr: &str, line: &str, headers: &str, body: &[u8]) -> Reply {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "{line} HTTP/1.1\r\nHost: test\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n",
+        body.len()
+    );
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(body);
+    let _ = stream.write_all(&bytes).await;
+    let mut raw = Vec::new();
+    let _ = stream.read_to_end(&mut raw).await;
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
+    Reply {
+        status: head[9..12].parse().unwrap(),
+        head,
+        body: raw[split + 4..].to_vec(),
+    }
+}
+
+async fn get(addr: &str, target: &str) -> Reply {
+    send(addr, &format!("GET {target}"), "", b"").await
+}
+
+async fn post(addr: &str, target: &str, body: &[u8]) -> Reply {
+    send(addr, &format!("POST {target}"), "", body).await
+}
+
+fn hits(seen: &Seen) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|(_, p, _)| p.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn responses_are_forwarded_byte_for_byte_with_our_headers() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    for prefix in ["", "/signet"] {
+        let r = get(&addr, &format!("{prefix}/api/tx/{H}")).await;
+        assert_eq!(r.status, 200, "{r:?}");
+        assert_eq!(
+            r.text(),
+            format!(r#"{{"txid":"{H}","status":{{"confirmed":false}}}}"#)
+        );
+        assert_eq!(r.header("content-type"), Some("application/json"));
+        assert_eq!(r.header("x-bitcoin-chain-tip"), Some(TIP));
+        assert_eq!(r.header("x-bitcoin-chain-tip-height"), Some("800001"));
+        assert_eq!(r.header("cache-control"), Some(LIVE));
+        assert_eq!(r.header("access-control-allow-origin"), Some("*"));
+        assert_eq!(
+            r.header("access-control-expose-headers"),
+            Some("x-bitcoin-chain-tip, x-bitcoin-chain-tip-height")
+        );
+        assert!(
+            r.header("x-powered-by").is_none(),
+            "upstream headers are not copied"
+        );
+        assert!(r.header("content-security-policy").is_some());
+    }
+    let raw = get(&addr, &format!("/api/block/{H}/raw")).await;
+    assert_eq!(raw.body, [0u8, 1, 2, 255]);
+    assert_eq!(raw.header("content-type"), Some("application/octet-stream"));
+    assert_eq!(
+        hits(&seen),
+        [
+            format!("/tx/{H}"),
+            format!("/tx/{H}"),
+            format!("/block/{H}/raw")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn cache_headers_per_route_class() {
+    let (addr, _) = start(Duration::ZERO, true).await;
+    for (path, cache) in [
+        (format!("/api/block/{H}/raw"), IMMUTABLE),
+        // TX has no witness, so its bytes are fixed by its txid.
+        (format!("/api/tx/{H}/raw"), IMMUTABLE),
+        (format!("/api/tx/{H}"), LIVE),
+        ("/api/blocks/tip/height".into(), LIVE),
+        ("/api/fee-estimates".into(), LIVE),
+        // Errors and refusals are never cached.
+        (format!("/api/block/{H}"), "no-store"),
+        ("/api/nope".into(), "no-store"),
+        ("/api/tx/zz".into(), "no-store"),
+    ] {
+        let r = get(&addr, &path).await;
+        assert_eq!(r.header("cache-control"), Some(cache), "{path}: {r:?}");
+    }
+}
+
+#[tokio::test]
+async fn upstream_errors_become_our_fixed_messages() {
+    let (addr, _) = start(Duration::ZERO, true).await;
+    let r = get(&addr, &format!("/api/block/{H}")).await;
+    assert_eq!((r.status, r.error()), (404, "not found".into()));
+    let r = get(
+        &addr,
+        "/api/address/bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+    )
+    .await;
+    assert_eq!(r.status, 503);
+    assert_eq!(r.error(), "address index is disabled on this server");
+    let r = get(&addr, &format!("/api/scripthash/{H}/utxo")).await;
+    assert_eq!((r.status, r.error()), (502, "upstream unavailable".into()));
+    assert!(!r.text().contains("/var"));
+    let r = post(&addr, "/api/tx", b"01000000000000000000").await;
+    assert_eq!(r.status, 400);
+    // The node is down: 502, never a hang or a panic.
+    let app = App::new(&config("http://127.0.0.1:1", true));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let down = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    let r = get(&down, "/api/blocks/tip/height").await;
+    assert_eq!((r.status, r.error()), (502, "upstream unavailable".into()));
+}
+
+#[tokio::test]
+async fn the_node_sees_only_paths_we_wrote() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    let addr_upper = "BC1QAR0SRRR7XFKVY5L643LYDNW9RE59GTZZWF5MDQ";
+    let r = get(
+        &addr,
+        &format!(
+            "/api/address/{addr_upper}/txs?after_txid={}&asof={H}",
+            H.to_uppercase()
+        ),
+    )
+    .await;
+    assert_eq!(r.status, 503);
+    let r = get(&addr, &format!("/api/block/{H}/txs")).await;
+    assert_eq!(r.status, 404);
+    assert_eq!(
+        hits(&seen),
+        [
+            format!(
+                "/address/bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq/txs?after_txid={H}&asof={H}"
+            ),
+            format!("/block/{H}/txs/0"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn hostile_requests_never_reach_the_node() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    let long = "a".repeat(8000);
+    let cases = [
+        ("/api/internal/txs".to_owned(), 404),
+        ("/api/internal/mempool/txs/all".into(), 404),
+        ("/api/../internal/txs".into(), 404),
+        (
+            "/api/tx/..%2F..%2Finternal%2Fmempool%2Ftxs%2Fall".into(),
+            400,
+        ),
+        (format!("/api/tx/{}%2Fraw", &H[..58]), 400),
+        ("/api/block/%2e%2e".into(), 400),
+        ("/api//blocks".into(), 404),
+        ("/api/blocks/tip/height/".into(), 404),
+        (format!("/api/tx/{long}"), 400),
+        (format!("/api/address/{long}"), 400),
+        ("/api/blocks/tip/height?cb=1".into(), 400),
+        (format!("/api/tx/{H}?asof={H}"), 400),
+        (format!("/api/tx/{H}/status?asof=..%2F"), 400),
+        (
+            "/api/address/tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".into(),
+            400,
+        ),
+        ("/api/block-template".into(), 404),
+        ("/api/txs/package".into(), 404),
+        ("/api/v1/fees/recommended".into(), 404),
+        (
+            "/signet/api/address/bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(),
+            400,
+        ),
+    ];
+    for (path, status) in &cases {
+        let r = get(&addr, path).await;
+        assert_eq!(r.status, *status, "{path}: {}", r.text());
+        assert_eq!(r.header("content-type"), Some("application/json"), "{path}");
+    }
+    for (line, status) in [
+        (format!("POST /api/tx/{H}"), 405),
+        ("GET /api/tx".to_owned(), 405),
+        ("DELETE /api/mempool".into(), 405),
+        ("POST /api/txs/test".into(), 404),
+        ("POST /api/addresses/txs".into(), 404),
+        ("POST /api/internal/txs".into(), 404),
+    ] {
+        let r = send(&addr, &line, "", b"[]").await;
+        assert_eq!(r.status, status, "{line}: {}", r.text());
+    }
+    assert!(hits(&seen).is_empty(), "{:?}", hits(&seen));
+}
+
+#[tokio::test]
+async fn identical_concurrent_requests_make_one_upstream_call() {
+    let (addr, seen) = start(Duration::from_millis(300), true).await;
+    let path = format!("/api/tx/{H}");
+    let mut tasks = Vec::new();
+    // Under the OS accept backlog (128 on macOS), so no connection is refused before it is served.
+    for _ in 0..100 {
+        let (addr, path) = (addr.clone(), path.clone());
+        tasks.push(tokio::spawn(async move { get(&addr, &path).await }));
+    }
+    for t in tasks {
+        let r = t.await.unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.text().contains(H));
+    }
+    assert_eq!(hits(&seen).len(), 1);
+    // Not a cache: once answered, the next request asks the node again.
+    get(&addr, &path).await;
+    assert_eq!(hits(&seen).len(), 2);
+}
+
+#[tokio::test]
+async fn hot_answers_are_held_briefly() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    for _ in 0..50 {
+        assert_eq!(get(&addr, "/api/fee-estimates").await.status, 200);
+        assert_eq!(get(&addr, "/signet/api/fee-estimates").await.status, 200);
+    }
+    // One call per network: each network has its own node.
+    assert_eq!(hits(&seen).len(), 2);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    get(&addr, "/api/fee-estimates").await;
+    assert_eq!(hits(&seen).len(), 3);
+}
+
+#[tokio::test]
+async fn broadcast_is_parsed_rebuilt_and_limited() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    // Uppercase hex with whitespace reaches the node as canonical lowercase.
+    let r = post(
+        &addr,
+        "/api/tx",
+        format!("  {}\n", TX.to_uppercase()).as_bytes(),
+    )
+    .await;
+    assert_eq!((r.status, r.text()), (200, H.to_owned()), "{r:?}");
+    assert_eq!(r.header("cache-control"), Some("no-store"));
+    assert_eq!(r.header("access-control-allow-origin"), Some("*"));
+    {
+        let log = seen.lock().unwrap();
+        assert_eq!((log[0].1.as_str(), &log[0].2[..]), ("/tx", TX.as_bytes()));
+    }
+    // Garbage and oversized bodies are refused before the node is asked.
+    for body in [b"zz".to_vec(), format!("{TX}00").into_bytes(), vec![]] {
+        assert_eq!(post(&addr, "/api/tx", &body).await.status, 400);
+    }
+    let big = "00".repeat(MAX_TX_BYTES + 100);
+    assert_eq!(post(&addr, "/api/tx", big.as_bytes()).await.status, 413);
+    assert_eq!(hits(&seen).len(), 1);
+    // Refused bodies spent tokens too: five attempts, then one per ten seconds.
+    assert_eq!(BROADCAST_BURST, 5);
+    let r = post(&addr, "/api/tx", TX.as_bytes()).await;
+    assert_eq!((r.status, r.header("retry-after")), (429, Some("10")));
+    assert_eq!(hits(&seen).len(), 1);
+    // Reads are not affected by the broadcast limit.
+    assert_eq!(get(&addr, "/api/fee-estimates").await.status, 200);
+}
+
+#[tokio::test]
+async fn broadcast_rejects_are_not_forwarded() {
+    let (addr, _) = start(Duration::ZERO, true).await;
+    let other = TX.replace("0100ffffffff", "0151ffffffff");
+    let r = post(&addr, "/api/tx", other.as_bytes()).await;
+    assert_eq!((r.status, r.error()), (400, "transaction rejected".into()));
+}
+
+#[tokio::test]
+async fn broadcast_can_be_switched_off() {
+    let (addr, seen) = start(Duration::ZERO, false).await;
+    let r = post(&addr, "/api/tx", TX.as_bytes()).await;
+    assert_eq!(
+        (r.status, r.error()),
+        (403, "broadcast is disabled on this server".into())
+    );
+    assert!(hits(&seen).is_empty());
+}
+
+#[tokio::test]
+async fn output_batches_are_rebuilt_from_parsed_positions() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    let r = post(
+        &addr,
+        &format!("/api/block-heights/txs/outs?asof={H}"),
+        b" [ [1, 2, 3], [4,5,6] ] ",
+    )
+    .await;
+    assert_eq!((r.status, r.text()), (200, "[null,null]".into()));
+    {
+        let log = seen.lock().unwrap();
+        assert_eq!(log[0].1, format!("/block-heights/txs/outs?asof={H}"));
+        assert_eq!(&log[0].2[..], b"[[1,2,3],[4,5,6]]");
+    }
+    for (body, status) in [
+        (b"[[1,2]]".to_vec(), 400),
+        (b"[[1,2,-3]]".to_vec(), 400),
+        (b"[[1,2,4294967296]]".to_vec(), 400),
+        (b"{\"a\":1}".to_vec(), 400),
+        (
+            format!("[{}[0,0,0]]", "[0,0,0],".repeat(300)).into_bytes(),
+            422,
+        ),
+        (vec![b' '; 20_000], 413),
+    ] {
+        let r = post(&addr, "/api/block-heights/txs/outs", &body).await;
+        assert_eq!(r.status, status, "{}", r.text());
+    }
+    assert_eq!(hits(&seen).len(), 1);
+}
+
+#[tokio::test]
+async fn cors_preflight_and_scope() {
+    let (addr, seen) = start(Duration::ZERO, true).await;
+    let r = send(
+        &addr,
+        "OPTIONS /signet/api/tx",
+        "Origin: https://wallet.example\r\nAccess-Control-Request-Method: POST\r\n",
+        b"",
+    )
+    .await;
+    assert_eq!(r.status, 204);
+    assert_eq!(r.header("access-control-allow-origin"), Some("*"));
+    assert_eq!(
+        r.header("access-control-allow-methods"),
+        Some("get, head, post")
+    );
+    assert_eq!(
+        r.header("access-control-allow-headers"),
+        Some("content-type")
+    );
+    assert!(r.header("content-security-policy").is_some());
+    assert!(hits(&seen).is_empty());
+    // Pages and the private API are same-origin only.
+    for path in ["/", "/healthz", "/app/x", "/apix"] {
+        let r = get(&addr, path).await;
+        assert!(r.header("access-control-allow-origin").is_none(), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn responses_carry_an_outcome_for_the_request_log() {
+    use axum::extract::ConnectInfo;
+    use mempool_based::esplora::{ApiOutcome, Source};
+    use tower::ServiceExt;
+
+    let (url, _) = mock(Duration::ZERO).await;
+    let router = App::new(&config(&url, true)).router();
+    let call = |path: &str| {
+        let mut req = axum::http::Request::get(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 9))));
+        router.clone().oneshot(req)
+    };
+    let first = call("/api/fee-estimates").await.unwrap();
+    let outcome = *first.extensions().get::<ApiOutcome>().unwrap();
+    assert_eq!(outcome.route, "fee_estimates");
+    assert!(matches!(outcome.source, Source::Upstream(_)));
+    assert_eq!(outcome.upstream_error, None);
+    let second = call("/signet/api/fee-estimates").await.unwrap();
+    assert!(matches!(
+        second.extensions().get::<ApiOutcome>().unwrap().source,
+        Source::Upstream(_)
+    ));
+    let hot = call("/api/fee-estimates").await.unwrap();
+    assert_eq!(
+        hot.extensions().get::<ApiOutcome>().unwrap().source,
+        Source::Hot
+    );
+    // An upstream 404 still went upstream; a request refused before that has no outcome.
+    let missing = call(&format!("/api/block/{H}")).await.unwrap();
+    assert_eq!(
+        missing.extensions().get::<ApiOutcome>().unwrap().route,
+        "block"
+    );
+    let refused = call("/api/tx/zz").await.unwrap();
+    assert!(refused.extensions().get::<ApiOutcome>().is_none());
+}

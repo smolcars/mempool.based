@@ -21,8 +21,14 @@ A network is enabled when all six of its variables are set, and disabled when no
 | `{NET}_RPC_PORT` | Port, 1 to 65535 |
 | `{NET}_RPC_USER` | HTTP Basic user |
 | `{NET}_RPC_PASSWORD` | HTTP Basic password. Held in a type that prints as `<redacted>` and never leaves the server |
-| `{NET}_ESPLORA_URL` | `http://` or `https://` base URL of rbitcoin's Esplora (`--esplora-listen`), or an absolute unix socket path. Credentials in the URL are refused, since URLs end up in logs |
+| `{NET}_ESPLORA_URL` | `http://` base URL of rbitcoin's Esplora (`--esplora-listen`), or an absolute unix socket path. The node speaks plain HTTP, so `https://` is refused. Credentials in the URL are refused, since URLs end up in logs |
 | `{NET}_ELECTRUM_ADDR` | `host:port` of rbitcoin's Electrum server (`--electrum-listen`), plain TCP |
+
+## Broadcast
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BROADCAST_ENABLED` | `true` | `false` turns off `POST /api/tx` on every network (it answers `403`). Broadcast is the only write the server makes to the node; its size cap and per-client rate limit are fixed ([`API.md`](API.md#broadcast)) |
 
 ## Limits
 
@@ -30,7 +36,7 @@ Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md)
 
 | Variable | Default | Protects against |
 |---|---|---|
-| `MAX_BODY_BYTES` | `16384` | Memory exhaustion from large request bodies. Enforced when a handler reads the body (axum's body extractors); a route that never reads its body ignores it, and the server discards it unread and closes the connection. A route that needs more (broadcast) raises it for itself with `DefaultBodyLimit` |
+| `MAX_BODY_BYTES` | `16384` | Memory exhaustion from large request bodies. Enforced when a handler reads the body (axum's body extractors); a route that never reads its body ignores it, and the server discards it unread and closes the connection. A route that needs more raises it for itself; broadcast takes up to 800,000 hex characters ([`API.md`](API.md#broadcast)) |
 | `REQUEST_TIMEOUT_SECS` | `10` | Slow handlers and slow uploads holding a slot forever. The same value bounds how long a connection may take to send its request headers or sit idle between requests, so half-sent requests (slowloris) and idle keep-alives are closed, and how long a write to the client may make no progress, so a client that stops reading its responses is disconnected |
 | `MAX_CONNECTIONS` | `1024` | Running out of file descriptors. Past it the server stops accepting until a connection closes. Keep it below the process's open-file limit |
 | `MAX_CONCURRENT_REQUESTS` | `256` | Overload. Requests past it are refused at once with `503`, not queued |

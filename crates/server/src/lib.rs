@@ -5,21 +5,25 @@
 
 pub mod config;
 pub mod error;
+pub mod esplora;
 pub mod limits;
 mod serve;
 
 use std::future::Future;
 use std::sync::Arc;
 
-use axum::extract::DefaultBodyLimit;
-use axum::http::HeaderValue;
+use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
-    X_FRAME_OPTIONS,
+    ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+    ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_SECURITY_POLICY,
+    HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::response::Response;
+use axum::http::{HeaderValue, Method, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router, middleware};
+use node::esplora::Esplora;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tower::Layer;
@@ -44,7 +48,8 @@ pub const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
 /// Vite puts content-hashed files under `/assets/`, so a URL there never changes content.
 pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// API prefixes inside a network scope. Unmatched paths under them are a JSON 404, never the app shell.
+/// API prefixes inside a network scope. Unmatched paths under them are a JSON 404, never the app
+/// shell; inside an enabled network, `/api/{*rest}` is the Esplora pass-through, which does the same.
 const API_PATHS: [&str; 6] = [
     "/api",
     "/api/",
@@ -55,10 +60,34 @@ const API_PATHS: [&str; 6] = [
 ];
 
 /// One enabled network. Handlers in [`network_routes`] receive it as `State<Arc<NetworkContext>>`;
-/// later tasks add the node clients and engine here.
-#[derive(Debug)]
+/// later tasks add the other node clients and the engine here.
 pub struct NetworkContext {
     pub config: NetworkConfig,
+    pub esplora: Esplora,
+    /// State of the `/api` pass-through.
+    pub api: esplora::Api,
+}
+
+impl std::fmt::Debug for NetworkContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkContext")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NetworkContext {
+    fn new(config: &NetworkConfig, all: &Config) -> Result<Self, node::esplora::Error> {
+        let url = match &config.esplora {
+            config::EsploraEndpoint::Http(url) => url.clone(),
+            config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
+        };
+        Ok(Self {
+            config: config.clone(),
+            esplora: Esplora::new(&url)?,
+            api: esplora::Api::new(all.broadcast, all.limits.max_tracked_clients),
+        })
+    }
 }
 
 /// Routes every enabled network serves, written with paths starting `/api` or `/app`. They are
@@ -84,10 +113,23 @@ impl App {
         let mut app = Router::new().route("/healthz", get(healthz));
         for network in Network::ALL {
             let prefix = network.path_prefix();
-            let scope = match config.networks.iter().find(|n| n.network == network) {
-                Some(n) => routes
+            let context = config
+                .networks
+                .iter()
+                .find(|n| n.network == network)
+                // Cannot fail: `Config` checked the Esplora URL with the client's own parser.
+                .and_then(|n| NetworkContext::new(n, config).ok());
+            let enabled = context.is_some();
+            let scope = match context {
+                Some(ctx) => routes
                     .clone()
-                    .with_state(Arc::new(NetworkContext { config: n.clone() })),
+                    .route("/api/{*rest}", any(esplora::handle))
+                    .route(
+                        "/api/tx",
+                        any(esplora::handle)
+                            .layer(DefaultBodyLimit::max(esplora::MAX_BROADCAST_BODY)),
+                    )
+                    .with_state(Arc::new(ctx)),
                 None if prefix.is_empty() => Router::new(),
                 None => {
                     // A disabled network has no pages either.
@@ -103,6 +145,7 @@ impl App {
             };
             let scope = API_PATHS
                 .iter()
+                .filter(|p| !(enabled && **p == "/api/{*rest}"))
                 .fold(scope, |r, p| r.route(p, any(not_found)));
             app = if prefix.is_empty() {
                 app.merge(scope)
@@ -140,7 +183,8 @@ impl App {
                 limiter.clone(),
                 limits::limit,
             ))
-            .layer(middleware::map_response(finish));
+            .layer(middleware::map_response(finish))
+            .layer(middleware::from_fn(cors));
         Self { router, limiter }
     }
 
@@ -161,6 +205,52 @@ async fn healthz() -> Json<serde_json::Value> {
 
 async fn not_found() -> ApiError {
     ApiError::NOT_FOUND
+}
+
+/// Whether `path` is under some network's `/api`.
+fn is_api(path: &str) -> bool {
+    Network::ALL.iter().any(|n| {
+        path.strip_prefix(n.path_prefix())
+            .is_some_and(|rest| rest == "/api" || rest.starts_with("/api/"))
+    })
+}
+
+/// `/api` is a public API that web wallets call from other origins. Nothing in it depends on
+/// cookies or other ambient credentials, so any origin may read it, broadcast included. Outermost,
+/// so refusals from the limits (429, 503, 504) are readable cross-origin too.
+async fn cors(req: Request, next: Next) -> Response {
+    if !is_api(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let preflight = req.method() == Method::OPTIONS;
+    let mut res = if preflight {
+        finish(StatusCode::NO_CONTENT.into_response()).await
+    } else {
+        next.run(req).await
+    };
+    let h = res.headers_mut();
+    h.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    if preflight {
+        h.insert(
+            ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, HEAD, POST"),
+        );
+        h.insert(
+            ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("Content-Type"),
+        );
+        h.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400"));
+    } else {
+        h.insert(
+            ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static("X-Bitcoin-Chain-Tip, X-Bitcoin-Chain-Tip-Height"),
+        );
+    }
+    // Errors and refusals must not be cached: the same URL can succeed a moment later.
+    if !h.contains_key(CACHE_CONTROL) {
+        h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    res
 }
 
 /// Last step for every response: errors through the error model, then the security headers.

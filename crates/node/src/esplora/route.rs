@@ -126,6 +126,11 @@ pub enum Route {
         start: BlockTxsStart,
     },
     BlockRaw(BlockHash),
+    /// The txid at `index` in the block.
+    BlockTxid {
+        hash: BlockHash,
+        index: u32,
+    },
 
     Tx(Txid),
     TxStatus {
@@ -135,6 +140,8 @@ pub enum Route {
     TxHex(Txid),
     TxRaw(Txid),
     TxMerkleProof(Txid),
+    /// BIP37 merkleblock, as hex.
+    TxMerkleblockProof(Txid),
     TxOutspend {
         txid: Txid,
         vout: u32,
@@ -144,6 +151,8 @@ pub enum Route {
         txid: Txid,
         asof: Option<BlockHash>,
     },
+    /// `GET /txs/outspends?txids=`: one outspend array per txid. The node takes at most 50.
+    TxsOutspends(Vec<Txid>),
 
     ScriptStats {
         script: ScriptRef,
@@ -175,11 +184,28 @@ pub enum Route {
 
     Mempool,
     MempoolTxids,
+    /// Mempool txids in txid order after `after`, at most `max_txs` (node default and cap 10,000).
+    MempoolTxidsPage {
+        after: Option<Txid>,
+        max_txs: Option<u32>,
+    },
     MempoolRecent,
     FeeEstimates,
     /// `POST /tx`: the only write. Never call it on a shared node.
     Broadcast(Transaction),
 
+    /// The confirmed transaction at a block position, as `/tx/:txid` JSON.
+    TxAt {
+        height: u32,
+        index: u32,
+        asof: Option<BlockHash>,
+    },
+    /// One confirmed output by outpoint, in the same shape as [`Route::OutputAt`].
+    TxOut {
+        txid: Txid,
+        vout: u32,
+        asof: Option<BlockHash>,
+    },
     /// One confirmed output by position. No address index needed.
     OutputAt {
         position: OutPosition,
@@ -254,6 +280,7 @@ impl Route {
             Self::BlockTxids(h) => write!(o, "/block/{h}/txids")?,
             Self::BlockTxs { hash, start } => write!(o, "/block/{hash}/txs/{}", start.0)?,
             Self::BlockRaw(h) => write!(o, "/block/{h}/raw")?,
+            Self::BlockTxid { hash, index } => write!(o, "/block/{hash}/txid/{index}")?,
 
             Self::Tx(t) => write!(o, "/tx/{t}")?,
             Self::TxStatus { txid, asof: a } => {
@@ -263,6 +290,7 @@ impl Route {
             Self::TxHex(t) => write!(o, "/tx/{t}/hex")?,
             Self::TxRaw(t) => write!(o, "/tx/{t}/raw")?,
             Self::TxMerkleProof(t) => write!(o, "/tx/{t}/merkle-proof")?,
+            Self::TxMerkleblockProof(t) => write!(o, "/tx/{t}/merkleblock-proof")?,
             Self::TxOutspend {
                 txid,
                 vout,
@@ -274,6 +302,15 @@ impl Route {
             Self::TxOutspends { txid, asof: a } => {
                 write!(o, "/tx/{txid}/outspends")?;
                 asof = *a;
+            }
+            Self::TxsOutspends(ids) => {
+                o.push_str("/txs/outspends?txids=");
+                for (i, t) in ids.iter().enumerate() {
+                    if i > 0 {
+                        o.push(',');
+                    }
+                    write!(o, "{t}")?;
+                }
             }
 
             Self::ScriptStats { script, asof: a } => {
@@ -328,10 +365,35 @@ impl Route {
 
             Self::Mempool => o.push_str("/mempool"),
             Self::MempoolTxids => o.push_str("/mempool/txids"),
+            Self::MempoolTxidsPage { after, max_txs } => {
+                o.push_str("/mempool/txids/page");
+                if let Some(t) = after {
+                    write!(o, "/{t}")?;
+                }
+                if let Some(n) = max_txs {
+                    write!(o, "?max_txs={n}")?;
+                }
+            }
             Self::MempoolRecent => o.push_str("/mempool/recent"),
             Self::FeeEstimates => o.push_str("/fee-estimates"),
             Self::Broadcast(_) => o.push_str("/tx"),
 
+            Self::TxAt {
+                height,
+                index,
+                asof: a,
+            } => {
+                write!(o, "/block-height/{height}/tx/{index}")?;
+                asof = *a;
+            }
+            Self::TxOut {
+                txid,
+                vout,
+                asof: a,
+            } => {
+                write!(o, "/tx/{txid}/out/{vout}")?;
+                asof = *a;
+            }
             Self::OutputAt {
                 position: p,
                 asof: a,
@@ -474,6 +536,37 @@ mod tests {
             asof: None,
         };
         assert_eq!(batch.body().unwrap().0, "[[1,2,3],[1,2,3]]");
+        assert_eq!(
+            path(&Route::TxsOutspends(vec![t, t])),
+            format!("/txs/outspends?txids={H},{H}")
+        );
+        assert_eq!(
+            path(&Route::MempoolTxidsPage {
+                after: Some(t),
+                max_txs: Some(9)
+            }),
+            format!("/mempool/txids/page/{H}?max_txs=9")
+        );
+        assert_eq!(
+            path(&Route::TxAt {
+                height: 5,
+                index: 1,
+                asof: Some(h)
+            }),
+            format!("/block-height/5/tx/1?asof={H}")
+        );
+        assert_eq!(
+            path(&Route::TxOut {
+                txid: t,
+                vout: 2,
+                asof: None
+            }),
+            format!("/tx/{H}/out/2")
+        );
+        assert_eq!(
+            path(&Route::BlockTxid { hash: h, index: 3 }),
+            format!("/block/{H}/txid/3")
+        );
         assert_eq!(batch.method(), Method::POST);
     }
 
