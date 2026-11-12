@@ -59,7 +59,7 @@ Refined when M1 lands.
 | FE3 | Show block summaries and the difficulty adjustment in the frontend: median fee rate and fee range on the block page, fee layers and fee figures in the home page's tiles (batch route on load, the WebSocket's `summary` message for new blocks, retry on 503) | BS1, LX1 | done ([#33](https://github.com/smolcars/mempool.based/pull/33)) |
 | W7 | WebGL block renderer for projected and mined blocks; fills the grid slot the block page reserves | W1, MP3, BS1 | done ([#36](https://github.com/smolcars/mempool.based/pull/36)) |
 | FE5 | The live mempool on the home page: projected-block tiles with their fee layers, the mempool panel and the latest transactions from the WebSocket topics; the projected tile becomes the mined one when a block arrives | MP3, FE3 | doing |
-| W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | todo |
+| W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | doing |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | todo |
 | DA1 | Difficulty adjustment (two headers and arithmetic), for the home page and `/api/v1/difficulty-adjustment` | N3, S2 | done ([#30](https://github.com/smolcars/mempool.based/pull/30)) |
 | WS1 | mempool.space-shaped WebSocket subset at `/api/v1/ws` (`want`, `track-tx`, `track-address`, `ping`) from the same hub | S3, MP5 | todo |
@@ -86,7 +86,7 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | doing |
+| LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | done ([#37](https://github.com/smolcars/mempool.based/pull/37)); the graph is unverified until LN2 |
 | LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | todo |
 | LN3 | Channel opens and closes from blocks, with close classification | LN2 | todo |
 | LN4 | Lightning store, statistics snapshots and API | LN3, ST1 | todo |
