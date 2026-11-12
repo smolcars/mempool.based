@@ -120,25 +120,28 @@
     box-shadow: inset 0 -2px 0 var(--color-accent);
   }
 
-  /* The target is 44 px; the drawn button stays small. */
+  /* A 44 px button around a 36 px drawn one, so the target is a thumb's and the look stays small. */
   .icon-btn {
     position: relative;
+    isolation: isolate;
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
+    width: var(--touch);
+    height: var(--touch);
     padding: 0;
-    border: 1px solid var(--color-line);
-    border-radius: var(--radius-m);
+    border: 0;
     background: none;
     cursor: pointer;
   }
-  .icon-btn::after {
+  .icon-btn::before {
     content: "";
     position: absolute;
-    inset: -4px;
+    inset: 4px;
+    z-index: -1;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-m);
   }
-  .icon-btn:hover {
+  .icon-btn:hover::before {
     background: var(--color-surface-sunken);
   }
   .icon-btn svg {
@@ -189,15 +192,25 @@
       padding: 0 var(--space-2);
     }
   }
-  /* Phones: the mark alone carries the brand, so the search keeps its width; the name stays for
-     screen readers. */
+  /* Phones: the mark alone carries the brand; the network sits beside the search, and the four
+     sections share the second row evenly, so every one is in sight at 320 px. */
   @media (max-width: 640px) {
     .site-header__inner {
+      grid-template-columns: auto auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        "brand network search theme"
+        "nav nav nav nav";
       padding-inline: var(--space-3);
       column-gap: var(--space-2);
     }
+    .nav {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: visible;
+    }
     .nav a {
-      padding: 0 6px;
+      justify-content: center;
+      padding: 0 2px;
     }
     .network__button {
       padding-inline: 8px 10px;
@@ -210,6 +223,22 @@
       overflow: hidden;
       clip-path: inset(50%);
       white-space: nowrap;
+    }
+    /* Searching takes the whole first row; the brand, network and theme step aside meanwhile. */
+    .site-header__inner:has(.site-header__search:focus-within) {
+      grid-template-areas:
+        "search search search search"
+        "nav nav nav nav";
+    }
+    .site-header__inner:has(.site-header__search:focus-within)
+      :is(.brand, .network, .theme-toggle) {
+      display: none;
+    }
+  }
+  /* The smallest phones: the network's name alone, without its arrow. */
+  @media (max-width: 360px) {
+    .network__chevron {
+      display: none;
     }
   }
 }

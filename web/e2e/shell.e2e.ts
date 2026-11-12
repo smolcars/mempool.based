@@ -91,14 +91,22 @@ for (const [name, viewport] of [
     // when the server serves one network, as here.
     const search = await header.locator(".search__field").boundingBox();
     const network = await header.locator(".network__button").boundingBox();
+    const theme = await header
+      .getByRole("button", { name: /Switch to (light|dark) theme/ })
+      .boundingBox();
     const links = await header.getByRole("navigation", { name: "Main" }).getByRole("link").all();
-    expect(search && search.width).toBeGreaterThan(150);
+    expect(links).toHaveLength(4);
+    expect(search && search.width).toBeGreaterThan(90);
+    // The network and theme are a thumb's target too, however small they are drawn.
+    expect(network && network.height).toBeGreaterThanOrEqual(43.5);
+    expect(theme && Math.min(theme.width, theme.height)).toBeGreaterThanOrEqual(43.5);
     for (const link of links) {
       const box = await link.boundingBox();
       if (!box || !search || !network) throw new Error("missing header part");
       expect(overlaps(box, search), "a section over the search").toBe(false);
       expect(overlaps(box, network), "a section over the network").toBe(false);
-      // A thumb's target.
+      // In sight without scrolling the row sideways, and a thumb's target.
+      expect(box.x + box.width, "a section past the edge").toBeLessThanOrEqual(viewport.width);
       expect(box.height).toBeGreaterThanOrEqual(43.5);
     }
     // About 100 px at most on a phone, so the page starts in the first screen.
@@ -107,5 +115,14 @@ for (const [name, viewport] of [
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
+    // On a phone, searching takes the row: the field and its answer are nearly the page's width.
+    if (viewport.width < 700) {
+      await header.getByRole("searchbox").fill("nonsense query");
+      await header.getByRole("searchbox").press("Enter");
+      const panel = page.getByText("Nothing matches");
+      await expect(panel).toBeVisible();
+      const field = await header.locator(".search__field").boundingBox();
+      expect(field && field.width).toBeGreaterThan(viewport.width * 0.85);
+    }
   });
 }
