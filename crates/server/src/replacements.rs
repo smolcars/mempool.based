@@ -17,7 +17,7 @@ use axum::http::header::CACHE_CONTROL;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, http::StatusCode};
 pub use engine::replacements::db::Batch;
-pub use engine::replacements::{Facts, Link, MAX_LINKS, Replacements};
+pub use engine::replacements::{Change, Facts, Link, MAX_LINKS, Mined, Replacements};
 use engine::store::Store;
 use logging::events::{ReplacementsRestored, ReplacementsStoreFailed};
 use serde_json::json;
@@ -81,7 +81,7 @@ impl Kept {
         if batch.is_empty() {
             return;
         }
-        let links = batch.links.len();
+        let links = links(&batch);
         if self.queue.try_send(batch).is_err() {
             self.failed("write", "queue_full", links);
         }
@@ -119,6 +119,14 @@ impl Kept {
     }
 }
 
+/// New links in a batch, for the log.
+fn links(batch: &[Change]) -> usize {
+    batch
+        .iter()
+        .filter(|c| matches!(c, Change::Link(_)))
+        .count()
+}
+
 fn store_error(e: &engine::store::Error) -> &'static str {
     match e {
         engine::store::Error::TimedOut => "timed_out",
@@ -147,7 +155,7 @@ pub fn writer(ctx: &NetworkContext) -> Option<(Kept, tokio::task::JoinHandle<()>
             while let Ok(more) = rx.try_recv() {
                 batches.push(more);
             }
-            let links = batches.iter().map(|b| b.links.len()).sum();
+            let links = batches.iter().map(|b| links(b)).sum();
             match engine::replacements::db::write(&k.store, batches, keep).await {
                 Ok(()) => k.failures.store(0, Ordering::Relaxed),
                 Err(e) => k.failed("write", store_error(&e), links),

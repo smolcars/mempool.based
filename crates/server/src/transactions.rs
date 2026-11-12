@@ -21,10 +21,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use bitcoin::Txid;
-use engine::replacements::{Facts, Node, Replacements};
+use engine::replacements::{Facts, Mined, Node, Replacements};
 use node::esplora::{ChainTip, Error, Esplora, RawResponse, Route};
 use serde::{Deserialize, Serialize};
-use serde_json::Number;
+use serde_json::{Number, Value};
 
 use crate::api_v1::{MEMPOOL_OFF, NOT_READY};
 use crate::esplora::{self, Answer, ApiOutcome, LIVE};
@@ -216,8 +216,9 @@ struct TreeTx {
     /// Whether a transaction it replaced itself did not signal. Absent on a leaf.
     #[serde(skip_serializing_if = "Option::is_none")]
     full_rbf: Option<bool>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    mined: bool,
+    /// `true` when mined, `null` when unknown (its block left the best chain), absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mined: Option<Value>,
 }
 
 /// One node of a tree, in the reference's field order.
@@ -232,8 +233,8 @@ struct Tree {
     /// Whether this transaction, or anything below it, was replaced without signalling.
     full_rbf: bool,
     replaces: Vec<Tree>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    mined: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mined: Option<Value>,
 }
 
 fn tree_json(n: &Node, parent: Option<u64>) -> Tree {
@@ -258,7 +259,7 @@ fn tree_json(n: &Node, parent: Option<u64>) -> Tree {
             time: n.time,
             rbf: f.map(|f| f.rbf),
             full_rbf: (!n.replaces.is_empty()).then_some(direct),
-            mined: n.mined,
+            mined: mined(n.mined),
         },
         time: n.time,
         interval: parent.map(|p| {
@@ -266,8 +267,13 @@ fn tree_json(n: &Node, parent: Option<u64>) -> Tree {
         }),
         full_rbf: (parent.is_some() && !signalled) || n.full_rbf(),
         replaces,
-        mined: n.mined,
+        mined: mined(n.mined),
     }
+}
+
+/// A tree's `mined`: absent when not mined, as the reference leaves it out.
+fn mined(m: Mined) -> Option<Value> {
+    (m != Mined::No).then(|| m.json())
 }
 
 /// The two lists, built once per change of the record.

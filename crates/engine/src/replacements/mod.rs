@@ -5,17 +5,25 @@
 //!
 //! Read as chains (what replaced this, and what replaced that) by the `tx:` topic and `/app`, and
 //! as trees (a replacement and everything it replaced, recursively) by `/api/v1`.
+//!
+//! A mined replacement carries its block. The record follows the chain from the tracker's own
+//! window of recent blocks ([`Replacements::follow`]), so a reorg reaches it from the same source
+//! the tracker trusts; what the window cannot settle is asked of the node, a bounded number of
+//! reads per reorg ([`Replacements::asks`], [`ask`]).
 
 pub mod db;
 #[cfg(test)]
 mod tests;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::sync::Arc;
 
-use bitcoin::Txid;
+use bitcoin::{BlockHash, Txid};
+use node::esplora::Esplora;
 use serde_json::{Value, json};
 
-use crate::mempool::TxInfo;
+use crate::mempool::{BlockSpends, TxInfo};
 
 /// Most links one chain answer or message carries, in each direction. A longer history is cut
 /// and marked `truncated`.
@@ -23,6 +31,34 @@ pub const MAX_LINKS: usize = 32;
 /// Most transactions one tree holds. A replacement removes at most 100 transactions with their
 /// descendants on rbitcoin, so a single step fits; a longer history is cut.
 pub const MAX_TREE: usize = 100;
+/// Most node reads one reorg may cause, failed ones included. Past it, whatever is still
+/// unsettled reads [`Mined::Unknown`] and stays so.
+pub const CHECKS: usize = 100;
+
+/// Whether a replacement is confirmed, and where.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mined {
+    /// Not seen in a block on the best chain.
+    #[default]
+    No,
+    /// In this block, height and hash, on the best chain as far as the record has followed it.
+    /// `None` only for a link stored before blocks were recorded, which no reorg re-examines.
+    In(Option<(u32, BlockHash)>),
+    /// Its block left the best chain and where it is now is not known: a check is due, failed,
+    /// or was past [`CHECKS`].
+    Unknown,
+}
+
+impl Mined {
+    /// `true`, `false`, or `null` when unknown.
+    pub fn json(self) -> Value {
+        match self {
+            Self::No => Value::Bool(false),
+            Self::In(_) => Value::Bool(true),
+            Self::Unknown => Value::Null,
+        }
+    }
+}
 
 /// One transaction's own figures, as the tracker held them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -66,8 +102,8 @@ pub struct Link {
     /// The replacement's, when the tracker held it: `None` when it was confirmed in the same
     /// block that removed the original, or left before we could read it.
     pub by_tx: Option<Facts>,
-    /// The replacement was later confirmed (seen leaving the mempool in a block).
-    pub mined: bool,
+    /// Whether the replacement is confirmed, and where.
+    pub mined: Mined,
 }
 
 /// Sat per 1,000 vB, rounded down, like every rate the server sends.
@@ -90,6 +126,11 @@ impl Link {
             "by_fee": by_fee,
             "by_vsize": by_vsize,
             "by_rate": self.by_tx.and_then(|f| rate(f.fee, f.vsize)),
+            "mined": self.mined.json(),
+            "block": match self.mined {
+                Mined::In(Some((height, hash))) => json!({ "height": height, "hash": hash }),
+                _ => Value::Null,
+            },
         })
     }
 }
@@ -103,8 +144,8 @@ pub struct Node {
     /// When it entered the mempool: its accept time, or for a replacement we never held, when we
     /// saw it replace.
     pub time: u64,
-    /// Confirmed: only ever set on a tree's newest replacement.
-    pub mined: bool,
+    /// Confirmed: only ever other than [`Mined::No`] on a tree's newest replacement.
+    pub mined: Mined,
     /// What it replaced, oldest replacement first.
     pub replaces: Vec<Node>,
 }
@@ -116,6 +157,75 @@ impl Node {
             .iter()
             .any(|c| c.tx.is_some_and(|f| !f.rbf) || c.full_rbf())
     }
+}
+
+/// One change to the record, in the order made: what the store replays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    /// A replacement, as recorded.
+    Link(Link),
+    /// Everything this transaction replaced now has its replacement in this state.
+    Mined(Txid, Mined),
+    /// The transaction no longer stands replaced, and what it replaced is no longer mined.
+    Returned(Txid),
+}
+
+/// One node read a check needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ask {
+    /// The best chain's block hash at this height.
+    Hash(u32),
+    /// Where this transaction is confirmed, if anywhere.
+    Tx(Txid),
+}
+
+/// The node's answer to an [`Ask`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    Hash(BlockHash),
+    /// The block that confirms it on the best chain; `None` when it is in none.
+    Tx(Option<(u32, BlockHash)>),
+}
+
+/// Where a check's reads go: the node's Esplora in the server, a script in tests.
+pub trait Lookup: Send + Sync {
+    /// `None` when the node could not answer.
+    fn answer(&self, ask: Ask) -> impl Future<Output = Option<Answer>> + Send;
+}
+
+impl Lookup for Esplora {
+    async fn answer(&self, ask: Ask) -> Option<Answer> {
+        match ask {
+            Ask::Hash(h) => self.block_hash(h).await.ok().map(|s| Answer::Hash(s.value)),
+            Ask::Tx(t) => match self.tx_status(t, None).await {
+                Ok(s) if !s.value.confirmed => Some(Answer::Tx(None)),
+                // Confirmed without saying where is no answer.
+                Ok(s) => s
+                    .value
+                    .block_height
+                    .zip(s.value.block_hash)
+                    .map(|b| Answer::Tx(Some(b))),
+                // Neither in the mempool nor in a block.
+                Err(node::esplora::Error::NotFound) => Some(Answer::Tx(None)),
+                Err(_) => None,
+            },
+        }
+    }
+}
+
+/// Asks in turn, stopping at the first failure so an unreachable node is asked once, not once
+/// per read. Returns each read made, a failed one with `None`.
+pub async fn ask(lookup: &impl Lookup, asks: &[Ask]) -> Vec<(Ask, Option<Answer>)> {
+    let mut out = Vec::with_capacity(asks.len());
+    for a in asks {
+        let answer = lookup.answer(*a).await;
+        let failed = answer.is_none();
+        out.push((*a, answer));
+        if failed {
+            break;
+        }
+    }
+    out
 }
 
 /// The bounded record.
@@ -134,6 +244,18 @@ pub struct Replacements {
     recorded: u64,
     /// Counts every change, so a reader can tell whether an answer built earlier still holds.
     version: u64,
+    /// Changes since the store last took them.
+    changes: Vec<Change>,
+    /// The best chain as the newest window showed it, tip first, down to the parent of the
+    /// window's oldest block: height and hash.
+    chain: Vec<(u32, BlockHash)>,
+    /// Mined links in blocks below this height are not proven on the best chain yet: a reorg,
+    /// a start or a gap the window could not see the bottom of. Walked down by [`Self::asks`].
+    unproven: Option<u32>,
+    /// Node reads left for the reorg being checked.
+    budget: usize,
+    /// Counts reorgs, so a check's answers are not applied after the chain moved again.
+    epoch: u64,
 }
 
 impl Replacements {
@@ -146,6 +268,11 @@ impl Replacements {
             next: 0,
             recorded: 0,
             version: 0,
+            changes: Vec::new(),
+            chain: Vec::new(),
+            unproven: None,
+            budget: 0,
+            epoch: 0,
         }
     }
 
@@ -170,6 +297,12 @@ impl Replacements {
         std::mem::take(&mut self.recorded)
     }
 
+    /// The changes made since the last call, oldest first, for the store. Links put back with
+    /// [`Self::restore`] are not among them.
+    pub fn take_changes(&mut self) -> Vec<Change> {
+        std::mem::take(&mut self.changes)
+    }
+
     pub fn get(&self, txid: &Txid) -> Option<&Link> {
         self.links.get(txid).map(|(_, l)| l)
     }
@@ -179,6 +312,7 @@ impl Replacements {
     pub fn insert(&mut self, link: Link) -> Link {
         let link = self.restore(link);
         self.recorded += 1;
+        self.changes.push(Change::Link(link));
         link
     }
 
@@ -208,19 +342,234 @@ impl Replacements {
         link
     }
 
-    /// `txid` was confirmed: if it replaced anything, its tree is now mined. Returns whether it
-    /// replaced anything we hold.
-    pub fn confirmed(&mut self, txid: &Txid) -> bool {
-        let Some(list) = self.replaced.get(txid) else {
+    /// `txid` was confirmed in this block: if it replaced anything, its tree is now mined.
+    /// Returns whether that changed the record.
+    pub fn confirmed(&mut self, txid: &Txid, height: u32, block: BlockHash) -> bool {
+        self.set_mined(*txid, Mined::In(Some((height, block))))
+    }
+
+    /// Whether `by`, as a replacement, is confirmed: [`Mined::No`] when it replaced nothing.
+    pub fn mined(&self, by: &Txid) -> Mined {
+        self.replaced_by(by)
+            .iter()
+            .find_map(|t| self.get(t))
+            .map_or(Mined::No, |l| l.mined)
+    }
+
+    /// Puts everything `by` replaced in state `m`. Returns whether that changed anything.
+    fn set_mined(&mut self, by: Txid, m: Mined) -> bool {
+        let Some(list) = self.replaced.get(&by) else {
             return false;
         };
+        let mut changed = false;
         for t in list {
-            if let Some((_, l)) = self.links.get_mut(t) {
-                l.mined = true;
+            if let Some((_, l)) = self.links.get_mut(t)
+                && l.mined != m
+            {
+                l.mined = m;
+                changed = true;
             }
         }
-        self.version += 1;
-        true
+        if changed {
+            self.version += 1;
+            self.changes.push(Change::Mined(by, m));
+        }
+        changed
+    }
+
+    /// Follows the best chain to the tracker's window `blocks` (tip first), as each delta
+    /// carries it. Returns the replaced transactions found confirmed themselves: the original
+    /// won after all.
+    ///
+    /// A window that only extends the chain followed costs a hash comparison and a lookup per
+    /// transaction of each new block. Any other (a reorg, a start, a gap longer than the
+    /// window) re-examines every mined replacement: one whose block the window shows gone is
+    /// placed in the window's block that holds it, else is not mined when the window shows
+    /// where the chains part, else is [`Mined::Unknown`] until [`Self::asks`] finds it; one
+    /// below a window that does not show where the chains part is left as it is until the
+    /// walk down proves its block.
+    pub fn follow(&mut self, blocks: &[Arc<BlockSpends>]) -> Vec<(Txid, u32, BlockHash)> {
+        let mut won = Vec::new();
+        let Some(tip) = blocks.first() else {
+            return won;
+        };
+        if self.chain.first().is_some_and(|(_, h)| *h == tip.hash) {
+            return won;
+        }
+        let mut chain: Vec<(u32, BlockHash)> = blocks.iter().map(|b| (b.height, b.hash)).collect();
+        if let Some(b) = blocks.last()
+            && let Some(h) = b.height.checked_sub(1)
+        {
+            chain.push((h, b.prev));
+        }
+        let old = std::mem::replace(&mut self.chain, chain);
+        let new: Vec<&Arc<BlockSpends>> = blocks
+            .iter()
+            .filter(|b| !old.iter().any(|(_, h)| *h == b.hash))
+            .collect();
+        if !old.first().is_some_and(|o| self.chain.contains(o)) {
+            self.reorged(blocks, &old, &mut won);
+        }
+        // Whatever a new block holds is mined there, whether we saw it leave the mempool or not.
+        for b in new {
+            for t in b.txids() {
+                if self.replaced.contains_key(t) {
+                    self.set_mined(*t, Mined::In(Some((b.height, b.hash))));
+                }
+            }
+        }
+        won
+    }
+
+    /// The window no longer extends the chain followed: see [`Self::follow`].
+    fn reorged(
+        &mut self,
+        blocks: &[Arc<BlockSpends>],
+        old: &[(u32, BlockHash)],
+        won: &mut Vec<(Txid, u32, BlockHash)>,
+    ) {
+        self.epoch += 1;
+        self.budget = CHECKS;
+        let chain = self.chain.clone();
+        let at = |h: u32| chain.iter().find(|(k, _)| *k == h).map(|(_, x)| *x);
+        let bottom = chain.last().map_or(0, |(h, _)| *h);
+        // The highest block we knew that the window still shows: nothing at or below it moved.
+        let fork = old
+            .iter()
+            .copied()
+            .chain(self.links.values().filter_map(|(_, l)| match l.mined {
+                Mined::In(Some(b)) => Some(b),
+                _ => None,
+            }))
+            .filter(|(h, x)| at(*h) == Some(*x))
+            .map(|(h, _)| h)
+            .max();
+        if fork.is_none() {
+            self.unproven = Some(bottom);
+        }
+        let held = |t: &Txid| {
+            blocks
+                .iter()
+                .find(|b| b.contains(t))
+                .map(|b| (b.height, b.hash))
+        };
+        let mut bys: Vec<Txid> = self.replaced.keys().copied().collect();
+        bys.sort_unstable();
+        for by in bys {
+            let m = self.mined(&by);
+            let gone = match m {
+                // Below the window, a block is proven only by the walk down.
+                Mined::In(Some((h, x))) => h >= bottom && at(h) != Some(x),
+                Mined::Unknown => true,
+                Mined::In(None) | Mined::No => false,
+            };
+            if !gone {
+                continue;
+            }
+            if let Some(b) = held(&by) {
+                self.set_mined(by, Mined::In(Some(b)));
+                continue;
+            }
+            // Unknown since an earlier reorg: it may be below this window, so the check decides.
+            if m == Mined::Unknown {
+                continue;
+            }
+            for t in self.replaced_by(&by).to_vec() {
+                if let Some((h, x)) = held(&t) {
+                    self.returned(&t);
+                    won.push((t, h, x));
+                }
+            }
+            // Every best-chain block above the fork is in the window.
+            if fork.is_some() {
+                self.set_mined(by, Mined::No);
+            } else {
+                self.set_mined(by, Mined::Unknown);
+            }
+        }
+    }
+
+    /// The reads a check needs next, at most what is left of [`CHECKS`] for this reorg, with
+    /// the epoch to hand back to [`Self::answers`]: the hash at the height of the highest mined
+    /// block not proven on the best chain yet (the walk down), then where each unknown
+    /// replacement is. `None` when nothing is due. Out of reads, what is still unproven becomes
+    /// [`Mined::Unknown`].
+    pub fn asks(&mut self) -> Option<(u64, Vec<Ask>)> {
+        let walk = self.unproven.and_then(|u| {
+            self.links
+                .values()
+                .filter_map(|(_, l)| match l.mined {
+                    Mined::In(Some((h, _))) if h < u => Some(h),
+                    _ => None,
+                })
+                .max()
+        });
+        if walk.is_none() {
+            self.unproven = None;
+        }
+        let mut unknown: Vec<Txid> = self
+            .replaced
+            .keys()
+            .filter(|by| self.mined(by) == Mined::Unknown)
+            .copied()
+            .collect();
+        if walk.is_none() && unknown.is_empty() {
+            return None;
+        }
+        if self.budget == 0 {
+            if let Some(u) = self.unproven.take() {
+                for by in self.mined_below(u) {
+                    self.set_mined(by, Mined::Unknown);
+                }
+            }
+            return None;
+        }
+        unknown.sort_unstable();
+        let mut asks: Vec<Ask> = walk.map(Ask::Hash).into_iter().collect();
+        asks.extend(unknown.into_iter().map(Ask::Tx));
+        asks.truncate(self.budget);
+        Some((self.epoch, asks))
+    }
+
+    /// Replacements mined in a known block below height `u`.
+    fn mined_below(&self, u: u32) -> Vec<Txid> {
+        self.replaced
+            .keys()
+            .filter(|by| matches!(self.mined(by), Mined::In(Some((h, _))) if h < u))
+            .copied()
+            .collect()
+    }
+
+    /// Applies the reads made for the asks of `epoch`, each counted against [`CHECKS`]; a
+    /// failed one (`None`) changes nothing, so it is asked again. Answers to an older epoch are
+    /// dropped: the reorg since re-examined everything they were about.
+    pub fn answers(&mut self, epoch: u64, answers: &[(Ask, Option<Answer>)]) {
+        self.budget = self.budget.saturating_sub(answers.len());
+        if epoch != self.epoch {
+            return;
+        }
+        for (ask, answer) in answers {
+            match (ask, answer) {
+                (Ask::Hash(h), Some(Answer::Hash(x))) => {
+                    let mut held = false;
+                    for by in self.mined_below(h.saturating_add(1)) {
+                        match self.mined(&by) {
+                            Mined::In(Some((k, y))) if k == *h && y == *x => held = true,
+                            Mined::In(Some((k, _))) if k == *h => {
+                                self.set_mined(by, Mined::Unknown);
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Our block is still there, and so is everything below it.
+                    self.unproven = (!held).then_some(*h);
+                }
+                (Ask::Tx(t), Some(Answer::Tx(b))) if self.mined(t) == Mined::Unknown => {
+                    self.set_mined(*t, b.map_or(Mined::No, |b| Mined::In(Some(b))));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Drops `txid`'s link, and returns it.
@@ -335,15 +684,16 @@ impl Replacements {
         if let Some(list) = self.replaced.get(txid) {
             for t in list {
                 if let Some((_, l)) = self.links.get_mut(t)
-                    && l.mined
+                    && l.mined != Mined::No
                 {
-                    l.mined = false;
+                    l.mined = Mined::No;
                     changed = true;
                 }
             }
         }
         if changed {
             self.version += 1;
+            self.changes.push(Change::Returned(*txid));
         }
         changed
     }
@@ -367,7 +717,7 @@ impl Replacements {
             txid: root,
             tx,
             time,
-            mined: links.iter().any(|l| l.mined),
+            mined: self.mined(&root),
             replaces: Vec::new(),
         };
         let mut seen = HashSet::from([root]);
@@ -389,7 +739,7 @@ impl Replacements {
                 txid: *t,
                 tx: Some(l.tx),
                 time: u64::from(l.tx.time),
-                mined: false,
+                mined: Mined::No,
                 replaces: Vec::new(),
             };
             self.grow(&mut child, seen);

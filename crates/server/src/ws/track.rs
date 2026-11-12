@@ -27,7 +27,8 @@ use tokio::time::Instant;
 
 use super::{Conn, Frame, Hub, Snapshot, Topic};
 use crate::config::{Network, WsLimits};
-use crate::replacements::{Batch, Facts, Kept, Link, MAX_LINKS, Replacements};
+use crate::replacements::{Batch, Facts, Kept, Link, MAX_LINKS, Mined, Replacements};
+use engine::replacements::{Answer, Ask, Lookup};
 use crate::{ApiError, esplora};
 
 /// The `/app` answer while the network's mempool engine is switched off.
@@ -485,14 +486,25 @@ impl Tracking {
         })
     }
 
-    /// Folds one tracker delta in: every replacement goes into the record, and each tracked
-    /// transaction that left or came back has its reason set or cleared. Returns whether one did,
-    /// and what changed in the record, for the store.
+    /// Folds one tracker delta in: the record follows the delta's window of blocks, every
+    /// replacement goes into it, and each tracked transaction that left or came back has its
+    /// reason set or cleared. Returns whether a reason or the record changed, and the record's
+    /// changes, for the store.
     fn apply(&self, d: &Delta, tracker: &Tracker) -> (bool, Batch) {
         let mut st = lock(&self.state);
         st.applied = d.seq;
         let seen = unix_now();
-        let mut batch = Batch::default();
+        let version = st.replacements.version();
+        let won = st.replacements.follow(&d.blocks);
+        // A reorg moved the record: said at once, like a confirmation.
+        let mut moved = st.replacements.version() != version;
+        // The original won the reorg: it is confirmed, no longer replaced.
+        for (txid, height, block) in won {
+            if let Some(e) = st.txs.get_mut(&txid) {
+                e.gone = Some(Removal::Confirmed { height, block });
+                moved = true;
+            }
+        }
         for (txid, info) in &d.replaced {
             let Ok(i) = d.removed.binary_search_by_key(txid, |(t, _)| *t) else {
                 continue;
@@ -507,12 +519,13 @@ impl Tracking {
                 .and_then(|i| d.added.get(i))
                 .map(|(_, i)| Facts::of(i))
                 .or_else(|| tracker.read(|m| m.get(by).map(Facts::of)));
-            // Confirmed in this delta, or never held at all: the tracker names as a replacement
-            // only what entered the mempool in this cycle or sits in a recent block.
-            let mined = match d.removed.binary_search_by_key(by, |(t, _)| *t) {
-                Ok(i) => matches!(d.removed.get(i), Some((_, Removal::Confirmed { .. }))),
-                Err(_) => by_info.is_none(),
-            };
+            // The tracker names as a replacement only what entered the mempool in this cycle or
+            // sits in one of the window's blocks.
+            let mined = d
+                .blocks
+                .iter()
+                .find(|b| b.contains(by))
+                .map_or(Mined::No, |b| Mined::In(Some((b.height, b.hash))));
             let link = Link {
                 txid: *txid,
                 by: *by,
@@ -521,13 +534,11 @@ impl Tracking {
                 by_tx: by_info,
                 mined,
             };
-            // As recorded, so the store keeps what the record filled in.
-            batch.links.push(st.replacements.insert(link));
+            st.replacements.insert(link);
         }
-        let mut moved = false;
         for (txid, reason) in &d.removed {
-            if matches!(reason, Removal::Confirmed { .. }) && st.replacements.confirmed(txid) {
-                batch.mined.push(*txid);
+            if let Removal::Confirmed { height, block } = reason {
+                st.replacements.confirmed(txid, *height, *block);
             }
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = Some(*reason);
@@ -535,15 +546,27 @@ impl Tracking {
             }
         }
         for (txid, _) in &d.added {
-            if st.replacements.returned(txid) {
-                batch.returned.push(*txid);
-            }
+            st.replacements.returned(txid);
             if let Some(e) = st.txs.get_mut(txid) {
                 e.gone = None;
                 moved = true;
             }
         }
-        (moved, batch)
+        (moved, st.replacements.take_changes())
+    }
+
+    /// The node reads the record's check needs next, if any ([`Replacements::asks`]).
+    fn asks(&self) -> Option<(u64, Vec<Ask>)> {
+        lock(&self.state).replacements.asks()
+    }
+
+    /// Folds a check's answers into the record. Returns whether it changed, and its changes.
+    fn answers(&self, epoch: u64, answers: &[(Ask, Option<Answer>)]) -> (bool, Batch) {
+        let mut st = lock(&self.state);
+        let version = st.replacements.version();
+        st.replacements.answers(epoch, answers);
+        let changed = st.replacements.version() != version;
+        (changed, st.replacements.take_changes())
     }
 
     /// Starting over from the tracker's state at `seq`, after losing our place in its stream:
@@ -818,7 +841,7 @@ fn state(
                     seen: 0,
                     tx: Facts::default(),
                     by_tx: None,
-                    mined: false,
+                    mined: Mined::No,
                 }];
                 chain.extend(rest.into_iter().filter(|l| l.txid != *txid));
                 let cut = cut || chain.len() > MAX_LINKS;
@@ -959,15 +982,28 @@ fn refusal(e: &electrum::Error) -> AddrState {
     }
 }
 
+/// How long a check the node could not answer waits before it is tried again.
+pub(crate) const CHECK_RETRY: Duration = Duration::from_secs(30);
+
 /// Follows the engines for the tracked transactions: the tracker's stream for removal reasons
 /// and replacements, the projected blocks for positions. Reconsiders every followed
 /// transaction at most once per `WS_MEMPOOL_INTERVAL_MS`, and a newly followed one at once. One
 /// task per network, whatever the number of subscribers.
-pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration, kept: Option<Kept>) {
+///
+/// It also runs the replacement record's checks after a reorg, through `lookup`, one at a time
+/// and off this loop: a check that fails is tried again after [`CHECK_RETRY`].
+pub(crate) async fn follow_txs<L: Lookup + Clone + 'static>(
+    track: Arc<Tracking>,
+    interval: Duration,
+    kept: Option<Kept>,
+    lookup: L,
+) {
     let Some((tracker, projector)) = track.engines.get().cloned() else {
         return;
     };
     let mut restore = kept.as_ref();
+    let mut check: Option<tokio::task::JoinHandle<_>> = None;
+    let mut retry = Instant::now();
     loop {
         let (seq, mut deltas) = tracker.subscribe(|m| m.seq());
         // After subscribing, so a replacement seen meanwhile waits in the stream; before the
@@ -1003,6 +1039,30 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration, kept: O
                     Err(RecvError::Lagged(_)) => break,
                     Err(RecvError::Closed) => return,
                 },
+                r = async {
+                    match check.as_mut() {
+                        Some(c) => c.await,
+                        None => std::future::pending().await,
+                    }
+                }, if check.is_some() => {
+                    check = None;
+                    if let Ok((epoch, answers)) = r {
+                        let answers: Vec<(Ask, Option<Answer>)> = answers;
+                        let failed = answers.iter().any(|(_, a)| a.is_none());
+                        let (changed, batch) = track.answers(epoch, &answers);
+                        if let Some(k) = &kept {
+                            k.send(batch);
+                        }
+                        if changed {
+                            dirty = true;
+                            next = Instant::now();
+                        }
+                        if failed {
+                            retry = Instant::now() + CHECK_RETRY;
+                        }
+                    }
+                },
+                () = tokio::time::sleep_until(retry), if check.is_none() && retry > Instant::now() => {},
                 p = projections.recv() => match p {
                     Ok(_) | Err(RecvError::Lagged(_)) => dirty = true,
                     Err(RecvError::Closed) => return,
@@ -1017,6 +1077,15 @@ pub(crate) async fn follow_txs(track: Arc<Tracking>, interval: Duration, kept: O
                     // an interval later: it may hold a confirmation.
                     next = Instant::now() + if left == Left::Again { AGAIN } else { interval };
                 }
+            }
+            if check.is_none()
+                && Instant::now() >= retry
+                && let Some((epoch, asks)) = track.asks()
+            {
+                let l = lookup.clone();
+                check = Some(tokio::spawn(async move {
+                    (epoch, engine::replacements::ask(&l, &asks).await)
+                }));
             }
         }
     }

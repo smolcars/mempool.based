@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
+use std::sync::Arc;
 
 use bitcoin::{Amount, BlockHash, OutPoint, Transaction, Txid};
 use node::esplora::ChainTip;
@@ -79,6 +80,10 @@ pub struct Delta {
     /// The records of the removed transactions that were replaced, as they were held: what a
     /// replacement replaced, after it has left. Sorted by txid.
     pub replaced: Vec<(Txid, TxInfo)>,
+    /// The recent active-chain blocks this delta was classified against, ending at `tip`, tip
+    /// first: what a reader needs to follow the chain without asking the node. Shared, not
+    /// copied.
+    pub blocks: Vec<Arc<BlockSpends>>,
 }
 
 /// The tracked mempool. Read it through [`super::Tracker`].
@@ -168,14 +173,36 @@ pub(crate) struct Diff {
     pub removed: Vec<Txid>,
 }
 
-/// One block's transactions and the outpoints they spend.
-#[derive(Debug)]
-pub(crate) struct BlockSpends {
+/// One recent block's transactions and the outpoints they spend.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BlockSpends {
     pub hash: BlockHash,
     pub prev: BlockHash,
     pub height: u32,
     txids: HashSet<Txid>,
     spends: HashMap<u64, Txid>,
+}
+
+impl BlockSpends {
+    pub fn contains(&self, txid: &Txid) -> bool {
+        self.txids.contains(txid)
+    }
+
+    pub fn txids(&self) -> impl Iterator<Item = &Txid> {
+        self.txids.iter()
+    }
+
+    /// A block holding `txids`, spending nothing we track: for other modules' tests.
+    #[cfg(test)]
+    pub(crate) fn listed(height: u32, hash: BlockHash, prev: BlockHash, txids: &[Txid]) -> Self {
+        Self {
+            hash,
+            prev,
+            height,
+            txids: txids.iter().copied().collect(),
+            spends: HashMap::new(),
+        }
+    }
 }
 
 impl Mempool {
@@ -273,7 +300,7 @@ impl Mempool {
         &self,
         removed: &[Txid],
         added: &[(Txid, TxInfo)],
-        blocks: &[BlockSpends],
+        blocks: &[Arc<BlockSpends>],
     ) -> Vec<(Txid, Removal)> {
         let new_spends: HashMap<u64, Txid> = added
             .iter()
@@ -337,7 +364,7 @@ impl Mempool {
     /// Transactions the blocks rule out, sorted by txid: those they contain, those spending an
     /// outpoint one of their transactions spends, and the descendants of the latter. Exact while
     /// the blocks are on the active chain: the node cannot hold any of them.
-    pub(crate) fn ruled_out(&self, blocks: &[BlockSpends]) -> Vec<Txid> {
+    pub(crate) fn ruled_out(&self, blocks: &[Arc<BlockSpends>]) -> Vec<Txid> {
         let mut out: HashSet<Txid> = blocks
             .iter()
             .flat_map(|b| &b.txids)
@@ -380,7 +407,7 @@ impl Mempool {
         &self,
         added: &mut Vec<(Txid, TxInfo)>,
         removed: &[Txid],
-        blocks: &[BlockSpends],
+        blocks: &[Arc<BlockSpends>],
     ) {
         let mined = |t: &Txid| blocks.iter().any(|b| b.txids.contains(t));
         let outputs = |t: Txid, n: u32| (0..n).map(move |v| self.keys.key(&OutPoint::new(t, v)));

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitcoin::hashes::Hash;
 
-use super::db::{self, Batch};
+use super::db;
 use super::*;
 use crate::store::{Options, Store};
 
@@ -39,8 +39,16 @@ fn link(a: u8, b: u8) -> Link {
             fee: 300,
             ..facts(b, true)
         }),
-        mined: false,
+        mined: Mined::No,
     }
+}
+
+fn block(n: u8) -> BlockHash {
+    BlockHash::from_byte_array([n; 32])
+}
+
+fn mined(t: &Node) -> bool {
+    matches!(t.mined, Mined::In(_))
 }
 
 fn txids(links: &[Link]) -> Vec<Txid> {
@@ -112,7 +120,7 @@ fn a_replacement_undone_by_a_block_leaves_one_newest_end() {
 fn won_after_all() -> Link {
     Link {
         by_tx: None,
-        mined: true,
+        mined: Mined::In(Some((7, block(7)))),
         ..link(2, 1)
     }
 }
@@ -129,7 +137,7 @@ fn the_original_confirmed_after_all_keeps_its_figures() {
         (tree.txid, tree.tx, tree.time),
         (id(1), Some(a), u64::from(a.time))
     );
-    assert!(tree.mined);
+    assert!(mined(&tree));
     assert_eq!(r.facts(&id(1)), Some(a));
     assert_eq!(r.chain(&id(2)).0[0].json()["by_fee"], a.fee);
     // A replacement that was never replaced itself still has none.
@@ -150,10 +158,7 @@ async fn reopen(store: &Store) -> Replacements {
 #[tokio::test]
 async fn the_figures_kept_survive_a_restart_on_either_side_of_the_block() {
     let t = temp();
-    let write = |l: Link| Batch {
-        links: vec![l],
-        ..Batch::default()
-    };
+    let write = |l: Link| vec![Change::Link(l)];
     // Restarted between the replacement and the block: the record put back holds A's figures.
     let mut r = Replacements::new(10);
     db::write(&t.store, vec![write(r.insert(link(1, 2)))], 10)
@@ -197,7 +202,7 @@ fn a_transaction_back_in_the_mempool_is_no_longer_replaced_or_mined() {
     let mut r = Replacements::new(10);
     r.insert(link(1, 2));
     r.insert(link(3, 4));
-    assert!(r.confirmed(&id(4)));
+    assert!(r.confirmed(&id(4), 7, block(7)));
     // 1 was rebroadcast after 2 left: nothing stands replaced by 2 any more.
     assert!(r.returned(&id(1)));
     assert!(r.get(&id(1)).is_none() && r.tree(&id(2)).is_none());
@@ -205,7 +210,7 @@ fn a_transaction_back_in_the_mempool_is_no_longer_replaced_or_mined() {
     let v = r.version();
     assert!(r.returned(&id(4)));
     assert!(r.version() > v);
-    assert!(!r.tree(&id(3)).unwrap().mined);
+    assert!(!mined(&r.tree(&id(3)).unwrap()));
     assert!(
         !r.returned(&id(9)),
         "an unknown transaction changes nothing"
@@ -273,16 +278,16 @@ fn a_chain_a_then_b_then_c_is_one_tree_from_any_member() {
     assert_eq!(tree.tx.map(|f| f.fee), Some(300));
     assert_eq!(tree.time, u64::from(facts(3, true).time));
     assert_eq!(tree.replaces[0].tx.map(|f| f.fee), Some(100));
-    assert!(!tree.full_rbf() && !tree.mined);
+    assert!(!tree.full_rbf() && !mined(&tree));
     assert_eq!(r.replaced_by(&id(3)), &[id(2)]);
     assert_eq!(r.facts(&id(3)).map(|f| f.fee), Some(300));
     assert_eq!(r.facts(&id(1)).map(|f| f.time), Some(facts(1, true).time));
     // Mined: the tree says so, and only the newest replacement's confirmation counts.
-    assert!(!r.confirmed(&id(1)));
+    assert!(!r.confirmed(&id(1), 7, block(7)));
     let v = r.version();
-    assert!(r.confirmed(&id(3)));
+    assert!(r.confirmed(&id(3), 7, block(7)));
     assert!(r.version() > v);
-    assert!(r.tree(&id(1)).unwrap().mined);
+    assert!(mined(&r.tree(&id(1)).unwrap()));
     assert_eq!(r.recent(25, false).len(), 1);
     assert!(r.recent(25, true).is_empty());
 }
@@ -357,19 +362,14 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     quiet.tx.rbf = false;
     let mut unknown = link(2, 3);
     unknown.by_tx = None;
-    let first = Batch {
-        links: vec![quiet, unknown],
-        mined: Vec::new(),
-        ..Batch::default()
-    };
+    let first = vec![Change::Link(quiet), Change::Link(unknown)];
     db::write(&t.store, vec![first], 3).await.unwrap();
     db::write(
         &t.store,
-        vec![Batch {
-            links: vec![link(4, 5)],
-            mined: vec![id(3)],
-            ..Batch::default()
-        }],
+        vec![vec![
+            Change::Link(link(4, 5)),
+            Change::Mined(id(3), Mined::In(Some((9, block(9))))),
+        ]],
         3,
     )
     .await
@@ -379,7 +379,7 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     let Temp { store, .. } = &t;
     let loaded = db::load(store, 3).await.unwrap();
     let mut want_unknown = unknown;
-    want_unknown.mined = true;
+    want_unknown.mined = Mined::In(Some((9, block(9))));
     assert_eq!(loaded, vec![quiet, want_unknown, link(4, 5)]);
     let again = Store::open(&dir, "regtest", Options::default()).unwrap();
     assert_eq!(db::load(&again, 3).await.unwrap(), loaded);
@@ -388,16 +388,12 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
         r.restore(l);
     }
     assert_eq!(r.take_recorded(), 0, "restored links are not new");
-    assert!(r.tree(&id(1)).unwrap().mined && r.tree(&id(1)).unwrap().full_rbf());
+    assert!(mined(&r.tree(&id(1)).unwrap()) && r.tree(&id(1)).unwrap().full_rbf());
 
     // The bound: only the newest three stay, a rewrite moves a link to the newest.
     db::write(
         &again,
-        vec![Batch {
-            links: vec![link(6, 7), link(1, 9)],
-            mined: Vec::new(),
-            ..Batch::default()
-        }],
+        vec![vec![Change::Link(link(6, 7)), Change::Link(link(1, 9))]],
         3,
     )
     .await
@@ -409,18 +405,9 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     db::write(
         &again,
         vec![
-            Batch {
-                links: vec![link(30, 31)],
-                ..Batch::default()
-            },
-            Batch {
-                returned: vec![id(30), id(6)],
-                ..Batch::default()
-            },
-            Batch {
-                links: vec![link(6, 32)],
-                ..Batch::default()
-            },
+            vec![Change::Link(link(30, 31))],
+            vec![Change::Returned(id(30)), Change::Returned(id(6))],
+            vec![Change::Link(link(6, 32))],
         ],
         3,
     )
@@ -432,29 +419,12 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
     // B replaced A, a miner confirmed A (A replaced B), and a reorg returned B: the store, read
     // back, holds what memory holds.
     let mut r = Replacements::new(10);
-    let steps = [
-        Batch {
-            links: vec![link(40, 41)],
-            ..Batch::default()
-        },
-        Batch {
-            links: vec![link(41, 40)],
-            ..Batch::default()
-        },
-        Batch {
-            returned: vec![id(41)],
-            ..Batch::default()
-        },
-    ];
-    for b in &steps {
-        for l in &b.links {
-            r.restore(*l);
-        }
-        for t in &b.returned {
-            r.returned(t);
-        }
-        db::write(&again, vec![b.clone()], 10).await.unwrap();
-    }
+    r.insert(link(40, 41));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
+    r.insert(link(41, 40));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
+    r.returned(&id(41));
+    db::write(&again, vec![r.take_changes()], 10).await.unwrap();
     let stored = db::load(&again, 100).await.unwrap();
     assert!(r.get(&id(40)).is_none() && r.get(&id(41)).is_none());
     assert!(
@@ -462,11 +432,7 @@ async fn the_stored_record_survives_a_restart_and_keeps_its_bound() {
         "{stored:?}"
     );
     // A write that fails part way leaves nothing behind.
-    let half = Batch {
-        links: vec![link(20, 21)],
-        mined: Vec::new(),
-        ..Batch::default()
-    };
+    let half = vec![Change::Link(link(20, 21))];
     let failed = again
         .write(move |sql| {
             db::insert(sql, &half)?;
@@ -497,16 +463,12 @@ async fn replacements_benchmark() {
                 l.txid = Txid::from_byte_array(a);
                 a[4] = 1;
                 l.by = Txid::from_byte_array(a);
-                l
+                Change::Link(l)
             })
             .collect();
         db::write(
             &t.store,
-            vec![Batch {
-                links,
-                mined: Vec::new(),
-                ..Batch::default()
-            }],
+            vec![links],
             keep,
         )
         .await

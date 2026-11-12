@@ -138,6 +138,7 @@ pub(crate) fn run(
             Arc::clone(&ctx.track),
             ctx.sockets.limits.mempool_interval,
             kept,
+            ctx.esplora.clone(),
         )),
         tokio::spawn(hint(
             tracker.clone(),
