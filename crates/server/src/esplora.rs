@@ -94,7 +94,7 @@ struct Heavy {
     share: HeavyShare,
     /// Heavy calls admitted and not yet answered, by key. Each is driven by its own task, never
     /// by a request, so a request that times out cannot hand the call to another.
-    calls: Arc<Mutex<HashMap<String, HeavyCall>>>,
+    calls: Arc<HeavyCalls>,
     /// Its own client, whose timeout is [`HEAVY_CEILING`], so a call is not abandoned (and its
     /// slot freed) while the node may still be working on it.
     esplora: Esplora,
@@ -303,7 +303,23 @@ fn is_heavy(route: &Route) -> bool {
 }
 
 /// One heavy call's answer, once the node gives it. Requests for it subscribe.
-type HeavyCall = Arc<watch::Sender<Option<Answer>>>;
+type HeavyCall = Arc<watch::Sender<Option<(Answer, Duration)>>>;
+
+type HeavyCalls = Mutex<HashMap<String, HeavyCall>>;
+
+/// Removes `call` from `calls` unless a request still waits for it. Joining subscribes under the
+/// same lock, so a request either joined before this (and the call goes on) or finds no call
+/// and starts its own: it is never left on a call that ends without an answer.
+fn finish(calls: &HeavyCalls, key: &str, call: &HeavyCall, abandon: bool) -> bool {
+    let mut calls = calls.lock().unwrap_or_else(PoisonError::into_inner);
+    if abandon && call.receiver_count() > 0 {
+        return false;
+    }
+    if calls.get(key).is_some_and(|c| Arc::ptr_eq(c, call)) {
+        calls.remove(key);
+    }
+    true
+}
 
 /// A heavy read. Joining an identical call already admitted costs nothing. Starting one needs a
 /// place among the network's [`HEAVY_PENDING`] and the client's [`HeavyShare`], or is refused at
@@ -313,7 +329,6 @@ type HeavyCall = Arc<watch::Sender<Option<Answer>>>;
 /// node answers or [`HEAVY_CEILING`] passes, even after every request waiting for it is gone.
 async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String) -> Response {
     let h = &ctx.api.heavy;
-    let started = Instant::now();
     let (mut answer, led) = {
         let mut calls = h.calls.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(call) = calls.get(&key) {
@@ -346,39 +361,41 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
             let running = Arc::clone(&h.running);
             let (esplora, all, call) = (h.esplora.clone(), Arc::clone(&h.calls), route.clone());
             tokio::spawn(async move {
-                let slot = tokio::select! {
-                    slot = running.acquire_owned() => slot.ok(),
-                    // Every request for it timed out while it waited: never call the node.
-                    () = tx.closed() => None,
-                };
-                let answer = match slot {
-                    Some(slot) => {
-                        let answer = esplora.raw(&call).await;
-                        drop((slot, pending, hold));
-                        Some(answer)
+                let slot = loop {
+                    tokio::select! {
+                        slot = Arc::clone(&running).acquire_owned() => break slot,
+                        // Every request for it timed out while it waited: never call the node,
+                        // unless one joined meanwhile.
+                        () = tx.closed() => {
+                            if finish(&all, &key, &tx, true) {
+                                return;
+                            }
+                        }
                     }
-                    None => None,
                 };
-                let mut calls = all.lock().unwrap_or_else(PoisonError::into_inner);
-                if calls.get(&key).is_some_and(|c| Arc::ptr_eq(c, &tx)) {
-                    calls.remove(&key);
-                }
-                drop(calls);
-                if let Some(answer) = answer {
-                    tx.send_replace(Some(answer));
-                }
+                let Ok(slot) = slot else {
+                    finish(&all, &key, &tx, false);
+                    return;
+                };
+                let called = Instant::now();
+                let answer = esplora.raw(&call).await;
+                let node_time = called.elapsed();
+                drop((slot, pending, hold));
+                finish(&all, &key, &tx, false);
+                tx.send_replace(Some((answer, node_time)));
             });
             (rx, true)
         }
     };
-    let result = match answer.wait_for(Option::is_some).await {
+    let (result, node_time) = match answer.wait_for(Option::is_some).await {
         Ok(a) => a
             .clone()
-            .unwrap_or_else(|| Err(Error::Unavailable("no answer".into()))),
-        Err(_) => Err(Error::Unavailable("call ended".into())),
+            .unwrap_or_else(|| (Err(Error::Unavailable("no answer".into())), Duration::ZERO)),
+        Err(_) => (Err(Error::Unavailable("call ended".into())), Duration::ZERO),
     };
+    // The node's own time, not the wait for a slot.
     let source = if led {
-        Source::Upstream(started.elapsed())
+        Source::Upstream(node_time)
     } else {
         Source::Coalesced
     };
@@ -1325,6 +1342,23 @@ mod tests {
         assert_eq!(a.unwrap().body[0], 7);
         assert!(matches!(source, Source::Upstream(_)));
         assert!(flights.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_call_is_dropped_only_when_nobody_waits_for_it() {
+        let calls = HeavyCalls::default();
+        let (tx, first) = watch::channel(None);
+        let tx: HeavyCall = Arc::new(tx);
+        calls.lock().unwrap().insert("k".into(), Arc::clone(&tx));
+        // Its last request timed out, so the task saw the channel close...
+        drop(first);
+        // ...and before it took the lock, another request joined.
+        let joined = calls.lock().unwrap().get("k").unwrap().subscribe();
+        assert!(!finish(&calls, "k", &tx, true), "the call must go on");
+        assert!(calls.lock().unwrap().contains_key("k"));
+        drop(joined);
+        assert!(finish(&calls, "k", &tx, true));
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     #[test]
