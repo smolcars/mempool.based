@@ -611,6 +611,16 @@ pub(crate) async fn flush(
 
 // Events: what the peer reports, as log lines.
 
+/// An error's first line, at most 120 bytes: a node error can quote a whole proxy error page.
+fn short(error: &str) -> &str {
+    let line = error.lines().next().unwrap_or_default();
+    let mut end = line.len().min(120);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line.get(..end).unwrap_or_default()
+}
+
 fn ldk_level(l: ln::Level) -> &'static str {
     match l {
         ln::Level::Gossip => "gossip",
@@ -693,7 +703,7 @@ async fn report(
             }),
             Event::GraphSaveFailed { error } => logging::emit(&LightningSaveFailed {
                 network,
-                error: &error,
+                error: short(&error),
             }),
             Event::Pruned { channels, nodes } => logging::emit(&LightningPruned {
                 network,
@@ -716,7 +726,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningLookupFailed {
                         network,
-                        error: &error,
+                        error: short(&error),
                         failures,
                         pending,
                     });
@@ -726,7 +736,7 @@ async fn report(
                 if failures.is_power_of_two() {
                     logging::emit(&LightningWatchFailed {
                         network,
-                        error: &error,
+                        error: short(&error),
                         failures,
                     });
                 }

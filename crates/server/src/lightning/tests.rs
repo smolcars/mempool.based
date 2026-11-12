@@ -425,6 +425,15 @@ async fn the_shutdown_flush_gives_up_at_its_deadline_behind_a_busy_writer() {
 }
 
 #[test]
+fn error_texts_are_cut_to_one_short_line() {
+    let page = "esplora unavailable: 502 Bad Gateway: <html>\r\n<head><title>502</title></head>";
+    assert_eq!(short(page), "esplora unavailable: 502 Bad Gateway: <html>");
+    let long = "é".repeat(100);
+    assert_eq!(short(&long).len(), 120);
+    assert_eq!(short(""), "");
+}
+
+#[test]
 fn short_channel_ids_print_as_lightning_writes_them() {
     assert_eq!(scid_text(A), "800000x5x0");
     assert_eq!(scid_text(B), "800001x1x1");
