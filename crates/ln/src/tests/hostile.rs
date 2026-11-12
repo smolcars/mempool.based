@@ -941,16 +941,6 @@ async fn feed(
             i += 2000;
         }
         most = most.max(peer.gossip().lookup.waiting());
-        if std::env::var_os("HOSTILE_TRACE").is_some() && i % 40_000 == 0 {
-            println!(
-                "TRACE i {i} queued {} inflight {} rss {:.0} MB received {}",
-                h.queued(),
-                h.script.released.load(Ordering::Relaxed) as i64
-                    - h.script.forwarded.load(Ordering::Relaxed) as i64,
-                rss_mb(),
-                totals(peer).messages()
-            );
-        }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     h.script.queue.lock().unwrap().clear();
