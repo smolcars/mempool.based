@@ -23,7 +23,7 @@ dev/regtest/regtest.py down       # remove the node and its chain
 | `send ADDRESS SATS [--feerate R]` | Pays SATS to a regtest address from a mature coinbase, prints the txid. Default 2 sat/vB |
 | `rbf` | Broadcasts a transaction at 1 sat/vB and a replacement at 5 sat/vB, prints both txids |
 | `cpfp` | Broadcasts a parent at 1 sat/vB and a child at 25 sat/vB, prints both txids |
-| `scenario` | `reset`, then builds the known chain, checks it, prints its manifest |
+| `scenario` | `reset`, then builds the known chain, checks it, prints its manifest. Stdout is only the JSON manifest; progress and the `.env` lines go to stderr |
 
 `send`, `rbf` and `cpfp` need a mature coinbase, so mine at least 101 blocks first (or run `scenario`).
 
@@ -151,5 +151,5 @@ Measured 2026-11-11 on an Apple Silicon Mac (Docker in a Linux VM). The amd64 nu
 
 - **Use Compose through `regtest.py`, not a GitHub service container.** A service container cannot pass arguments to the image's entrypoint, and this node needs its flags. Services also start before checkout, so `compose.yml` would not exist yet.
 - **Do not cache the image.** It is 10 MB, pinned by digest, and served from ghcr.io next to GitHub's runners. Restoring an `actions/cache` tarball and running `docker load` would cost about as much as the pull. Revisit only if a measured pull takes more than a few seconds; then cache `docker save` output keyed on the digest.
-- **Start it in parallel with the build.** Run `dev/regtest/regtest.py scenario &` at the start of the e2e job, build the server and frontend, then `wait` and `eval` the env lines. The harness should add about 10 seconds of wall clock and none on the critical path.
+- **Start it in parallel with the build.** Run `dev/regtest/regtest.py scenario &` at the start of the e2e job, build the server and frontend, then `wait` and `eval` the output of `regtest.py env`. The harness should add about 10 seconds of wall clock and none on the critical path.
 - **Tests that need a different chain** call `reset`, `mine`, `send`, `rbf` and `cpfp` themselves. Each instance is separate, so test jobs can run their own in parallel with `REGTEST_PROJECT`.

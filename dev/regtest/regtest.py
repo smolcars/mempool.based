@@ -224,26 +224,27 @@ def cpfp():
 # --- commands ---------------------------------------------------------------
 
 
-def print_env():
+def print_env(file=sys.stdout):
     print(
         f"REGTEST_RPC_HOST=127.0.0.1\nREGTEST_RPC_PORT={port('rpc')}\n"
         f"REGTEST_RPC_USER={USER}\nREGTEST_RPC_PASSWORD={PASSWORD}\n"
         f"REGTEST_ESPLORA_URL=http://127.0.0.1:{port('esplora')}\n"
-        f"REGTEST_ELECTRUM_ADDR=127.0.0.1:{port('electrum')}"
+        f"REGTEST_ELECTRUM_ADDR=127.0.0.1:{port('electrum')}",
+        file=file,
     )
 
 
-def cmd_up(_):
+def cmd_up(_, env_to=sys.stdout):
     start = time.monotonic()
     compose("up", "-d", "--quiet-pull")
     wait_ready()
     print(f"regtest: {project()} ready in {time.monotonic() - start:.1f} s", file=sys.stderr)
-    print_env()
+    print_env(env_to)
 
 
-def cmd_reset(args):
+def cmd_reset(args, env_to=sys.stdout):
     compose("down", "-v", "--remove-orphans")
-    cmd_up(args)
+    cmd_up(args, env_to)
 
 
 def cmd_send(args):
@@ -255,7 +256,7 @@ def cmd_send(args):
 
 
 def cmd_scenario(args):
-    cmd_reset(args)
+    cmd_reset(args, env_to=sys.stderr)  # stdout carries only the manifest
     blocks = mine_at_fixed_times(105)  # coinbases 1..6 are now mature
     cb1, cb2, cb3 = take_coins(3)
     kinds = [(P2PKH, 100_000_000), (P2SH_TRUE, 50_000_000), (P2WPKH, 100_000_000), (P2WSH, 100_000_000),
