@@ -109,6 +109,8 @@ An open home page then polls about once every 3 seconds. Static files are `/asse
 
 `crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
 
+The browser tests run at these defaults too, each test as a client of its own behind a trusted proxy ([`FRONTEND.md`](FRONTEND.md#browser-tests)), and fail on any refusal. `CLIENT_MAX_CONNECTIONS` does not apply to a trusted proxy's connections, so they do not exercise it.
+
 ### Static files
 
 Pages and the files under `/assets` are answered from memory or disk with no node work behind them. They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.

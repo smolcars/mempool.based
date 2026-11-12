@@ -47,6 +47,7 @@ Most coverage belongs in the first two layers. Integration and end-to-end tests 
 - **Tests never reach the public internet or a shared node.** CI has no access to either.
 - **Tests bind port 0** or take their port from the environment.
 - **A flaky test is a failing test.** Fix it or delete it; do not retry it.
+- **Browser tests run at the server's production limits** and fail on any refusal, naming the limit and the request ([`FRONTEND.md`](FRONTEND.md#browser-tests)). A test that trips one has found a page that asks for too much, or a test that does; never raise a limit to make it pass.
 - **New logic with a branch, a loop or a parser ships with a test.**
 
 ## Measuring

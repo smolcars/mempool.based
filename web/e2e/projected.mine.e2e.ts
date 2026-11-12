@@ -1,5 +1,6 @@
 // Mines on the run's node, so it runs after every other test (the `mines` project).
-import { expect, test } from "./fixtures";
+import { FOUND_WAIT_MS } from "../src/pages/projected/state";
+import { expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 test("the next block's page says when the block is found, offers it, and carries on", async ({
   page,
@@ -12,8 +13,11 @@ test("the next block's page says when the block is found, offers it, and carries
   const before = Number(/block (\d+)/.exec((await lede.textContent()) ?? "")?.[1]);
 
   const [hash] = await mine(1);
-  // The notice's title; the live region's sentence ends "found." instead.
-  await expect(page.getByText(new RegExp(`^Block ${before} was found\\s`))).toBeVisible();
+  // The page hears of the block with the projection, then holds the notice until the block's new
+  // picture arrives, at most FOUND_WAIT_MS. The title; the live region's sentence ends "found.".
+  await expect(page.getByText(new RegExp(`^Block ${before} was found\\s`))).toBeVisible({
+    timeout: PROJECTION_LAG_MS + FOUND_WAIT_MS,
+  });
   await expect(page.getByRole("link", { name: `Open block ${before}` })).toHaveAttribute(
     "href",
     `/regtest/block/${hash}`,

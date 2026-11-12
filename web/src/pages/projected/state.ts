@@ -69,6 +69,9 @@ export interface PageState {
 
 export const initialState: PageState = { status: "waiting" };
 
+/** The longest the found moment waits for the block's new picture (the browser tests wait on it). */
+export const FOUND_WAIT_MS = 8000;
+
 /** Blocks found within this long of the last are told as one burst. */
 export const BURST_MS = 60_000;
 

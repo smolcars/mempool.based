@@ -77,10 +77,23 @@ test("hovering a square shows its transaction, and clicking opens it", async ({
   };
   await page.goto(BLOCK);
   await expect(page.locator(".block-core--grid")).toBeVisible();
-  await expect.poll(async () => (await squares(page)).length, { timeout: 5000 }).toBe(3);
+  // The squares slide into place, slower on a busy machine: aim only once two looks agree.
+  let found: { x: number; y: number }[] = [];
+  let last = "";
+  await expect
+    .poll(
+      async () => {
+        found = await squares(page);
+        const settled = JSON.stringify(found) === last;
+        last = JSON.stringify(found);
+        return settled ? found.length : 0;
+      },
+      { timeout: 5000 },
+    )
+    .toBe(3);
   const tip = page.locator(".txgrid__tip");
   let target: { x: number; y: number } | undefined;
-  for (const s of await squares(page)) {
+  for (const s of found) {
     await page.mouse.move(s.x, s.y);
     await expect(tip).toHaveClass(/txgrid__tip--shown/);
     // The txid is looked up once the pointer rests.

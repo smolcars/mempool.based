@@ -370,6 +370,10 @@ Lint, format and type checks are strict, and CI fails on any finding. OXC is the
 
 Arguments go to Playwright: `bun run e2e tx.e2e.ts`, `bun run e2e -g "deep link"`, `bun run e2e --headed`.
 
+**The server runs with every limit at its production default** ([`CONFIG.md`](CONFIG.md#limits)), so each run also proves that real page loads stay inside them. The tests all come from one address, so each test poses as its own visitor, as its fresh browser context (empty cache, no cookies) is: the server trusts `X-Forwarded-For` from `127.0.0.1` only, and the fixture sends an address of the test's own (`198.18.<worker>.<test>`) on every page, file, API call, WebSocket handshake and `request` call. One address per worker would be one person making a dozen cold loads in seconds, which the block summary route's per-client limit rightly refuses. A test that sets `extraHTTPHeaders` itself must keep that header.
+
+**A limit that refuses anything fails the run, and says which.** A page or static file answered `429` or `503` ends its test at once with the request named, instead of a later assertion timing out. After the tests, `bun run e2e` fails if the server's log holds any refusal, even of an API call a page retried, and prints them: each line names the route, the limit (`refused`) and the worker's address (`client`).
+
 ### Adding a test
 
 Put it beside the others as `web/e2e/<page>.e2e.ts` (the `.e2e.ts` suffix keeps Vitest away from it), and import from `./fixtures`, never from `@playwright/test`:
@@ -399,4 +403,5 @@ test("a block page shows its height", async ({ page }) => {
   ```
 
 - **Hostile chain data.** `hostile.mine.e2e.ts` puts markup, a `javascript:` URL, bidi overrides, ANSI escapes and NUL on the chain (`regtest.py hostile`: OP_RETURN outputs and a hand-built coinbase tag) and checks the transaction, block and address pages show them as visible, inert text: no injected element, no dialog, no unexpected link scheme. A new page that shows chain data belongs in it.
+- **Wait on the page's own bounds, by name.** Pages that follow the projected blocks hear of a new block when the projection does, which can trail the node by up to `PROJECTION_LAG_MS` (in `e2e/fixtures.ts`, with its reasoning); the next block's page then holds its notice for up to `FOUND_WAIT_MS` (`src/pages/projected/state.ts`). Import those constants rather than writing a timeout, so the test and the page cannot drift apart. Each wait ends as soon as the page catches up. Before a mining test starts, the `mine` fixture waits until the server's `blocks` and `projected` topics both sit on the node's tip, at most `PROJECTION_LAG_MS`, and fails naming what lagged; otherwise blocks an earlier test mined would arrive together with this test's.
 - **Keep the suite fast.** Browser tests cover what only a browser can show: that the page renders real data, links work and nothing errors. Logic belongs in unit tests.
