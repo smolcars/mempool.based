@@ -17,7 +17,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bitcoin::{BlockHash, OutPoint, Txid};
+use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use hyper::header::HeaderValue;
 use hyper::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -35,6 +35,10 @@ const MAX_MESSAGE: usize = 512;
 
 /// Most outpoints [`Rpc::tx_spending_prevout`] takes in one call: about 85 KB of request.
 pub const MAX_PREVOUTS: usize = 1000;
+
+/// Most txids [`Rpc::mempool_entries`] and [`Rpc::raw_transactions`] take in one call.
+/// A mainnet batch of 1,000 raw transactions measured 5 MB and 305 ms.
+pub const MAX_BATCH: usize = 1000;
 
 /// What went wrong with an RPC call, in terms a caller can act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,18 +189,16 @@ impl Rpc {
         })
     }
 
+    /// Response body bytes this client and its clones have read, for cost accounting.
+    pub fn bytes_received(&self) -> u64 {
+        self.transport.bytes_received()
+    }
+
     async fn call<T: DeserializeOwned>(
         &self,
         method: &'static str,
         params: impl Serialize,
     ) -> Result<T, Error> {
-        #[derive(Serialize)]
-        struct Request<P> {
-            jsonrpc: &'static str,
-            id: u8,
-            method: &'static str,
-            params: P,
-        }
         let body = serde_json::to_vec(&Request {
             jsonrpc: "1.0",
             id: 0,
@@ -204,6 +206,75 @@ impl Rpc {
             params,
         })
         .map_err(|_| Error::Config("request did not encode"))?;
+        let (status, body) = self.post(body).await?;
+        decode(status, &body)
+    }
+
+    /// One JSON-RPC array of `method` calls, one per item of `params`: one HTTP request and one
+    /// node work-queue slot. Each answer is the call's own result or error, in input order.
+    async fn batch<T: DeserializeOwned, P: Serialize>(
+        &self,
+        method: &'static str,
+        params: impl ExactSizeIterator<Item = P>,
+    ) -> Result<Vec<Result<T, Error>>, Error> {
+        let n = params.len();
+        if n > MAX_BATCH {
+            return Err(Error::RequestTooBig);
+        }
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let calls: Vec<Request<P>> = params
+            .enumerate()
+            .map(|(id, params)| Request {
+                jsonrpc: "1.0",
+                id,
+                method,
+                params,
+            })
+            .collect();
+        let body =
+            serde_json::to_vec(&calls).map_err(|_| Error::Config("request did not encode"))?;
+        let (status, body) = self.post(body).await?;
+        match status {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(Error::Auth),
+            StatusCode::SERVICE_UNAVAILABLE => return Err(Error::Busy),
+            _ => {}
+        }
+        let answers: Vec<Answer<T>> = match serde_json::from_slice(&body) {
+            Ok(a) => a,
+            // Not an array of answers: a whole-request failure, read like a single call's.
+            Err(e) => {
+                return Err(decode::<serde::de::IgnoredAny>(status, &body)
+                    .err()
+                    .unwrap_or(Error::Decode(e.to_string())));
+            }
+        };
+        let mut out: Vec<Option<Result<T, Error>>> =
+            std::iter::repeat_with(|| None).take(n).collect();
+        for a in answers {
+            let result = match a {
+                Answer { error: Some(e), .. } => Err(Error::Rpc {
+                    code: e.code,
+                    message: truncate(e.message),
+                }),
+                Answer {
+                    result: Some(r), ..
+                } => Ok(r),
+                _ => Err(Error::Decode("no result and no error".into())),
+            };
+            match out.get_mut(a.id) {
+                Some(slot @ None) => *slot = Some(result),
+                _ => return Err(Error::Decode("batch answer ids do not match".into())),
+            }
+        }
+        out.into_iter()
+            .map(|r| r.ok_or_else(|| Error::Decode("batch answer missing".into())))
+            .collect()
+    }
+
+    /// Sends one JSON-RPC body within the slot limit and the timeout.
+    async fn post(&self, body: Vec<u8>) -> Result<(StatusCode, bytes::Bytes), Error> {
         let started = tokio::time::Instant::now();
         let _slot = tokio::time::timeout(self.timeout, self.slots.acquire())
             .await
@@ -218,7 +289,7 @@ impl Rpc {
         )
         .await
         .map_err(|_| Error::Timeout)??;
-        decode(res.status, &res.body)
+        Ok((res.status, res.body))
     }
 
     // Chain.
@@ -282,6 +353,36 @@ impl Rpc {
     /// `getmempoolentry`. Not in the mempool: `Rpc { code: -5 }`.
     pub async fn mempool_entry(&self, txid: Txid) -> Result<MempoolEntry, Error> {
         self.call("getmempoolentry", [txid]).await
+    }
+
+    /// `getmempoolentry` for each txid, in one batch of at most [`MAX_BATCH`]. A txid no longer
+    /// in the mempool answers `Err(Rpc { code: -5 })` in its slot.
+    pub async fn mempool_entries(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Result<MempoolEntry, Error>>, Error> {
+        self.batch("getmempoolentry", txids.iter().map(|t| [t]))
+            .await
+    }
+
+    /// `getrawtransaction` (not verbose) for each txid, in one batch of at most [`MAX_BATCH`].
+    /// Finds mempool and confirmed transactions; an unknown txid answers `Err(Rpc { code: -5 })`.
+    pub async fn raw_transactions(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Result<Transaction, Error>>, Error> {
+        let hex: Vec<Result<String, Error>> = self
+            .batch("getrawtransaction", txids.iter().map(|t| (t, false)))
+            .await?;
+        Ok(hex
+            .into_iter()
+            .map(|r| {
+                r.and_then(|h| {
+                    bitcoin::consensus::encode::deserialize_hex(&h)
+                        .map_err(|e| Error::Decode(e.to_string()))
+                })
+            })
+            .collect())
     }
 
     /// `getmempoolcluster`: the cluster `txid` is in. Not in the mempool: `Rpc { code: -5 }`.
@@ -362,6 +463,22 @@ impl Rpc {
 
 /// Serializes as `[]`.
 const NO_PARAMS: [u8; 0] = [];
+
+#[derive(Serialize)]
+struct Request<P> {
+    jsonrpc: &'static str,
+    id: usize,
+    method: &'static str,
+    params: P,
+}
+
+/// One answer of a batch.
+#[derive(Deserialize)]
+struct Answer<T> {
+    id: usize,
+    result: Option<T>,
+    error: Option<RpcError>,
+}
 
 /// One JSON-RPC response. `result` is decoded straight into `T`; nothing else is buffered.
 #[derive(Deserialize)]

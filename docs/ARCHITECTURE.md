@@ -72,11 +72,11 @@ The message catalogue lives in `docs/WS.md`, written with the hub.
 ## Mempool tracking
 
 1. Poll `getrawmempool` with `mempool_sequence` and diff the txid set against the last one.
-2. Fetch details only for new txids, in bulk.
+2. Fetch details only for new txids, in JSON-RPC batches.
 3. Take block boundaries and fee bands from the node's cluster chunks (`getmempoolfeeratediagram`) and its template, instead of running our own block builder.
-4. Classify removals: confirmed, replaced, evicted or expired.
+4. Classify removals: confirmed, replaced (naming the replacement) or evicted.
 
-Measured costs are in [`RBITCOIN.md`](RBITCOIN.md).
+The tracker's design, cadence and accuracy limits are in [`MEMPOOL.md`](MEMPOOL.md); node costs in [`RBITCOIN.md`](RBITCOIN.md).
 
 ## Storage
 
