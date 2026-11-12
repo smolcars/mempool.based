@@ -10,7 +10,7 @@ A block explorer that answers the question a reader came with before it explains
 
 Transactions settle out of the mempool into blocks the way sediment settles into layers. The idea stays in the logo, in the words, and in how a block is drawn, but it no longer paints every surface:
 
-- **A block is a container that fills.** A block tile shows how full the block is as one gauge rising from its floor, in the colour of its median fee; the figures beside it say the rest. A block's own page draws every transaction as a rectangle in a clean block outline, as high as the block is full, the dearest at the top left.
+- **A block is a core sample.** A block tile shows its fee make-up as layers settled in a box the size of the block's capacity: cheapest at the bottom, each layer as thick as the virtual size paying that band, the room above them the space the block left. A block's own page draws every transaction as a rectangle in a clean block outline, as high as the block is full, the dearest at the top left.
 - **Fee rate is intensity.** Cheap is a quiet steel grey, dear a strong blue-violet, through blue. The scale keeps its resolution between 0.1 and 5 sat/vB, where almost all traffic now sits, and it never uses red: an ordinary fee is never an error.
 - **Mined is solid, projected is provisional.** Mined tiles are filled and outlined. Projected tiles are dashed and open. When a block is found, the next projected tile crosses the "now" line and sets.
 - **Palette:** cool neutral greys with one accent, rhodonite pink, for interaction. The accent is never a fee colour.
@@ -85,10 +85,10 @@ Ten bands, one sequential ramp across neighbouring hues: a quiet steel grey for 
 
 | Token | Band | Colour |
 |---|---|---|
-| `--fee-1` | under 0.2 | `#7f8b92` |
-| `--fee-2` | 0.2 to 0.3 | `#708da0` |
-| `--fee-3` | 0.3 to 0.5 | `#668dac` |
-| `--fee-4` | 0.5 to 1 | `#608cb8` |
+| `--fee-1` | under 0.2 | `#868a8d` |
+| `--fee-2` | 0.2 to 0.3 | `#6b8494` |
+| `--fee-3` | 0.3 to 0.5 | `#688fac` |
+| `--fee-4` | 0.5 to 1 | `#5885b7` |
 | `--fee-5` | 1 to 1.5 | `#5c89c3` |
 | `--fee-6` | 1.5 to 2 | `#5d86ce` |
 | `--fee-7` | 2 to 3 | `#6182d7` |
@@ -96,15 +96,17 @@ Ten bands, one sequential ramp across neighbouring hues: a quiet steel grey for 
 | `--fee-9` | 5 to 10 | `#7176e7` |
 | `--fee-10` | 10 and up | `#7b6fed` |
 
-- The colours are OKLCH lightness 0.63 to 0.615, chroma 0.018 to 0.183 and hue 232 to 284, evenly stepped: rebuild them that way if the thresholds change.
+- Bands 5 to 10 are OKLCH lightness 0.623 to 0.615, chroma 0.096 to 0.183 and hue 255 to 284, evenly stepped. The cheap end, where almost every transaction sits today, is spread wider so neighbours can be told apart: a grey (L 0.632, C 0.006), a slate darker than its neighbours (L 0.600, C 0.038, h 236), a lighter steel blue (L 0.632, C 0.062, h 242), then blue (L 0.605, C 0.092, h 252). Rebuild them that way if the thresholds change.
 - The thresholds are a frontend constant (`FEE_BOUNDS` in `web/src/lib/format.ts`). If fee levels move, change the thresholds, not the colours.
 - Band the rate as printed, not the raw value: 0.1996 sat/vB prints as `0.20` and takes band 2, so the colour never disagrees with the number next to it.
-- Every fee colour reaches 3:1 against every surface in both themes (the least is 3.08, `--fee-1` on dark `surface-raised`), which WCAG requires for graphics. Fee colours are fills: rectangles, gauges, layers and keys. They are never used as text colour.
-- **Where fee colour goes:** the block map, a tile's gauge, the mempool's rows by fee band, the mempool history's layers, a transaction's fee ribbon, and the key beside the drawing that needs one. Not beside numbers in tables, facts or the fee panel: the number says it. `FeeRate` draws a swatch only when asked (`swatch`), as the map's tooltip does.
+- Every fee colour reaches 3:1 against every surface in both themes (the least is 3.03, `--fee-3` on white), which WCAG requires for graphics. Fee colours are fills: rectangles, gauges, layers and keys. They are never used as text colour.
+- **Where fee colour goes:** the block map, a tile's layers, the mempool's rows by fee band, the mempool history's layers, a transaction's fee ribbon, and the key beside the drawing that needs one. Not beside numbers in tables, facts or the fee panel: the number says it. `FeeRate` draws a swatch only when asked (`swatch`), as the map's tooltip does.
 
 ### Charts
 
-Series that are not fees take their own two colours, never a fee or status colour: `--series-1` (light `#1f6f9c`, dark `#6cb0dc`), a calm blue, solid, for the main series and its area; `--series-2` (light `#9a6412`, dark `#d9a24c`), an ochre, dashed, for the second; `--series-3` is the muted text colour. Stacked shares (pools) are shades of series 1.
+Series that are not fees take their own two colours, never a fee or status colour: `--series-1` (light `#1f6f9c`, dark `#6cb0dc`), a calm blue, solid, for the main series and its area; `--series-2` (light `#9a6412`, dark `#d9a24c`), an ochre, dashed, for the second; `--series-3` is the muted text colour. An area is filled only over an axis that starts at zero: over a cut axis the line stands alone, so a change is not overstated.
+
+**Mining pools** are the one small set of categories on the site, and only in the pool-share charts, always named beside their colour: `--pool-1` to `--pool-6` for the six biggest (light blue `#2f6f9c`, ochre `#9a6412`, plum `#7d4e8f`, green `#3a7a5a`, rust `#a24f2e`, indigo `#5563a8`; dark `#6cb0dc`, `#d9a24c`, `#c193d6`, `#74bb94`, `#e0906d`, `#97a3e6`), each at least 4.6:1 on its panel, and `--pool-other` a neutral grey for the rest. Neighbours differ in hue, with a seam of the panel between them.
 
 ### Network
 
@@ -177,11 +179,11 @@ An output is **Spent** (or **Being spent**, while the spending transaction is un
 - **In lists:** first eight and last eight characters with a middle ellipsis (`a3f9c2e1…7b0d44e9`), in the monospace cut. The full value is in the `title` and in the copy button.
 - **As a page subject** (block hash, txid, address): the full value in groups of eight at one contrast, wrapping cleanly at any width. A copy button sits at the end.
 - **Addresses** in the flow diagram: whole, wrapping, where the cards have room; seven and five characters on a phone.
-- **Copy button:** a 28 px icon button with a 44 px target on touch screens. On press it turns positive, pops once and its label reads "Copied" for 1.4 s, only when the value was copied. When the browser copied nothing, its icon turns to a cross in the negative color, "Not copied" shows above it and "Could not copy" is announced, for 3 s.
+- **Copy button:** a 28 px drawn button in a 44 px target that takes only its room, kept clear of the link beside it. "Copied" shows beside it, over the value it copied, where no scrolling table can clip it. On press it turns positive, pops once and its label reads "Copied" for 1.4 s, only when the value was copied. When the browser copied nothing, its icon turns to a cross in the negative color, "Not copied" shows above it and "Could not copy" is announced, for 3 s.
 
 ### Time
 
-Relative time ("13 min ago") in lists, with the absolute UTC time in the `title`. Detail pages show absolute UTC first (`2026-11-11 20:41:07 UTC`) and relative time below. Under 10 seconds is "just now". Block tiles drop "ago" to fit ("13 min").
+Relative time ("13 min ago", "1 day 23 h ago", "9 days ago": days lead from a day on) in lists, with the absolute UTC time in the `title`. Detail pages show absolute UTC first (`2026-11-11 20:41:07 UTC`) and relative time below. Under 10 seconds is "just now". Block tiles drop "ago" to fit ("13 min").
 
 ## Space, shape and layout
 
@@ -301,14 +303,14 @@ Decided while building it, where the rest of this document left it open. The pag
 
 | Component | What it is |
 |---|---|
-| Header | Logo and wordmark, network switch, search, navigation (Blocks, Mempool, Mining, Lightning), theme toggle. Sticky. One row on wide screens. Under 1040 px (tablets, phones, a desktop at 200% zoom) two rows: the brand, the search and the theme toggle, then the network switch and the sections, which scroll sideways inside their row if a narrow phone cannot fit them. On a phone the mark stands without the wordmark, so the search keeps its width, and the header is about 100 px |
+| Header | Logo and wordmark, network switch, search, navigation (Blocks, Mempool, Mining, Lightning), theme toggle. Sticky. One row on wide screens. Between 640 and 1040 px (tablets, a desktop at 200% zoom) two rows: the brand, the search and the theme toggle, then the network switch and the sections. On a phone two rows of about 100 px in all: the mark, the network, the search (its hint one word, "Search") and the theme, then the four sections sharing the row evenly, every one in sight at 320 px. A focused search takes the whole first row, the mark, network and theme stepping aside, so it and its answer are the phone's width. The network and theme are 44 px targets around a smaller drawn pill and square |
 | Network band | A slim band tinted with the network colour, a short hatched mark and the warning in words. Test networks only |
 | Logo | `design/logo.svg`: a tile with three strata, the top layer in the accent and offset, still settling. In the header it is inline SVG with the tile in `--color-network`. The wordmark is live text, so a new name is one string |
-| Block tile | Projected (dashed) or mined (solid). Height or label, median fee, fee range, total fees (in magnitude), a gauge, transaction count and age. Mined tiles link to the block and show the pool below |
-| Tile gauge | The block's capacity as a box, filled from the floor as high as the block is full, in the colour of the band holding its median vbyte: the tile's one sign of fee level (`gaugeLayers`). Until the block's facts arrive, a neutral gauge of the same height stands in |
+| Block tile | Projected (dashed) or mined (solid). Height or label, median fee, fee range, total fees (in magnitude), its fee layers, transaction count and age. Mined tiles link to the block and show the pool below |
+| Tile layers | The block's capacity as a box, its fee bands settled from the floor, cheapest at the bottom, each as thick as the virtual size paying it (`strataLayers`); the room above is room the block left. Until the block's facts arrive, a neutral gauge of the same height stands in |
 | Block strip | Projected lane, "now" line, mined lane. Scrolls sideways inside itself on narrow screens and starts centred on the line |
-| Fee answers | "Fee to pay now": up to four plainly labelled rates, slowest first (No rush, Low, Medium, High), each with its unit and what it promises (within a day, within an hour, within 30 min, next block), rounded up. Levels next to each other that print the same rate are one answer ("Low or medium", "Any wait"), never stacked labels. Two by two, in sunken wells |
-| Waiting by fee rate | The home page's mempool by band: one row per band, dearest first, with its range, a bar of its share of the mempool and its size. The numbers carry today's structure even when one cheap band holds nearly all of it |
+| Fee answers | "Fee to pay now": up to four plainly labelled rates, slowest first (No rush, Low, Medium, High), each with its unit and what it promises (within a day, within an hour, within 30 min, next block), rounded up. Levels next to each other that print the same rate are one answer ("No rush or low"), never stacked labels, laid out in the same two rows of two whatever merges: Low and Medium alone are never merged, a lone answer beside three takes its row, and one answer for every wait ("Any wait") fills both rows, centred, saying the next block has room at that rate. In sunken wells |
+| Waiting by fee rate | The home page's mempool: one line saying the fee rate the next block's worth reaches down to, then, behind "By fee rate" (open on wide screens, closed on a phone), a row per band, dearest first: its range, a bar on a log scale from 100 vB to one block's worth (a band past a block fills its bar, the end cut), its size, and how many blocks deep the queue is by the end of that band |
 | Fee key | Ten swatches with lower bounds. Beside a drawing that needs one (the block map, a projected block), never repeated where the figures already name the bands |
 | Fee chip | A number and its unit, with a swatch only where it is the key to a drawing (`FeeRate swatch`) |
 | Amount | BTC with dimmed trailing zeros, sats on hover; `short` for a summary's magnitude |
@@ -316,12 +318,13 @@ Decided while building it, where the rest of this document left it open. The pag
 | Stat | Label above a figure, optional muted sub-line |
 | Fact list | `dl` of label and value pairs, two columns or one |
 | Summary | The transaction page's answer: Status, Fee, Amount and Block (or First seen), four label-value pairs in a panel. On a phone, status and fee share a row and the amount has one of its own, so thousands of bitcoin in eight decimals fit 320 px in any face |
-| Table | Units in headers, bare numbers in cells, numeric columns right-aligned in the monospace, a gutter on both sides of every column, row rules. Phones drop the least important columns and may show a shorter header (`short`) |
-| More | The second reading layer: a disclosure ("How these figures are made") holding methodology and longer notes, under the one sentence that stays visible |
+| Table | Units in headers, bare numbers in cells, numeric columns right-aligned in the monospace, a gutter on both sides of every column, row rules. Phones drop the least important columns and may show a shorter header (`short`). A list's row is one target: a tap anywhere on it opens its item, the cells' own links and buttons staying on top and the row link hidden from the keyboard and screen readers. Identifiers in a list take as much of their column as it allows, cut in the middle only when they must |
+| More | The second reading layer: a disclosure ("How these figures are made", "How this changes", "Why") holding methodology and longer notes, under the one sentence that stays visible |
+| Lightning nav | Lightning's own way around: Overview and Rankings in one short row above the title, and on a node or channel a "←" link back to the list the reader came from |
 | Packed map | Rectangles sized by vsize and coloured by fee band, the dearest at top left, one clean block on the floor of the frame ([The transaction grid](#the-transaction-grid)). Tooltip on hover, click opens the transaction, rows in the table below ring their rectangle. Comes with a caption and the fee key; the table is its text alternative |
 | Flow diagram | Inputs on the left, outputs on the right, ribbons as thick as the value they carry, meeting at a bar that is the transaction. The fee leaves as its own ribbon in its fee colour |
 | Status badge | Pill with icon and word: Confirmed (check), Unconfirmed (dashed circle), Replaced, Dropped and Removed (cross) |
-| Timeline | Numbered steps: first seen, replaced or replacing, waiting or confirmed. Horizontal on wide screens, vertical on phones. Once a transaction is confirmed and settled it shrinks to one line of words, the summary holding the rest. A version that can no longer confirm is struck through with a dashed marker |
+| Timeline | Numbered steps: first seen, replaced or replacing, waiting or confirmed. While waiting and once confirmed it is one line of words, the summary and "Where it waits" holding the rest; after a replacement, a drop or a reorganisation it is the full sequence, horizontal on wide screens and vertical on phones. A version that can no longer confirm is struck through with a dashed marker |
 | Notice | Bordered strip for important state, such as "This version was replaced" with a link to the replacement |
 | Tooltip | Raised surface, title line and muted detail lines. Opens on hover and keyboard focus |
 | Buttons | Default (outlined) and accent (filled). Toggles use `aria-pressed` and show a dot when on. 44 px tall on touch screens |
@@ -428,7 +431,7 @@ Decided while building it, where the layout above left it open:
 
 - **The period is in the address** (`/mining?period=1m`), so a view can be linked; a week is the default. "All" joins the design's four periods, for the whole of history. The period is a row of links, the current one raised with an accent underline.
 - **Charts are drawn in the series colours, never fee colours:** the main series a solid `--series-1` line over a pale area, a second series a dashed `--series-2` line on its own right-hand scale. The one exception is the fee-rate chart, whose axis carries the fee scale as its key.
-- **Pool shares over time are strata.** Each pool is a layer, the biggest at the bottom, in shades of series 1 with a seam of the panel between them. The seven biggest pools have their own layer and the rest are one, "Other pools". The layer under the pointer turns the accent. Shares over time are weekly, so that chart appears from a month up; for 24 hours and a week the same place shows the period's shares as one bar, in the same shades, each pool named with its share.
+- **Pool shares over time are strata.** Each pool is a layer, the biggest at the bottom, in its pool colour with a seam of the panel between them. The six biggest pools have their own layer and colour and the rest are one, "Other pools", in grey. The layer under the pointer turns the accent. Shares over time are weekly, so that chart appears from a month up; for 24 hours and a week the same place shows the period's shares as one bar, in the same shades, each pool named with its share.
 - **Summaries in magnitude.** Rewards read `2 793 BTC`, the exact amount in the title; the pool table's estimate of how a pool's hashrate is made sits behind "How these figures are made".
 - **Hashrate needs a week.** Each daily point averages the 7 days before it, so the 24-hour view draws the last week and says why.
 - **Coverage is drawn, not hidden.** Where the server has not stored the start of the period yet, the chart keeps the whole period's width and hatches the part with no data ("No data stored"), and a note above says "Data from 22 Sep 2026 onward". The same hatch is the note's swatch. A period with nothing stored says so and offers all of history.
@@ -456,7 +459,9 @@ Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
 - **The mempool is the core sample laid on its side,** as pool shares are, but its layers are fee bands, so here they take the fee colors: color still carries fee and nothing else. The layer under the pointer turns the accent.
 - **Flow is its own chart,** not a second axis on the first: its units are a rate, and the question it answers (filling or draining) is read from where the line sits against the layers. A sentence above gives the period's answer in words.
 - **Honest about coverage,** as the mining charts are: a break wherever a step was not sampled (a lone minute is a sliver), and a sentence saying how many of the period's minutes are here and since when.
-- **Opens on what is recorded.** With no period in the address, a view whose records begin inside it starts where they do, and the sentence says the charts start there; a period the reader chooses keeps its whole width, the time before the records hatched ("No data stored"). The fee key is not repeated under the chart: its readout names every band.
+- **Opens on what is recorded, and says so in its choices.** With no period in the address, a view whose records begin inside it starts where they do, under one line ("Everything recorded, since …"), and the period choices gain "Recorded", marked as the current one: a period's name always means its whole width, so choosing "24 h" shows the whole day, the time before the records hatched ("No data stored"). The same holds on the Lightning overview. The fee key is not repeated under the chart: its readout names every band, and on a phone only the bands holding anything at that point.
+- **A few missing minutes are bridged.** Up to five missing steps are drawn across rather than as thin stripes that look like faults; a longer pause in recording breaks the line, and the figures table lists only what was stored.
+- **A phone's time axis names its ends:** too narrow for ticks a reader can place, a chart labels its first and last moment instead ("9 Nov", "12 Nov"; "12 Nov 11:14", "20:35").
 - **Eleven intervals** wrap into two even rows on a phone.
 
 ### Lightning (not in the prototype)
@@ -479,7 +484,7 @@ Channel page: id and state badge; funding; close (kind · how sure, why); its tw
 
 Decided while building it:
 
-- **The order answers the visit:** the figures, then the largest and best-connected nodes with links to the rankings, then the newest opens and closes, then the history.
+- **The order answers the visit:** the figures, the history chart, then five-row previews of the largest and best-connected nodes (their "Top 100" in the panel's heading) and of the newest opens and closes. Every Lightning page has the short Overview and Rankings row; a node or channel leads back to the list the reader came from.
 - **What is ours is said, not hidden.** Under the figures, one line says only channels checked against the chain are counted; how, and what the fee figures leave out, is behind "How these figures are made". History starts when this server's peer first synced: with no interval in the address the chart starts there and says so; a chosen interval hatches the time before it. The closed lists say they hold closes seen since then.
 - **A close says how sure it is,** beside its kind: "Force close · Certain", "Cooperative close · Likely" (a splice that only takes funds out looks the same), "Penalty · Certain", "Other · Certain it is not a plain close". Lists give the kind in one word; the channel page gives the reason.
 - **Charts are drawn in the series colours,** as the mining charts are: the main series an area, the second a dashed line on its own scale. Capacity in the figures reads in magnitude (`3 199 BTC`).
