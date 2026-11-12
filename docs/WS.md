@@ -65,9 +65,10 @@ Fed by the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOO
 | `mempool` | The home page's mempool panel | JSON, the whole state each time | about 200 bytes |
 | `projected` | The block strip's projected tiles | JSON, the whole state each time | about 1.4 KB |
 | `transactions` | The home page's latest transactions | JSON, the whole list each time | about 1.4 KB |
+| `fees` | The home page's "Fee to pay now" panel | JSON, the whole state each time, only when it changed | about 330 bytes |
 | `projected-txs:0` to `projected-txs:6` | One projected block's grid | Binary: a snapshot, then deltas | snapshot 48 bytes a transaction; see [Cost](#cost-of-the-mempool-topics) |
 
-With `{NET}_MEMPOOL_ENABLED=false` every one of them answers subscribe with `{"topic":"…","type":"off"}` and nothing else.
+With `{NET}_MEMPOOL_ENABLED=false` every one of them but `fees` answers subscribe with `{"topic":"…","type":"off"}` and nothing else; `fees` then carries the node's own estimates.
 
 Rates are integers in **sat per 1,000 vB**, the node's own unit and resolution (`1234` is 1.234 sat/vB); sizes are sigop-adjusted virtual bytes; amounts are satoshis.
 
@@ -98,6 +99,19 @@ Eight blocks, the next first; the last holds everything beyond the other seven (
 ```
 
 The newest `WS_LATEST_TXS` (10) transactions the server has seen, newest first by the node's acceptance `time` (Unix seconds). `value` is the total output value. A transaction stays in the list after it confirms or is replaced; it leaves when newer ones push it out. Rows already shown keep their place: diff by `txid` to find the new ones.
+
+**`fees`**
+
+```json
+{"topic":"fees","type":"fees","source":"projected","tip":{"height":975530,"hash":"…"},
+ "levels":[{"name":"high","blocks":1,"minutes":10,"rate":2001},
+           {"name":"medium","blocks":3,"minutes":30,"rate":1031},
+           {"name":"low","blocks":6,"minutes":60,"rate":126},
+           {"name":"no_rush","blocks":144,"minutes":1440,"rate":100}],
+ "min_fee_rate":100}
+```
+
+What to pay to be mined within each horizon ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations)). `levels` is always these four, fastest first, each with its horizon in blocks and in minutes at one block per ten; `rate` is in sat per 1,000 vB like every rate here, never below `min_fee_rate` (the node's minimum) and never below a slower level's. `source` is `projected` for our own, or `node` for the node's own estimates, which are served for the first five minutes after the server starts, while the projection is stale, and with the engine off; `tip` is the block ours was projected on, `null` for the node's. When neither can be served, the message is `{"topic":"fees","type":"unavailable"}` and stays until one can: show no number then rather than an old one. Each message replaces the last; nothing needs to be kept between them.
 
 **`projected-txs:N`**
 

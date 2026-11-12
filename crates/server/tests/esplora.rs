@@ -251,7 +251,7 @@ async fn responses_are_forwarded_byte_for_byte_with_our_headers() {
             r.header("access-control-expose-headers"),
             Some(
                 "x-bitcoin-chain-tip, x-bitcoin-chain-tip-height, x-request-id, \
-                 x-data-from-height, x-data-from-time, x-data-complete"
+                 x-data-from-height, x-data-from-time, x-data-complete, x-fee-source"
             )
         );
         assert!(
@@ -372,7 +372,7 @@ async fn hostile_requests_never_reach_the_node() {
         ),
         ("/api/block-template".into(), 404),
         ("/api/txs/package".into(), 404),
-        ("/api/v1/fees/recommended".into(), 404),
+        ("/api/v1/fees/unknown".into(), 404),
         (
             "/signet/api/address/bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(),
             400,

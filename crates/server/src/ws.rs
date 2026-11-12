@@ -12,6 +12,7 @@
 //! Any of them, or the hub on a full queue, sets the close reason once; the writer then sends the
 //! close frame and the task ends.
 
+pub mod fees;
 mod frame;
 mod hub;
 pub mod mempool;
@@ -109,6 +110,8 @@ pub enum Topic {
     Tx(bitcoin::Txid),
     /// One address followed, by its script: `address:<address>`.
     Address(node::electrum::ScriptHash),
+    /// Fee recommendations.
+    Fees,
 }
 
 /// Names of the [`Topic::ProjectedTxs`] topics, by block.
@@ -129,6 +132,7 @@ impl Topic {
             "mempool" => Some(Self::Mempool),
             "projected" => Some(Self::Projected),
             "transactions" => Some(Self::Transactions),
+            "fees" => Some(Self::Fees),
             _ => PROJECTED_TXS
                 .iter()
                 .position(|n| *n == s)
@@ -147,6 +151,7 @@ impl Topic {
             Self::Mempool => "mempool",
             Self::Projected => "projected",
             Self::Transactions => "transactions",
+            Self::Fees => "fees",
             Self::ProjectedTxs(i) => PROJECTED_TXS.get(usize::from(i)).copied().unwrap_or(""),
         }
     }

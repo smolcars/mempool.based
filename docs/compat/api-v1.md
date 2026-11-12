@@ -23,9 +23,9 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 
 | Endpoint | Returns | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| `GET /v1/fees/recommended` | Five fee levels in whole sat/vB: fastest, half hour, hour, economy, minimum | Engine (projected blocks from cluster chunks) | planned | M2 | ref | The most widely used `/v1` route. Whole numbers with a floor of 1, so on a 0.1 sat/vB mempool it overstates the minimum tenfold. Keep the integer contract for old clients |
-| `GET /v1/fees/precise` | The same five levels with sub-sat precision | Engine | planned | M2 | ref | Read 2.633 / 1.38 / 0.628 / 0.2 / 0.1 while `recommended` said 3 / 1 / 1 / 1 / 1. This is the honest one on rbitcoin |
-| `GET /v1/fees/mempool-blocks` | Projected blocks: size, vsize, tx count, total fees, median fee, fee range | Engine, from `getmempoolfeeratediagram` and the template | planned | M2 | ref | Eight blocks, the last holding the rest of the mempool |
+| `GET /v1/fees/recommended` | Five fee levels in whole sat/vB: fastest, half hour, hour, economy, minimum | Engine (projected blocks and recent arrivals) | served | M2 | ref | Whole numbers rounded up, at least 1: on a 0.1 sat/vB mempool the floor alone overstates the minimum tenfold. Kept for old clients; `X-Fee-Source` says when it is the node's estimate ([`API.md`](../API.md#fees)) |
+| `GET /v1/fees/precise` | The same five levels with sub-sat precision | Engine | served | M2 | ref | Three decimals, the node's resolution. The honest one on rbitcoin. Our own method; values beside the reference's in [`MEMPOOL.md`](../MEMPOOL.md#against-the-node-and-the-reference) |
+| `GET /v1/fees/mempool-blocks` | Projected blocks: size, vsize, tx count, total fees, median fee, fee range | Engine (projected blocks from cluster chunks) | served | M2 | ref | Eight blocks at most, the last holding the rest of the mempool; empty ones left out. `feeRange` is always seven rates by vsize |
 
 ## Mempool, RBF and CPFP
 

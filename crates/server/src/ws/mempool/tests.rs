@@ -435,7 +435,7 @@ impl Server {
 
 static IDS: AtomicU64 = AtomicU64::new(1_000_000);
 
-fn conn(queue: usize) -> (Arc<Conn>, mpsc::Receiver<Frame>) {
+pub(crate) fn conn(queue: usize) -> (Arc<Conn>, mpsc::Receiver<Frame>) {
     let (tx, rx) = mpsc::channel(queue);
     let conn = Conn {
         id: IDS.fetch_add(1, Ordering::Relaxed),
@@ -446,7 +446,7 @@ fn conn(queue: usize) -> (Arc<Conn>, mpsc::Receiver<Frame>) {
 }
 
 /// A frame's opcode and payload.
-fn open(f: &Frame) -> (u8, &[u8]) {
+pub(crate) fn open(f: &Frame) -> (u8, &[u8]) {
     let b = f.as_bytes();
     let (len, at) = match b[1] & 0x7F {
         126 => (u64::from(u16::from_be_bytes([b[2], b[3]])), 4),
@@ -951,4 +951,98 @@ async fn a_new_minimum_fee_rate_is_sent_on_its_own() {
         tokio::time::sleep(Duration::from_millis(10)).await;
         c.drain(&mut rx).unwrap();
     }
+}
+
+/// The latest `fees` message `rx` holds, if any.
+fn latest_fees(rx: &mut mpsc::Receiver<Frame>, last: &mut Value) {
+    while let Ok(f) = rx.try_recv() {
+        *last = serde_json::from_slice(open(&f).1).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn fees_follow_the_projection_and_are_withdrawn_while_it_is_stale() {
+    let mock = Mock::new();
+    let s = Server::start(&mock, Duration::from_millis(10));
+    // The server's own fees task is still warming up and its node is unreachable: it serves
+    // nothing rather than a guess.
+    // A second fees task on its own context, warmed up as after five quiet minutes.
+    let ctx = context(true, Duration::from_millis(10));
+    let mut rec = engine::fees::Recommender::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rec.gap(now - 400);
+    let engines = crate::ws::fees::Engines {
+        tracker: s.tracker.clone(),
+        projector: s.projector.clone(),
+    };
+    let task = tokio::spawn(crate::ws::fees::run(Arc::clone(&ctx), Some(engines), rec));
+    let (conn, mut rx) = conn(1024);
+    ctx.hub.subscribe(Topic::Fees, &conn);
+
+    // 1.2 MvB: six 100 kvB transactions at 5 sat/vB, six at 2 sat/vB.
+    for fee in [500_000, 200_000] {
+        for _ in 0..6 {
+            mock.add(fee, 100_000);
+        }
+    }
+    s.settle().await;
+    let mut last = Value::Null;
+    let deadline = Instant::now() + WAIT;
+    let levels = |v: &Value| -> Vec<u64> {
+        v["levels"]
+            .as_array()
+            .map(|l| l.iter().map(|l| l["rate"].as_u64().unwrap()).collect())
+            .unwrap_or_default()
+    };
+    // The next block holds the 5 sat/vB half and must outbid the 2 sat/vB rest; three blocks
+    // hold everything, so the rest is the node's minimum (1 sat/vB on this mock).
+    while levels(&last) != [2_001, 1_000, 1_000, 1_000] {
+        assert!(Instant::now() < deadline, "never recommended: {last}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        latest_fees(&mut rx, &mut last);
+    }
+    assert_eq!(last["source"], "projected");
+    assert_eq!(last["min_fee_rate"], 1_000);
+    assert_eq!(last["tip"]["height"], 0);
+    assert_eq!(
+        ctx.fees.current().unwrap().source,
+        crate::ws::fees::Source::Projected
+    );
+    assert!(s.ctx.fees.current().is_none());
+    let mb = ctx.fees.blocks().unwrap();
+    assert_eq!(mb.blocks[0].txs + mb.blocks[1].txs, 12);
+    assert_eq!(mb.blocks[0].median, 5_000);
+
+    // A block takes the 5 sat/vB ones: everything left fits in the next block.
+    mock.mine(6);
+    s.settle().await;
+    while levels(&last) != [1_000; 4] {
+        assert!(
+            Instant::now() < deadline,
+            "never followed the block: {last}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        latest_fees(&mut rx, &mut last);
+    }
+    assert_eq!(last["tip"]["height"], 1);
+
+    // The node fails: the projection goes stale, and with no node estimates either, nothing
+    // is served rather than an old answer.
+    mock.set_down(true);
+    while last["type"] != "unavailable" {
+        assert!(Instant::now() < deadline, "never withdrawn: {last}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        latest_fees(&mut rx, &mut last);
+    }
+    assert!(ctx.fees.current().is_none());
+    mock.set_down(false);
+    while last["source"] != "projected" {
+        assert!(Instant::now() < deadline, "never came back: {last}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        latest_fees(&mut rx, &mut last);
+    }
+    task.abort();
 }

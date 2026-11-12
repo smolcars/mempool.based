@@ -164,6 +164,53 @@ The remaining blocks are projected from now, or from the tip's timestamp if that
 
 How we differ from the reference backend, measured side by side: progress, heights, block counts and `previousTime` match exactly and `previousRetarget` up to floating-point rounding. The reference's `timeAvg` divides the time from the period's first block to *now* by the blocks mined, so it grows between blocks and is wrong when the tip is ahead of the clock; ours uses the tip's timestamp. Its `difficultyChange` follows from that average: within 0.01 percentage points of ours on mainnet and signet, but about two points off on testnet4, where tips run hours ahead. `estimatedRetargetDate` and `remainingTime` differ accordingly.
 
+### Fees
+
+What to pay to be mined within a horizon, and the projected blocks behind it. Computed by us from the projected blocks ([`MEMPOOL.md`](MEMPOOL.md#fee-recommendations) has the method and its measured record); code: `crates/engine/src/fees.rs` for the method, `crates/server/src/ws/fees.rs` for the task, `crates/server/src/api_v1.rs` for the routes.
+
+| Route | Answer |
+|---|---|
+| `GET /api/v1/fees/precise` | `{fastestFee, halfHourFee, hourFee, economyFee, minimumFee}` in sat/vB with three decimals: the node's own resolution (sat per 1,000 vB). **The one to use** |
+| `GET /api/v1/fees/recommended` | The same five, each rounded **up** to a whole sat/vB, at least `1` |
+| `GET /api/v1/fees/mempool-blocks` | `[{blockSize, blockVSize, nTx, totalFees, medianFee, feeRange}]`: the projected blocks, the next first, the last holding the rest of the mempool. Empty ones are left out |
+
+| Field | Level | Horizon |
+|---|---|---|
+| `fastestFee` | `high` | the next block |
+| `halfHourFee` | `medium` | within 3 blocks, about half an hour |
+| `hourFee` | `low` | within 6 blocks, about an hour |
+| `economyFee` | `no_rush` | within 144 blocks, about a day |
+| `minimumFee` | | the lowest rate the node accepts now (`mempoolminfee`, never under 0.1 sat/vB) |
+
+A faster level is never lower than a slower one, and none is below `minimumFee`.
+
+**The whole-number route overstates.** Its shape, whole sat/vB with a floor of 1, is what old wallets parse, so it is kept. Rounding is always up, so a whole number never pays less than the precise rate it stands for. On rbitcoin's mempool, where most transactions pay under 1 sat/vB, that floor alone is up to ten times the minimum (`1` for a 0.1 sat/vB `minimumFee`), and any level under 1 sat/vB reads `1`. Use `/fees/precise`.
+
+**Where the answer came from** is in the `X-Fee-Source` header, exposed to cross-origin callers like the chain-tip headers:
+
+| `X-Fee-Source` | Meaning |
+|---|---|
+| `projected` | Ours, from the projected blocks on the tip in `X-Bitcoin-Chain-Tip` |
+| `node` | The node's own `/fee-estimates` (targets 1, 3, 6 and 144 blocks), lifted to the node's minimum and put in order. Served while ours cannot be: for the first five minutes after start, while the projection is stale (the node is failing), and always with `{NET}_MEMPOOL_ENABLED=false`. No chain-tip headers; `Age` gives the seconds since the node answered |
+
+When neither is available (the node's estimates are older than 90 s or never came), the fee routes answer `503` rather than an old number. `mempool-blocks` is `503 the mempool engine is off on this server` with the engine off, and otherwise serves the last projection, with `Age` while it is stale.
+
+**Answered from memory.** A task per network recomputes the recommendation once per `WS_MEMPOOL_INTERVAL_MS` (2 s) from the latest projection, and the projected blocks once per new projection; a request reads the result. The only node calls are the task's `/fee-estimates` (and `getmempoolinfo` with the engine off), at most once per 30 s, and only while the node's estimates are what is served and a fee route was asked in the last ten minutes (or the `fees` topic has a subscriber). After a quiet spell the first request is therefore a `503` with `Retry-After: 1`, and the answer follows within a few seconds.
+
+#### Differences from the reference
+
+Shapes observed on the reference backend; values side by side in [`MEMPOOL.md`](MEMPOOL.md#against-the-node-and-the-reference).
+
+| Field or route | Here | Why |
+|---|---|---|
+| Every rate | Our own method on rbitcoin's chunks, three decimals | The reference's own method is not ours to copy; rates are the node's sat per 1,000 vB, so more decimals would be noise |
+| `economyFee` | About a day (144 blocks) | Our definition; the reference's was 0.2 when its minimum was 0.1, at every observation |
+| `X-Fee-Source`, `Age` | Added | Says when the answer is the node's estimate, not ours |
+| `blockSize` | The serialized sizes the tracker read, summed | Same meaning |
+| `blockVSize` | Summed sigop-adjusted vsize, an integer | The reference's has quarters (weight over four) |
+| `medianFee`, `feeRange` | The effective (chunk) rate at the middle vbyte; seven rates by vsize: lowest, 10th, 25th, 50th, 75th, 90th percentile, highest | The reference's last block carried eleven `feeRange` values; ours always seven |
+| An empty projected block | Left out | |
+
 ### Mining
 
 Who mined each block, each pool's share, the network's hashrate and difficulty over time, and the block fee, reward, fee-rate and size series, all from the block table ([`STORE.md`](STORE.md#blocks)), never from the node. They need `DATA_DIR`; without a table every route answers `503`. Code: `crates/engine/src/mining/` for the pool list, attribution and hashrate arithmetic, `crates/engine/src/blocks/mining.rs` for the table's statements, `crates/server/src/mining.rs` for the routes and their cache.
@@ -283,6 +330,7 @@ The 975,000-row table is synthetic (realistic sizes, the list's tags, the last y
 - Treat any non-2xx as `{"error": string}` JSON. The message is safe to show; the status says what to do: `404` not found, `400` bad input, `503` retry later (or, for address pages, the index is off).
 - Tip and mempool answers are at most a second old by design; poll no faster than that. For live data use the WebSocket when it exists.
 - Difficulty progress is `/api/v1/difficulty-adjustment` ([above](#difficulty-adjustment)). It changes once a block; its time fields can be counted down locally between fetches.
+- Fee recommendations come live from the `fees` WebSocket topic ([`WS.md`](WS.md#mempool-topics)), in the same unit as the other topics; `/api/v1/fees/precise` is the HTTP form.
 - Mining charts read `/api/v1/mining/…` ([above](#mining)) and must check `X-Data-From-Time` and `X-Data-Complete`: while the backfill runs, history starts later than asked.
 - Read `X-Bitcoin-Chain-Tip` to detect a tip change between two fetches of one page, and refetch the page.
 - Response bodies are chain data: render them as text, never as HTML (rule 14).

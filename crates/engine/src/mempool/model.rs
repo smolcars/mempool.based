@@ -7,7 +7,7 @@ use bitcoin::{Amount, BlockHash, OutPoint, Transaction, Txid};
 use node::esplora::ChainTip;
 use node::rpc::model::MempoolEntry;
 
-/// What we keep for every mempool transaction: 48 bytes plus 8 per input.
+/// What we keep for every mempool transaction: 56 bytes plus 8 per input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxInfo {
     /// Base fee, without `prioritisetransaction` deltas.
@@ -17,6 +17,8 @@ pub struct TxInfo {
     /// Sigop-adjusted virtual size, the size mining uses.
     pub vsize: u32,
     pub weight: u32,
+    /// Serialized size in bytes, witness included: the projected blocks' `blockSize`.
+    pub size: u32,
     /// Unix time the node accepted it, from `getmempoolentry`. Survives our own restarts.
     pub time: u32,
     /// Output count, to find children of a removed transaction.
@@ -26,13 +28,15 @@ pub struct TxInfo {
 }
 
 impl TxInfo {
-    /// A record with no inputs, for building deltas in other crates' tests.
+    /// A record with no inputs, for building deltas in other crates' tests. Its size is its
+    /// weight over four.
     pub fn new(fee: Amount, value: Amount, vsize: u32, weight: u32, time: u32) -> Self {
         Self {
             fee,
             value,
             vsize,
             weight,
+            size: weight.div_ceil(4),
             time,
             outputs: 0,
             spends: Box::new([]),
@@ -119,6 +123,7 @@ impl Keys {
             value,
             vsize: sat(entry.vsize),
             weight: sat(entry.weight),
+            size: sat(tx.total_size() as u64),
             time: sat(entry.time),
             outputs: sat(tx.output.len() as u64),
             spends: tx
