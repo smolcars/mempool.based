@@ -320,12 +320,19 @@ fn a_recorded_mainnet_mempool_gives_the_recorded_answer() {
         .map(|v| v.as_u64().unwrap() as u32)
         .collect();
     assert!(r.levels[0] > bottoms[1], "{:?} {bottoms:?}", r.levels);
-    assert!(r.levels[1] > bottoms[3].min(bottoms[2]), "{:?} {bottoms:?}", r.levels);
+    assert!(
+        r.levels[1] > bottoms[3].min(bottoms[2]),
+        "{:?} {bottoms:?}",
+        r.levels
+    );
     // Without arrivals, the next block is the one-step-above-the-boundary answer.
     let still = recommend(&d, &Inflow::default(), floor);
     assert!(still.levels[0] <= r.levels[0]);
     assert!(d.at_or_above(still.levels[0]) < BLOCK_VSIZE);
-    assert!(d.at_or_above(still.levels[0] - 1) >= BLOCK_VSIZE || still.levels[0] == floor.max(RELAY_FLOOR));
+    assert!(
+        d.at_or_above(still.levels[0] - 1) >= BLOCK_VSIZE
+            || still.levels[0] == floor.max(RELAY_FLOOR)
+    );
 }
 
 // Properties over random mempools from a deterministic generator.
