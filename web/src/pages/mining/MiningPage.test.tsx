@@ -210,6 +210,59 @@ describe("pool page", () => {
     );
   });
 
+  it("pages through a pool's blocks, showing the last ones after the server runs out", async () => {
+    const block = (height: number) => ({
+      id: height.toString(16).padStart(64, "0"),
+      height,
+      timestamp: 1_790_000_000 + height,
+      tx_count: 1,
+      size: 1000,
+      weight: 4000,
+      extras: { totalFees: 0, medianFee: null, reward: 312_500_000 },
+    });
+    const range = (from: number, n: number) => Array.from({ length: n }, (_, i) => block(from - i));
+    replies["/v1/mining/pool/evil"] = () => Response.json(STATS);
+    replies["/v1/mining/pool/evil/hashrate"] = () => Response.json([]);
+    replies["/v1/mining/pool/evil/blocks"] = () => Response.json(range(1000, 100));
+    replies["/v1/mining/pool/evil/blocks/901"] = () => Response.json(range(900, 50));
+    const el = openPool("/mining/pool/evil");
+    const more = () =>
+      [...el.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Show 25"));
+    const rows = () => el.querySelectorAll("tbody tr").length;
+    await vi.waitFor(() => expect(rows()).toBe(25));
+    for (const want of [50, 75, 100, 125, 150]) {
+      more()?.click();
+      await vi.waitFor(() => expect(rows()).toBe(want));
+    }
+    expect(text(el)).not.toContain("Could not load older blocks");
+    expect(more()).toBeUndefined();
+  });
+
+  it("says when older blocks come back unreadable, and lets the reader retry", async () => {
+    replies["/v1/mining/pool/evil"] = () => Response.json(STATS);
+    replies["/v1/mining/pool/evil/hashrate"] = () => Response.json([]);
+    replies["/v1/mining/pool/evil/blocks"] = () =>
+      Response.json(
+        Array.from({ length: 100 }, (_, i) => ({
+          id: "a".repeat(64),
+          height: 1000 - i,
+          timestamp: 1,
+          tx_count: 1,
+          size: 1,
+          weight: 4,
+          extras: { totalFees: 0, medianFee: null, reward: 1 },
+        })),
+      );
+    replies["/v1/mining/pool/evil/blocks/901"] = () => Response.json({ not: "a list" });
+    const el = openPool("/mining/pool/evil");
+    await vi.waitFor(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(25));
+    for (let i = 0; i < 4; i++) {
+      [...el.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Show 25"))?.click();
+    }
+    await vi.waitFor(() => expect(text(el)).toContain("Could not load older blocks"));
+    expect(text(el)).toContain("The server sent a reply that could not be read.");
+  });
+
   it("says when no pool has the name", async () => {
     const el = openPool("/mining/pool/nobody");
     await vi.waitFor(() => expect(text(el)).toContain("No pool on the list has this name"));

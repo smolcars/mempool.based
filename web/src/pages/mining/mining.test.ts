@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  byTime,
   coverageNote,
+  fillWeeks,
   hashrateInterval,
   hashrateSeries,
   isPoolStats,
@@ -222,5 +224,33 @@ describe("reply checks", () => {
     };
     expect(isPoolStats(stats)).toBe(true);
     expect(isPoolStats({ ...stats, totalReward: "1e9" })).toBe(false);
+  });
+});
+
+describe("ordering and gaps", () => {
+  it("orders block points by time, which can run backwards across heights", () => {
+    const pts = [
+      { avgHeight: 1, timestamp: 100 },
+      { avgHeight: 2, timestamp: 300 },
+      { avgHeight: 3, timestamp: 200 },
+    ];
+    expect(byTime(pts)?.map((p) => p.avgHeight)).toStrictEqual([1, 3, 2]);
+    expect(byTime(undefined)).toBeUndefined();
+  });
+  it("fills a pool's weeks without a block as zero, inventing none outside its stored weeks", () => {
+    const W = 7 * DAY;
+    const week = (timestamp: number, share: number) => ({
+      timestamp,
+      share,
+      avgHashrate: share * 1e21,
+      poolName: "A",
+    });
+    const filled = fillWeeks([week(3 * W, 0.2), week(W, 0.3)]);
+    expect(filled.map((w) => [w.timestamp, w.share])).toStrictEqual([
+      [W, 0.3],
+      [2 * W, 0],
+      [3 * W, 0.2],
+    ]);
+    expect(fillWeeks([])).toStrictEqual([]);
   });
 });

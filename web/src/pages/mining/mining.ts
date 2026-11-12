@@ -6,6 +6,7 @@ import { formatDay } from "../../components/chart/scale";
 import type { Network } from "../../lib/network";
 
 const DAY = 86_400;
+const WEEK = 7 * DAY;
 
 export const PERIODS = [
   { id: "24h", label: "24 h", words: "the last 24 hours", seconds: DAY },
@@ -53,6 +54,29 @@ export function periodDomain(
   const last = x.at(-1);
   if (p.seconds === undefined || first === undefined || last === undefined) return undefined;
   return [Math.min(first, now - p.seconds), Math.max(last, now)];
+}
+
+/** Block-series points by time (the server orders them by height), or undefined for none. */
+export function byTime<T extends BlockPoint>(points: readonly T[] | undefined): T[] | undefined {
+  return points && sorted(points, (a, b) => a.timestamp - b.timestamp || a.avgHeight - b.avgHeight);
+}
+
+/**
+ * A pool's weekly points with the weeks it found no block filled in as zero: the route leaves
+ * them out, and a chart would otherwise draw a line across them. Weeks before its first and
+ * after its last stored week are not invented.
+ */
+export function fillWeeks(weeks: readonly PoolWeek[]): PoolWeek[] {
+  const by = sorted(weeks, (a, b) => a.timestamp - b.timestamp);
+  const first = by[0];
+  const last = by.at(-1);
+  if (!first || !last) return [];
+  const at = new Map(by.map((w) => [w.timestamp, w]));
+  const out: PoolWeek[] = [];
+  for (let t = first.timestamp; t <= last.timestamp; t += WEEK) {
+    out.push(at.get(t) ?? { timestamp: t, avgHashrate: 0, share: 0, poolName: first.poolName });
+  }
+  return out;
 }
 
 /** `reward-stats` sums at most a year of blocks. */

@@ -23,6 +23,7 @@ import {
   isRewardStats,
   isSizes,
   networkHashrate,
+  byTime,
   networkNote,
   periodDomain,
   PERIODS,
@@ -478,6 +479,14 @@ function OverTime(props: { period: Period; network: Network }) {
     isRatePoints,
   );
   const sizes = createMiningData(net, path("sizes", "sizes-weights"), isSizes);
+  // Points come in height order, and block times can run backwards: charts need them by time.
+  const feePoints = createMemo(() => byTime(fees.answer()?.value));
+  const rewardPoints = createMemo(() => byTime(rewards.answer()?.value));
+  const ratePoints = createMemo(() => byTime(rates.answer()?.value));
+  const sizePoints = createMemo(() => {
+    const v = sizes.answer()?.value;
+    return v ? { sizes: byTime(v.sizes) ?? [], weights: byTime(v.weights) ?? [] } : undefined;
+  });
   const data = (): MiningData<unknown> =>
     ({ fees, rewards, rates, sizes } as Record<SeriesId, MiningData<unknown>>)[shown()];
   const time = () => (props.period.id === "24h" ? formatMoment : formatDay);
@@ -520,15 +529,15 @@ function OverTime(props: { period: Period; network: Network }) {
         busy={data().loading()}
       >
         <CoverageNote coverage={data().answer()?.coverage} period={props.period} />
-        <Show when={shown() === "fees" && fees.answer()}>
+        <Show when={shown() === "fees" && feePoints()}>
           {(a) => (
             <Show
-              when={a().value.length > 0}
+              when={a().length > 0}
               fallback={<NothingStored what="blocks" period={props.period} />}
             >
               <ChartSlot
                 {...common(
-                  a().value.map((p) => p.timestamp),
+                  a().map((p) => p.timestamp),
                   "Average fees per block",
                 )}
                 left={{ format: btcShort, zero: true }}
@@ -536,7 +545,7 @@ function OverTime(props: { period: Period; network: Network }) {
                   {
                     name: "Fees per block",
                     draw: "area",
-                    values: a().value.map((p) => Number(p["avgFees"])),
+                    values: a().map((p) => Number(p["avgFees"])),
                     format: btcFull,
                   },
                 ]}
@@ -544,15 +553,15 @@ function OverTime(props: { period: Period; network: Network }) {
             </Show>
           )}
         </Show>
-        <Show when={shown() === "rewards" && rewards.answer()}>
+        <Show when={shown() === "rewards" && rewardPoints()}>
           {(a) => (
             <Show
-              when={a().value.length > 0}
+              when={a().length > 0}
               fallback={<NothingStored what="blocks" period={props.period} />}
             >
               <ChartSlot
                 {...common(
-                  a().value.map((p) => p.timestamp),
+                  a().map((p) => p.timestamp),
                   "Average reward per block",
                 )}
                 left={{ format: btcShort, zero: true, log: "auto" }}
@@ -560,7 +569,7 @@ function OverTime(props: { period: Period; network: Network }) {
                   {
                     name: "Reward per block",
                     draw: "area",
-                    values: a().value.map((p) => Number(p["avgRewards"])),
+                    values: a().map((p) => Number(p["avgRewards"])),
                     format: btcFull,
                   },
                 ]}
@@ -568,15 +577,15 @@ function OverTime(props: { period: Period; network: Network }) {
             </Show>
           )}
         </Show>
-        <Show when={shown() === "rates" && rates.answer()}>
+        <Show when={shown() === "rates" && ratePoints()}>
           {(a) => (
             <Show
-              when={a().value.length > 0}
+              when={a().length > 0}
               fallback={<NothingStored what="fee rates" period={props.period} />}
             >
               <ChartSlot
                 {...common(
-                  a().value.map((p) => p.timestamp),
+                  a().map((p) => p.timestamp),
                   "Fee rates paid in blocks",
                 )}
                 left={{ format: (v) => formatFeeAxis(v), log: true, fee: true }}
@@ -584,15 +593,15 @@ function OverTime(props: { period: Period; network: Network }) {
                   {
                     name: "10th to 90th percentile",
                     tone: 1,
-                    lo: a().value.map((p) => pos(p.avgFee_10)),
-                    hi: a().value.map((p) => pos(p.avgFee_90)),
+                    lo: a().map((p) => pos(p.avgFee_10)),
+                    hi: a().map((p) => pos(p.avgFee_90)),
                     format: feeRateText,
                   },
                   {
                     name: "25th to 75th percentile",
                     tone: 2,
-                    lo: a().value.map((p) => pos(p.avgFee_25)),
-                    hi: a().value.map((p) => pos(p.avgFee_75)),
+                    lo: a().map((p) => pos(p.avgFee_25)),
+                    hi: a().map((p) => pos(p.avgFee_75)),
                     format: feeRateText,
                   },
                 ]}
@@ -600,7 +609,7 @@ function OverTime(props: { period: Period; network: Network }) {
                   {
                     name: "Median",
                     draw: "line",
-                    values: a().value.map((p) => pos(p.avgFee_50)),
+                    values: a().map((p) => pos(p.avgFee_50)),
                     format: feeRateText,
                   },
                 ]}
@@ -612,15 +621,15 @@ function OverTime(props: { period: Period; network: Network }) {
             </Show>
           )}
         </Show>
-        <Show when={shown() === "sizes" && sizes.answer()}>
+        <Show when={shown() === "sizes" && sizePoints()}>
           {(a) => (
             <Show
-              when={a().value.sizes.length > 0}
+              when={a().sizes.length > 0}
               fallback={<NothingStored what="blocks" period={props.period} />}
             >
               <ChartSlot
                 {...common(
-                  a().value.sizes.map((p) => p.timestamp),
+                  a().sizes.map((p) => p.timestamp),
                   "Average block size and weight",
                 )}
                 left={{ format: bytesText, zero: true }}
@@ -629,7 +638,7 @@ function OverTime(props: { period: Period; network: Network }) {
                   {
                     name: "Size",
                     draw: "area",
-                    values: a().value.sizes.map((p) => p.avgSize),
+                    values: a().sizes.map((p) => p.avgSize),
                     format: bytesText,
                   },
                   {
@@ -637,7 +646,7 @@ function OverTime(props: { period: Period; network: Network }) {
                     draw: "line",
                     axis: "right",
                     tone: 2,
-                    values: a().value.weights.map((p) => p.avgWeight / 4_000_000),
+                    values: a().weights.map((p) => p.avgWeight / 4_000_000),
                     format: percent,
                   },
                 ]}

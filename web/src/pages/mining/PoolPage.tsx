@@ -1,7 +1,6 @@
 import { useParams } from "@solidjs/router";
 import { createMemo, createSignal, onMount, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
-import { sorted } from "../../components/chart/geometry";
 import { formatDay, formatHashrate, formatShare } from "../../components/chart/scale";
 import { DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
@@ -9,13 +8,14 @@ import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
-import { fetchApi, isNotFound, withRetry } from "../../lib/api";
+import { ApiError, fetchApi, isNotFound, withRetry } from "../../lib/api";
 import { groupDigits, MISSING } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { createMiningData } from "./data";
 import {
   competitive,
+  fillWeeks,
   isPoolBlocks,
   isPoolStats,
   isPoolWeeks,
@@ -60,7 +60,7 @@ function Pool(props: { network: Network; slug: string }) {
   onMount(() => void Chart.preload());
   const link = () => safeLink(s()?.pool.link ?? "");
   const series = createMemo(() => {
-    const w = sorted(weeks.answer()?.value ?? [], (a, b) => a.timestamp - b.timestamp);
+    const w = fillWeeks(weeks.answer()?.value ?? []);
     return {
       x: w.map((p) => p.timestamp),
       hashrate: w.map((p) => p.avgHashrate),
@@ -258,19 +258,20 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
     const last = loaded().at(-1);
     if (!last) return;
     setMore("loading");
+    const fail = (e: unknown) => {
+      setMoreError(e);
+      setMore("failed");
+    };
     withRetry(() =>
       fetchApi<unknown>(props.network, `/v1/mining/pool/${props.slug}/blocks/${last.height}`),
-    ).then(
-      (v) => {
-        if (!isPoolBlocks(v)) throw new Error("unreadable");
-        setOlder((o) => [...o, ...v]);
-        setMore(v.length < PAGE ? "done" : "idle");
-      },
-      (e: unknown) => {
-        setMoreError(e);
-        setMore("failed");
-      },
-    );
+    ).then((v) => {
+      if (!isPoolBlocks(v)) {
+        fail(new ApiError(200, "The server sent a reply that could not be read."));
+        return;
+      }
+      setOlder((o) => [...o, ...v]);
+      setMore(v.length < PAGE ? "done" : "idle");
+    }, fail);
   };
   const exhausted = () => more() === "done" || (first.answer()?.value.length ?? 0) < PAGE;
   return (
@@ -327,7 +328,7 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
         />
         <Show when={shown() < loaded().length || !exhausted()}>
           <Show
-            when={more() === "idle" || more() === "loading"}
+            when={more() !== "failed"}
             fallback={
               <ErrorState
                 title="Could not load older blocks"
