@@ -19,7 +19,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 |---|---|---|---|
 | N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | done ([#3](https://github.com/smolcars/mempool.based/pull/3)) |
 | N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | doing |
-| N3 | RPC client: fixed set of typed read-only methods | F0 | doing |
+| N3 | RPC client: fixed set of typed read-only methods | F0 | done ([#7](https://github.com/smolcars/mempool.based/pull/7)) |
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | done ([#4](https://github.com/smolcars/mempool.based/pull/4)) |
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | doing |
 | S3 | WebSocket hub: bounded connections and topics, new-block push from Electrum; `docs/WS.md` | N2, S1 | todo |
@@ -39,7 +39,7 @@ Refined when M1 lands.
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | todo |
+| MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | doing |
 | MP2 | Projected blocks from cluster chunks and the block template | MP1 | todo |
 | MP3 | Binary WebSocket deltas for projected blocks | MP2, S3 | todo |
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |

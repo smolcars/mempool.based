@@ -51,6 +51,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 | `GET /mempool` | 320 ms | 6 KB |
 | `getmempoolfeeratediagram` | 330 ms | 309 KB, 9,441 chunks |
 | `getblocktemplate` | 390 ms | 4.9 MB, 7,501 transactions |
+| `getblock` verbosity 2 | 550–860 ms | 10.4 MB, 4,200 transactions |
 | `getrawmempool` verbose | 5.7 s | 39.5 MB |
 
 ## Rules that follow
@@ -60,6 +61,10 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Expect 503 on huge addresses.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused. Use the paged routes and surface the limit to the user.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
+- **`getmempoolfeeratediagram` returns one point per chunk,** in mining order, not Core's running total.
+- **`getblock` verbosity 2 carries every transaction's fee** (the coinbase has none). Its `vsize` is the plain BIP141 size, not adjusted for sigops.
+- **`getmininginfo.networkhashps` does not fit a `u64`** on mainnet.
+- **`getblocktemplate` on signet needs the `signet` rule;** mainnet and testnet4 accept it too, so we always send it.
 - **P2P is BIP324 v2 only.** Irrelevant to us unless something tries to peer with the node.
 
 ## Upstream wishlist
