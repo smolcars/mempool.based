@@ -46,8 +46,8 @@ Refined when M1 lands.
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | MP1 | Mempool tracker: sequence-aware poll and diff, bulk detail fetch, removal reasons | N1, N3 | done ([#20](https://github.com/smolcars/mempool.based/pull/20)) |
-| MP2 | Projected blocks from cluster chunks and the block template | MP1 | doing |
-| MP3 | Binary WebSocket deltas for projected blocks | MP2, S3 | todo |
+| MP2 | Projected blocks from cluster chunks and the block template | MP1 | done ([#28](https://github.com/smolcars/mempool.based/pull/28)) |
+| MP3 | Run the mempool tracker and projected blocks inside the server, and serve them over the WebSocket: mempool totals, projected-block totals, binary per-transaction deltas, the latest transactions | MP2, S3 | doing |
 | MP4 | Fee recommendations, and the matching `/api/v1/fees` endpoints | MP2 | todo |
 | MP5 | Transaction and address tracking over shared, capped Electrum subscriptions | S3, N2 | todo |
 | MP6 | RBF history and CPFP or cluster view | MP1 | todo |
