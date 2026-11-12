@@ -23,7 +23,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | Job | Runs when | Does |
 |---|---|---|
 | `changes` | always | Decides which jobs below run. Pull requests run only the jobs their paths need; a `master` push runs every job when it touches code and none when it touches only docs |
-| `rust` | Rust, lockfile or workflow changes | Format check, clippy with warnings denied, tests |
+| `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile or workflow changes | Format check, clippy with warnings denied, tests |
 | `web` | `web/`, the files the frontend imports from `design/` (`tokens.css`, `logo.svg`, `fonts/`) or workflow changes | Type check (both tsconfigs), `oxlint` with type-aware rules and the `oxfmt` format check, unit tests, production build, bundle-size check |
 | `e2e` | anything `rust` or `web` runs for, or `dev/regtest/` | `bun run e2e` ([`FRONTEND.md`](FRONTEND.md#browser-tests)): the server and frontend built from the PR, a regtest node with the known chain, Playwright in headless Chromium |
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |

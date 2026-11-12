@@ -1,0 +1,20 @@
+[package]
+name = "load"
+description = "Load generator for measuring the server (docs/PERFORMANCE.md). Not part of the server's build"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Only crates the workspace already locks: no new dependency.
+[dependencies]
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[lints]
+workspace = true

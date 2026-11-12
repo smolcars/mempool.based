@@ -105,7 +105,7 @@ Solid with TypeScript, built by Vite into static files. No server rendering and 
 | Cached or immutable API response, server time | 10 ms at p99 |
 | Frame rate during block and mempool animations | 60 fps on a mid-range laptop |
 
-A change that breaks a budget needs a stated reason in its PR.
+A change that breaks a budget needs a stated reason in its PR. Where we stand against each, and how it was measured: [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ## Deployment
 
