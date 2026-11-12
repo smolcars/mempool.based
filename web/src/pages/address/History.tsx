@@ -123,11 +123,14 @@ export function History(props: {
   // When a refresh brings a new first page, what was loaded after it stays only where it still
   // continues the fresh page, so nothing is skipped and nothing stale stays. New rows flash once.
   let previous: Transaction[] | undefined;
+  // Counts first pages; a page request made before the latest one is dropped when it lands.
+  let generation = 0;
   let known = new Set<string>();
   let fresh = new Set<string>();
   createComputed(
     on(first, (f) => {
       if (!f) return;
+      generation++;
       const ids = new Set(f.map((t) => t.txid));
       const old = previous;
       if (old) {
@@ -144,6 +147,7 @@ export function History(props: {
     const list = shown();
     const last = list?.[list.length - 1];
     if (!last || loadingMore()) return;
+    const asked = generation;
     setLoadingMore(true);
     setMoreError(undefined);
     try {
@@ -154,9 +158,9 @@ export function History(props: {
       );
       batch(() => {
         setLoadingMore(false);
-        // A refresh while this was in flight may have replaced the rows it continues; then it
-        // would leave a gap or bring back stale rows, so it is dropped.
-        if (shown()?.at(-1)?.txid !== last.txid) return;
+        // A refresh while this was in flight may have changed the history it continues (new
+        // transactions, a reorg), so the reply could leave a gap or bring back stale rows.
+        if (generation !== asked) return;
         setLater((l) => [...l, ...page]);
         setLastPageFull(pageIsFull(page, PAGE));
       });
