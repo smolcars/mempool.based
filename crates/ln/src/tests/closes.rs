@@ -749,7 +749,11 @@ async fn a_close_found_ahead_of_the_watcher_is_left_to_the_block_read() {
     .await;
     n.at(ch).await;
     assert_eq!(n.closed().len(), 1);
-    assert_eq!(n.g.watch.status().blocks, 1, "recorded by reading the block");
+    assert_eq!(
+        n.g.watch.status().blocks,
+        1,
+        "recorded by reading the block"
+    );
     // That block leaves the chain: the close is undone.
     unmine(&node, ch);
     mine_empty(&node, 2);

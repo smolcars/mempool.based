@@ -709,7 +709,8 @@ impl<C: Chain> Watcher<C> {
 
     /// Starts following from `tip` without reading the blocks before it. Watched channels that
     /// may have closed in those blocks go to the catch-up: all of them after a gap (`from` the
-    /// newest block read), those verified below `tip` at the first look.
+    /// newest block read), at the first look those verified at or below `tip` (the tip they were
+    /// verified at may be another branch's).
     fn reset(&self, tip: &Header, from: Option<u32>) {
         let gap = from.is_some();
         let mut s = self.watch().lock();
@@ -724,7 +725,7 @@ impl<C: Chain> Watcher<C> {
         let again: Vec<u64> = s
             .funding
             .iter()
-            .filter(|(_, f)| gap || f.verified_at < tip.height)
+            .filter(|(_, f)| gap || f.verified_at <= tip.height)
             .map(|(scid, _)| *scid)
             .collect();
         let rechecked = again.len();
@@ -1153,9 +1154,15 @@ impl<C: Chain> Watcher<C> {
                 s.seen.front().map_or(0, |b| b.height),
                 s.seen.back().map_or(0, |b| b.height),
             );
-            if height > last || (height >= low && s.hash_at(height) != Some(hash)) {
+            let other_branch = height <= last && height >= low && s.hash_at(height) != Some(hash);
+            if height > last || other_branch {
                 if !item.in_graph && !s.funding.contains_key(&item.scid) {
                     s.watch(item.scid, item.funding.clone());
+                }
+                // If the watcher's branch wins, its block at that height was read without the
+                // channel: check it again once the watcher has followed the node.
+                if other_branch {
+                    s.recheck.insert(item.scid);
                 }
                 return Ok(());
             }
