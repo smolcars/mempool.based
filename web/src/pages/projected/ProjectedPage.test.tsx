@@ -162,6 +162,35 @@ describe("projected-block page", () => {
     expect(moved?.getAttribute("href")).toBe("/regtest/block/next/2");
   });
 
+  it("tells the second block that what it showed is now the next block", () => {
+    const { el, ws } = live("/regtest/block/next/2");
+    ws.receive(projected(100));
+    ws.receive(projected(101));
+    const moved = el.querySelector(".projected-found__text a");
+    expect(moved?.textContent).toBe("the next block");
+    expect(moved?.getAttribute("href")).toBe("/regtest/block/next");
+  });
+
+  it("tells the rest of the mempool that only part of it moved up", () => {
+    const { el, ws } = live("/regtest/block/next/8");
+    ws.receive(projected(100));
+    ws.receive(projected(101));
+    const text = el.querySelector(".projected-found__text")?.textContent ?? "";
+    expect(text).toContain("some of what waited here now fills the seventh block from now");
+    expect(text).toContain("the rest still waits here");
+  });
+
+  it("comes back from `off` when the server's mempool is switched on again", () => {
+    const { el, ws } = live();
+    ws.receive({ topic: "projected", type: "off" });
+    ws.receive({ topic: "projected-txs:0", type: "off" });
+    expect(el.textContent).toContain("The live mempool is off");
+    ws.receive(projected(100));
+    ws.receive(snapshotFrame(0, 1, [rec(1)]));
+    expect(el.textContent).not.toContain("The live mempool is off");
+    expect(rows(el)).toHaveLength(1);
+  });
+
   it("says when the chain switched branches", () => {
     const { el, ws } = live();
     ws.receive(projected(100));

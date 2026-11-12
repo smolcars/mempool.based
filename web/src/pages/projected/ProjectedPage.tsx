@@ -126,6 +126,8 @@ function ProjectedView(props: { index: number }) {
           setTxsOff(true);
           return;
         }
+        // Data again after `off`: the server's mempool was switched back on.
+        setTxsOff(false);
         const first = model.seq === undefined && model.txs.size === 0;
         const r = model.apply(m);
         if (r.result === "lost") restart();
@@ -474,21 +476,24 @@ function ChangeNotice(props: {
             <Match when={props.index === 0}>
               This page now shows the next block after it, from what is still waiting.
             </Match>
-            <Match when={moved()} keyed>
-              {(m) =>
-                m === "mined" ? (
-                  <>
-                    Every projected block moved up. What this page showed was the guess at one of
-                    them; it now shows the block that has taken this place.
-                  </>
-                ) : (
-                  <>
-                    Every projected block moved up. What this page showed is now{" "}
-                    <Link href={paths.projected(m + 1)}>{positionName(m, true)}</Link>; this page
-                    shows the block that has taken this place.
-                  </>
-                )
-              }
+            <Match when={props.index === PROJECTED_BLOCKS - 1}>
+              Every projected block moved up: some of what waited here now fills{" "}
+              <Link href={paths.projected(PROJECTED_BLOCKS - 1)}>
+                {positionName(PROJECTED_BLOCKS - 2, true)}
+              </Link>
+              , and the rest still waits here.
+            </Match>
+            <Match when={moved() === "mined"}>
+              Every projected block moved up. What this page showed was the guess at one of them; it
+              now shows the block that has taken this place.
+            </Match>
+            {/* Compared with undefined: a block that moved up to the next place is at index 0. */}
+            <Match when={moved() !== undefined}>
+              Every projected block moved up. What this page showed is now{" "}
+              <Link href={paths.projected(Number(moved()) + 1)}>
+                {positionName(Number(moved()), true)}
+              </Link>
+              ; this page shows the block that has taken this place.
             </Match>
           </Switch>
         </p>
