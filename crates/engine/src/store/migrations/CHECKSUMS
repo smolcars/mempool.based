@@ -1,0 +1,2 @@
+# One line per migration: file name and FNV-1a 64 of its contents. A shipped migration never
+# changes; `cargo test -p engine store` fails with the line to append when you add one.

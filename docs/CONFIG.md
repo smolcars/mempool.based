@@ -10,6 +10,7 @@ The server reads its configuration from the environment once, at startup. Invali
 |---|---|---|
 | `LISTEN_ADDR` | `127.0.0.1:8080` | Address and port to listen on. Port `0` picks a free one; the `listening` event shows which |
 | `WEB_DIR` | `web/dist` | The built frontend. Nothing outside it is served |
+| `DATA_DIR` | `data` | Where each network's SQLite file lives (`<DATA_DIR>/mainnet.sqlite`, …). Created if missing; must be writable. It holds only derived and observed data ([`STORE.md`](STORE.md)). Not read yet: the first feature that stores data wires it in |
 
 ## Networks
 

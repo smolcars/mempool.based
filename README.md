@@ -52,6 +52,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/WS.md`](docs/WS.md) | The WebSocket protocol at `/app/ws`: messages, topics, limits and close codes |
 | [`docs/CONFIG.md`](docs/CONFIG.md) | Every environment variable, its default and what it protects against |
 | [`docs/CI.md`](docs/CI.md) | CI speed budget and testing layers |
+| [`docs/STORE.md`](docs/STORE.md) | The SQLite store: migrations, writes, reads, backup |
 | [`docs/LOGGING.md`](docs/LOGGING.md) | Structured logging: the event catalogue and its rules |
 | [`docs/LIGHTNING.md`](docs/LIGHTNING.md) | How the Lightning explorer works |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | The Docker image and the compose file that runs it beside rbitcoin |

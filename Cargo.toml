@@ -20,6 +20,9 @@ bytes = "1.12.1"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+# Bundled: a pinned SQLite compiled in, so neither CI nor the distroless image needs libsqlite3.
+# hooks: the progress handler that enforces the read time limit. Adds no crates.
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal"] }
