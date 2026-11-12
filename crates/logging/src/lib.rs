@@ -215,13 +215,16 @@ fn write_lines(rx: Receiver<Vec<u8>>, out: impl Write) {
             let _ = out.write_all(&line);
             written += 1;
         }
-        let dropped = logger.dropped.swap(0, Ordering::Relaxed);
+        // Read, not cleared: the count stays outstanding for `flush` until its line is out, and
+        // drops counted meanwhile survive the subtraction below.
+        let dropped = logger.dropped.load(Ordering::Relaxed);
         if dropped > 0 {
             let event = events::LogEventsDropped { count: dropped };
             let line = format::line(&event, logger.settings.format, SystemTime::now());
             let _ = out.write_all(&line);
         }
         let _ = out.flush();
+        logger.dropped.fetch_sub(dropped, Ordering::Relaxed);
         logger.pending.fetch_sub(written, Ordering::Relaxed);
     }
 }
