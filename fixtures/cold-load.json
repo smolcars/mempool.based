@@ -1,17 +1,16 @@
 {
- "commit": "e28f703",
+ "commit": "2008fd3",
  "pages": {
   "home": {
    "requests": [
     "/regtest/",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/HomePage-CESq-pR1.js",
-    "/assets/Difficulty-D2YYMawc.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/HomePage-B-DW1bLe.js",
+    "/assets/Difficulty-BjnhNUVd.js",
     "/assets/Difficulty-Ds2oW-iD.css",
     "/assets/HomePage-BkR6UsOC.css",
     "/app/config",
@@ -20,19 +19,18 @@
    ],
    "sockets": 1,
    "peak_api": 1,
-   "peak_static": 7
+   "peak_static": 6
   },
   "blocks": {
    "requests": [
     "/regtest/blocks",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/BlocksPage-BAQqkgWE.js",
-    "/assets/parts-D0U0L9OE.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/BlocksPage-DgP03TH8.js",
+    "/assets/parts-B3smwKf4.js",
     "/assets/parts-BFWkTqCC.css",
     "/assets/BlocksPage-BoXi2DeU.css",
     "/app/config",
@@ -51,19 +49,18 @@
    ],
    "sockets": 0,
    "peak_api": 2,
-   "peak_static": 7
+   "peak_static": 6
   },
   "block": {
    "requests": [
     "/regtest/block/2ac64444e3172ee94aeeff3b09014b1d69b4daeccddac025d493332d54f6f145",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/BlockPage-CCNemvqS.js",
-    "/assets/parts-D0U0L9OE.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/BlockPage-B5v43s17.js",
+    "/assets/parts-B3smwKf4.js",
     "/assets/parts-BFWkTqCC.css",
     "/assets/BlockPage-i0f6maju.css",
     "/app/config",
@@ -72,23 +69,22 @@
     "/regtest/api/block/2ac64444e3172ee94aeeff3b09014b1d69b4daeccddac025d493332d54f6f145/txs/0",
     "/regtest/app/blocks/summary",
     "/regtest/app/block/2ac64444e3172ee94aeeff3b09014b1d69b4daeccddac025d493332d54f6f145/txs",
-    "/assets/TxGrid-aq0YzyZf.js",
+    "/assets/TxGrid-CM5BhLq7.js",
     "/assets/TxGrid-za-dNcP0.css"
    ],
    "sockets": 1,
    "peak_api": 5,
-   "peak_static": 7
+   "peak_static": 6
   },
   "tx": {
    "requests": [
     "/regtest/tx/44c64894ca2125fb361f286005f8e27d1c1846bfe00c692925ab4d6844721bbd",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/TransactionPage-BviIU5pS.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/TransactionPage-Jr_O-UAN.js",
     "/assets/track-topics-BxYdBJvG.js",
     "/assets/TransactionPage-Dgq4X-Ng.css",
     "/app/config",
@@ -99,21 +95,20 @@
    ],
    "sockets": 1,
    "peak_api": 3,
-   "peak_static": 7
+   "peak_static": 6
   },
   "address": {
    "requests": [
     "/regtest/address/bcrt1qft5p2uhsdcdc3l2ua4ap5qqfg4pjaqlp250x7us7a8qqhrxrxfsqseac85",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/AddressPage-CYXCOryq.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/AddressPage-D1b5y5Oz.js",
     "/assets/address-CKKub9Xd.js",
     "/assets/track-topics-BxYdBJvG.js",
-    "/assets/Pagination-Cv0NjCSM.js",
+    "/assets/Pagination-BZ1k9JQ9.js",
     "/assets/Pagination-d9RNnqtp.css",
     "/assets/AddressPage-ByHPS4JG.css",
     "/app/config",
@@ -124,22 +119,21 @@
    ],
    "sockets": 1,
    "peak_api": 4,
-   "peak_static": 7
+   "peak_static": 6
   },
   "mining": {
    "requests": [
     "/regtest/mining",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/MiningPage-CJvsoDqz.js",
-    "/assets/scale-BK1Xq7VL.js",
-    "/assets/Difficulty-D2YYMawc.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/MiningPage-DGSAVPe0.js",
+    "/assets/scale-XARlGhh9.js",
+    "/assets/Difficulty-BjnhNUVd.js",
     "/assets/Difficulty-Ds2oW-iD.css",
-    "/assets/MiningPage-B3O7CUs8.js",
+    "/assets/MiningPage-DfdTQ0TX.js",
     "/assets/geometry-_mZivsNK.js",
     "/assets/MiningPage-BOIzqCHU.css",
     "/app/config",
@@ -147,7 +141,7 @@
     "/regtest/api/v1/mining/hashrate/1w",
     "/regtest/api/v1/mining/blocks/fees/1w",
     "/regtest/api/blocks",
-    "/assets/Chart-azGVWK80.js",
+    "/assets/Chart-Db0JM-ZN.js",
     "/assets/Chart-CPktYCGX.css",
     "/regtest/app/blocks/summary"
    ],
@@ -160,20 +154,19 @@
     "/regtest/lightning",
     "/assets/recursive-B1_8zyf9.woff2",
     "/boot.js",
-    "/assets/index-DLyiBkB2.js",
-    "/assets/app-s4jpLZaM.js",
-    "/assets/app-2fsANe7B.css",
-    "/assets/index-B5lpZXhU.css",
-    "/assets/LightningPage-nmy935Vk.js",
-    "/assets/scale-BK1Xq7VL.js",
-    "/assets/parts-CAmtOYfZ.js",
+    "/assets/index-D8Daa6R0.js",
+    "/assets/app-Cb2Wq3Az.js",
+    "/assets/app-Bb-mZYKp.css",
+    "/assets/LightningPage-DObfrI4A.js",
+    "/assets/scale-XARlGhh9.js",
+    "/assets/parts-YgG70_96.js",
     "/assets/parts-B1dKaqol.css",
     "/app/config",
     "/regtest/app/lightning/status"
    ],
    "sockets": 0,
    "peak_api": 1,
-   "peak_static": 7
+   "peak_static": 6
   }
  }
 }
