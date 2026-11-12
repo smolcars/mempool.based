@@ -1,0 +1,105 @@
+@layer components {
+  .difficulty__note {
+    max-width: 60ch;
+    color: var(--color-text-muted);
+  }
+  .difficulty__period {
+    margin-bottom: var(--space-4);
+  }
+  /* Blocks mined this period, in a neutral tone: fee colors are only for fee data. */
+  .difficulty__bar {
+    position: relative;
+    height: 14px;
+    overflow: hidden;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+  .difficulty__done {
+    position: absolute;
+    inset: 0;
+    background: var(--color-line-strong);
+    transform-origin: left;
+    transform: scaleX(var(--p));
+    transition: transform var(--dur-slow) var(--ease-out);
+  }
+  .difficulty__done--loading {
+    opacity: 0;
+  }
+  /* Where the period would be at one block every 10 minutes. */
+  .difficulty__pace {
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 2px 0 0 var(--color-text);
+    transform: translateX(calc(var(--p) * 100% - 1px));
+    transition: transform var(--dur-slow) var(--ease-out);
+  }
+  .difficulty__caption {
+    display: grid;
+    gap: var(--space-1);
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .difficulty__count {
+    min-height: 1.5em;
+    font-weight: var(--weight-bold);
+    color: var(--color-text);
+  }
+  /* Two lines kept, so the stats below never move when the sentence arrives. */
+  .difficulty__pace-text {
+    min-height: 3em;
+  }
+  .difficulty__stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+  .difficulty__label {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .difficulty__value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-height: calc(var(--text-xl) * 1.3 + var(--text-sm) * 1.5);
+    font-size: var(--text-xl);
+    font-weight: var(--weight-bold);
+    line-height: 1.3;
+    letter-spacing: var(--tracking-tight);
+  }
+  .difficulty__value:empty::before {
+    content: "";
+    display: block;
+    width: 60%;
+    height: 1.1rem;
+    margin-top: 0.35rem;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+  }
+  .difficulty__sub {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: 0;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+  .difficulty__arrow {
+    margin-right: 0.2em;
+  }
+  @media (max-width: 640px) {
+    /* A phone wraps the sentence to three lines. */
+    .difficulty__pace-text {
+      min-height: 4.5em;
+    }
+    .difficulty__stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 360px) {
+    .difficulty__pace-text {
+      min-height: 6em;
+    }
+  }
+}

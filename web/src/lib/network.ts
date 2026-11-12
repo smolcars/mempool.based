@@ -54,6 +54,10 @@ export const paths = {
     position <= 1 ? "/block/next" : `/block/next/${segment(position)}`,
   tx: (txid: string) => `/tx/${segment(txid)}`,
   address: (address: string) => `/address/${segment(address)}`,
-  mining: () => "/mining",
+  /** The mining page, for a period such as `1m` when given. */
+  mining: (period?: string) =>
+    period === undefined ? "/mining" : `/mining?period=${encodeURIComponent(period)}`,
+  /** A mining pool by its slug from the pool list. */
+  pool: (slug: string) => `/mining/pool/${segment(slug)}`,
   lightning: () => "/lightning",
 };

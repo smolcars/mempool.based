@@ -733,71 +733,9 @@
   }
 }
 
-/* ---------- Difficulty adjustment ---------- */
+/* ---------- Difficulty adjustment: the panel's body is components/Difficulty.css ---------- */
 @layer pages {
   .home-difficulty {
     min-width: 0;
-  }
-  .home-difficulty__note {
-    max-width: 60ch;
-    color: var(--color-text-muted);
-  }
-  .home-difficulty__period {
-    margin-bottom: var(--space-4);
-  }
-  /* Blocks mined this period, in a neutral tone: fee colors are only for fee data. */
-  .home-difficulty__bar {
-    position: relative;
-    height: 14px;
-    overflow: hidden;
-    border-radius: var(--radius-pill);
-    background: var(--color-surface-sunken);
-    box-shadow: inset 0 0 0 1px var(--color-line);
-  }
-  .home-difficulty__done {
-    position: absolute;
-    inset: 0;
-    background: var(--color-line-strong);
-    transform-origin: left;
-    transform: scaleX(var(--p));
-    transition: transform var(--dur-slow) var(--ease-out);
-  }
-  .home-difficulty__done--loading {
-    opacity: 0;
-  }
-  /* Where the period would be at one block every 10 minutes. */
-  .home-difficulty__pace {
-    position: absolute;
-    inset: 0;
-    box-shadow: inset 2px 0 0 var(--color-text);
-    transform: translateX(calc(var(--p) * 100% - 1px));
-    transition: transform var(--dur-slow) var(--ease-out);
-  }
-  .home-difficulty__caption {
-    display: grid;
-    gap: var(--space-1);
-    margin-top: var(--space-2);
-    font-size: var(--text-sm);
-    color: var(--color-text-muted);
-  }
-  .home-difficulty__count {
-    min-height: 1.5em;
-    font-weight: var(--weight-bold);
-    color: var(--color-text);
-  }
-  /* Two lines kept, so the stats below never move when the sentence arrives. */
-  .home-difficulty__pace-text {
-    min-height: 3em;
-  }
-  .home-difficulty__stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .home-difficulty__arrow {
-    margin-right: 0.2em;
-  }
-  @media (max-width: 640px) {
-    .home-difficulty__stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
 }
