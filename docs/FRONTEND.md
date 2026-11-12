@@ -143,7 +143,7 @@ Light by default, dark when the OS asks, either one forced by the toggle. A forc
 
 The stored theme must apply before first paint, and the Content-Security-Policy forbids inline script. So `index.html` loads `public/boot.js` as a small blocking same-origin script in the head: it sets `data-theme` and `data-network` on `<html>` before the body is drawn. It is fetched alongside the render-blocking stylesheet, so it adds no round trip.
 
-The font is preloaded, and `index.tsx` waits up to 400 ms for it before the first render, so text is laid out once in Recursive and does not reflow when it arrives. Anything that appears after the first render must not move what is already on screen: reserve its space, or put it where nothing follows it.
+The font is preloaded, and `index.tsx` waits for it before the first render, up to 3 s (the block period browsers use for web fonts), so text is laid out once in Recursive and does not reflow when it arrives. The font is fetched alongside the script, so the wait rarely costs anything; only a font slower than 3 s can still reflow text. Anything that appears after the first render must not move what is already on screen: reserve its space, or put it where nothing follows it.
 
 ## Rules for page builders
 

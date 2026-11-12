@@ -5,11 +5,12 @@ import "./styles/global.css";
 import { routes } from "./routes";
 import { Shell } from "./shell/Shell";
 
-const FONT_WAIT_MS = 400;
+// As long as a browser's own block period for web fonts; only a slower font can still reflow text.
+const FONT_WAIT_MS = 3000;
 
 const root = document.getElementById("root");
 if (root) {
-  // Give the preloaded font a moment, so text is laid out once in it and never reflows on swap.
+  // Wait for the preloaded font (fetched alongside this script), so text is laid out once in it.
   const font = document.fonts?.load("1em Recursive") ?? Promise.resolve();
   const timeout = new Promise((resolve) => setTimeout(resolve, FONT_WAIT_MS));
   void Promise.race([font, timeout])

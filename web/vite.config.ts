@@ -43,7 +43,8 @@ export default defineConfig({
     // The tokens and font live in design/, beside web/.
     fs: { allow: [".."] },
     proxy: {
-      "^/(api|app)(/|$)": { target: server, ws: true },
+      // Every network has its own API under its prefix.
+      "^(/(signet|testnet4|regtest))?/(api|app)(/|$)": { target: server, ws: true },
       "/healthz": server,
     },
   },
