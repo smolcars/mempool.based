@@ -8,10 +8,10 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 
 | ID | Task | Needs | Status |
 |---|---|---|---|
-| F0 | Rust workspace, skeleton server (`/healthz`, static files), skeleton frontend, CI within budget | — | todo |
-| R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | todo |
-| R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | todo |
-| D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | todo |
+| F0 | Rust workspace, skeleton server (`/healthz`, static files), skeleton frontend, CI within budget | — | doing |
+| R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | doing |
+| R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | doing |
+| D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | doing |
 
 ## M1 — Explorer skeleton
 
