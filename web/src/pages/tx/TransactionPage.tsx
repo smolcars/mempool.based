@@ -120,7 +120,7 @@ function TransactionView(props: { txid: string }) {
   };
   const confs = () => confirmations(status()?.block_height, tip());
 
-  // shortcut: polls /tx/:txid/status and the tip every POLL_MS; replace with the /app/ws WebSocket when it lands.
+  // shortcut: polls /tx/:txid/status and the tip every POLL_MS until settled; replace with the /app/ws WebSocket when it lands.
   // A memo, so the effect below restarts only when watching starts or stops, not on every tip.
   const watching = createMemo(() => {
     const l = live();
@@ -140,24 +140,26 @@ function TransactionView(props: { txid: string }) {
       busy = true;
       try {
         const now = live();
-        if (now && now !== "removed" && !now.confirmed) {
-          try {
-            const next = await fetchApi<TxStatus>(network(), `/tx/${props.txid}/status`, {
-              signal: controller.signal,
-            });
-            if (next.confirmed) {
-              setJustConfirmed(true);
-              setLive(next);
-              setAnnouncement(
-                `Confirmed in block ${groupDigits(next.block_height ?? Number.NaN)}.`,
-              );
-            }
-          } catch (e) {
-            if (!isNotFound(e)) throw e;
-            setLive("removed");
-            setAnnouncement("This transaction is no longer in the mempool.");
-            return;
+        if (!now || now === "removed") return;
+        // Status is checked while confirmed too: a reorg can send a young transaction back.
+        try {
+          const next = await fetchApi<TxStatus>(network(), `/tx/${props.txid}/status`, {
+            signal: controller.signal,
+          });
+          if (next.confirmed !== now.confirmed || next.block_hash !== now.block_hash) {
+            setJustConfirmed(next.confirmed && !now.confirmed);
+            setLive(next);
+            setAnnouncement(
+              next.confirmed
+                ? `Confirmed in block ${groupDigits(next.block_height ?? Number.NaN)}.`
+                : "Unconfirmed again: the block that held it left the chain.",
+            );
           }
+        } catch (e) {
+          if (!isNotFound(e)) throw e;
+          setLive("removed");
+          setAnnouncement("This transaction is no longer in the mempool.");
+          return;
         }
         const height = await fetchApi<string>(network(), "/blocks/tip/height", {
           as: "text",

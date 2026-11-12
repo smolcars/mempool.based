@@ -15,9 +15,9 @@ import {
   opReturnData,
   printable,
 } from "./script";
-import { coinbaseHeight, formatSequence, SHOW_ALL_MAX, sequenceMeaning } from "./tx";
+import { coinbaseHeight, formatSequence, MORE_STEP, SHOW_ALL_MAX, sequenceMeaning } from "./tx";
 
-/** Witness items listed before "Show all items". */
+/** Witness items listed at first; each "Show more" adds MORE_STEP. */
 const WITNESS_SHOWN = 24;
 
 const asm = (hex: string) => disassemble(hex, SHOW_ALL_MAX);
@@ -117,7 +117,9 @@ function InputDetails(props: { vin: Vin; version: number }) {
     }
     return null;
   });
-  const [allWitness, setAllWitness] = createSignal(false);
+  const [witnessPresses, setWitnessPresses] = createSignal(0);
+  const witnessShown = () =>
+    Math.min(witness().length, WITNESS_SHOWN + witnessPresses() * MORE_STEP);
   return (
     <>
       <dl class="tx-facts">
@@ -190,12 +192,17 @@ function InputDetails(props: { vin: Vin; version: number }) {
             <p class="tx-witness__title">
               Witness, {groupDigits(witness().length)} item{witness().length === 1 ? "" : "s"}
             </p>
-            <For each={allWitness() ? witness() : witness().slice(0, WITNESS_SHOWN)}>
+            <For each={witness().slice(0, witnessShown())}>
               {(item, i) => <Code label={`Item ${i()}`} value={item} bytes={item.length / 2} />}
             </For>
-            <Show when={witness().length > WITNESS_SHOWN && !allWitness()}>
-              <button class="btn" type="button" onClick={() => setAllWitness(true)}>
-                Show all {groupDigits(witness().length)} items
+            <Show when={witness().length > witnessShown()}>
+              <button
+                class="btn"
+                type="button"
+                onClick={() => setWitnessPresses(witnessPresses() + 1)}
+              >
+                Show {groupDigits(Math.min(witness().length - witnessShown(), MORE_STEP))} more of{" "}
+                {groupDigits(witness().length)} items
               </button>
             </Show>
           </div>

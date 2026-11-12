@@ -201,6 +201,44 @@ describe("TransactionPage", () => {
     expect(fetchMock.mock.calls.length).toBe(calls);
   });
 
+  it("goes back to unconfirmed when its block leaves the chain", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    serve(payment(confirmed), [], "975516");
+    replies[api(`/tx/${TXID}/status`)] = { status: 200, body: { confirmed: false } };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+    vi.advanceTimersByTime(POLL_MS);
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
+    expect(text(el)).toContain("Waiting for a block");
+    expect(text(el.querySelector("p[aria-live=polite]") as Element)).toContain("Unconfirmed again");
+  });
+
+  it("reveals a long witness a hundred items at a time", async () => {
+    const witness = Array.from({ length: 300 }, (_, i) => i.toString(16).padStart(2, "0"));
+    const tx = payment(confirmed);
+    const first = tx.vin?.[0];
+    if (!first) throw new Error("fixture has an input");
+    serve({ ...tx, vin: [{ ...first, witness }] });
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    el.querySelector<HTMLButtonElement>(".tx-flow__col--in .tx-flow__open")?.click();
+    await settle();
+    const items = () => el.querySelectorAll(".tx-witness .tx-code").length;
+    const more = () => el.querySelector<HTMLButtonElement>(".tx-witness > .btn");
+    expect(items()).toBe(24);
+    expect(more()?.textContent).toBe("Show 100 more of 300 items");
+    more()?.click();
+    await settle();
+    expect(items()).toBe(124);
+    more()?.click();
+    more()?.click();
+    await settle();
+    expect(items()).toBe(300);
+    expect(more()).toBeNull();
+  });
+
   it("says when the transaction is not found", async () => {
     replies = {};
     const el = page(`/tx/${TXID}`);
