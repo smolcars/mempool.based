@@ -6,6 +6,9 @@ How the Solid app in `web/` is put together, and the rules that let several peop
 
 ```text
 web/
+  .oxlintrc.json        Lint rules, and the reason for every rule that is off (see "Checks")
+  .oxfmtrc.json         Formatter settings
+  tsconfig.json         Shared compiler options; tsconfig.app.json (browser) and tsconfig.node.json extend it
   index.html            The shell document: preloads the font, runs public/boot.js, loads src/index.tsx
   public/boot.js        Runs before first paint: applies a stored theme and the network (see "Theme")
   scripts/check-size.js First-load budget check (`bun run size`)
@@ -233,6 +236,20 @@ The font is preloaded, and `index.tsx` waits up to 1 s for it before the first r
 6. **No layout shift.** Reserve space for what loads later.
 7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy library (WebGL, uPlot) loads only on the page that uses it.
 8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router at a given URL.
+
+## Checks
+
+Lint, format and type checks are strict, and CI fails on any finding. OXC is the only linter and formatter: never add Biome, ESLint or Prettier.
+
+| Command | Runs | Covers |
+|---|---|---|
+| `bun run typecheck` | `tsc` on `tsconfig.app.json`, then `tsconfig.node.json` | Everything: the app and its unit tests (browser types only, so app code cannot reach Node's `process` or `Buffer`); browser tests, scripts and configs (Node types) |
+| `bun run lint` | `oxlint`, then `oxfmt --check` | What CI's lint step checks |
+| `bun run format` | `oxfmt` | Rewrites files in place. `bun run format:check` checks without writing |
+
+- **Lint.** Every `oxlint` category is an error (correctness, suspicious, perf, pedantic, style and restriction), with the TypeScript, unicorn, oxc, import, promise and JSX accessibility plugins, and Vitest's for unit tests. Rules that need types (unawaited promises, promises passed where a callback returns nothing, unsafe `any`) run through `oxlint-tsgolint` on the same tsconfig. Nothing is set to warn. A rule is off in `.oxlintrc.json` only with its reason beside it. An exception for one line is `// oxlint-disable-next-line <rule> -- <why>`; a disable that no longer matches anything fails the check.
+- **Format.** `oxfmt` formats everything in `web/` it can parse: TypeScript, JavaScript, JSON, CSS and HTML, at 100 columns. It cannot format `scripts/e2e.sh`.
+- **Types.** On top of `strict`: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noPropertyAccessFromIndexSignature` (an index signature is read as `x["key"]`, a reminder it may be missing), `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode` and `allowUnusedLabels` off, `noUncheckedSideEffectImports`, `erasableSyntaxOnly`, `verbatimModuleSyntax`, and `checkJs` for the JavaScript files. Left off: `isolatedDeclarations`, which is for publishing type declarations; and `skipLibCheck` stays on, so dependencies' own type errors are not ours to fix.
 
 ## Testing
 
