@@ -161,8 +161,23 @@ for (const width of [320, 360]) {
         }));
         expect(box.table, `${path}: table width`).toBeLessThanOrEqual(box.room);
       }
+      // What sticks out past the viewport, named, so a failure on another platform says why.
+      const over = await page.evaluate((w) => {
+        const out: string[] = [];
+        for (const el of document.querySelectorAll("main *")) {
+          const r = el.getBoundingClientRect();
+          if (r.right > w + 0.5 && !el.closest(".table-scroll")) {
+            out.push(
+              `${el.tagName.toLowerCase()}.${el.getAttribute("class") ?? ""} ${Math.round(r.right)}`,
+            );
+          }
+        }
+        return out.slice(0, 5);
+      }, width);
       const scrolled = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(scrolled, `${path}: page width`).toBeLessThanOrEqual(width);
+      expect(scrolled, `${path}: page width; past it: ${over.join(", ")}`).toBeLessThanOrEqual(
+        width,
+      );
     }
   });
 }
