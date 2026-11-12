@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# TEMP measurement
 # The mempool.based server and its built frontend in one image. docs/DEPLOY.md explains it.
 # Base images are multi-arch (linux/amd64, linux/arm64) and pinned by digest.
 
