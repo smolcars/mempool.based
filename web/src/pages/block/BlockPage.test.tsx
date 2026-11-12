@@ -62,9 +62,13 @@ function serve(table: typeof replies) {
     const reply = typeof r === "function" ? r(calls.filter((c) => c === path).length) : r;
     if (!reply) return Response.json({ error: "not found" }, { status: 404 });
     const status = reply.status ?? 200;
+    // Block JSON is immutable, as the server marks it, so the client keeps it in memory.
+    const headers = /^\/block\/[0-9a-f]{64}$/.test(path)
+      ? { "cache-control": "public, max-age=31536000, immutable" }
+      : {};
     return typeof reply.body === "string"
-      ? new Response(reply.body, { status })
-      : Response.json(reply.body, { status });
+      ? new Response(reply.body, { status, headers })
+      : Response.json(reply.body, { status, headers });
   });
 }
 
@@ -88,8 +92,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+let history = createMemoryHistory();
+
 function open(url: string) {
-  const history = createMemoryHistory();
+  history = createMemoryHistory();
   history.set({ value: url });
   const el = document.createElement("div");
   document.body.append(el);
@@ -140,6 +146,29 @@ describe("BlockPage", () => {
     expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
     expect(text(el.querySelector("tbody tr") as Element)).toContain("Coinbase");
     expect(document.title).toBe("Block 975 411 | mempool.based".replace(" 4", " 4"));
+  });
+
+  it("shows the right header after moving between cached blocks", async () => {
+    const prevBlock = {
+      ...block,
+      id: PREV,
+      height: block.height - 1,
+      version: 4,
+      previousblockhash: null,
+    };
+    serve({
+      ...normal(),
+      [`/block/${PREV}`]: { body: prevBlock },
+      [`/block/${PREV}/status`]: status({ height: prevBlock.height, next_best: HASH }),
+      [`/block/${PREV}/txs/0`]: { body: [coinbase] },
+    });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Version")).toBe("0x20000000"));
+    history.set({ value: `/block/${PREV}` });
+    await until(() => expect(fact(el, "Version")).toBe("0x00000004"));
+    history.set({ value: `/block/${HASH}` });
+    await until(() => expect(text(el.querySelector("h1") as Element)).toBe("Block 975 411"));
+    expect(fact(el, "Version")).toBe("0x20000000");
   });
 
   it("renders a hostile coinbase tag as text", async () => {

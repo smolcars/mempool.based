@@ -580,8 +580,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
       <div class="block-fact">
         <dt>{p.label}</dt>
         <dd>
-          <Show when={b()} fallback={<Skel size="s" />}>
-            {(blk) => p.children(blk())}
+          {/* Keyed: a cached block can replace another without a loading state in between. */}
+          <Show when={b()} keyed fallback={<Skel size="s" />}>
+            {(blk) => p.children(blk)}
           </Show>
         </dd>
       </div>
@@ -664,10 +665,12 @@ function CoreSample(props: { weight: number | undefined }) {
         </Show>
       </div>
       <figcaption class="block-core__caption">
-        <Show when={share() !== undefined} fallback={<Skel />}>
-          The block fills {percent(share() ?? 0)} of its weight limit. A map of its transactions by
-          fee rate is not available yet.
-        </Show>
+        {/* The sentence is always there, so it wraps the same while the figure loads. */}
+        The block fills{" "}
+        <Show when={share() !== undefined} fallback={<Skel size="s" />}>
+          {percent(share() ?? 0)}
+        </Show>{" "}
+        of its weight limit. A map of its transactions by fee rate is not available yet.
       </figcaption>
     </figure>
   );
