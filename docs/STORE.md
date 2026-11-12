@@ -179,9 +179,10 @@ For the mining routes, `crates/engine/src/blocks/mining.rs` (and `pool_page` in 
 | `pool_counts(store, from, to)` | Blocks, empty blocks and reward per pool over a range, most blocks first | 0.2 ms for a week; 0.2 s for all of history |
 | `pool_weeks(store, from, to)` | Blocks per pool per week from Monday 00:00 UTC | 0.24 s for all of history |
 | `pool_page(store, pool, from, below, limit)` | One pool's rows below a height, newest first | 0.2 ms for 100 |
-| `retargets(store, from, to)` | Each retarget's time and difficulty, with the period before's | 0.9 ms for all of history |
+| `retargets(store, floor, from, to)` | Each retarget's time and difficulty, with the period before's when that is stored at the floor or above | 0.9 ms for all of history |
 | `work(store, from, to)` | Difficulty summed over a range and its first and last time: a hashrate estimate's inputs | |
-| `at_or_before(store, time)` | The newest block stamped at or before a time, through the `time` index | 0.4 ms |
+| `at_or_before(store, floor, time)`, `first_since(store, floor, time)` | The newest block stamped at or before a time, and the lowest height stamped at or after one, at the floor height or above, through the `time` index | 0.4 ms; 1 ms for a week back, 27 ms for a year |
+| `top(store)` | The highest row's height and hash | |
 | `reattribute(store, pools)` | Redoes the `pool` column if the list changed (above) | 1.8 s for every row |
 
 Measured with `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark`, which writes 975,000 rows attributed as they go in 9 s (attribution adds about 2 µs a row).

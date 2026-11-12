@@ -496,7 +496,7 @@ async fn timestamp(State(ctx): Ctx, Path(t): Path<String>) -> Response {
         let t: u64 = number(&t, "invalid timestamp")?;
         let (store, table) = ready(&ctx)?;
         let span = table.span;
-        let found = blocks::at_or_before(store, t)
+        let found = blocks::at_or_before(store, span.from, t)
             .await
             .map_err(|e| error(&e))?
             .filter(|b| b.0 >= span.from)
@@ -884,9 +884,9 @@ async fn since(store: &Store, span: Span, start: u64) -> Result<Range, store::Er
     let first = if start == 0 {
         0
     } else {
-        blocks::heights_between(store, start, u64::MAX)
+        blocks::first_since(store, span.from, start)
             .await?
-            .map_or(span.tip.saturating_add(1), |(lo, _)| lo)
+            .unwrap_or(span.tip.saturating_add(1))
     };
     Ok(Range {
         lo: first.max(span.from),

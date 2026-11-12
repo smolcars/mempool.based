@@ -33,8 +33,8 @@ pub use db::{
 };
 pub use follow::{Followed, Reorgs, follow};
 pub use mining::{
-    PoolCount, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before, pool_counts,
-    pool_weeks, reattribute, retargets, row_counts, span, top, work,
+    PoolCount, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before, first_since,
+    pool_counts, pool_weeks, reattribute, retargets, row_counts, span, top, work,
 };
 pub use source::{Header, NodeSource, Source};
 pub use stats::{Facts, Rates};

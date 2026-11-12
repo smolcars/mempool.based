@@ -1118,16 +1118,70 @@ async fn retargets_work_and_times() {
     assert_eq!(w.max_time - w.min_time, 6000);
     assert_eq!(work(&t.store, 10, 10).await.unwrap(), None);
 
-    assert_eq!(at_or_before(&t.store, 9_999).await.unwrap(), None);
-    let b = at_or_before(&t.store, 10_000 + 7 * 600 + 599)
+    assert_eq!(at_or_before(&t.store, 0, 9_999).await.unwrap(), None);
+    let b = at_or_before(&t.store, 0, 10_000 + 7 * 600 + 599)
         .await
         .unwrap()
         .unwrap();
     assert_eq!((b.0, b.1, b.2), (7, hash(0, 7), 10_000 + 7 * 600));
     assert_eq!(
-        at_or_before(&t.store, u64::MAX).await.unwrap().unwrap().0,
+        at_or_before(&t.store, 0, u64::MAX)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
         4032
     );
+
+    // Rows below the floor never answer, whatever their timestamps.
+    insert(
+        &t.store,
+        vec![mined(5000, 10_000 + 7 * 600 + 300, b"", 1.0)],
+    )
+    .await;
+    assert_eq!(
+        at_or_before(&t.store, 0, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        5000
+    );
+    assert_eq!(
+        at_or_before(&t.store, 10, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        5000
+    );
+    assert_eq!(
+        at_or_before(&t.store, 5001, 10_000 + 7 * 600 + 599)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        first_since(&t.store, 0, 10_000 + 7 * 600 + 1)
+            .await
+            .unwrap(),
+        Some(8)
+    );
+    assert_eq!(
+        first_since(&t.store, 4000, 10_000 + 7 * 600 + 1)
+            .await
+            .unwrap(),
+        Some(4000)
+    );
+    assert_eq!(first_since(&t.store, 0, u64::MAX).await.unwrap(), None);
+    t.store
+        .write(|sql| {
+            sql.prepare("DELETE FROM blocks WHERE height = 5000")?
+                .execute([])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
 
     // Weeks start on Monday: 1970-01-05 00:00 UTC is 345,600.
     let w = pool_weeks(&t.store, 0, 4032).await.unwrap();

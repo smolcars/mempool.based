@@ -219,22 +219,40 @@ pub async fn work(store: &Store, from: u32, to: u32) -> Result<Option<Work>, Err
         .await
 }
 
-/// The newest block stamped at or before `time`, by its timestamp: `(height, hash, time)`.
+/// The newest block at height `floor` or above stamped at or before `time`, by its timestamp:
+/// `(height, hash, time)`. The floor keeps rows below a gap out of the choice.
 pub async fn at_or_before(
     store: &Store,
+    floor: u32,
     time: u64,
 ) -> Result<Option<(u32, BlockHash, u64)>, Error> {
     store
         .read(move |sql| {
             Ok(sql
                 .prepare(
-                    "SELECT height, hash, time FROM blocks WHERE time <= ?1 \
+                    "SELECT height, hash, time FROM blocks WHERE time <= ?1 AND height >= ?2 \
                      ORDER BY time DESC, height DESC LIMIT 1",
                 )?
-                .query_row(params![int(time)], |r| {
+                .query_row(params![int(time), floor], |r| {
                     Ok((get(r, 0)?, read_hash(r, 1)?, get(r, 2)?))
                 })
                 .optional()?)
+        })
+        .await
+}
+
+/// The lowest height at `floor` or above stamped at or after `time`.
+pub async fn first_since(store: &Store, floor: u32, time: u64) -> Result<Option<u32>, Error> {
+    store
+        .read(move |sql| {
+            let h: Option<i64> = sql
+                // Walk the `time` index from `time`, not every row from the floor up.
+                .prepare(
+                    "SELECT min(height) FROM blocks INDEXED BY blocks_time \
+                     WHERE time >= ?1 AND height >= ?2",
+                )?
+                .query_row(params![int(time), floor], |r| r.get(0))?;
+            Ok(h.and_then(|h| u32::try_from(h).ok()))
         })
         .await
 }
