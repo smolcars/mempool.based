@@ -2,7 +2,7 @@
 
 Pinned to **rbitcoin v0.9.2**, still the minimum. This page was written against v0.9.1: its facts were read from that tag's source and docs, or measured against a synced v0.9.1 mainnet node. When the pin moves, re-check this page.
 
-A newer node unlocks one thing: `GET /block/:hash/txs/summary`, merged to rbitcoin's `master` after v0.9.2 ([below](#listing-a-blocks-transactions)). No release has it yet. The server uses it where the node serves it and `getblock` where it does not, so v0.9.2 loses nothing.
+A newer node, built from rbitcoin's `master` after v0.9.2, unlocks `GET /block/:hash/txs/summary` ([below](#listing-a-blocks-transactions)): the server uses it where the node serves it and `getblock` where it does not, so v0.9.2 loses nothing. It also announces a tip only once it can serve the block (PR 1577, [the wishlist](#upstream-wishlist)). No release has either yet.
 
 ## What v0.9.2 changed for us
 
