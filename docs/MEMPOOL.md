@@ -484,7 +484,7 @@ So on regtest the whole delay was the feed's 2 s rate limit. With the mempool's 
 
 No mempool message on the old tip came after the `block` message, and none on the new tip before it. Before the change the same block would have waited for a poll, about 600 ms for the listing and the block, and then for the feed's rate limit of up to 2 s. Builders measured 3 to 6 s on mainnet. An earlier build in the same run showed a further gap: a poll read the new tip 300 ms before Electrum announced it, while its listing still held the block's 2,948 transactions. That build sent a projection on the new tip still holding them. The rule that a poll which sees a new tip drops what the block rules out closes it.
 
-**Node cost per block,** the WebSocket's block fetch and the summary's `getblock` left aside (both unchanged):
+**Node cost per block,** the WebSocket's block fetch and the summary's block listing left aside (both unchanged by this):
 
 | | Before | After |
 |---|---|---|
@@ -506,7 +506,7 @@ Every block we watch arrive is compared with the block we expected on its parent
 ### What is compared
 
 - **Expected:** our first projected block as it stood on the parent, the last projection published before the projector moved onto this block (`Projector::expected`).
-- **Mined:** the block's transactions, coinbase left out, with fees and sizes from the `getblock` at verbosity 2 that the block summary reads for every new block anyway.
+- **Mined:** the block's transactions, coinbase left out, with fees and sizes from the block listing the summary reads for every new block anyway: `/block/:hash/txs/summary` where the node serves it, else `getblock` at verbosity 2. Both give the same transactions, fees and sizes ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)).
 - **What left with the block:** every transaction in that last projection, in any block, that the first projection on this block no longer holds, with the rate we had placed it at (`Expected::left`). A mined transaction in it was in our mempool; an expected one in it that is not in the block was knocked out by the block.
 - **When the block came:** the moment the projector learnt of it, before it asked the node anything for the projection on it (`Expected::at`), the same for whoever computes the summary first. On mainnet that is about 0.7 s after Electrum's announcement ([When a block is found](#when-a-block-is-found)).
 - **When each was seen, and its weight:** the node's accept time and the raw weight from the tracker's records, read right after the block was applied.
@@ -561,7 +561,7 @@ The stale flag survives the node's recovery: when the tracker's first good cycle
 
 ### Cost
 
-None on the node: the block's transactions are the summary's `getblock`, already fetched for every new block, and the rest is in memory. In the server, the comparison runs on a blocking thread under the tracker's read lock (0.2 to 26 ms on regtest, 0.7 and 1.8 ms on mainnet), then one write of about 300 bytes of totals plus 45 bytes per listed transaction, at most 1,000 (`MAX_TXS`, the most telling kinds first). The new block's summary waits for its audit, so its facts carry the audit from the start: no wait on mainnet, where the projector has moved onto the block before the `getblock` returns, and at most 5 s otherwise.
+None on the node: the block's transactions are the summary's listing, already fetched for every new block, and the rest is in memory. In the server, the comparison runs on a blocking thread under the tracker's read lock (0.2 to 26 ms on regtest, 0.7 and 1.8 ms on mainnet), then one write of about 300 bytes of totals plus 45 bytes per listed transaction, at most 1,000 (`MAX_TXS`, the most telling kinds first). The new block's summary waits for its audit, so its facts carry the audit from the start, at most 5 s. Through `getblock` there was no wait on mainnet: the projector had moved onto the block before the `getblock` returned. The listing route answers in tens of milliseconds, so there the summary waits for the projector instead, about 0.7 s after Electrum's announcement ([When a block is found](#when-a-block-is-found)); not yet measured with the mempool engine on, since the shared nodes run with it off.
 
 ### On regtest
 

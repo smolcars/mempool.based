@@ -1,6 +1,8 @@
 # What we rely on from rbitcoin
 
-Pinned to **rbitcoin v0.9.2**. This page was written against v0.9.1: its facts were read from that tag's source and docs, or measured against a synced v0.9.1 mainnet node. When the pin moves, re-check this page.
+Pinned to **rbitcoin v0.9.2**, still the minimum. This page was written against v0.9.1: its facts were read from that tag's source and docs, or measured against a synced v0.9.1 mainnet node. When the pin moves, re-check this page.
+
+A newer node unlocks one thing: `GET /block/:hash/txs/summary`, merged to rbitcoin's `master` after v0.9.2 ([below](#listing-a-blocks-transactions)). No release has it yet. The server uses it where the node serves it and `getblock` where it does not, so v0.9.2 loses nothing.
 
 ## What v0.9.2 changed for us
 
@@ -21,9 +23,9 @@ Upstream references: `COMPAT.md`, `docs/rpc.md`, `docs/lightning.md` and `docs/e
 
 | Interface | Flag | We use it for |
 |---|---|---|
-| Esplora REST | `--esplora-listen` | Blocks, transactions, addresses, outspends, broadcast, fee estimates |
+| Esplora REST | `--esplora-listen` | Blocks, transactions, addresses, outspends, broadcast, fee estimates, block listings (`/block/:hash/txs/summary`, newer than v0.9.2) |
 | Electrum TCP | `--electrum-listen` | Push: new headers, tracked scripthashes, tracked outpoints |
-| JSON-RPC | `--rpc-listen` | Mempool listing, cluster chunks, block template, block stats, block summaries (`getblock` verbosity 2) |
+| JSON-RPC | `--rpc-listen` | Mempool listing, cluster chunks, block template, block stats, block listings where the node has no listing route (`getblock` verbosity 2) |
 | Address index | `--sh-index` | Address and scripthash routes. Off by default in rbitcoin; required for address pages |
 
 RPC accepts a Bearer token or a Core-style cookie over HTTP Basic. There is no `--rpcuser` / `--rpcpassword`.

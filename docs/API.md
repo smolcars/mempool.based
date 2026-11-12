@@ -226,7 +226,7 @@ Blocks with the reference's `extras`, and every transaction of a block, for tool
 | `GET /api/v1/block/:hash/tx/:txid/summary` | That transaction's row | immutable |
 | `GET /api/v1/blocks/tip/height` | `/api/blocks/tip/height`'s answer, sharing its calls and its one-second cache | as that route |
 
-**Where each part comes from.** The header fields are the node's Esplora block JSON. `extras` come from the block table's row ([`STORE.md`](STORE.md#blocks)) and the block's audit ([Block audits](#block-audits)); they never cost a node call. The summaries come from the same cached `getblock` as `/app/block/:hash/txs` ([`FRONTEND.md`](FRONTEND.md#block-summaries)).
+**Where each part comes from.** The header fields are the node's Esplora block JSON. `extras` come from the block table's row ([`STORE.md`](STORE.md#blocks)) and the block's audit ([Block audits](#block-audits)); they never cost a node call. The summaries come from the same cached block listing as `/app/block/:hash/txs` ([`FRONTEND.md`](FRONTEND.md#block-summaries)): `/block/:hash/txs/summary` where the node serves it, else `getblock` at verbosity 2 ([`RBITCOIN.md`](RBITCOIN.md#listing-a-blocks-transactions)).
 
 `extras`, in the reference's order:
 
@@ -278,7 +278,7 @@ An answer is read fresh from the table on each request, so a list never holds a 
 
 Side by side on mainnet (2026-11-12, tip 975,545; the tip list, the list from 974,000, block 975,541's summary and one recent full block, compared field by field): every header field, `reward`, `totalFees`, `avgFee`, the coinbase fields, `header` and `virtualSize` were identical in every block; the differences are the rows above. The summary had the same 2,077 transactions in the same order with the same `fee`, `vsize` and `value`; `rate` differed only for the 145 transactions the reference rated as packages.
 | Summary `time` | Absent | The reference adds when it first saw a transaction, for some; we keep accept times only for an audit's listed transactions |
-| Summary `flags` | Absent | The reference's bit field of transaction features (script types, RBF and the like) needs every input's previous output, which `getblock` at verbosity 2 does not give. A `0` would claim none |
+| Summary `flags` | Absent | The reference's bit field of transaction features (script types, RBF and the like) needs every input's previous output, which neither block listing gives (`getblock` at verbosity 2 or the summary route). A `0` would claim none |
 | Summary `rate` | The transaction's own rate | The reference gives a transaction mined with its ancestors or descendants their package's rate (three transactions at 16.861 where their own were 5.34, 6.00 and 33.10). In one mainnet block, 1,931 of 2,076 rates were equal and the other 145 were such packages |
 | `tx/:txid/summary` of a txid not in the block | `404 {"error": "transaction not found in this block"}` | The reference answers `404` too |
 
