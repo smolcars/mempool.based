@@ -121,21 +121,35 @@ function share(part: number, whole: number): string {
 
 /**
  * How much of the period the answer holds, in a sentence; undefined when every minute is there.
- * Say since when when recording began inside the period, so a short history is not mistaken for a
- * quiet mempool.
+ * Say since when when recording began inside the period, or always for all of history (which owes
+ * only the minutes since then), so a short history is not mistaken for a quiet mempool.
  */
 export function coverageSentence(h: History, words: string): string | undefined {
-  if (h.complete || h.points.length === 0) return undefined;
-  const held = `${minutes(h.sampled)} of the ${minutes(h.minutes)} in ${words} (${share(h.sampled, h.minutes)})`;
+  if (h.points.length === 0) return undefined;
+  const pct = share(h.sampled, h.minutes);
+  if (h.first !== null && h.interval === "all") {
+    const since = `This server has recorded the mempool since ${formatMoment(h.first)}`;
+    return h.complete
+      ? `${since}, every minute of it.`
+      : `${since}, and holds ${minutes(h.sampled)} of the ${minutes(h.minutes)} since then (${pct}).`;
+  }
+  if (h.complete) return undefined;
+  const held = `${minutes(h.sampled)} of the ${minutes(h.minutes)} in ${words} (${pct})`;
   if (h.first !== null && h.first > h.from) {
     return `This server has recorded the mempool since ${formatMoment(h.first)}, so this view holds ${held}.`;
   }
   return `This view holds ${held}. The gaps are times this server was not recording.`;
 }
 
-/** Where the hatch for "not recorded yet" ends: the first record, when it falls inside the period. */
-export const dataFrom = (h: History): number | undefined =>
-  h.first !== null && h.first > h.from ? h.first : undefined;
+/**
+ * Where the hatch for "not recorded yet" ends: the start of the step that holds the first record,
+ * since that step's point is drawn at its start; undefined when that is not inside the period.
+ */
+export function dataFrom(h: History): number | undefined {
+  if (h.first === null) return undefined;
+  const start = Math.floor(h.first / h.step) * h.step;
+  return start > h.from ? start : undefined;
+}
 
 /** How a point's time reads: to the minute for steps under a day, else the day. */
 export function pointTime(step: number): (t: number) => string {

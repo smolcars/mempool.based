@@ -56,6 +56,36 @@ describe("coverage", () => {
     );
     expect(dataFrom(h)).toBeUndefined();
   });
+  it("ends the hatch where the step holding the first record starts, as its point is drawn there", () => {
+    const h = history({
+      step: 600,
+      first: T0 + 3780,
+      complete: false,
+      sampled: 5,
+      minutes: 10_000,
+    });
+    expect(dataFrom(h)).toBe(T0 + 3600);
+  });
+  it("says since when for all of history, which owes only the minutes since the first record", () => {
+    // A young server: its first record at 14:00, grouped into the day that starts at midnight.
+    const midnight = T0 - 14 * 3600;
+    const all = {
+      interval: "all",
+      from: midnight,
+      step: 86_400,
+      first: T0,
+      points: [point(midnight)],
+    };
+    expect(dataFrom(history({ ...all, complete: true }))).toBeUndefined();
+    expect(coverageSentence(history({ ...all, complete: true }), "all of history")).toBe(
+      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, every minute of it.",
+    );
+    expect(
+      coverageSentence(history({ ...all, complete: false, sampled: 30, minutes: 40 }), "x"),
+    ).toBe(
+      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, and holds 30 minutes of the 40 minutes since then (75%).",
+    );
+  });
   it("never rounds a share up to whole", () => {
     const h = history({ first: T0 - 60, complete: false, sampled: 1439, minutes: 1440 });
     expect(coverageSentence(h, "x")).toContain("(99%)");
