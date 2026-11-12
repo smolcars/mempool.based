@@ -38,8 +38,8 @@ One table per group, each on its own page:
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
 | mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 51 | 5 | 3 | 14 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 19 | 3 | 4 | 22 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 25 | 19 | 5 | 6 | 31 |
-| **Total** | | **232** | **139** | **29** | **12** | **52** | **194** |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 26 | 18 | 5 | 6 | 31 |
+| **Total** | | **232** | **140** | **28** | **12** | **52** | **194** |
 
 Every row's status was checked against `master` on 2026-11-12 (task C1): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
@@ -71,7 +71,6 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 | Lightning node: fee histogram and history | A node's fee rates, and its capacity and channels over time | Nothing: both routes are served | Half a day | Build |
 | RBF `/rbf`, and the home page's recent replacements | Recent replacement trees, with a full-RBF filter, and the newest few on the home page | Nothing: `/api/v1/replacements` and `/fullrbf/replacements` | A day | Build |
 | Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Nothing: the stored snapshots and `/api/v1/lightning/statistics/:interval` have them | A few hours | Build later |
-| Address: balance chart | Balance over time | Nothing: Esplora `/txs/summary` pages through it | A day | Build; say where a large address's history is cut short |
 | Link previews (Q1) | Cards for block, transaction and address links | Server-side titles and descriptions in the shell for those paths | A day or two | Build (already Q1). Images would cost more; start without |
 | Units | BTC or sats | Nothing: one setting read by the amount component | A day | Build later |
 | Clock `/clock` | Full-screen tip height, fee and mempool size | Nothing, without the price | A few hours | Build later; leave the price out |

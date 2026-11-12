@@ -1,7 +1,7 @@
 // The address's confirmed balance over time, from the node's paged `/txs/summary` rows: how much
 // history to load, how to anchor a partial one to the true balance, and how a live change joins
-// what is loaded. Pure but for `loadHistory`, which takes its fetcher. docs/FRONTEND.md "Address
-// balance chart".
+// what is loaded. Pure but for `loadHistory`, which takes its fetcher. docs/FRONTEND.md "The
+// address balance chart".
 import type { Stamped } from "../../lib/api";
 import type { AddressStats, TxSummary } from "../../lib/esplora";
 

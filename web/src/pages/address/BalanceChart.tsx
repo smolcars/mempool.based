@@ -39,7 +39,7 @@ type Shown =
 /**
  * The confirmed balance after each block, as a step line. Its requests start once the page's own
  * have answered, and its code with them; addresses with no history, or too much for the node to
- * add up, never load either. docs/FRONTEND.md "Address balance chart".
+ * add up, never load either. docs/FRONTEND.md "The address balance chart".
  */
 export function BalanceChart(props: {
   address: string;
