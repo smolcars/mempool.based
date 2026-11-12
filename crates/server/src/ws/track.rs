@@ -18,7 +18,7 @@ use axum::http::StatusCode;
 use bitcoin::{BlockHash, Txid};
 use engine::mempool::{Delta, Removal, Tracker};
 use engine::projected::{Position, Projector};
-use logging::events::{TrackingRefused, TrackingSummary};
+use logging::events::{ReplacementsChecked, TrackingRefused, TrackingSummary};
 use node::electrum::{self, ScriptHash, Status};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -1050,6 +1050,12 @@ pub(crate) async fn follow_txs<L: Lookup + Clone + 'static>(
                         let answers: Vec<(Ask, Option<Answer>)> = answers;
                         let failed = answers.iter().any(|(_, a)| a.is_none());
                         let (changed, batch) = track.answers(epoch, &answers);
+                        logging::emit(&ReplacementsChecked {
+                            network: track.network.name(),
+                            reads: answers.len(),
+                            failed,
+                            changed,
+                        });
                         if let Some(k) = &kept {
                             k.send(batch);
                         }
