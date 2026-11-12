@@ -78,6 +78,8 @@ enum Failure {
     NotFound,
     /// The node's work queue is full.
     Busy,
+    /// The node refused our RPC credentials.
+    Auth,
     Timeout,
     TooBig,
     Decode,
@@ -91,6 +93,7 @@ impl Failure {
         match e {
             RpcError::Rpc { code: -5, .. } => Self::NotFound,
             RpcError::Busy => Self::Busy,
+            RpcError::Auth => Self::Auth,
             RpcError::Timeout => Self::Timeout,
             RpcError::ResponseTooBig => Self::TooBig,
             RpcError::Decode(_) => Self::Decode,
@@ -103,6 +106,7 @@ impl Failure {
         match self {
             Self::NotFound => None,
             Self::Busy => Some("busy"),
+            Self::Auth => Some("auth"),
             Self::Timeout => Some("timeout"),
             Self::TooBig => Some("response_too_big"),
             Self::Decode => Some("decode"),
@@ -115,7 +119,8 @@ impl Failure {
             Self::NotFound => ApiError::NOT_FOUND,
             Self::Busy => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "node busy"),
             Self::Timeout => ApiError::TIMEOUT,
-            Self::TooBig | Self::Decode | Self::Unavailable => ApiError::UPSTREAM,
+            // A client learns only that the node is unavailable; the log says why.
+            Self::Auth | Self::TooBig | Self::Decode | Self::Unavailable => ApiError::UPSTREAM,
             Self::Lost => ApiError::INTERNAL,
         }
     }

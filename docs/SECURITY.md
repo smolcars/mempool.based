@@ -26,11 +26,11 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 ### Bounding work
 
 6. **Every request has a body limit, a timeout and a concurrency limit.** Defaults are small; raise them per route with a reason.
-7. **Rate limits are per client address.** Behind a reverse proxy, the client address comes only from a header the operator configured as trusted.
+7. **Rate limits are per client address.** Behind a reverse proxy, the client address comes only from a header the operator configured as trusted, and only on connections from addresses the operator named as proxies; from anyone else the header is ignored ([`CONFIG.md`](CONFIG.md#client-addresses)). Naming a header without naming who may send it is refused at startup.
 8. **Expensive answers are computed once.** Concurrent identical requests share one upstream call, results are cached, and list endpoints are paged with a hard cap.
 9. **WebSocket connections are bounded in every dimension:** total connections, connections per address, inbound message size, messages per second, subscriptions per connection, tracked addresses and transactions per connection, and send-queue length. A slow client is disconnected.
 10. **Client subscriptions never map one-to-one onto node resources.** Tracked scripts are multiplexed onto shared Electrum subscriptions with a global cap and reference counts.
-11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated.
+11. **Untrusted inputs cannot drive unbounded node load.** Lightning gossip triggers funding-output lookups; those are batched, rate-limited and deduplicated. Requests whose cost grows with the data behind them (address histories, batches) have a cost limit of their own, globally and per client, that counts a call until the node has really finished it, not until we stop waiting ([`CONFIG.md`](CONFIG.md#address-and-batch-routes)).
 
 ### Handling data
 
@@ -46,6 +46,10 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 18. **No panic on untrusted input.** A malformed request, upstream response or gossip message is an error value, never a crash.
 19. **No `unsafe`.**
 20. **Dependencies are audited in CI** against the advisory database.
+
+### Browsers
+
+21. **The private `/app` API serves only this site's pages.** A WebSocket upgrade on `/app/ws` whose `Origin` is not this site (its host and port equal to the request's `Host`) is refused with `403`, before it takes any slot. Otherwise any website could open sockets from each of its visitors until their per-client cap is reached and lock them out of ours. An upgrade without `Origin` comes from a program, not a browser, and cannot be forced on a third party's visitor, so it is allowed and bounded like any client.
 
 ## Reviewing a change
 

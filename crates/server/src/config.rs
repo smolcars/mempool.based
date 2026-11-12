@@ -109,8 +109,8 @@ pub struct Limits {
     pub client_rate_per_sec: u32,
     pub client_burst: u32,
     pub max_tracked_clients: usize,
-    /// Header a trusted reverse proxy sets to the client address. `None`: use the socket peer.
-    pub trusted_proxy_header: Option<HeaderName>,
+    /// Who may name the client's address in a header. `None`: always the socket peer.
+    pub trusted_proxy: Option<TrustedProxy>,
     /// Memory budget of each network's block summary cache (`BLOCK_SUMMARY_CACHE_MB`).
     pub summary_cache_bytes: usize,
 }
@@ -123,13 +123,73 @@ impl Default for Limits {
             max_connections: 1024,
             max_requests: 256,
             client_connections: 32,
-            client_requests: 16,
+            // Derived from the frontend's cold page loads: docs/CONFIG.md, "Per-client defaults".
+            client_requests: 48,
             client_rate_per_sec: 20,
-            client_burst: 60,
+            client_burst: 120,
             max_tracked_clients: 65_536,
-            trusted_proxy_header: None,
+            trusted_proxy: None,
             summary_cache_bytes: 32 << 20,
         }
+    }
+}
+
+/// An IP address or CIDR prefix, as `TRUSTED_PROXIES` lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpNet {
+    addr: IpAddr,
+    prefix: u8,
+}
+
+impl IpNet {
+    /// `192.0.2.1`, `192.0.2.0/24`, `2001:db8::1` or `2001:db8::/32`. A prefix of 0 is refused:
+    /// trusting every address is the same as trusting the header from anyone.
+    pub fn parse(s: &str) -> Option<Self> {
+        let (addr, prefix) = match s.split_once('/') {
+            Some((a, p)) if p.bytes().all(|b| b.is_ascii_digit()) => (a, p.parse().ok()?),
+            Some(_) => return None,
+            None => (s, u8::MAX),
+        };
+        let addr = addr.parse::<IpAddr>().ok()?.to_canonical();
+        let bits = if addr.is_ipv4() { 32 } else { 128 };
+        let prefix = if prefix == u8::MAX { bits } else { prefix };
+        (1..=bits)
+            .contains(&prefix)
+            .then_some(Self { addr, prefix })
+    }
+
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        match (self.addr, ip.to_canonical()) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                let mask = u32::MAX << (32 - u32::from(self.prefix));
+                u32::from(net) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                let mask = u128::MAX << (128 - u32::from(self.prefix));
+                u128::from(net) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Display for IpNet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.addr, self.prefix)
+    }
+}
+
+/// Who may name the client's address in a header: only connections from `proxies`
+/// (`TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES`, docs/CONFIG.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedProxy {
+    pub header: HeaderName,
+    pub proxies: Vec<IpNet>,
+}
+
+impl TrustedProxy {
+    pub fn trusts(&self, ip: IpAddr) -> bool {
+        self.proxies.iter().any(|n| n.contains(ip))
     }
 }
 
@@ -174,7 +234,7 @@ impl Default for WsLimits {
     fn default() -> Self {
         Self {
             max_sockets: 1024,
-            client_max_sockets: 8,
+            client_max_sockets: 16,
             max_message_bytes: 1024,
             messages_per_sec: 10,
             max_subscriptions: 8,
@@ -271,13 +331,7 @@ impl Config {
         }
 
         let d = Limits::default();
-        let trusted_proxy_header = match var("TRUSTED_PROXY_HEADER") {
-            None => None,
-            Some(v) => Some(
-                HeaderName::try_from(v.as_str())
-                    .map_err(|_| "TRUSTED_PROXY_HEADER is not a valid header name".to_owned())?,
-            ),
-        };
+        let trusted_proxy = trusted_proxy(&var)?;
         let limits = Limits {
             max_body_bytes: positive(&var, "MAX_BODY_BYTES", d.max_body_bytes)?,
             request_timeout: Duration::from_secs(positive(
@@ -292,7 +346,7 @@ impl Config {
             client_rate_per_sec: positive(&var, "CLIENT_RATE_PER_SEC", d.client_rate_per_sec)?,
             client_burst: positive(&var, "CLIENT_BURST", d.client_burst)?,
             max_tracked_clients: positive(&var, "MAX_TRACKED_CLIENTS", d.max_tracked_clients)?,
-            trusted_proxy_header,
+            trusted_proxy,
             summary_cache_bytes: positive(
                 &var,
                 "BLOCK_SUMMARY_CACHE_MB",
@@ -339,12 +393,14 @@ impl Config {
                 "WS_MEMPOOL_INTERVAL_MS must be 100 to 60000 and WS_LATEST_TXS at most 100".into(),
             );
         }
-        if ws.max_sockets > 1 << 20 || ws.send_queue > 1 << 16 || ws.max_message_bytes > 1 << 20 {
-            return Err(
-                "WS_MAX_SOCKETS must be at most 1048576, WS_SEND_QUEUE at most 65536 \
-                 and WS_MAX_MESSAGE_BYTES at most 1048576"
-                    .into(),
-            );
+        for (name, value, max) in [
+            ("WS_MAX_SOCKETS", ws.max_sockets, 1 << 20),
+            ("WS_SEND_QUEUE", ws.send_queue, 1 << 16),
+            ("WS_MAX_MESSAGE_BYTES", ws.max_message_bytes, 1 << 20),
+        ] {
+            if value > max {
+                return Err(format!("{name} must be at most {max}"));
+            }
         }
 
         let broadcast = match var("BROADCAST_ENABLED").as_deref() {
@@ -378,6 +434,44 @@ impl Config {
             log_client_addr,
         })
     }
+}
+
+/// Most entries `TRUSTED_PROXIES` takes; a deployment has a handful of proxies.
+const MAX_TRUSTED_PROXIES: usize = 64;
+
+/// `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES`: both or neither. A header without the addresses
+/// allowed to send it would let every client choose its own address (SECURITY.md rule 7).
+fn trusted_proxy(var: &dyn Fn(&str) -> Option<String>) -> Result<Option<TrustedProxy>, String> {
+    let (header, proxies) = match (var("TRUSTED_PROXY_HEADER"), var("TRUSTED_PROXIES")) {
+        (None, None) => return Ok(None),
+        (Some(_), None) => {
+            return Err(
+                "TRUSTED_PROXY_HEADER is set without TRUSTED_PROXIES: also name the \
+                        addresses of the proxies allowed to send it"
+                    .into(),
+            );
+        }
+        (None, Some(_)) => {
+            return Err(
+                "TRUSTED_PROXIES is set without TRUSTED_PROXY_HEADER: also name the \
+                        header those proxies write the client address to"
+                    .into(),
+            );
+        }
+        (Some(h), Some(p)) => (h, p),
+    };
+    let header = HeaderName::try_from(header.as_str())
+        .map_err(|_| "TRUSTED_PROXY_HEADER is not a valid header name".to_owned())?;
+    let proxies = proxies
+        .split(',')
+        .map(|p| IpNet::parse(p.trim()))
+        .collect::<Option<Vec<_>>>()
+        .filter(|p| !p.is_empty() && p.len() <= MAX_TRUSTED_PROXIES)
+        .ok_or(
+            "TRUSTED_PROXIES must be a comma-separated list of at most 64 IP addresses or \
+                CIDR prefixes, none of them /0",
+        )?;
+    Ok(Some(TrustedProxy { header, proxies }))
 }
 
 fn positive<T>(var: &dyn Fn(&str) -> Option<String>, name: &str, default: T) -> Result<T, String>
@@ -659,18 +753,15 @@ mod tests {
             ("MAX_BODY_BYTES", "1024"),
             ("REQUEST_TIMEOUT_SECS", "3"),
             ("CLIENT_RATE_PER_SEC", "5"),
-            ("TRUSTED_PROXY_HEADER", "X-Real-IP"),
         ])
         .unwrap();
         assert_eq!(c.limits.max_body_bytes, 1024);
         assert_eq!(c.limits.request_timeout, Duration::from_secs(3));
         assert_eq!(c.limits.client_rate_per_sec, 5);
-        assert_eq!(c.limits.trusted_proxy_header.unwrap(), "x-real-ip");
         for bad in ["0", "-1", "abc", "1.5"] {
             let e = parse(&[("CLIENT_BURST", bad)]).unwrap_err();
             assert!(e.contains("CLIENT_BURST"), "{e}");
         }
-        assert!(parse(&[("TRUSTED_PROXY_HEADER", "bad header")]).is_err());
         assert!(parse(&[]).unwrap().broadcast);
         assert!(!parse(&[("BROADCAST_ENABLED", "false")]).unwrap().broadcast);
         assert!(parse(&[("BROADCAST_ENABLED", "no")]).is_err());
@@ -756,6 +847,78 @@ mod tests {
         }
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");
+    }
+
+    #[test]
+    fn a_proxy_header_needs_the_proxies_allowed_to_send_it() {
+        let c = parse(&[
+            ("TRUSTED_PROXY_HEADER", "X-Real-IP"),
+            ("TRUSTED_PROXIES", "127.0.0.1, 172.16.0.0/12,::1 ,fd00::/8"),
+        ])
+        .unwrap();
+        let t = c.limits.trusted_proxy.unwrap();
+        assert_eq!(t.header, "x-real-ip");
+        let shown: Vec<String> = t.proxies.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            shown,
+            ["127.0.0.1/32", "172.16.0.0/12", "::1/128", "fd00::/8"]
+        );
+        for (ip, trusted) in [
+            ("127.0.0.1", true),
+            ("::ffff:127.0.0.1", true),
+            ("127.0.0.2", false),
+            ("172.31.255.1", true),
+            ("172.32.0.1", false),
+            ("::1", true),
+            ("fdab::9", true),
+            ("2001:db8::1", false),
+        ] {
+            assert_eq!(t.trusts(ip.parse().unwrap()), trusted, "{ip}");
+        }
+        // One without the other is refused, naming what is missing.
+        let e = parse(&[("TRUSTED_PROXY_HEADER", "X-Real-IP")]).unwrap_err();
+        assert!(e.contains("without TRUSTED_PROXIES"), "{e}");
+        let e = parse(&[("TRUSTED_PROXIES", "127.0.0.1")]).unwrap_err();
+        assert!(e.contains("without TRUSTED_PROXY_HEADER"), "{e}");
+        let with = |h: &str, p: &str| parse(&[("TRUSTED_PROXY_HEADER", h), ("TRUSTED_PROXIES", p)]);
+        assert!(
+            with("bad header", "127.0.0.1")
+                .unwrap_err()
+                .contains("TRUSTED_PROXY_HEADER")
+        );
+        for bad in [
+            "0.0.0.0/0",
+            "::/0",
+            "127.0.0.1/33",
+            "::1/129",
+            "127.0.0.1/",
+            "127.0.0.1/+8",
+            "localhost",
+            "127.0.0.1,,::1",
+            "10.0.0.0/8 extra",
+            &vec!["10.0.0.1"; 65].join(","),
+        ] {
+            let e = with("X-Real-IP", bad).unwrap_err();
+            assert!(
+                e.contains("TRUSTED_PROXIES") && !e.contains(bad),
+                "{bad}: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_websocket_limit_names_only_itself() {
+        for (name, value) in [
+            ("WS_SEND_QUEUE", "65537"),
+            ("WS_MAX_SOCKETS", "1048577"),
+            ("WS_MAX_MESSAGE_BYTES", "1048577"),
+        ] {
+            let e = parse(&[(name, value)]).unwrap_err();
+            assert!(e.starts_with(name), "{e}");
+            for other in ["WS_SEND_QUEUE", "WS_MAX_SOCKETS", "WS_MAX_MESSAGE_BYTES"] {
+                assert!(other == name || !e.contains(other), "{e}");
+            }
+        }
     }
 
     #[test]

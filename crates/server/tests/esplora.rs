@@ -21,6 +21,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const H: &str = "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054";
+/// A mainnet address, for the heavy routes.
+const MAIN: &str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 const TIP: &str = "00000000000000000000ec095818efb89e40f794c13326dbbdec38e1de395193";
 /// A legacy (no witness) transaction: one input spending a null outpoint, one empty output.
 const TX: &str = concat!(
@@ -582,4 +584,89 @@ async fn responses_carry_an_outcome_for_the_request_log() {
     );
     let refused = call("/api/tx/zz").await.unwrap();
     assert!(refused.extensions().get::<ApiOutcome>().is_none());
+}
+
+#[tokio::test]
+async fn heavy_routes_have_a_cost_limit_that_outlives_the_request() {
+    use mempool_based::config::{IpNet, TrustedProxy};
+    use mempool_based::esplora::{HEAVY_PENDING, HEAVY_RUNNING, HeavyShare};
+    assert_eq!((HEAVY_RUNNING, HEAVY_PENDING), (4, 12));
+    // The node takes 3 s per answer; our requests give up after 1 s.
+    let (url, seen) = mock(Duration::from_secs(3)).await;
+    let mut c = config(&url, false);
+    c.limits.request_timeout = Duration::from_secs(1);
+    // A client's share follows its general limits: 24 requests at once make 2 heavy ones.
+    c.limits.client_requests = 24;
+    assert_eq!(HeavyShare::of(&c.limits).pending, 2);
+    // Requests come from loopback and name their client, so one test can be several clients.
+    c.limits.trusted_proxy = Some(TrustedProxy {
+        header: "x-real-ip".parse().unwrap(),
+        proxies: vec![IpNet::parse("127.0.0.1").unwrap()],
+    });
+    let app = App::new(&c);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+
+    // `?asof=` makes each request its own key, as an attacker would.
+    let heavy = |client: u8, n: u32| {
+        let addr = addr.clone();
+        tokio::spawn(async move {
+            let line = format!("GET /api/address/{MAIN}?asof={n:064x}");
+            send(
+                &addr,
+                &line,
+                &format!("X-Real-IP: 192.0.2.{client}\r\n"),
+                b"",
+            )
+            .await
+        })
+    };
+    let address_calls = |seen: &Seen| {
+        hits(seen)
+            .iter()
+            .filter(|p| p.starts_with("/address/"))
+            .count()
+    };
+    let settle = || tokio::time::sleep(Duration::from_millis(200));
+    let mut waiting = vec![heavy(1, 1), heavy(1, 2)];
+    settle().await;
+    // A third from the same client is refused at once.
+    let r = heavy(1, 3).await.unwrap();
+    assert_eq!((r.status, r.error().as_str()), (429, "too many requests"));
+    // Five more clients fill the network's twelve places: four run, eight wait.
+    for client in 2..=6 {
+        waiting.extend([
+            heavy(client, u32::from(client) * 10),
+            heavy(client, u32::from(client) * 10 + 1),
+        ]);
+    }
+    settle().await;
+    assert_eq!(address_calls(&seen), 4, "only four run at once");
+    // Anyone else is told to retry, at once.
+    let started = std::time::Instant::now();
+    let r = heavy(7, 7).await.unwrap();
+    assert_eq!((r.status, r.error().as_str()), (503, "node busy; retry"));
+    assert_eq!(r.header("retry-after"), Some("1"));
+    assert!(started.elapsed() < Duration::from_millis(500));
+    // Joining a call already running needs no place, and cheap routes are not limited at all
+    // (this one reaches the slow node like any read, and times out like one).
+    waiting.push(heavy(8, 1));
+    assert_eq!(get(&addr, &format!("/api/tx/{H}/status")).await.status, 504);
+    // Every request gives up after 1 s...
+    for r in waiting {
+        assert_eq!(r.await.unwrap().status, 504);
+    }
+    // ...but the node is still working on four calls, so a new one waits behind them, and
+    // gives up too, without reaching the node.
+    assert_eq!(heavy(9, 9).await.unwrap().status, 504);
+    assert_eq!(
+        address_calls(&seen),
+        4,
+        "slots were freed while the node still worked"
+    );
+    // Once the node has answered, the slots are free again.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(heavy(9, 10).await.unwrap().status, 504);
+    assert_eq!(address_calls(&seen), 5);
 }

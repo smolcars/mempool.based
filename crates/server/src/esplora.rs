@@ -20,12 +20,13 @@ use axum::response::{IntoResponse, Response};
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::{Address, BlockHash, Transaction, Txid};
 use node::esplora::{
-    BlockTxsStart, Error, OutPosition, OutPositions, RawResponse, Route, ScriptHash, ScriptRef,
+    BlockTxsStart, Error, Esplora, OutPosition, OutPositions, RawResponse, Route, ScriptHash,
+    ScriptRef,
 };
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, Semaphore};
 
-use crate::config::Network;
-use crate::limits::{Client, Clients};
+use crate::config::{Limits, Network};
+use crate::limits::{Client, Clients, Held, Refused};
 use crate::{ApiError, IMMUTABLE, NetworkContext};
 
 /// How long the hot tip-scoped answers ([`is_hot`]) are reused.
@@ -46,22 +47,82 @@ pub const MAX_OUTSPENDS_TXIDS: usize = 50;
 const CHAIN_TIP: HeaderName = HeaderName::from_static("x-bitcoin-chain-tip");
 const CHAIN_TIP_HEIGHT: HeaderName = HeaderName::from_static("x-bitcoin-chain-tip-height");
 
+/// Heavy calls ([`is_heavy`]) running on the node at once, per network.
+pub const HEAVY_RUNNING: usize = 4;
+/// Heavy calls running or waiting for one of those slots, per network. Past it: `503` at once.
+/// At 1 to 2 s each for a busy address, the last in line still answers inside the request timeout.
+pub const HEAVY_PENDING: usize = 12;
+
+/// One client's share of heavy calls, from its general per-client limits, so a deployment that
+/// raises those for many users behind one address raises this too. By default 4 running or
+/// waiting (two address pages at once), 30 at once and then 2 a second (an address page costs 2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeavyShare {
+    pub pending: u32,
+    pub burst: u32,
+    pub per_sec: f64,
+}
+
+impl HeavyShare {
+    pub fn of(limits: &Limits) -> Self {
+        Self {
+            pending: (limits.client_requests / 12).max(2),
+            burst: (limits.client_burst / 4).max(2),
+            per_sec: (f64::from(limits.client_rate_per_sec) / 10.0).max(0.5),
+        }
+    }
+}
+
+/// How long a heavy call is counted as running when the node does not answer: well past the
+/// request timeout, because the node may keep working after we stop waiting.
+pub const HEAVY_CEILING: Duration = Duration::from_secs(60);
+
 /// Per-network state of the pass-through, held in [`NetworkContext`].
 #[derive(Debug)]
 pub struct Api {
     flights: Flights,
     /// `None` when broadcast is switched off (`BROADCAST_ENABLED=false`).
     broadcast: Option<Arc<Clients>>,
+    heavy: Heavy,
+}
+
+/// The cost limit of heavy calls (SECURITY.md rules 8 and 11).
+struct Heavy {
+    running: Arc<Semaphore>,
+    pending: Arc<Semaphore>,
+    clients: Arc<Clients>,
+    share: HeavyShare,
+    /// Its own client, whose timeout is [`HEAVY_CEILING`], so a call is not abandoned (and its
+    /// slot freed) while the node may still be working on it.
+    esplora: Esplora,
+}
+
+impl std::fmt::Debug for Heavy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Heavy")
+            .field("running", &self.running)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Api {
-    pub fn new(broadcast: bool, max_tracked_clients: usize) -> Self {
+    /// `url` is the network's Esplora endpoint, checked by `Config`.
+    pub fn new(broadcast: bool, limits: &Limits, url: &str) -> Result<Self, Error> {
+        let max_tracked_clients = limits.max_tracked_clients;
+        let share = HeavyShare::of(limits);
         let rate = 1.0 / BROADCAST_EVERY.as_secs_f64();
-        Self {
+        Ok(Self {
             flights: Flights::default(),
             broadcast: broadcast
                 .then(|| Clients::with_rate(rate, BROADCAST_BURST, max_tracked_clients)),
-        }
+            heavy: Heavy {
+                running: Arc::new(Semaphore::new(HEAVY_RUNNING)),
+                pending: Arc::new(Semaphore::new(HEAVY_PENDING)),
+                clients: Clients::with_rate(share.per_sec, share.burst, max_tracked_clients),
+                share,
+                esplora: Esplora::with_limits(url, HEAVY_CEILING, Esplora::DEFAULT_MAX_RESPONSE)?,
+            },
+        })
     }
 }
 
@@ -139,7 +200,7 @@ async fn serve(ctx: &NetworkContext, client: &Client, req: Request) -> Result<Re
         return Ok(res);
     }
     match call {
-        Call::Read(route) => Ok(read(ctx, route).await),
+        Call::Read(route) => Ok(read(ctx, client, route).await),
         Call::Outputs { asof } => {
             let body = read_body(req).await?;
             let positions: Vec<[u32; 3]> = serde_json::from_slice(&body).map_err(|_| {
@@ -157,7 +218,7 @@ async fn serve(ctx: &NetworkContext, client: &Client, req: Request) -> Result<Re
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "at most 300 positions",
             ))?;
-            Ok(read(ctx, Route::OutputsAt { positions, asof }).await)
+            Ok(read(ctx, client, Route::OutputsAt { positions, asof }).await)
         }
         Call::Broadcast => {
             let limiter = ctx.api.broadcast.as_ref().ok_or(ApiError::new(
@@ -200,13 +261,16 @@ fn parse_tx(body: &[u8]) -> Result<Transaction, ApiError> {
     bitcoin::consensus::encode::deserialize_hex(hex).map_err(|_| bad())
 }
 
-async fn read(ctx: &NetworkContext, route: Route) -> Response {
+async fn read(ctx: &NetworkContext, client: &Client, route: Route) -> Response {
     let mut key = String::with_capacity(160);
     route.write_path(&mut key);
     if let Some((body, _)) = route.body() {
         // Only the outputs batch gets here; its body is JSON we wrote ourselves.
         key.push('\n');
         key.push_str(&String::from_utf8_lossy(&body));
+    }
+    if is_heavy(&route) {
+        return heavy(ctx, client, route, key).await;
     }
     let ttl = if is_hot(&route) {
         HOT_TTL
@@ -216,6 +280,79 @@ async fn read(ctx: &NetworkContext, route: Route) -> Response {
     let (answer, source) = ctx.api.flights.run(key, ttl, ctx.esplora.raw(&route)).await;
     respond(&route, answer, source)
 }
+
+/// Routes whose cost on the node grows with the data behind them: an address's whole history
+/// (seconds for a busy one), or a batch of lookups. `?asof=` makes every request a distinct key,
+/// so sharing calls cannot bound them; [`heavy`] does.
+fn is_heavy(route: &Route) -> bool {
+    matches!(
+        route,
+        Route::ScriptStats { .. }
+            | Route::ScriptUtxo { .. }
+            | Route::ScriptTxs { .. }
+            | Route::ScriptTxsChain { .. }
+            | Route::ScriptTxsMempool(_)
+            | Route::ScriptTxsSummary { .. }
+            | Route::TxsOutspends(_)
+            | Route::OutputsAt { .. }
+    )
+}
+
+/// A heavy read. Joining an identical call already running costs nothing. Starting one needs a
+/// place among the network's [`HEAVY_PENDING`] and the client's [`HeavyShare`], or is refused at
+/// once with a "retry" (`503` or `429`); then it waits for one of the [`HEAVY_RUNNING`] slots.
+/// The call runs in its own task, which keeps its places until the node answers or
+/// [`HEAVY_CEILING`] passes, even after every request waiting for it is gone.
+async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String) -> Response {
+    let h = &ctx.api.heavy;
+    let places = if ctx.api.flights.in_flight(&key) {
+        None
+    } else {
+        let Ok(pending) = Arc::clone(&h.pending).try_acquire_owned() else {
+            return Refused {
+                error: HEAVY_BUSY,
+                reason: "heavy_busy",
+            }
+            .into_response();
+        };
+        match h
+            .clients
+            .acquire(client.addr, Held::Request, h.share.pending, 1.0)
+        {
+            Ok(hold) => Some((pending, hold)),
+            Err(r) => {
+                let reason = match r.reason {
+                    "client_rate" => "route_rate",
+                    "client_concurrency" => "route_concurrency",
+                    other => other,
+                };
+                return Refused { reason, ..r }.into_response();
+            }
+        }
+    };
+    let running = Arc::clone(&h.running);
+    let esplora = h.esplora.clone();
+    let call = route.clone();
+    let fetch = async move {
+        // Waiting ends with the request: a timed-out request gives its place back.
+        let Ok(running) = running.acquire_owned().await else {
+            return Err(Error::Unavailable("closed".into()));
+        };
+        let held = (running, places);
+        let task = tokio::spawn(async move {
+            let answer = esplora.raw(&call).await;
+            drop(held);
+            answer
+        });
+        task.await
+            .unwrap_or_else(|_| Err(Error::Unavailable("task ended".into())))
+    };
+    let (answer, source) = ctx.api.flights.run(key, Duration::ZERO, fetch).await;
+    respond(&route, answer, source)
+}
+
+/// The network's heavy calls are all running: retry in a moment.
+const HEAVY_BUSY: ApiError = ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "node busy; retry");
 
 /// Fixed-key answers that every page polls and that cost the node 200–300 ms or more.
 fn is_hot(route: &Route) -> bool {
@@ -738,6 +875,12 @@ impl Flights {
             None => Source::Coalesced,
         };
         (done.answer.clone(), source)
+    }
+
+    /// Whether a call for `key` is running now, so a request for it would join and not call.
+    fn in_flight(&self, key: &str) -> bool {
+        let map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
+        map.get(key).is_some_and(|c| !c.initialized())
     }
 
     fn join(&self, key: &str, ttl: Duration) -> Arc<OnceCell<Done>> {

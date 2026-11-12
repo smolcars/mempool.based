@@ -47,13 +47,13 @@ What each setting changes, and the event catalogue, are in [`LOGGING.md`](LOGGIN
 |---|---|---|
 | `LOG_FORMAT` | `json`, or `text` when stdout is a terminal | `json` or `text` |
 | `LOG_LEVEL` | `info` | Lowest level written: `debug`, `info`, `warn` or `error`. Events below it are not formatted at all |
-| `LOG_REQUESTS` | `all` | Which requests get an `http_request` event: `all`, `failures` (status 400 and above, which includes every refusal) or `off`. A passing `/healthz` is never logged |
+| `LOG_REQUESTS` | `all` | Which requests get an `http_request` event: `all`, `failures` (status 400 and above, which includes every refusal) or `off`. A passing `/healthz` or `/readyz` is never logged |
 | `LOG_CLIENT_ADDR` | `false` | `true` adds the client address, as the rate limiter keys it (IPv4, or an IPv6 /64), to `http_request`. Off by default for privacy; the trade-off is in [`LOGGING.md`](LOGGING.md#why-client-addresses-are-off-by-default) |
 
 
 ## Limits
 
-Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md) rules 6 and 7). Each must be a positive integer. Refusals are small JSON errors: `429` with `Retry-After: 1` when one client is over its share, `503` when the server as a whole is, `413` for a body that is too large and `504` for a request that ran out of time.
+Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md) rules 6 and 7). Each must be a positive integer. The per-client limits below apply to requests a handler answers (`/api`, `/app`, `/healthz`, `/readyz`, under any network prefix); pages and static files have their own fixed per-client limits ([below](#static-files)), so loading the app never uses up the allowance its API calls need. Refusals are small JSON errors: `429` with `Retry-After: 1` when one client is over its share, `503` when the server as a whole is, `413` for a body that is too large and `504` for a request that ran out of time.
 
 | Variable | Default | Protects against |
 |---|---|---|
@@ -61,16 +61,60 @@ Every request passes these before any handler runs ([`SECURITY.md`](SECURITY.md)
 | `REQUEST_TIMEOUT_SECS` | `10` | Slow handlers and slow uploads holding a slot forever. The same value bounds how long a connection may take to send its request headers or sit idle between requests, so half-sent requests (slowloris) and idle keep-alives are closed, and how long a write to the client may make no progress, so a client that stops reading its responses is disconnected |
 | `MAX_CONNECTIONS` | `1024` | Running out of file descriptors. Past it the server stops accepting until a connection closes. Keep it below the process's open-file limit |
 | `MAX_CONCURRENT_REQUESTS` | `256` | Overload. Requests past it are refused at once with `503`, not queued |
-| `CLIENT_MAX_CONNECTIONS` | `32` | One address holding many open connections. Not applied when `TRUSTED_PROXY_HEADER` is set, because every connection then comes from the proxy |
-| `CLIENT_MAX_CONCURRENT_REQUESTS` | `16` | One address occupying many request slots with slow requests |
+| `CLIENT_MAX_CONNECTIONS` | `32` | One address holding many open connections. Not applied to connections from a trusted proxy (`TRUSTED_PROXIES`), which carry many clients |
+| `CLIENT_MAX_CONCURRENT_REQUESTS` | `48` | One address occupying many request slots with slow requests. Derived [below](#per-client-defaults) |
 | `CLIENT_RATE_PER_SEC` | `20` | One address sending a sustained flood. Refilled continuously |
-| `CLIENT_BURST` | `60` | Size of a client's token bucket: how many requests it may send at once. A page load with its assets is about ten |
+| `CLIENT_BURST` | `120` | Size of a client's token bucket: how many requests it may send at once. Derived [below](#per-client-defaults) |
 | `MAX_TRACKED_CLIENTS` | `65536` | The rate limiter's own memory. A client that has been quiet long enough to refill its bucket is forgotten. If more clients than this are active within one refill period (`CLIENT_BURST / CLIENT_RATE_PER_SEC` seconds), new ones get `503` until some go quiet, and clients already tracked are still served |
-| `TRUSTED_PROXY_HEADER` | unset | Where the client address comes from. Unset: the socket peer. Set (for example `X-Real-IP` or `X-Forwarded-For`): the last address in the last instance of that header, falling back to the socket peer when it does not parse. Set it only when every request reaches the server through a proxy that writes the header, and make the server unreachable any other way; otherwise clients choose their own address |
+| `TRUSTED_PROXY_HEADER` | unset | The header a reverse proxy writes the client's address to, for example `X-Real-IP` or `X-Forwarded-For`. Needs `TRUSTED_PROXIES`; setting one without the other stops the server at startup |
+| `TRUSTED_PROXIES` | unset | Comma-separated IP addresses or CIDR prefixes (`127.0.0.1`, `172.16.0.0/12`, `::1`, at most 64, no `/0`) of the proxies allowed to send that header. The header is read only on connections from these addresses; from anyone else it is ignored and the socket address is the client. [How the address is found](#client-addresses) |
 
 Fixed limits: a request head (request line and headers) may be at most 16 KiB. A malformed or oversized request head is refused by the HTTP parser itself with an empty `400` or `431` and the connection is closed; those responses carry no body and so no error JSON or security headers.
 
 Clients are counted by IPv4 address or by IPv6 /64, since one host routinely holds a whole /64. Many users behind one NAT share a single client's limits; raise `CLIENT_RATE_PER_SEC`, `CLIENT_BURST` and `CLIENT_MAX_CONCURRENT_REQUESTS` if that is your audience.
+
+### Client addresses
+
+A header is only as trustworthy as the peer that sent it, so the server reads `TRUSTED_PROXY_HEADER` only on a connection whose socket address is in `TRUSTED_PROXIES`. Every other connection is keyed on its socket address, whatever headers it sends. On a trusted connection:
+
+- Every instance of the header is read as one comma-separated list, in order. Entries are IP addresses, optionally with a port (`203.0.113.9:4711`, `[2001:db8::1]:443`).
+- The list is walked from the right, the end the nearest proxy wrote. Entries that are themselves in `TRUSTED_PROXIES` are skipped; the first other address is the client. Anything to its left was written by the client and is never read. This is what makes a chain of proxies work (a CDN in front of nginx: list both) and a client's own `X-Forwarded-For` harmless, as long as each proxy appends to the header or overwrites it.
+- If every entry is a trusted proxy, the leftmost is the client. If the header is missing, or the walk meets an entry that is not an address, the client is the last trusted address reached: the proxy itself. A misconfigured proxy then shares one allowance among all its clients, which is noticed quickly, and no client can choose another's.
+
+The proxy must overwrite the header or append to it; a proxy that passes the client's own header through unchanged lets clients choose their address. [`DEPLOY.md`](DEPLOY.md#tls-and-the-reverse-proxy) has examples. `RFC 7239` `Forwarded` headers are not parsed.
+
+### Per-client defaults
+
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, frontend at `master` commit `5b4e45b` (2026-11-12):
+
+| Page | Static files | API requests | WebSockets | Most API requests in flight |
+|---|---|---|---|---|
+| Home | 17 | 9 | 1 | 4 |
+| Blocks | 16 | 13 | 0 | 2 |
+| Block | 22 | 6 | 0 | 5 |
+| Transaction | 13 | 4 | 0 | 3 |
+| Address | 15 | 3 | 0 | 2 |
+| Mining, Lightning | 11 | 1 | 0 | 1 |
+
+An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
+
+| Limit | Default | Derivation |
+|---|---|---|
+| `CLIENT_MAX_CONCURRENT_REQUESTS` | `48` | Three cold loads of the heaviest page at the same moment (three browsers behind one NAT, or one restoring tabs), with every API request of each in flight together: 3 × 13 = 39, against a measured peak of 5 per page. Headroom for the page that grows next |
+| `CLIENT_BURST` | `120` | A restored session of eight tabs loading one after another: 8 × 13 = 104 |
+| `CLIENT_RATE_PER_SEC` | `20` | Unchanged: sixty open home pages polling, or a full burst refilled in 6 seconds |
+| `WS_CLIENT_MAX_SOCKETS` | `16` | One socket per open tab; sixteen tabs |
+| Static files, fixed | 400 at once, 100 a second, 96 in flight | Twenty cold loads of the heaviest page (22 files) at once, and three of them with every file in flight together (66) |
+
+`crates/server/tests/cold_load.rs` replays the recorded loads ([`fixtures/cold-load.json`](../fixtures/cold-load.json)) through the real limiter with these defaults, three tabs at once and eight in a row, and fails if any request is refused. **When the frontend changes what a page loads, re-record the fixture** (the script's header says how) and run that test; if it fails, raise the defaults here with the new numbers.
+
+### Static files
+
+Pages and the files under `/assets` are answered from memory or disk with no node work behind them. They have their own per-client limits, fixed: a burst of 400, refilled at 100 a second, and 96 in flight at once, counted separately from the API's. They still pass `MAX_CONCURRENT_REQUESTS`, `MAX_CONNECTIONS`, `CLIENT_MAX_CONNECTIONS` and the timeouts like every request, so a client flooding them is refused with `429` while others are served.
+
+### Address and batch routes
+
+The address and scripthash routes, `/txs/outspends` and `POST /block-heights/txs/outs` can cost the node seconds each ([`API.md`](API.md#protection-for-the-node)). Per network, fixed: four run at once and eight more may wait for a slot; past those twelve the answer is `503` `node busy; retry` at once. Per client, a share of its general limits, so raising those for a NAT raises this too: `CLIENT_MAX_CONCURRENT_REQUESTS / 12` running or waiting (4 by default: two address pages at once), and `CLIENT_BURST / 4` started at once then `CLIENT_RATE_PER_SEC / 10` a second (30, then 2: an address page costs two). Past those, `429`. Both refusals carry `Retry-After: 1`. A call counts as running until the node has answered or 60 seconds have passed, even when the request that started it has timed out; a request still waiting gives its place back when it times out.
 
 ### Block summaries
 
@@ -97,7 +141,7 @@ Bounds on `/app/ws` ([`SECURITY.md`](SECURITY.md) rule 9; the protocol and its c
 | Variable | Default | Protects against |
 |---|---|---|
 | `WS_MAX_SOCKETS` | `1024` | Memory and file descriptors held by open sockets, every network together. Past it an upgrade gets `503`. At most 1,048,576 |
-| `WS_CLIENT_MAX_SOCKETS` | `8` | One address holding many sockets. Past it an upgrade gets `429`. Applies behind a trusted proxy too, keyed on the proxy header's address |
+| `WS_CLIENT_MAX_SOCKETS` | `16` | One address holding many sockets. Past it an upgrade gets `429`. Keyed on the client address as above, behind a trusted proxy too. Only this site's pages may open sockets, so another site cannot use up its visitors' allowance ([`WS.md`](WS.md#connection-rules)) |
 | `WS_MAX_MESSAGE_BYTES` | `1024` | Large messages from a client. Checked against the frame header before the payload is read, and against a fragmented message's total. Over it: close `1009`. At most 1,048,576 |
 | `WS_MESSAGES_PER_SEC` | `10` | A client flooding the server with frames, pings and pongs included. The same number is the burst allowed. Over it: close `4002` |
 | `WS_MAX_SUBSCRIPTIONS` | `8` | One socket subscribing to many topics. Over it: close `4001` |

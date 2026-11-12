@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use super::frame::{self, Incoming};
 use super::*;
 use crate::config::Network;
+use axum::http::header::{HOST, ORIGIN};
 
 /// A client frame as it goes on the wire: masked with a fixed key.
 fn masked(b0: u8, payload: &[u8]) -> Vec<u8> {
@@ -479,4 +480,51 @@ fn appended_changes_follow_the_state_until_folded_into_a_new_one() {
     assert_eq!(b_rx.try_recv().unwrap(), Frame::text(b"s2"));
     assert!(b_rx.try_recv().is_err());
     assert_eq!(hub.subscribers(topic), 2);
+}
+
+#[test]
+fn only_this_site_may_open_a_socket_from_a_browser() {
+    let check = |origins: &[&str], host: Option<&str>| {
+        let mut h = HeaderMap::new();
+        for o in origins {
+            h.append(ORIGIN, HeaderValue::from_str(o).unwrap());
+        }
+        if let Some(host) = host {
+            h.insert(HOST, HeaderValue::from_str(host).unwrap());
+        }
+        same_origin(&h).is_ok()
+    };
+    // No Origin: not a browser.
+    assert!(check(&[], Some("explorer.example")));
+    assert!(check(&[], None));
+    for (origin, host) in [
+        ("https://explorer.example", "explorer.example"),
+        ("https://Explorer.Example", "explorer.example"),
+        ("https://explorer.example", "explorer.example:443"),
+        ("https://explorer.example:8443", "explorer.example:8443"),
+        ("http://127.0.0.1:5173", "127.0.0.1:5173"),
+        ("http://[::1]:8080", "[::1]:8080"),
+        ("http://other-name.example", "other-name.example"),
+    ] {
+        assert!(check(&[origin], Some(host)), "{origin} {host}");
+    }
+    for (origins, host) in [
+        (&["https://evil.example"][..], Some("explorer.example")),
+        (
+            &["https://explorer.example.evil.example"],
+            Some("explorer.example"),
+        ),
+        (&["https://explorer.example:8443"], Some("explorer.example")),
+        (&["http://127.0.0.1:5173"], Some("127.0.0.1:8080")),
+        (&["null"], Some("explorer.example")),
+        (&["ws://explorer.example"], Some("explorer.example")),
+        (&["https://"], Some("")),
+        (&["https://explorer.example"], None),
+        (
+            &["https://explorer.example", "https://explorer.example"],
+            Some("explorer.example"),
+        ),
+    ] {
+        assert!(!check(origins, host), "{origins:?} {host:?}");
+    }
 }

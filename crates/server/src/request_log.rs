@@ -18,7 +18,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use logging::events::HttpRequest;
 
-use crate::config::{Config, Network, RequestLog};
+use crate::config::{Config, Network, RequestLog, TrustedProxy};
 use crate::esplora::{ApiOutcome, Source};
 use crate::limits::{Refused, client_addr};
 
@@ -32,7 +32,7 @@ const FRONTEND: &str = "frontend";
 pub struct RequestLogger {
     mode: RequestLog,
     client_addr: bool,
-    trusted_proxy_header: Option<HeaderName>,
+    trusted_proxy: Option<TrustedProxy>,
 }
 
 impl RequestLogger {
@@ -40,7 +40,7 @@ impl RequestLogger {
         Self {
             mode: config.log_requests,
             client_addr: config.log_client_addr,
-            trusted_proxy_header: config.limits.trusted_proxy_header.clone(),
+            trusted_proxy: config.limits.trusted_proxy.clone(),
         }
     }
 }
@@ -57,7 +57,7 @@ pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: N
         .client_addr
         .then(|| {
             let peer = req.extensions().get::<ConnectInfo<SocketAddr>>()?.0;
-            let addr = client_addr(req.headers(), peer.ip(), log.trusted_proxy_header.as_ref());
+            let addr = client_addr(req.headers(), peer.ip(), log.trusted_proxy.as_ref());
             Some(addr.to_string())
         })
         .flatten();
@@ -74,7 +74,7 @@ pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: N
         RequestLog::Off => false,
     };
     // Health checks poll constantly; only a failing one is news.
-    if !wanted || (route == "/healthz" && !failed) {
+    if !wanted || (matches!(route, "/healthz" | "/readyz") && !failed) {
         return res;
     }
     let outcome = res.extensions().get::<ApiOutcome>().copied();
@@ -121,7 +121,10 @@ fn request_id() -> String {
 /// The network a request was for. The raw path is only matched against fixed prefixes, so
 /// nothing from it reaches the log.
 fn network(path: &str, route: &str) -> Option<&'static str> {
-    if route == "/healthz" || path.starts_with("/assets/") || route.starts_with("/{network}") {
+    if matches!(route, "/healthz" | "/readyz")
+        || path.starts_with("/assets/")
+        || route.starts_with("/{network}")
+    {
         return None;
     }
     let under = |prefix: &str| {

@@ -127,6 +127,8 @@ async fn start_with(
         ("REGTEST_ESPLORA_URL", "http://127.0.0.1:1".to_owned()),
         ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1".to_owned()),
         ("TRUSTED_PROXY_HEADER", "X-Real-IP".to_owned()),
+        // The test connects from loopback and names its client in the header.
+        ("TRUSTED_PROXIES", "127.0.0.1".to_owned()),
     ]
     .into_iter()
     .chain(extra.iter().cloned())

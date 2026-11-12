@@ -16,6 +16,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::Request;
 use axum::routing::{get, post};
+use mempool_based::config::{IpNet, TrustedProxy};
 use mempool_based::{App, Config, IMMUTABLE, Limits, NetworkContext, SECURITY_HEADERS};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -455,7 +456,10 @@ async fn a_client_over_its_rate_is_refused_while_others_are_served() {
     let a = "192.0.2.1:1000";
     assert_eq!(from(&app, a, "/healthz").await, 200);
     assert_eq!(from(&app, a, "/api/net").await, 200);
-    assert_eq!(from(&app, a, "/").await, 429);
+    assert_eq!(from(&app, a, "/signet/api/net").await, 429);
+    // Pages and static files do not spend the API allowance, so the app still loads.
+    assert_eq!(from(&app, a, "/").await, 200);
+    assert_eq!(from(&app, a, "/assets/app.js").await, 200);
     // Another port is the same client; another /64 is not.
     assert_eq!(from(&app, "192.0.2.1:2000", "/healthz").await, 429);
     assert_eq!(from(&app, "192.0.2.2:1000", "/healthz").await, 200);
@@ -476,8 +480,45 @@ async fn a_client_over_its_rate_is_refused_while_others_are_served() {
     assert_eq!(r.header("retry-after"), Some("1"));
 }
 
+fn trusted(proxies: &str) -> Option<TrustedProxy> {
+    Some(TrustedProxy {
+        header: "x-real-ip".parse().unwrap(),
+        proxies: proxies
+            .split(',')
+            .map(|p| IpNet::parse(p).unwrap())
+            .collect(),
+    })
+}
+
 #[tokio::test]
-async fn proxy_header_is_honoured_only_when_trusted() {
+async fn static_files_have_their_own_bounded_allowance() {
+    use mempool_based::limits::{STATIC_BURST, STATIC_CONCURRENCY};
+    let app = App::with_routes(&config(Limits::default()), probes());
+    let a = "192.0.2.1:1";
+    // A burst of static files bigger than the API's whole allowance is served...
+    for i in 0..STATIC_BURST {
+        let path = if i % 2 == 0 {
+            "/assets/app.js"
+        } else {
+            "/signet/"
+        };
+        assert_eq!(from(&app, a, path).await, 200, "static request {i}");
+    }
+    // ...and leaves the API allowance untouched.
+    assert_eq!(from(&app, a, "/api/net").await, 200);
+    // But it is not unlimited: past its own burst (refilled at 100 a second meanwhile), a flood is
+    // refused while others are served.
+    let mut sent = 0;
+    while from(&app, a, "/assets/app.js").await == 200 {
+        sent += 1;
+        assert!(sent < 10_000, "a static flood was never refused");
+    }
+    assert_eq!(from(&app, "192.0.2.2:1", "/assets/app.js").await, 200);
+    assert!(STATIC_CONCURRENCY < Limits::default().max_requests as u32);
+}
+
+#[tokio::test]
+async fn proxy_header_is_honoured_only_from_a_trusted_proxy() {
     let tight = Limits {
         client_rate_per_sec: 1,
         client_burst: 1,
@@ -493,18 +534,65 @@ async fn proxy_header_is_honoured_only_when_trusted() {
         .status
     };
 
+    // Not configured: the header is ignored, every request is the socket peer's.
     let untrusted = start(tight.clone()).await;
     assert_eq!(as_client(untrusted.clone(), "192.0.2.1").await, 200);
     assert_eq!(as_client(untrusted, "192.0.2.2").await, 429);
 
-    let trusted = start(Limits {
-        trusted_proxy_header: Some("x-real-ip".parse().unwrap()),
+    // Configured, but the peer (127.0.0.1) is not a named proxy: the tester's spoofing run, which
+    // got past every per-client limit before. Still ignored.
+    let elsewhere = start(Limits {
+        trusted_proxy: trusted("10.0.0.1,fd00::/8"),
+        ..tight.clone()
+    })
+    .await;
+    assert_eq!(as_client(elsewhere.clone(), "192.0.2.1").await, 200);
+    assert_eq!(as_client(elsewhere, "192.0.2.2").await, 429);
+
+    // From a named proxy: one bucket per address it names.
+    let proxied = start(Limits {
+        trusted_proxy: trusted("127.0.0.0/8"),
         ..tight
     })
     .await;
-    assert_eq!(as_client(trusted.clone(), "192.0.2.1").await, 200);
-    assert_eq!(as_client(trusted.clone(), "192.0.2.2").await, 200);
-    assert_eq!(as_client(trusted, "192.0.2.1").await, 429);
+    assert_eq!(as_client(proxied.clone(), "192.0.2.1").await, 200);
+    assert_eq!(as_client(proxied.clone(), "192.0.2.2").await, 200);
+    assert_eq!(as_client(proxied, "192.0.2.1").await, 429);
+}
+
+#[tokio::test]
+async fn the_connection_cap_is_lifted_only_for_a_trusted_proxy() {
+    let hold_three = |addr: String| async move {
+        let mut held = Vec::new();
+        for _ in 0..2 {
+            held.push(TcpStream::connect(&addr).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut third = TcpStream::connect(&addr).await.unwrap();
+        let _ = third
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+            .await;
+        let mut buf = Vec::new();
+        let _ = third.read_to_end(&mut buf).await;
+        !buf.is_empty()
+    };
+    let capped = start(Limits {
+        client_connections: 2,
+        trusted_proxy: trusted("10.0.0.1"),
+        ..limits()
+    })
+    .await;
+    assert!(
+        !hold_three(capped).await,
+        "a header setting must not lift the cap for others"
+    );
+    let proxy = start(Limits {
+        client_connections: 2,
+        trusted_proxy: trusted("127.0.0.1"),
+        ..limits()
+    })
+    .await;
+    assert!(hold_three(proxy).await, "the proxy carries many clients");
 }
 
 #[tokio::test]
@@ -623,4 +711,45 @@ async fn path_traversal_is_refused() {
             "{path} leaked a file outside the web dir"
         );
     }
+}
+
+/// Raw bytes in, raw bytes out: for requests no well-behaved client would send.
+async fn raw(addr: &str, bytes: &[u8]) -> String {
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let _ = stream.write_all(bytes).await;
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut out)).await;
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[tokio::test]
+async fn hostile_framing_from_the_acceptance_check() {
+    let addr = start(limits()).await;
+    let big = "a".repeat(17_000);
+    let many: String = (0..200).map(|i| format!("X-H{i}: a\r\n")).collect();
+    // Each answer's status line and what the body must contain. One response each: nothing
+    // pipelined behind a framing trick is ever answered.
+    let cases: Vec<(&str, Vec<u8>, &str, &str)> = vec![
+        ("17 KiB header", format!("GET /api/net HTTP/1.1\r\nHost: t\r\nX-Big: {big}\r\n\r\n").into_bytes(), "431 Request Header Fields Too Large", ""),
+        ("200 headers", format!("GET /api/net HTTP/1.1\r\nHost: t\r\n{many}\r\n").into_bytes(), "431 Request Header Fields Too Large", ""),
+        ("CRLF in the path", b"GET /api/net\r\nX-Injected: 1 HTTP/1.1\r\nHost: t\r\n\r\n".to_vec(), "400 Bad Request", ""),
+        ("HTTP/0.9", b"GET /api/net\r\n\r\n".to_vec(), "400 Bad Request", ""),
+        ("garbage", b"\x00\x01\x02\xff\xfe garbage\r\n\r\n".to_vec(), "400 Bad Request", ""),
+        ("two Content-Lengths", b"POST /api/echo HTTP/1.1\r\nHost: t\r\nContent-Length: 4\r\nContent-Length: 40\r\nConnection: close\r\n\r\nabcd".to_vec(), "400 Bad Request", ""),
+        ("TE and CL", b"POST /api/echo HTTP/1.1\r\nHost: t\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\nGET /api/net HTTP/1.1\r\nHost: t\r\n\r\n".to_vec(), "200 OK", "\r\n\r\n0"),
+        ("absolute form", b"GET http://evil.example/api/net HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n".to_vec(), "200 OK", "mainnet"),
+        ("TRACE", b"TRACE /api/net HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n".to_vec(), "405 Method Not Allowed", "method not allowed"),
+        ("multi-range", b"GET /index.html HTTP/1.1\r\nHost: t\r\nRange: bytes=0-10,20-30,0-\r\nConnection: close\r\n\r\n".to_vec(), "416 Range Not Satisfiable", ""),
+        ("dotfile", b"GET /.env HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n".to_vec(), "200 OK", "app-shell"),
+    ];
+    for (name, bytes, status, body) in cases {
+        let out = raw(&addr, &bytes).await;
+        assert!(
+            out.starts_with(&format!("HTTP/1.1 {status}\r\n")),
+            "{name}: {out}"
+        );
+        assert!(out.contains(body), "{name}: {out}");
+        assert_eq!(out.matches("HTTP/1.1 ").count(), 1, "{name}: {out}");
+    }
+    assert_eq!(get_path(&addr, "/healthz").await.status, 200);
 }

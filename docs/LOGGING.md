@@ -35,7 +35,7 @@ The server writes structured logs to stdout. Every line is one **event**: a decl
 
 ## Settings
 
-`LOG_FORMAT`, `LOG_LEVEL`, `LOG_REQUESTS` and `LOG_CLIENT_ADDR` are in [`CONFIG.md`](CONFIG.md#logging). A passing `/healthz` is never logged, whatever `LOG_REQUESTS` says, so health checks do not flood the log.
+`LOG_FORMAT`, `LOG_LEVEL`, `LOG_REQUESTS` and `LOG_CLIENT_ADDR` are in [`CONFIG.md`](CONFIG.md#logging). A passing `/healthz` or `/readyz` is never logged, whatever `LOG_REQUESTS` says, so health checks do not flood the log.
 
 ### Why client addresses are off by default
 
@@ -58,7 +58,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
+| `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `trusted_proxies` (as prefixes) and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
 | `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`) |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
@@ -79,8 +79,8 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 - `route` is the matched route template (`/signet/api/{*rest}`, `/healthz`), or `frontend` for pages and static files.
 - `network` is left out for `/healthz`, `/assets` and unknown network prefixes.
 - `duration_ms` runs until the response head is ready; streaming the body is not included. `bytes` is the body size when known up front.
-- `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), or for a WebSocket upgrade `client_sockets` (`WS_CLIENT_MAX_SOCKETS`) and `server_sockets` (`WS_MAX_SOCKETS`). A `413` is an oversized body.
-- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)), for the block summary routes and for the mining routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`, `mining_pools`, `mining_hashrate`, …), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache or a mining answer already computed, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, or `busy` when the node's RPC queue was full).
+- `refused` names the limit that said no: `client_rate`, `client_concurrency`, `client_table_full`, `server_busy`, `timeout`, `route_rate` (a route's own stricter limit, such as broadcast or one client's uncached block summaries), `summary_busy` (the network's block summary queue is full), `heavy_busy` (the network's address and batch calls are all running) and `route_concurrency` (one client's are), or for a WebSocket upgrade `origin` (another site's page, [`WS.md`](WS.md#connection-rules)), `client_sockets` (`WS_CLIENT_MAX_SOCKETS`) and `server_sockets` (`WS_MAX_SOCKETS`). A `413` is an oversized body.
+- `endpoint`, `source`, `upstream_ms` and `upstream_error` are set for `/api` requests that reached the pass-through ([`API.md`](API.md)), for the block summary routes and for the mining routes: the named route (`tx_status`, `block_summary`, `block_summary_txs`, `block_summaries`, `mining_pools`, `mining_hashrate`, …), where the answer came from (`upstream`, `coalesced` onto another request's call, `hot` from the short cache, `cached` from the block summary cache or a mining answer already computed, or `stored` from the block table), this request's own upstream time, and why the upstream call got no answer (`timeout`, `unavailable`, `response_too_big`, `decode`, `busy` when the node's RPC queue was full, or `auth` when the node refused our RPC credentials; the client sees only `upstream unavailable`).
 - `client` only with `LOG_CLIENT_ADDR=true`.
 
 ### Node clients
@@ -93,6 +93,9 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | `electrum_resynced` | info | `network` | Updates may have been missed (reconnect, or a tip jump too far to follow) |
 | `electrum_lines_skipped` | warn | `network`, `total` | The node sent lines that are not valid JSON-RPC; at a total of 1, 2, 4, 8… |
 | `chain_reorg` | warn | `network`, `fork_height` | Blocks above `fork_height` left the best chain |
+| `rpc_auth_failed` | error | `network` | The node refused `{NET}_RPC_USER` and `{NET}_RPC_PASSWORD`. Checked at startup and every 30 s ([`DEPLOY.md`](DEPLOY.md#health)); written when the refusals start. The server keeps running: fix the credentials. Clients see only `upstream unavailable` |
+| `rpc_unreachable` | warn | `network`, `error`, `failures` | The RPC check got no answer (`timeout`, `unavailable`, `busy`, `decode`): at the 1st, 2nd, 4th, 8th… check in a row. Look at the network, or whether the node is up |
+| `rpc_reachable` | info | `network`, `height`, `failures` | The RPC check got an answer with our credentials: the first at startup, and the first after failures or a refused password |
 
 `crates/server/src/report.rs` produces these from the client's `health()` watch and event stream; call `report_electrum` once where each network's Electrum client is created. The Esplora and RPC clients return their failures as error values (`rpc::Error::Busy` is the node's back-pressure); the code that calls them owns the event, summarised by rule 3.
 
@@ -103,6 +106,7 @@ The protocol and its close codes are in [`WS.md`](WS.md).
 | Event | Level | Fields | When |
 |---|---|---|---|
 | `ws_fanout` | info | `network`, `topic`, `kind`, `subscribers`, `open`, `bytes`, `dropped_slow`, `duration_ms`, `fanout_ms` | One message went to every subscriber of a `blocks` topic: once per new block, block summary, reorg or resync per network, whatever the client count. The mempool topics, which send every few seconds, are summed in `mempool_summary` instead. `duration_ms` runs from the node's notification to the last subscriber's queue (the block fetch included); `fanout_ms` is the queueing part. `open` counts sockets on every network |
+| `ws_origin_refused` | warn | `network`, `origin`, `host`, `total` | Upgrades refused because their `Origin` is not this site, every network together: at a total of 1, 2, 4, 8…, with the latest refused `Origin` and `Host`, each cut to 100 characters. A steady stream means another site embeds ours; refusals of our own pages mean the proxy rewrites `Host` |
 | `ws_clients_dropped` | warn | `network`, `reason`, `total` | The server closed clients for breaking a limit: `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`, `protocol_error`, `binary` or `invalid_utf8`. At a total of 1, 2, 4, 8… per reason and network |
 | `ws_closed` | debug | `network`, `code`, `reason`, `duration_ms`, `open` | Every socket close: its close code (1006 when the connection dropped without one), the reason label (those above, or `client_closed`, `shutdown`, `connection_lost`), how long it was open, and the sockets still open |
 | `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora within 3 seconds of retrying, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
@@ -141,7 +145,8 @@ How the tracker and projected blocks run in the server is in [`MEMPOOL.md`](MEMP
 | Event | Level | Fields | When |
 |---|---|---|---|
 | `difficulty_computed` | info | `network`, `height`, `next_retarget_height`, `difficulty_change`, `duration_ms` | The difficulty-adjustment answer ([`API.md`](API.md#difficulty-adjustment)) was recomputed for a new tip: once per block or reorg per network. `difficulty_change` is the expected change in percent at that moment; `duration_ms` is the node fetches |
-| `difficulty_refresh_failed` | warn | `network`, `height`, `error`, `failures` | It could not be recomputed for the tip at `height`, so the last answer is still served: at the 1st, 2nd, 4th, 8th… failure in a row. `error` is `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `tip_moved` (Esplora answered for another tip than the one being computed: a block or reorg in between; retried), `wrong_height` or `invalid_bits`. The next `difficulty_computed` is the recovery |
+| `difficulty_refresh_failed` | warn | `network`, `height`, `error`, `failures` | It could not be recomputed for the tip at `height`, so the last answer is still served: at the 1st, 2nd, 4th, 8th… failure in a row. `error` is `timeout`, `unavailable`, `response_too_big`, `decode`, `not_found`, `wrong_height` or `invalid_bits`. The next `difficulty_computed` is the recovery |
+| `difficulty_refresh_retried` | debug | `network`, `height`, `retries` | Esplora answered for another tip than the one being computed (a block or reorg in between), so the refresh starts again: expected during a burst of blocks, so not a failure. At the 1st, 2nd, 4th, 8th… in a row |
 
 ### Store and block table
 

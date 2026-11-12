@@ -85,7 +85,11 @@ fn started(config: &Config, log: logging::Settings) {
         client_rate_per_sec: l.client_rate_per_sec,
         client_burst: l.client_burst,
         max_tracked_clients: l.max_tracked_clients,
-        trusted_proxy_header: l.trusted_proxy_header.as_ref().map(|h| h.as_str()),
+        trusted_proxy_header: l.trusted_proxy.as_ref().map(|t| t.header.as_str()),
+        trusted_proxies: l
+            .trusted_proxy
+            .as_ref()
+            .map(|t| t.proxies.iter().map(ToString::to_string).collect()),
         ws_max_sockets: config.ws.max_sockets,
         ws_client_max_sockets: config.ws.client_max_sockets,
         ws_max_message_bytes: config.ws.max_message_bytes,
