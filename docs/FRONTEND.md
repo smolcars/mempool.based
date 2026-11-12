@@ -185,6 +185,7 @@ const status = useLiveStatus(); // "connecting" | "live" | "reconnecting" | "off
 ```
 
 - **Load over HTTP, then keep up over the socket.** The socket only reports changes. Fetch the state with `fetchApi`, apply messages on top, and treat a gap, a `resync` message that disagrees and the `resync` handler the same way: fetch again. Messages that arrive while that fetch is in flight are held and replayed on its answer (`pages/home/feeds.ts`, `createBlockFeed`).
+- **The mempool topics** exist now ([`WS.md`](WS.md#mempool-topics)): `mempool` for the mempool panel and bar, `projected` for the projected tiles, `transactions` for the latest transactions, and `projected-txs:N` for one projected block's grid. The first three are JSON and each message is the whole state, so a page keeps the last one. `projected-txs:N` is binary: write its parser in `lib/` from the tables in `WS.md`, apply deltas only when `prev` matches, and resubscribe when it does not. A page holds at most two of these at once. On a server with the mempool switched off each topic sends `{"type":"off"}` once: show that the mempool is not available, without polling. Rates are in sat per 1,000 vB.
 - **Say when it is not live.** While `status()` is not `live`, poll what the socket would have sent, no faster than every few seconds, and tell the reader (the home page's indicator).
 - In tests, stub the global `WebSocket` with `FakeSocket` from `lib/fakes.ts` and play the server: `FakeSocket.last().hello()`, `.receive({...})`, `.drop(1006)`.
 

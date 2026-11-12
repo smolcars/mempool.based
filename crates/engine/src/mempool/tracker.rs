@@ -212,6 +212,8 @@ struct Shared {
     deltas: broadcast::Sender<Arc<Delta>>,
     events: broadcast::Sender<Event>,
     wake: Notify,
+    /// The node's last `getmempoolinfo` answer.
+    info: std::sync::Mutex<Option<MempoolInfo>>,
 }
 
 /// A handle on a running tracker. Cheap to clone.
@@ -246,6 +248,7 @@ impl Tracker {
             deltas: broadcast::channel(config.subscriber_queue.max(1)).0,
             events: broadcast::channel(256).0,
             wake: Notify::new(),
+            info: std::sync::Mutex::new(None),
         });
         let poller = Poller {
             source: Arc::new(source),
@@ -291,6 +294,16 @@ impl Tracker {
         self.shared.events.subscribe()
     }
 
+    /// The node's last `getmempoolinfo` answer (its minimum accepted fee rate, memory use, …),
+    /// read on every probe, so at most one cycle old. `None` before the first.
+    pub fn node_info(&self) -> Option<MempoolInfo> {
+        self.shared
+            .info
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// A hint that the chain tip moved (from Electrum, say): poll now instead of at the next
     /// gap. Without hints the tracker still sees the new tip on its next cycle.
     pub fn tip_changed(&self) {
@@ -332,7 +345,15 @@ impl<S: Source> Poller<S> {
             };
             let started = Instant::now();
             let bytes = self.source.bytes();
-            let result = match self.source.mempool_info().await {
+            let info = self.source.mempool_info().await;
+            if let Ok(i) = &info {
+                *self
+                    .shared
+                    .info
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(i.clone());
+            }
+            let result = match info {
                 Ok(info)
                     if !forced
                         && last_full.is_some_and(|t| t.elapsed() < self.config.heartbeat)

@@ -173,6 +173,7 @@ impl App {
                     tokio::spawn(summary::worker(Arc::clone(&ctx)));
                     tokio::spawn(difficulty::run(Arc::clone(&ctx), ctx.electrum.events()));
                     blocks::spawn(&ctx, config.backfill);
+                    ws::mempool::start(&ctx);
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()

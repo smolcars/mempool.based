@@ -91,6 +91,9 @@ pub struct NetworkConfig {
     pub esplora: EsploraEndpoint,
     /// Electrum TCP address as `host:port`.
     pub electrum: String,
+    /// Whether the mempool tracker and projected blocks run (`{NET}_MEMPOOL_ENABLED`). They poll
+    /// the node about once a second.
+    pub mempool: bool,
 }
 
 /// Bounds on what clients can make the server do (SECURITY.md rules 6 and 7).
@@ -159,6 +162,12 @@ pub struct WsLimits {
     pub max_subscriptions: usize,
     pub send_queue: usize,
     pub idle_timeout: Duration,
+    /// Projected blocks' transaction topics one socket may hold at once.
+    pub max_block_subscriptions: usize,
+    /// Least time between two messages of one mempool topic.
+    pub mempool_interval: Duration,
+    /// Transactions in the `transactions` topic's list.
+    pub latest_txs: usize,
 }
 
 impl Default for WsLimits {
@@ -171,6 +180,9 @@ impl Default for WsLimits {
             max_subscriptions: 8,
             send_queue: 64,
             idle_timeout: Duration::from_secs(60),
+            max_block_subscriptions: 2,
+            mempool_interval: Duration::from_secs(2),
+            latest_txs: 10,
         }
     }
 }
@@ -310,7 +322,23 @@ impl Config {
                 "WS_IDLE_TIMEOUT_SECS",
                 w.idle_timeout.as_secs(),
             )?),
+            max_block_subscriptions: positive(
+                &var,
+                "WS_MAX_BLOCK_SUBSCRIPTIONS",
+                w.max_block_subscriptions,
+            )?,
+            mempool_interval: Duration::from_millis(positive(
+                &var,
+                "WS_MEMPOOL_INTERVAL_MS",
+                u64::try_from(w.mempool_interval.as_millis()).unwrap_or(u64::MAX),
+            )?),
+            latest_txs: positive(&var, "WS_LATEST_TXS", w.latest_txs)?,
         };
+        if !(100..=60_000).contains(&ws.mempool_interval.as_millis()) || ws.latest_txs > 100 {
+            return Err(
+                "WS_MEMPOOL_INTERVAL_MS must be 100 to 60000 and WS_LATEST_TXS at most 100".into(),
+            );
+        }
         if ws.max_sockets > 1 << 20 || ws.send_queue > 1 << 16 || ws.max_message_bytes > 1 << 20 {
             return Err(
                 "WS_MAX_SOCKETS must be at most 1048576, WS_SEND_QUEUE at most 65536 \
@@ -424,6 +452,11 @@ fn network_config(
     if !matches!(host_port(&electrum), Some((_, Some(_)))) {
         return Err(format!("{p}_ELECTRUM_ADDR must be host:port"));
     }
+    let mempool = match var(&format!("{p}_MEMPOOL_ENABLED")).as_deref() {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(_) => return Err(format!("{p}_MEMPOOL_ENABLED must be true or false")),
+    };
 
     Ok(Some(NetworkConfig {
         network,
@@ -435,6 +468,7 @@ fn network_config(
         },
         esplora,
         electrum,
+        mempool,
     }))
 }
 
@@ -542,6 +576,13 @@ mod tests {
             n.esplora,
             EsploraEndpoint::Http("http://node.example:3002".into())
         );
+        assert!(n.mempool, "the mempool engine is on by default");
+        let mut v = signet();
+        v.push(("SIGNET_MEMPOOL_ENABLED", "false"));
+        assert!(!parse(&v).unwrap().networks[0].mempool);
+        v.pop();
+        v.push(("SIGNET_MEMPOOL_ENABLED", "off"));
+        assert!(parse(&v).unwrap_err().contains("SIGNET_MEMPOOL_ENABLED"));
     }
 
     #[test]
@@ -653,6 +694,28 @@ mod tests {
             (3, Duration::from_secs(2))
         );
         assert!(parse(&[("WS_MAX_SUBSCRIPTIONS", "0")]).is_err());
+        let c = parse(&[
+            ("WS_MAX_BLOCK_SUBSCRIPTIONS", "1"),
+            ("WS_MEMPOOL_INTERVAL_MS", "500"),
+            ("WS_LATEST_TXS", "25"),
+        ])
+        .unwrap();
+        assert_eq!(
+            (
+                c.ws.max_block_subscriptions,
+                c.ws.mempool_interval,
+                c.ws.latest_txs
+            ),
+            (1, Duration::from_millis(500), 25)
+        );
+        for (k, bad) in [
+            ("WS_MEMPOOL_INTERVAL_MS", "99"),
+            ("WS_MEMPOOL_INTERVAL_MS", "60001"),
+            ("WS_LATEST_TXS", "101"),
+            ("WS_MAX_BLOCK_SUBSCRIPTIONS", "0"),
+        ] {
+            assert!(parse(&[(k, bad)]).is_err(), "{k}={bad}");
+        }
         assert!(parse(&[("WS_SEND_QUEUE", "99999999")]).is_err());
         assert_eq!(parse(&[]).unwrap().limits.summary_cache_bytes, 32 << 20);
         let c = parse(&[("BLOCK_SUMMARY_CACHE_MB", "64")]).unwrap();

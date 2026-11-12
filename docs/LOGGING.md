@@ -59,7 +59,7 @@ Every response carries `X-Request-Id`, a 16-digit hex id that also appears in it
 | Event | Level | Fields | When |
 |---|---|---|---|
 | `server_starting` | info | `version`, `listen_addr`, `web_dir`, `networks`, `log_format`, `log_level`, `log_requests`, `log_client_addr`, `broadcast_enabled`, every limit and backfill setting from [`CONFIG.md`](CONFIG.md) by its variable's name in lower case (`max_body_bytes`, `request_timeout_secs`, `backfill_busy_percent`, …), `trusted_proxy_header` and `data_dir` if set | Configuration parsed, before listening. Never the RPC user or password |
-| `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr` | Once per enabled network at startup |
+| `network_enabled` | info | `network`, `rpc_addr`, `esplora`, `electrum_addr`, `mempool` | Once per enabled network at startup. `mempool` is whether its mempool engine runs (`{NET}_MEMPOOL_ENABLED`) |
 | `no_networks` | warn | none | No network is configured |
 | `web_dir_missing` | warn | `web_dir` | `WEB_DIR` has no `index.html` |
 | `listening` | info | `addr` | The listener is bound; shows the real port when asked for port 0 |
@@ -102,7 +102,7 @@ The protocol and its close codes are in [`WS.md`](WS.md).
 
 | Event | Level | Fields | When |
 |---|---|---|---|
-| `ws_fanout` | info | `network`, `topic`, `kind`, `subscribers`, `open`, `bytes`, `dropped_slow`, `duration_ms`, `fanout_ms` | One message went to every subscriber of a topic: once per new block, block summary, reorg or resync per network, whatever the client count. `duration_ms` runs from the node's notification to the last subscriber's queue (the block fetch included); `fanout_ms` is the queueing part. `open` counts sockets on every network |
+| `ws_fanout` | info | `network`, `topic`, `kind`, `subscribers`, `open`, `bytes`, `dropped_slow`, `duration_ms`, `fanout_ms` | One message went to every subscriber of a `blocks` topic: once per new block, block summary, reorg or resync per network, whatever the client count. The mempool topics, which send every few seconds, are summed in `mempool_summary` instead. `duration_ms` runs from the node's notification to the last subscriber's queue (the block fetch included); `fanout_ms` is the queueing part. `open` counts sockets on every network |
 | `ws_clients_dropped` | warn | `network`, `reason`, `total` | The server closed clients for breaking a limit: `too_slow`, `idle`, `rate`, `too_big`, `bad_message`, `too_many_subscriptions`, `protocol_error`, `binary` or `invalid_utf8`. At a total of 1, 2, 4, 8… per reason and network |
 | `ws_closed` | debug | `network`, `code`, `reason`, `duration_ms`, `open` | Every socket close: its close code (1006 when the connection dropped without one), the reason label (those above, or `client_closed`, `shutdown`, `connection_lost`), how long it was open, and the sockets still open |
 | `block_unavailable` | warn | `network`, `height`, `hash`, `failures` | A new block's JSON could not be fetched from Esplora within 3 seconds of retrying, so subscribers were sent `resync`. At the 1st, 2nd, 4th, 8th… failure in a row |
@@ -119,6 +119,22 @@ The routes are in [`FRONTEND.md`](FRONTEND.md#block-summaries). Each request is 
 | `block_summaries_refused` | warn | `network`, `reason`, `total` | Requests for uncached blocks were refused: `summary_busy` (the network's queue was full) or `route_rate` (one client over its share). At a total of 1, 2, 4, 8… per reason and network |
 
 Opening a socket is an `http_request` with route `/app/ws` (or the network's prefix) and status `101`; a refused upgrade is the same event with `429` or `503` and `refused` naming the cap.
+
+### The live mempool
+
+How the tracker and projected blocks run in the server is in [`MEMPOOL.md`](MEMPOOL.md#in-the-server). A healthy network writes `mempool_synced` once and then one `mempool_summary` a minute; everything else is an abnormal condition.
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `mempool_synced` | info | `network`, `duration_ms`, `txs`, `bytes`, `calls` | The tracker's first complete cycle: the initial sync, failed attempts included in the time |
+| `mempool_summary` | info | `network`, `txs`, `cycles`, `skipped`, `added`, `confirmed`, `replaced`, `evicted`, `vanished`, `node_calls`, `node_bytes`, `cycle_ms_max`, `updates`, `cluster_calls`, `clusters_asked`, `cluster_bytes`, `pack_ms_max`, `stale`, `ws_messages`, `ws_bytes`, `ws_sent_bytes`, `ws_dropped_slow`, `fanout_ms_max` | Once a minute per network while the tracker is not failing: the minute's tracker cycles and their node cost, the projector's updates and cluster requests, and the mempool topics' messages (`ws_bytes` encoded once; `ws_sent_bytes` that times the subscribers). `txs` and `stale` are the state now |
+| `mempool_poll_failed` | warn | `network`, `error`, `failures`, `retry_in_ms` | A tracker cycle failed and nothing was published: at the 1st, 2nd, 4th, 8th… failure in a row. `error` is `busy`, `timeout`, `unavailable`, `response_too_big`, `decode`, `auth` or `failed` |
+| `mempool_recovered` | info | `network`, `failures` | A cycle succeeded after `failures` in a row |
+| `mempool_sequence_regressed` | warn | `network`, `from`, `to` | The node's `mempool_sequence` went backwards: it restarted |
+| `projection_fetch_failed` | warn | `network`, `error`, `failures`, `pending`, `retry_in_ms` | A cluster request failed; the projected blocks are marked stale. At the 1st, 2nd, 4th, 8th… failure in a row. `error` as above |
+| `projection_recovered` | info | `network`, `failures` | The projected blocks are current again after failed requests |
+| `projection_resynced` | warn | `network`, `txs` | The projector fell behind the tracker and rebuilt from a snapshot |
+| `mempool_subscriber_lagged` | warn | `network`, `source`, `missed`, `total` | A reader of the `tracker`'s or the `projector`'s change stream fell behind and started over. At a total of 1, 2, 4, 8… per source and network |
 
 ### Derived data
 

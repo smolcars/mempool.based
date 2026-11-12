@@ -156,6 +156,14 @@ impl Harness {
     }
 
     async fn start_with(ws: WsLimits, request_timeout: Duration) -> Harness {
+        Self::start_vars(ws, request_timeout, &[]).await
+    }
+
+    async fn start_vars(
+        ws: WsLimits,
+        request_timeout: Duration,
+        extra: &[(&str, &str)],
+    ) -> Harness {
         let blocks = Blocks::default();
         let misses = Misses::default();
         let esplora = mock_esplora(Arc::clone(&blocks), Arc::clone(&misses)).await;
@@ -172,6 +180,7 @@ impl Harness {
             ),
         ]
         .into_iter()
+        .chain(extra.iter().map(|(k, v)| (*k, (*v).to_owned())))
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
         let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
@@ -824,4 +833,48 @@ async fn shutdown_closes_sockets_within_the_deadline() {
     // Every socket's task has ended and released its slot, not only the wait.
     assert_eq!(s.sockets.open(), 0);
     assert_eq!(stubborn.close_code().await.0, 1001);
+}
+
+#[tokio::test]
+async fn mempool_topics_poll_a_dead_node_quietly_and_cap_block_subscriptions() {
+    // The RPC port is closed: the tracker retries with backoff and nothing is published.
+    let s = Harness::start(limits()).await;
+    let failed = logged(|v| v["event"] == "mempool_poll_failed" && v["network"] == "regtest").await;
+    assert_eq!(failed["error"], "unavailable");
+    let mut ws = s.connect().await;
+    ws.json().await;
+    ws.send(json!({"op": "subscribe",
+        "topics": ["mempool", "projected", "transactions", "projected-txs:0", "projected-txs:6"]}))
+        .await;
+    ws.send(json!({"op": "ping"})).await;
+    assert_eq!(
+        ws.json().await,
+        json!({"type": "pong"}),
+        "no state before the first cycle"
+    );
+    ws.send(json!({"op": "subscribe", "topics": ["projected-txs:1"]}))
+        .await;
+    assert_eq!(
+        ws.close_code().await,
+        (4001, "too many subscriptions".into())
+    );
+}
+
+#[tokio::test]
+async fn the_mempool_switch_turns_the_topics_off() {
+    let s = Harness::start_vars(
+        limits(),
+        Duration::from_secs(2),
+        &[("REGTEST_MEMPOOL_ENABLED", "false")],
+    )
+    .await;
+    let mut ws = s.connect().await;
+    ws.json().await;
+    ws.send(json!({"op": "subscribe", "topics": ["mempool", "projected-txs:3"]}))
+        .await;
+    assert_eq!(ws.json().await, json!({"topic": "mempool", "type": "off"}));
+    assert_eq!(
+        ws.json().await,
+        json!({"topic": "projected-txs:3", "type": "off"})
+    );
 }
