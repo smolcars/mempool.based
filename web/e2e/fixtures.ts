@@ -82,15 +82,15 @@ export const test = base.extend<{
       const errors: string[] = [];
       const refused = new Set<string>();
       // Each engine words a CSP violation differently, so the page reports every violation itself,
-      // in words the check below knows. In WebKit every
-      // Playwright screenshot adds a style of its own, which the CSP refuses: a style from no file
-      // at all, since the site's own come from its files. That one is named apart.
+      // in words the check below knows. In WebKit every Playwright screenshot adds a style of its
+      // own, which the CSP refuses: one with no file and no element, reported against the document
+      // itself, where a style of the site's names its `<style>` element. That one is named apart.
       await context.addInitScript((playwrightStyle) => {
         document.addEventListener("securitypolicyviolation", (e) => {
           const what = `${e.violatedDirective} ${e.blockedURI}`;
           // oxlint-disable-next-line no-console -- the console is how the test hears of it
           console.error(
-            e.sourceFile === "" && e.violatedDirective === "style-src-elem"
+            e.sourceFile === "" && e.violatedDirective === "style-src-elem" && e.target === document
               ? `${playwrightStyle} ${what}`
               : `Content Security Policy violation: ${what}`,
           );
