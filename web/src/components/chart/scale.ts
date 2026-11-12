@@ -128,6 +128,23 @@ export function formatMoment(t: number): string {
 }
 
 /**
+ * The two ends of a time axis too narrow for ticks (a phone): the first and last moment, each
+ * saying as much as the span needs. Under two days the hours lead, the first with its day:
+ * `12 Nov 11:14` and `20:35`; longer, the days: `9 Nov` and `12 Nov`, with the years when they differ.
+ */
+export function endLabels(from: number, to: number): [string, string] {
+  const a = utc(from);
+  const b = utc(to);
+  const day = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""}`;
+  const hm = (d: Date) => `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+  if (to - from < 2 * 86_400) {
+    return [`${day(a)} ${hm(a)}`, a.getUTCDate() === b.getUTCDate() ? hm(b) : `${day(b)} ${hm(b)}`];
+  }
+  if (a.getUTCFullYear() !== b.getUTCFullYear()) return [formatDay(from), formatDay(to)];
+  return [day(a), day(b)];
+}
+
+/**
  * Ticks for a time axis over `[from, to]` (unix seconds), at most `max` of them, on round UTC
  * moments: hours, days, Mondays, months or years. Labels say no more than the step needs:
  * `14:00` (the day, `3 Nov`, at midnight), `3 Nov`, `Nov` (`Jan 2026` at a year's start), `2026`.

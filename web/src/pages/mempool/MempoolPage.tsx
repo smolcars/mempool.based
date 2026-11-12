@@ -3,7 +3,7 @@
 import { useSearchParams } from "@solidjs/router";
 import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
-import { formatSi } from "../../components/chart/scale";
+import { formatMoment, formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
@@ -213,8 +213,14 @@ function ChartSlot(props: { class: string; children: JSX.Element }) {
  * rather than hatching most of its width; the coverage sentence says so. A period the reader chose
  * keeps its whole width, the part before the records hatched.
  */
+/** The longest run of missing steps drawn across rather than as a break. */
+const BRIDGE_STEPS = 5;
+
 function Charts(props: { h: History; interval: Interval; fit: boolean }) {
   const fitted = () => (props.fit ? dataFrom(props.h) : undefined);
+  // A missing minute or few is bridged, not drawn as a stripe that looks like a fault; a longer
+  // pause in recording still breaks the line, and the table lists only what was stored.
+  const bridged = () => props.h.step * BRIDGE_STEPS;
   const s = createMemo(() => seriesOf(props.h));
   const domain = () => [fitted() ?? props.h.from, props.h.to] as const;
   const hatchFrom = () => (fitted() === undefined ? dataFrom(props.h) : undefined);
@@ -246,10 +252,11 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             <Show when={hatchFrom() !== undefined}>
               <span class="mempool-coverage__swatch" aria-hidden="true" />
             </Show>
-            {text()}
+            {/* Fitted to the records, one line says from when; the period's own account is a
+                choice away. */}
             {fitted() === undefined
-              ? ""
-              : " The charts start there; a period chosen above keeps its whole width."}
+              ? text()
+              : `Everything recorded, since ${formatMoment(props.h.first ?? 0)}.`}
           </p>
         )}
       </Show>
@@ -263,7 +270,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             x={s().x}
             domain={domain()}
             dataFrom={hatchFrom()}
-            gap={props.h.step}
+            gap={bridged()}
             height={300}
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
             series={[{ name: "Total", values: s().vsize, draw: "line", format: formatSize }]}
@@ -293,7 +300,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             x={s().x}
             domain={domain()}
             dataFrom={hatchFrom()}
-            gap={props.h.step}
+            gap={bridged()}
             height={200}
             left={{ format: (v) => `${formatSi(v, "vB")}/s`, zero: true }}
             series={[{ name: "Arrived", values: s().entered, draw: "line", format: rateText }]}

@@ -1,4 +1,14 @@
 @layer components {
+  /* A narrow chart (a phone) reads out only the layers that hold anything at the point; the
+     figures table under it has every one. */
+  .chart {
+    container-type: inline-size;
+  }
+  @container (max-width: 480px) {
+    .chart__value--empty {
+      display: none;
+    }
+  }
   .chart {
     min-width: 0;
   }

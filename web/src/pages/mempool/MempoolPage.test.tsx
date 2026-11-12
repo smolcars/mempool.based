@@ -54,9 +54,12 @@ describe("mempool history page", () => {
     await vi.waitFor(() => expect(requests).toContain("/app/mempool/history/24h"));
   });
 
-  it("draws a missing step as a break, never as a line across it", async () => {
+  it("bridges a few missing minutes, and breaks the line where recording paused longer", async () => {
+    // Three missing minutes (T0+120 to T0+240) are drawn across; ten (T0+420 to T0+960) break it.
     replies["/app/mempool/history/2h"] = answer(
-      history({ points: [point(T0), point(T0 + 60), point(T0 + 300), point(T0 + 360)] }),
+      history({
+        points: [point(T0), point(T0 + 60), point(T0 + 300), point(T0 + 360), point(T0 + 1020)],
+      }),
     );
     const el = mount(() => <MempoolPage />, "/mempool?interval=2h");
     const chart = await drawn(el);
@@ -105,7 +108,7 @@ describe("mempool history page", () => {
     );
     const el = mount(() => <MempoolPage />, "/mempool");
     await drawn(el);
-    expect(text(el)).toContain("The charts start there");
+    expect(text(el)).toContain("Everything recorded, since 12 Nov 2026, 15:00 UTC.");
     expect(text(el)).not.toContain("No data stored");
     // The choice marked is "Recorded", not "24 h", which means the whole day.
     expect(el.querySelector(".mempool-intervals [aria-current=page]")?.textContent).toBe(

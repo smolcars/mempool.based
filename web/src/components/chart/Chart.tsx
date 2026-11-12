@@ -22,6 +22,7 @@ import {
   type Scale,
   scale,
   timeTicks,
+  endLabels,
 } from "./scale";
 import "./Chart.css";
 
@@ -213,6 +214,8 @@ export default function Chart(props: ChartProps) {
     const yOf = (s: ChartSeries) => ((s.axis ?? "left") === "right" && yr ? yr : yl).scale;
     const floor = yl.scale(yl.scale.domain[0]);
     const time = timeTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 84)));
+    // Too narrow for ticks a reader can place (a phone): the axis names its two ends instead.
+    const ends = right - left < 420 ? endLabels(domain[0], domain[1]) : undefined;
     const covered = props.dataFrom;
     return {
       w,
@@ -225,6 +228,7 @@ export default function Chart(props: ChartProps) {
       yr,
       yOf,
       time,
+      ends,
       hatch:
         covered !== undefined && covered > domain[0]
           ? { x: left, w: Math.min(right, sx(covered)) - left }
@@ -232,8 +236,11 @@ export default function Chart(props: ChartProps) {
       layers: stack.map((s) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver)),
       stack,
       bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap, sliver)),
+      // An area only over an axis from zero: filled down to a cut axis, it would overstate a change.
       areas: series().map((s) =>
-        s.draw === "area" ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver) : "",
+        s.draw === "area" && yOf(s).domain[0] === 0
+          ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver)
+          : "",
       ),
       lines: series().map(
         (s) =>
@@ -278,6 +285,7 @@ export default function Chart(props: ChartProps) {
         typeof b.lo[i] !== "number" || typeof b.hi[i] !== "number"
           ? "no data"
           : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}`,
+      empty: false,
     })),
     ...series().map((s) => ({
       kind: `line-${s.tone ?? 1}`,
@@ -286,6 +294,7 @@ export default function Chart(props: ChartProps) {
       name: s.name,
       short: undefined,
       value: reading(s.values[i], s.format),
+      empty: false,
     })),
     ...notes().map((s) => ({
       kind: "note",
@@ -294,6 +303,7 @@ export default function Chart(props: ChartProps) {
       name: s.name,
       short: undefined,
       value: reading(s.values[i], s.format),
+      empty: false,
     })),
     ...layers().map((l, k) => ({
       kind: filled(l) ? "fee" : "layer",
@@ -302,6 +312,7 @@ export default function Chart(props: ChartProps) {
       name: l.name,
       short: l.short,
       value: reading(l.values[i], layerFormat),
+      empty: l.values[i] === 0,
     })),
   ];
   const valueText = () => {
@@ -378,6 +389,7 @@ export default function Chart(props: ChartProps) {
                   "chart__value",
                   {
                     "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
+                    "chart__value--empty": r().empty,
                   },
                 ]}
               >
@@ -534,13 +546,34 @@ export default function Chart(props: ChartProps) {
                 y1={f().bottom}
                 y2={f().bottom}
               />
-              <For each={f().time.ticks}>
-                {(t) => (
-                  <text class="chart__label" x={f().sx(t)} y={f().bottom + 18} text-anchor="middle">
-                    {f().time.label(t)}
-                  </text>
+              <Show
+                when={f().ends}
+                fallback={
+                  <For each={f().time.ticks}>
+                    {(t) => (
+                      <text
+                        class="chart__label"
+                        x={f().sx(t)}
+                        y={f().bottom + 18}
+                        text-anchor="middle"
+                      >
+                        {f().time.label(t)}
+                      </text>
+                    )}
+                  </For>
+                }
+              >
+                {(ends) => (
+                  <>
+                    <text class="chart__label" x={f().left} y={f().bottom + 18} text-anchor="start">
+                      {ends()[0]}
+                    </text>
+                    <text class="chart__label" x={f().right} y={f().bottom + 18} text-anchor="end">
+                      {ends()[1]}
+                    </text>
+                  </>
                 )}
-              </For>
+              </Show>
               <Show when={props.x[index()]}>
                 {(t) => (
                   <g class="chart__cursor">
