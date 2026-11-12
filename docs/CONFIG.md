@@ -101,7 +101,7 @@ The proxy must overwrite the header or append to it; a proxy that passes the cli
 
 ### Per-client defaults
 
-The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 after PF4 merged the small shared chunks into the shell's ([`FRONTEND.md`](FRONTEND.md#chunks)). The same recording of the build before it is in brackets:
+The defaults above are derived from what the frontend really asks for, so an ordinary user is never refused. A cold load of each page in a fresh browser, recorded by [`dev/cold-load/record.mjs`](../dev/cold-load/record.mjs) on the regtest scenario chain, last recorded 2026-11-12 after PF4 merged the small shared chunks into the shell's, with the address page's balance chart ([`FRONTEND.md`](FRONTEND.md#chunks)). The same recording of the build before it is in brackets:
 
 | Page | Static files | API requests | WebSockets | Most API requests in flight |
 |---|---|---|---|---|
@@ -109,7 +109,7 @@ The defaults above are derived from what the frontend really asks for, so an ord
 | Blocks | 10 (20) | 13 | 0 | 2 |
 | Block | 12 (26) | 6 | 1 | 5 |
 | Transaction | 9 (19) | 5 | 1 | 3 |
-| Address | 12 (23) | 5 | 1 | 4 |
+| Address | 16 (27) | 10 | 1 | 4 |
 | Mining | 15 (26) | 6 | 0 | 4 |
 | Lightning | 10 (18) | 2 | 0 | 1 |
 
