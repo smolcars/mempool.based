@@ -49,6 +49,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/RBITCOIN.md`](docs/RBITCOIN.md) | What we rely on from rbitcoin, with measurements |
 | [`docs/MEMPOOL.md`](docs/MEMPOOL.md) | How the mempool is tracked, and why each removal happened |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model and the rules that follow from it |
+| [`docs/WS.md`](docs/WS.md) | The WebSocket protocol at `/app/ws`: messages, topics, limits and close codes |
 | [`docs/CONFIG.md`](docs/CONFIG.md) | Every environment variable, its default and what it protects against |
 | [`docs/CI.md`](docs/CI.md) | CI speed budget and testing layers |
 | [`docs/LOGGING.md`](docs/LOGGING.md) | Structured logging: the event catalogue and its rules |

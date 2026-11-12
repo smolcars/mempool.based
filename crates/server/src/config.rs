@@ -146,6 +146,32 @@ impl RequestLog {
     }
 }
 
+/// Bounds on WebSocket connections (SECURITY.md rule 9). `docs/CONFIG.md` explains each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsLimits {
+    pub max_sockets: usize,
+    pub client_max_sockets: u32,
+    pub max_message_bytes: usize,
+    pub messages_per_sec: u32,
+    pub max_subscriptions: usize,
+    pub send_queue: usize,
+    pub idle_timeout: Duration,
+}
+
+impl Default for WsLimits {
+    fn default() -> Self {
+        Self {
+            max_sockets: 1024,
+            client_max_sockets: 8,
+            max_message_bytes: 1024,
+            messages_per_sec: 10,
+            max_subscriptions: 8,
+            send_queue: 64,
+            idle_timeout: Duration::from_secs(60),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen: SocketAddr,
@@ -153,6 +179,7 @@ pub struct Config {
     /// Enabled networks, in [`Network::ALL`] order.
     pub networks: Vec<NetworkConfig>,
     pub limits: Limits,
+    pub ws: WsLimits,
     /// Whether `POST /api/tx` is served (`BROADCAST_ENABLED`).
     pub broadcast: bool,
     pub log_requests: RequestLog,
@@ -215,6 +242,28 @@ impl Config {
             );
         }
 
+        let w = WsLimits::default();
+        let ws = WsLimits {
+            max_sockets: positive(&var, "WS_MAX_SOCKETS", w.max_sockets)?,
+            client_max_sockets: positive(&var, "WS_CLIENT_MAX_SOCKETS", w.client_max_sockets)?,
+            max_message_bytes: positive(&var, "WS_MAX_MESSAGE_BYTES", w.max_message_bytes)?,
+            messages_per_sec: positive(&var, "WS_MESSAGES_PER_SEC", w.messages_per_sec)?,
+            max_subscriptions: positive(&var, "WS_MAX_SUBSCRIPTIONS", w.max_subscriptions)?,
+            send_queue: positive(&var, "WS_SEND_QUEUE", w.send_queue)?,
+            idle_timeout: Duration::from_secs(positive(
+                &var,
+                "WS_IDLE_TIMEOUT_SECS",
+                w.idle_timeout.as_secs(),
+            )?),
+        };
+        if ws.max_sockets > 1 << 20 || ws.send_queue > 1 << 16 || ws.max_message_bytes > 1 << 20 {
+            return Err(
+                "WS_MAX_SOCKETS must be at most 1048576, WS_SEND_QUEUE at most 65536 \
+                 and WS_MAX_MESSAGE_BYTES at most 1048576"
+                    .into(),
+            );
+        }
+
         let broadcast = match var("BROADCAST_ENABLED").as_deref() {
             None | Some("true") => true,
             Some("false") => false,
@@ -238,6 +287,7 @@ impl Config {
             web_dir,
             networks,
             limits,
+            ws,
             broadcast,
             log_requests,
             log_client_addr,
@@ -536,6 +586,14 @@ mod tests {
         assert!(parse(&[("LOG_REQUESTS", "some")]).is_err());
         assert!(parse(&[("LOG_CLIENT_ADDR", "yes")]).is_err());
         assert!(parse(&[("MAX_CONNECTIONS", "99999999")]).is_err());
+        assert_eq!(parse(&[]).unwrap().ws, WsLimits::default());
+        let c = parse(&[("WS_SEND_QUEUE", "3"), ("WS_IDLE_TIMEOUT_SECS", "2")]).unwrap();
+        assert_eq!(
+            (c.ws.send_queue, c.ws.idle_timeout),
+            (3, Duration::from_secs(2))
+        );
+        assert!(parse(&[("WS_MAX_SUBSCRIPTIONS", "0")]).is_err());
+        assert!(parse(&[("WS_SEND_QUEUE", "99999999")]).is_err());
         let e = parse(&[("LISTEN_ADDR", "pasted-secret")]).unwrap_err();
         assert!(!e.contains("pasted-secret"), "{e}");
     }

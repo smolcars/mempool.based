@@ -11,6 +11,7 @@ pub mod limits;
 pub mod report;
 pub mod request_log;
 mod serve;
+pub mod ws;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -33,7 +34,7 @@ use tower::Layer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-pub use config::{Config, Limits, Network, NetworkConfig};
+pub use config::{Config, Limits, Network, NetworkConfig, WsLimits};
 pub use error::ApiError;
 use limits::Limiter;
 
@@ -69,6 +70,10 @@ pub struct NetworkContext {
     pub esplora: Esplora,
     /// State of the `/api` pass-through.
     pub api: esplora::Api,
+    /// The node's push channel; feeds [`ws::feed`].
+    pub electrum: node::electrum::Client,
+    pub hub: ws::Hub,
+    pub sockets: Arc<ws::Sockets>,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -80,7 +85,12 @@ impl std::fmt::Debug for NetworkContext {
 }
 
 impl NetworkContext {
-    fn new(config: &NetworkConfig, all: &Config) -> Result<Self, node::esplora::Error> {
+    /// Starts the network's Electrum client, so it must run inside a tokio runtime.
+    fn new(
+        config: &NetworkConfig,
+        all: &Config,
+        sockets: &Arc<ws::Sockets>,
+    ) -> Result<Self, node::esplora::Error> {
         let url = match &config.esplora {
             config::EsploraEndpoint::Http(url) => url.clone(),
             config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
@@ -89,6 +99,9 @@ impl NetworkContext {
             config: config.clone(),
             esplora: Esplora::new(&url)?,
             api: esplora::Api::new(all.broadcast, all.limits.max_tracked_clients),
+            electrum: node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum)),
+            hub: ws::Hub::new(config.network, Arc::clone(sockets)),
+            sockets: Arc::clone(sockets),
         })
     }
 }
@@ -96,7 +109,7 @@ impl NetworkContext {
 /// Routes every enabled network serves, written with paths starting `/api` or `/app`. They are
 /// mounted at the root for mainnet and under `/signet`, `/testnet4` and `/regtest` for the others.
 pub fn network_routes() -> Router<Arc<NetworkContext>> {
-    Router::new()
+    Router::new().route("/app/ws", get(ws::handle))
 }
 
 /// The whole application, ready to serve.
@@ -104,6 +117,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
 pub struct App {
     router: Router,
     limiter: Limiter,
+    sockets: Arc<ws::Sockets>,
 }
 
 impl App {
@@ -116,6 +130,7 @@ impl App {
         let mut app = Router::new()
             .route("/healthz", get(healthz))
             .merge(app_config::routes(config));
+        let sockets = ws::Sockets::new(&config.ws, config.limits.request_timeout);
         for network in Network::ALL {
             let prefix = network.path_prefix();
             let context = config
@@ -123,18 +138,24 @@ impl App {
                 .iter()
                 .find(|n| n.network == network)
                 // Cannot fail: `Config` checked the Esplora URL with the client's own parser.
-                .and_then(|n| NetworkContext::new(n, config).ok());
+                .and_then(|n| NetworkContext::new(n, config, &sockets).ok());
             let enabled = context.is_some();
             let scope = match context {
-                Some(ctx) => routes
-                    .clone()
-                    .route("/api/{*rest}", any(esplora::handle))
-                    .route(
-                        "/api/tx",
-                        any(esplora::handle)
-                            .layer(DefaultBodyLimit::max(esplora::MAX_BROADCAST_BODY)),
-                    )
-                    .with_state(Arc::new(ctx)),
+                Some(ctx) => {
+                    let ctx = Arc::new(ctx);
+                    let events = ctx.electrum.events();
+                    tokio::spawn(ws::feed(Arc::clone(&ctx), events));
+                    report::report_electrum(network, &ctx.electrum);
+                    routes
+                        .clone()
+                        .route("/api/{*rest}", any(esplora::handle))
+                        .route(
+                            "/api/tx",
+                            any(esplora::handle)
+                                .layer(DefaultBodyLimit::max(esplora::MAX_BROADCAST_BODY)),
+                        )
+                        .with_state(ctx)
+                }
                 None if prefix.is_empty() => Router::new(),
                 None => {
                     // A disabled network has no pages either.
@@ -194,7 +215,11 @@ impl App {
                 request_log::RequestLogger::new(config),
                 request_log::log_request,
             ));
-        Self { router, limiter }
+        Self {
+            router,
+            limiter,
+            sockets,
+        }
     }
 
     /// The router alone, for driving with `tower::ServiceExt::oneshot`. Requests must carry a
@@ -203,8 +228,21 @@ impl App {
         self.router.clone()
     }
 
+    /// WebSocket state shared by every network.
+    pub fn sockets(&self) -> &Arc<ws::Sockets> {
+        &self.sockets
+    }
+
+    /// Serves until `shutdown` resolves. Then open requests get the request timeout to finish,
+    /// and open WebSockets are sent a close frame and get the same time, counted from the signal.
     pub async fn serve(self, listener: TcpListener, shutdown: impl Future<Output = ()>) {
-        serve::serve(listener, self.router, self.limiter, shutdown).await;
+        let sockets = self.sockets;
+        let signal = async {
+            shutdown.await;
+            sockets.close_all();
+        };
+        serve::serve(listener, self.router, self.limiter, signal).await;
+        sockets.drain().await;
     }
 }
 

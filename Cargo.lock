@@ -386,6 +386,7 @@ dependencies = [
  "hyper-util",
  "logging",
  "node",
+ "serde",
  "serde_json",
  "tokio",
  "tower",
