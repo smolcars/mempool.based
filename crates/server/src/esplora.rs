@@ -1704,7 +1704,10 @@ mod tests {
             panic!("boom");
         });
         assert!(task.await.is_err());
-        assert!(calls.lock().unwrap().is_empty(), "the next request starts afresh");
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "the next request starts afresh"
+        );
         assert!(
             joined.wait_for(Option::is_some).await.is_err(),
             "a waiting request is told the call ended"
@@ -1744,4 +1747,3 @@ mod tests {
         );
     }
 }
-
