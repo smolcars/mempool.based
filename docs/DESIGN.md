@@ -436,14 +436,29 @@ Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
 ### Lightning (not in the prototype)
 
 ```text
-Lightning ═════
-Nodes  Channels  Capacity  Median fee rate (ppm)
-[capacity over time chart]
-Top nodes by capacity / by channels: table
-Node page: alias (text only), pubkey grouped with copy, color swatch, channels table
+Lightning                                   Find a node or channel [ … ][Search]
+The network now ═════════════════════════════════════════ As of 12 Nov, 18:30 UTC
+Channels  Nodes  Capacity  Median fee rate  Median base fee
+(only channels checked against the chain)
+Over time ═══════════════════════════════════════════════════ Every ten minutes
+[24 h | 1 w | 1 m | 3 m | 1 y | All]   (since when, with the hatch)
+[area: channels; dashed line: capacity, right axis]
+Newest channels ══════════════════ │ Newest closes ═════════════════════
+channel and ends, capacity, block  │ channel, kind and ends, capacity, block
+Largest nodes ════════════════════ │ Most connected nodes ══════════════
+Node page: name (text, cut), key grouped with copy, "the key is the identity";
+  figures; addresses and features as chips; channels, open | closed, 25 a page
+Channel page: id and state badge; funding; close (kind · how sure, why); its two ends' policies
 ```
 
-Node aliases and colors come from gossip and are untrusted: the alias is text, and the node color is shown only as a swatch with a border, never as text or background behind text.
+Decided while building it:
+
+- **What is ours is said, not hidden.** Under the figures, one line says only channels checked against the chain are counted, so the counts run lower than sites that list what gossip claims. History starts when this server's peer first synced: the chart hatches before that and says since when, and the closed lists say they hold closes seen since then.
+- **A close says how sure it is,** beside its kind: "Force close · Certain", "Cooperative close · Likely" (a splice that only takes funds out looks the same), "Penalty · Certain", "Other · Certain it is not a plain close". Lists give the kind in one word; the channel page gives the reason.
+- **Charts are drawn with the text color,** as the mining charts are: the main series an area, the second a dashed line on its own scale.
+- **Names are claims.** A node's name is text, cut short in lists and titles with the rest one press away, and isolated so its direction cannot run into the text beside it; its public key is always next to it. Node colors are not shown: color carries fee and nothing else, and an operator's chosen color would only add a second way to imitate another node.
+- **Tables fit a 320 px phone.** A channel row puts its id, kind, time and both ends in one cell; a node list drops, on a phone, the figure it is not ranked by.
+- **Switched off is a sentence,** not an empty chart: a network without Lightning says so, and a peer still syncing shows how far it has come and fills the page when done.
 
 ## Plain CSS or a utility framework
 

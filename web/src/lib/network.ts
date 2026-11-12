@@ -59,7 +59,18 @@ export const paths = {
     period === undefined ? "/mining" : `/mining?period=${encodeURIComponent(period)}`,
   /** A mining pool by its slug from the pool list. */
   pool: (slug: string) => `/mining/pool/${segment(slug)}`,
-  lightning: () => "/lightning",
+  /** The Lightning network's overview, its chart over an interval such as `1m` when given. */
+  lightning: (interval?: string) =>
+    interval === undefined ? "/lightning" : `/lightning?interval=${encodeURIComponent(interval)}`,
+  /** A Lightning node by its public key. */
+  lightningNode: (key: string) => `/lightning/node/${segment(key)}`,
+  /** A Lightning channel by its id (`811984x2037x0`). */
+  lightningChannel: (id: string) => `/lightning/channel/${segment(id)}`,
+  /** Lightning nodes and channels matching a name, a key or an id. */
+  lightningSearch: (q: string) => `/lightning/search?q=${encodeURIComponent(q)}`,
+  /** The largest, best-connected or oldest Lightning nodes. */
+  lightningRankings: (by?: string) =>
+    by === undefined ? "/lightning/rankings" : `/lightning/rankings?by=${encodeURIComponent(by)}`,
   /** The mempool's history, for an interval such as `1w` when given. */
   mempool: (interval?: string) =>
     interval === undefined ? "/mempool" : `/mempool?interval=${encodeURIComponent(interval)}`,
