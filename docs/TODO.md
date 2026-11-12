@@ -29,6 +29,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | W4 | Transaction page: inputs, outputs, fee, status, live confirmation | W1, S2, S3 | done ([#24](https://github.com/smolcars/mempool.based/pull/24)) |
 | W5 | Address page: totals, unspent outputs, paged history; large addresses show history without totals and say why | W1, S2 | done ([#25](https://github.com/smolcars/mempool.based/pull/25)) |
 | W6 | Search: txid, block hash, height, address (exact match) | W1, S2, LX1 | todo |
+| D2 | Bring `docs/DESIGN.md` in line with what was built: the page builders' corrections (address page sketch, transactions listed in block order, the Live indicator's place, arrows the font has, duration tokens the build rewrites) | LX1 | todo |
 | FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | todo |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
