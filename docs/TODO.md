@@ -119,7 +119,15 @@ Refined when M4 lands.
 | C1c | Replacement trees: keep the figures of a root that a miner confirmed after we saw it replaced, and unmark a replacement whose block is reorged away | C1b | done ([#76](https://github.com/smolcars/rbitcoin-space/pull/76)) for the confirmed root; the reorg half is C1d |
 | C1d | Unmark a replacement whose confirming block is reorged away, correctly: it needs the mined height in the record and the store (a migration), a reorg path into the record, and a check of the new chain, since in the usual reorg the replacement is in the competing block too | C1c | todo |
 | WS2 | Follow-ups on the compatible WebSocket: send the first `mempool-blocks` with the block instead of about 4 s later, and decide on the bounded `track-mempool-txids` its PR proposes | WS1 | todo; its first half, `mempool-blocks` arriving with the block, was done by [#67](https://github.com/smolcars/rbitcoin-space/pull/67); what remains is the decision on a bounded `track-mempool-txids` |
-| C1 | Audit the four compatibility inventories against what is built (many rows still say planned for pages and routes that are live), recount, and list what is really left with a recommendation for each | M4 | doing |
+| C1 | Audit the four compatibility inventories against what is built (many rows still say planned for pages and routes that are live), recount, and list what is really left with a recommendation for each | M4 | done ([#78](https://github.com/smolcars/rbitcoin-space/pull/78)): 139 of 232 rows served, 29 planned, 12 different, 52 skipped; the gaps are G1 to G8 and the owner's decisions |
+| G1 | Small server gaps the audit found: `vBytesPerSecond` and `live-2h-chart` on `/api/v1/ws`, `/api/v1/backend-info`, three Lightning paths that answer 400 where 404 is right, a pool's average block health, and the Lightning stop that timed out | C1 | doing |
+| G2 | Pool column on the blocks page; the past adjustments table and a block health graph on the mining page | C1 | todo |
+| G3 | Lightning node page: the fee histogram and the node's history chart | W11 | todo |
+| G4 | The `/rbf` page with the full-RBF filter, and recent replacements on the home page | C1b | todo |
+| G5 | Address balance chart | C1 | todo |
+| G6 | Later: Lightning nodes by network type over time; a BTC/sats units switch; `/clock` | C1 | todo |
+| G7 | After the owner's decision on a broadcast page: `/tx/push`, then `/tx/preview` (needs a transaction and PSBT parser in the browser), then goggles (needs per-transaction flags from the engine) | C1 | todo; waits on the owner |
+| G8 | Owner's decisions from the audit: a broadcast page (the route is already served under its rules); package submission and test-accept (the audit recommends skipping both); fiat prices stay parked | C1 | waits on the owner |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
 | Q3 | Performance pass against the budgets | M4 | done ([#70](https://github.com/smolcars/rbitcoin-space/pull/70)); results in `docs/PERFORMANCE.md`; its PR took 3 min 4 s of CI on a partly cold cache, so check the next Rust PR against the budget |
