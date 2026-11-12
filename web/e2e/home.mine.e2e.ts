@@ -37,7 +37,10 @@ test("mining takes the projected next block across the line and empties the proj
   await expect(nextLink).toHaveAccessibleName("Next block, projected: nothing waiting", {
     timeout: PROJECTION_LAG_MS,
   });
-  await expect(page.getByText("Nothing is waiting.", { exact: false })).toBeVisible();
+  // The mempool panel says the same once its own topic catches up, so look in the strip.
+  await expect(
+    page.getByRole("region", { name: "Blocks" }).getByText("Nothing is waiting.", { exact: false }),
+  ).toBeVisible();
 });
 
 test("a new block lands in the strip without a reload, and a burst leaves it correct", async ({

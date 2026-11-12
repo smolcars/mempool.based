@@ -73,6 +73,10 @@ echo "e2e: ready in ${SECONDS}s, server at http://$addr" >&2
 status=0
 E2E_BASE_URL="http://$addr" E2E_OUTPUT_DIR="$run/results" node_modules/.bin/playwright test "$@" ||
   status=$?
+# Stopping the server flushes its log, which it writes from a queue.
+kill "$server" 2>/dev/null || true
+wait "$server" 2>/dev/null || true
+server=""
 # No page load may trip a limit at the defaults, even one a test tolerates: name them.
 refused=$(grep -E '"refused":|"event":"connections_refused"' "$run/server.log" || true)
 if [ -n "$refused" ]; then
