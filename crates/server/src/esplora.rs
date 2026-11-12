@@ -781,7 +781,7 @@ fn int(s: &str, msg: &'static str) -> Result<u32, ApiError> {
     s.parse().map_err(|_| ApiError::bad_request(msg))
 }
 
-fn txid(s: &str) -> Result<Txid, ApiError> {
+pub(crate) fn txid(s: &str) -> Result<Txid, ApiError> {
     hash(s).ok_or(ApiError::bad_request("invalid txid"))
 }
 
@@ -796,7 +796,7 @@ fn hash<T: FromStr>(s: &str) -> Option<T> {
         .flatten()
 }
 
-fn address(s: &str, network: Network) -> Result<Address, ApiError> {
+pub(crate) fn address(s: &str, network: Network) -> Result<Address, ApiError> {
     let chain = match network {
         Network::Mainnet => bitcoin::Network::Bitcoin,
         Network::Signet => bitcoin::Network::Signet,

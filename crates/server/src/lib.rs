@@ -14,6 +14,8 @@ pub mod esplora;
 pub mod health;
 pub mod limits;
 pub mod mining;
+pub mod relatives;
+pub mod replacements;
 pub mod report;
 pub mod request_log;
 mod serve;
@@ -83,7 +85,9 @@ pub struct NetworkContext {
     pub rpc: node::rpc::Rpc,
     /// State of the block summary routes.
     pub summaries: summary::Summaries,
-    pub hub: ws::Hub,
+    pub hub: Arc<ws::Hub>,
+    /// Followed transactions and addresses, and the replacement record.
+    pub track: Arc<ws::Tracking>,
     pub sockets: Arc<ws::Sockets>,
     /// Kept current by [`difficulty::run`]; read by `/api/v1/difficulty-adjustment`.
     pub difficulty: difficulty::Difficulty,
@@ -111,6 +115,15 @@ impl NetworkContext {
             config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
         };
         let rpc = &config.rpc;
+        let electrum = node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum));
+        let hub = Arc::new(ws::Hub::new(config.network, Arc::clone(sockets)));
+        let track = Arc::new(ws::Tracking::new(
+            config.network,
+            Arc::clone(&hub),
+            Some(electrum.clone()),
+            config.mempool,
+            &all.ws,
+        ));
         let table = all
             .data_dir
             .as_deref()
@@ -125,8 +138,9 @@ impl NetworkContext {
             config: config.clone(),
             esplora: Esplora::new(&url).ok()?,
             api: esplora::Api::new(all.broadcast, &all.limits, &url).ok()?,
-            electrum: node::electrum::Client::spawn(node::electrum::Config::new(&config.electrum)),
-            hub: ws::Hub::new(config.network, Arc::clone(sockets)),
+            electrum,
+            hub,
+            track,
             sockets: Arc::clone(sockets),
             difficulty: difficulty::Difficulty::default(),
             mining: mining::Mining::default(),
@@ -143,6 +157,8 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/block/{hash}/summary", get(summary::facts))
         .route("/app/block/{hash}/txs", get(summary::txs))
         .route("/app/blocks/summary", get(summary::batch))
+        .route("/app/tx/{txid}/relatives", get(relatives::route))
+        .route("/app/tx/{txid}/replacements", get(replacements::route))
         .merge(api_v1::routes())
 }
 
@@ -187,6 +203,11 @@ impl App {
                     blocks::spawn(&ctx, config.backfill);
                     ws::mempool::start(&ctx);
                     tokio::spawn(mining::run(Arc::clone(&ctx)));
+                    tokio::spawn(ws::track::follow_addresses(
+                        Arc::clone(&ctx.track),
+                        ctx.electrum.events(),
+                        ctx.electrum.health(),
+                    ));
                     report::report_electrum(network, &ctx.electrum);
                     routes
                         .clone()

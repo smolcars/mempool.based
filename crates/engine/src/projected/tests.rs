@@ -99,6 +99,23 @@ fn a_child_lifts_its_parent() {
     assert_eq!(blocks[0][0].1.rate, 8416);
     assert_eq!(blocks[0][1].1.rate, 8416);
     assert_eq!((blocks[0][0].1.fee, blocks[0][1].1.fee), (100, 10_000));
+    // The group says the same: one chunk at that rate, the node's fee and weight.
+    let g = m.group(&child).unwrap();
+    assert_eq!((g.chunk, g.chunks.len()), (0, 1));
+    let c = &g.chunks[0];
+    assert_eq!((c.fee, c.weight, c.rate), (10_100, 4800, 8416));
+    assert_eq!(
+        c.txs,
+        vec![
+            (parent, Some(blocks[0][0].1)),
+            (child, Some(blocks[0][1].1))
+        ]
+    );
+    assert_eq!(
+        m.group(&other).unwrap().chunks[0].txs,
+        vec![(other, Some(blocks[0][2].1))]
+    );
+    assert_eq!(m.group(&id(9)), None);
     // When the child leaves, the parent's cluster must be asked again.
     assert_eq!(m.remove(&child), vec![parent]);
     assert!(m.apply_cluster(&cluster(&[(100, 4000, &[parent])])));
@@ -263,6 +280,16 @@ fn a_large_cluster_keeps_its_linearization() {
     assert!(m.apply_cluster(&cluster(&chunks)));
     assert_eq!(m.chunks(), 8);
     assert_eq!(txids(&order(&mut m, ONE_BLOCK)[0]), members);
+    // Any member's group is the whole cluster in order; `chunk` points at its own.
+    let g = m.group(&id(20)).unwrap();
+    assert_eq!(g.chunk, 2);
+    let all: Vec<Txid> = g
+        .chunks
+        .iter()
+        .flat_map(|c| c.txs.iter().map(|t| t.0))
+        .collect();
+    assert_eq!(all, members);
+    assert_eq!(g.chunks[2].fee, 7800);
 }
 
 // Replay of a recorded mainnet template and diagram.

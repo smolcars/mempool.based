@@ -97,6 +97,16 @@ impl Hub {
         self.topics().get(&topic).map_or(0, |s| s.subscribers.len())
     }
 
+    /// The network this hub serves.
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
+    /// Forgets a topic and its stored state: for a tracked item nobody follows any more.
+    pub(super) fn remove(&self, topic: Topic) {
+        self.topics().remove(&topic);
+    }
+
     pub(super) fn unsubscribe(&self, topic: Topic, id: u64) {
         if let Some(state) = self.topics().get_mut(&topic) {
             state.subscribers.remove(&id);

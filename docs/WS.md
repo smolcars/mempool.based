@@ -179,6 +179,78 @@ A second run of 1,760 s, which included block 975,526 (3,663 transactions confir
 
 CPU and memory grow with the clients, not with the topics: each message is encoded once (in that run 139 KB a minute encoded, 424 MB a minute queued) and each client's queue holds references to the same bytes. With one client on mainnet the whole server, engines included, used 2.8% of one core and 80 MB.
 
+### Following a transaction or an address
+
+Two families of topics with a parameter, for the transaction and address pages (`crates/server/src/ws/track.rs`). Each message is the topic's whole state, so a client keeps the last one; the first is sent on subscribe. A client never needs to order or merge them.
+
+| Topic | For | Format |
+|---|---|---|
+| `tx:<txid>` | Where a transaction is and what happened to it | JSON, the whole state each time, about 300 bytes |
+| `address:<address>` | A signal that an address's history changed, so the page refetches | JSON, about 150 bytes |
+
+**Names are parsed strictly.** A txid is exactly 64 hex digits in lower case. An address must be one of this network's; it is echoed in `topic` as the server writes it, with bech32 in lower case (an address typed in upper case comes back lower case), so a page should lower-case a bech32 address before subscribing. Anything else closes the socket with `4000`, like any unknown topic.
+
+**`tx:<txid>`**
+
+Rates are sat per 1,000 vB, as everywhere. `stale` is true while the node is failing: the state is the last good one. One of:
+
+```json
+{"topic":"tx:…","type":"tx","stale":false,"state":"mempool","time":1794461221,"fee":381,"vsize":127,"rate":3000,
+ "position":{"block":0,"blocks":8,"effective_rate":3000,"ahead_vsize":412311,"ahead_txs":1022}}
+{"topic":"tx:…","type":"tx","stale":false,"state":"replaced","by":"<txid>","truncated":false,
+ "chain":[{"txid":"<this>","by":"<B>","seen":1794461300,"fee":381,"vsize":127,"rate":3000,"by_fee":900,"by_vsize":127,"by_rate":7086},
+          {"txid":"<B>","by":"<C>", …}]}
+{"topic":"tx:…","type":"tx","stale":false,"state":"confirmed","height":975530,"hash":"…"}
+{"topic":"tx:…","type":"tx","stale":false,"state":"evicted"}
+{"topic":"tx:…","type":"tx","stale":false,"state":"unknown"}
+```
+
+| `state` | Means | The page |
+|---|---|---|
+| `mempool` | In the node's mempool. `time` is when the node accepted it; `fee`, `vsize` and `rate` are its own. `position` is where the projected blocks put it, `null` for the moment before they have placed it | Shows the position (below) |
+| `replaced` | It left because `by` spent one of its inputs, or one of its ancestors' (a child leaves with its replaced parent and carries the same replacement). `chain` runs from this transaction to the newest replacement known: follow the last link's `by`, and subscribe to that one to see where it is. A later replacement of the end grows the chain, and the server sends the longer one. Figures are as the tracker knew them; `by_fee` and `by_vsize` are `null` when the replacement was confirmed in the block that removed this one. A link known only from the tracker's reason, after the record dropped it, has only `txid` and `by`. At most 32 links; `truncated` says there were more | Offers the newest replacement |
+| `confirmed` | Mined in block `hash` at `height`. A reorg that takes the block away brings it back to `mempool`, or to `unknown` if the node does not take it back. After the server lost track of the chain (a reconnect to the node, a reorg deeper than it follows) it also says `unknown` rather than vouch for an old confirmation | Shows the block |
+| `evicted` | It left the mempool for a reason the node does not report: evicted for size, expired after two weeks, dropped after a reorg, or replaced by a transaction we did not see ([`MEMPOOL.md`](MEMPOOL.md#where-it-can-only-infer)) | Says it is no longer in the mempool |
+| `unknown` | Not in the mempool, and the server has no record of why: confirmed before anyone followed it here, never seen, or gone while the server was not following it. The server asks the node nothing to find out | Asks `GET /api/tx/:txid/status`, the page's own route for confirmed data, and again on each new block. The topic says `mempool` if it arrives later |
+
+**The position.** `block` is the projected block, 0 for the next; the last one (`blocks` − 1) holds everything beyond the others. `ahead_vsize` and `ahead_txs` are what would be mined before it, earlier blocks included. Say "in the next block" for block 0, "in about N blocks" (N = `block` + 1) for the others, and "in more than `blocks` − 1 blocks" for the last; never a time to the minute. The projection is the node's own template rule applied to its own chunks and matched the node's template above 99.7% by weight in every check ([`MEMPOOL.md`](MEMPOOL.md#agreement-with-the-node)), but miners pick their own blocks and break ties their own way. On mainnet, a transaction in the large class of identical cheap chunks moves between later blocks every few seconds: that is the projection's honest uncertainty. `effective_rate` is the rate of the chunk it will be mined in, so a parent lifted by a child shows the child's chunk rate here and its own in `rate`.
+
+**How often.** The server reconsiders every followed transaction at most once per `WS_MEMPOOL_INTERVAL_MS`, from the same projection the other mempool topics use, and a newly followed one at once (its first message comes within milliseconds). It publishes only from a view of the engines that matches the removal reasons it has folded in, so a transaction never reads as waiting after the server has seen it leave. A change of state, a new effective rate, or entering or leaving the next block goes out at once. A change of only how much is ahead of it, or of which later block it is in, goes out at most once per `WS_POSITION_INTERVAL_MS` (10 s): enough for a page to keep its estimate fresh, without a message for every shuffle.
+
+**`address:<address>`**
+
+```json
+{"topic":"address:bc1q…","type":"address","state":"watching","status":"6c3e…"}
+{"topic":"address:bc1q…","type":"address","state":"unavailable"}
+{"topic":"address:bc1q…","type":"address","state":"refused","reason":"too_large"}
+```
+
+| `state` | Means |
+|---|---|
+| `watching` | The node watches it. `status` is the node's Electrum status of the address's history (`null` for an address with none): it changes whenever a payment to or from it enters the mempool or confirms, and with a reorg. Refetch what the page shows when it differs from the last one. Subscribe first, then fetch, so nothing falls between |
+| `unavailable` | The node cannot be reached, or the connection to it dropped: the last status may be out of date. When the connection is back the server asks again and sends `watching` with the status as it is then |
+| `refused` | The node will not watch it. `reason` is `too_large` (more history than the node's `--max-sh-creates`: the page can still page its history over HTTP but gets no live signal), `no_index` (the node runs without `--sh-index`), `server_full` (the node's own subscription cap) or `refused` (any other refusal). Final until the page subscribes again |
+
+No message is sent until the node has answered, normally a few milliseconds after subscribing. One node subscription serves every socket following the address, and it is dropped when the last one leaves; one whose request is still in flight then keeps its place under `WS_TRACKED_ADDRESSES_TOTAL` until the node answers, so sockets subscribing and leaving fast cannot pile up requests on the node.
+
+**Bounds.** One socket may follow `WS_MAX_TRACKED_TXS` (4) transactions and `WS_MAX_TRACKED_ADDRESSES` (2) addresses, inside `WS_MAX_SUBSCRIPTIONS`; over either, close `4001`. A network follows at most `WS_TRACKED_TXS_TOTAL` (10,000) distinct transactions and `WS_TRACKED_ADDRESSES_TOTAL` (1,000) distinct addresses. Past those the socket is sent `{"topic":"tx:…","type":"refused","reason":"server_full"}` (or the same for an address), is not subscribed, and stays open: try again later. When the last socket following a transaction or address unsubscribes or closes, the server forgets it, its stored message and, for an address, the node's subscription.
+
+**With the mempool engine off** (`{NET}_MEMPOOL_ENABLED=false`), `tx:<txid>` answers `{"topic":"tx:…","type":"off"}` and nothing else. Addresses do not need the engine and work either way. Before the tracker's first complete cycle a `tx:` topic sends nothing, rather than a state it cannot vouch for.
+
+**Recovery.** Nothing to do: every message is complete. After a reconnect, subscribe again and the first message is the current state.
+
+**Cost.** A followed transaction asks the node nothing: its state comes from the tracker's records and removal reasons, the projected blocks and the replacement record ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)), all already in memory. Measured locally on the release build against regtest (5,000 transactions in the mempool, Apple M4 shared with other work), 5,000 sockets each following a different transaction:
+
+| | |
+|---|---|
+| Node calls a minute, nobody connected | 18 (2.01 MB), no cluster requests |
+| Node calls a minute, 5,000 followers, mempool unchanged | 18 (2.01 MB), no cluster requests: the same |
+| Every socket has its first message | within the 5 s it took to open them |
+| Server RSS | 17 MB idle, 38 MB with the 5,000 sockets open, 70 MB at the peak of the next two minutes |
+| Server CPU | 14% of one core while the sockets opened, 0–4% after |
+| A minute of churn (a child paying 100 sat/vB for one of them every 0.5 s) | 29,973 messages, 8.2 MB encoded once, about 6 per transaction: one per position interval |
+| The block that confirmed all 5,000 | 5,000 `confirmed` messages; no client dropped |
+
 ## Connection rules
 
 | Rule | Default | Setting |
@@ -189,6 +261,10 @@ CPU and memory grow with the clients, not with the topics: each message is encod
 | Frames per second from a client, every kind counted; a burst of the same size is allowed | 10 | `WS_MESSAGES_PER_SEC` |
 | Topics subscribed at once | 8 | `WS_MAX_SUBSCRIPTIONS` |
 | Of those, `projected-txs:N` topics | 2 | `WS_MAX_BLOCK_SUBSCRIPTIONS` |
+| Of those, `tx:<txid>` topics | 4 | `WS_MAX_TRACKED_TXS` |
+| Of those, `address:<address>` topics | 2 | `WS_MAX_TRACKED_ADDRESSES` |
+| Distinct transactions and addresses followed, per network | 10,000 and 1,000 | `WS_TRACKED_TXS_TOTAL`, `WS_TRACKED_ADDRESSES_TOTAL` |
+| Messages about a followed transaction that only moved | one per 10 s | `WS_POSITION_INTERVAL_MS` |
 | Messages per mempool topic | one per 2 s | `WS_MEMPOOL_INTERVAL_MS` |
 | Transactions in the `transactions` list | 10 | `WS_LATEST_TXS` |
 | Messages queued for a client that is not reading | 64 | `WS_SEND_QUEUE` |
@@ -211,7 +287,7 @@ Browsers answer pings on their own, so a live tab is never closed for silence. A
 | 1007 | `invalid utf-8` | A text message, or a close frame's reason, that is not UTF-8 |
 | 1009 | `message too big` | A message over `WS_MAX_MESSAGE_BYTES`, refused from the frame header before the payload is read |
 | 4000 | `bad message` | Not a message listed above |
-| 4001 | `too many subscriptions` | Over `WS_MAX_SUBSCRIPTIONS` or `WS_MAX_BLOCK_SUBSCRIPTIONS` |
+| 4001 | `too many subscriptions` | Over `WS_MAX_SUBSCRIPTIONS`, `WS_MAX_BLOCK_SUBSCRIPTIONS`, `WS_MAX_TRACKED_TXS` or `WS_MAX_TRACKED_ADDRESSES` |
 | 4002 | `too many messages` | Over `WS_MESSAGES_PER_SEC` |
 | 4003 | `too slow` | The send queue was full: the client is not reading |
 | 4004 | `idle timeout` | Nothing received for `WS_IDLE_TIMEOUT_SECS`, ping unanswered |
@@ -223,7 +299,7 @@ A client closed for 1002 to 4002 has a bug; reconnecting will not help. After 40
 - **Fan-out.** A topic message is encoded once into a complete WebSocket frame (header and payload) held behind a reference count. Sending it to a subscriber puts a reference on that subscriber's bounded queue; the subscriber's writer puts the same bytes on the wire. Nothing is copied or encoded per connection.
 - **Cost per connection** is one task, its queue and its subscriptions: about 5 KB of server memory measured with 5,000 open sockets, plus kernel socket buffers. Memory grows linearly with connections. Queued messages are shared, so a full queue costs 64 references, not 64 copies.
 - **Cost per message** is one `O(subscribers)` pass of non-blocking queue pushes under the topic's lock, then one write per subscriber on its own task. Measured: about 2 ms to queue a block to 5,000 sockets, and about 35 ms until 5,000 local clients had all read it.
-- **Upstream work is shared and capped.** No client message reaches the node. The only upstream calls are the block fetch for each new block, made by one task per network (normally one request, at most 120), the block's summary, computed once by the summary routes' own capped worker, and the mempool engine's polling, which runs whatever the number of subscribers. The full fetch is also the existence check, since a missing block is a short 404 and a separate check would add a round trip once the block is there. `hello` and the snapshots come from memory.
+- **Upstream work is shared and capped.** No client message reaches the node, but for following an address, which joins one shared Electrum subscription per address, capped per network with requests in flight counted. The only other upstream calls are the block fetch for each new block, made by one task per network (normally one request, at most 120), the block's summary, computed once by the summary routes' own capped worker, and the mempool engine's polling, which runs whatever the number of subscribers. The full fetch is also the existence check, since a missing block is a short 404 and a separate check would add a round trip once the block is there. `hello` and the snapshots come from memory.
 - **Mempool topics** are produced by one task per network that reads the latest projection, compares each block with what it last published, and encodes each message once. A topic's stored state for new subscribers is its last snapshot plus the deltas appended since; after 16 deltas, or when they outweigh the snapshot, they are folded into a fresh snapshot, which is stored but sent to nobody.
 - **Shutdown.** Every socket is sent `1001` and given up to `REQUEST_TIMEOUT_SECS`, counted from the signal, to finish, together with the HTTP connections. Sockets still open then are dropped, and the server waits for them to release their slots.
 - **Behind TLS.** The reverse proxy must pass `Upgrade` and `Connection` through (nginx: `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, `proxy_set_header Connection "upgrade"`), pass `Host` through for the origin check above and keep idle connections open longer than `WS_IDLE_TIMEOUT_SECS / 2`, the ping interval. The page connects to `wss://` on its own host, which the Content-Security-Policy's `default-src 'self'` allows in current Chromium and Firefox. Older WebKit did not match `ws:`/`wss:` with `'self'` ([WebKit bug 201591](https://bugs.webkit.org/show_bug.cgi?id=201591)); if a Safari user cannot connect, that is the cause.

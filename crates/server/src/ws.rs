@@ -15,6 +15,7 @@
 mod frame;
 mod hub;
 pub mod mempool;
+pub mod track;
 
 use std::collections::HashSet;
 use std::pin::pin;
@@ -42,6 +43,7 @@ use crate::limits::{self, Held, Hold, Refused};
 
 pub use frame::Frame;
 pub use hub::{Fanout, Hub, Snapshot, feed};
+pub use track::Tracking;
 
 /// Protocol version, sent in `hello`. Bumped only for a change an old client would misread.
 pub const VERSION: u32 = 1;
@@ -89,8 +91,8 @@ impl Close {
     }
 }
 
-/// A topic a client can subscribe to. Later topics (a tracked transaction or address) are added
-/// here and in [`Topic::parse`].
+/// A topic a client can subscribe to. The fixed ones parse with [`Topic::parse`], a tracked
+/// transaction or address with [`track::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Blocks,
@@ -103,6 +105,10 @@ pub enum Topic {
     ProjectedTxs(u8),
     /// The newest transactions seen.
     Transactions,
+    /// One transaction followed: `tx:<txid>`.
+    Tx(bitcoin::Txid),
+    /// One address followed, by its script: `address:<address>`.
+    Address(node::electrum::ScriptHash),
 }
 
 /// Names of the [`Topic::ProjectedTxs`] topics, by block.
@@ -131,8 +137,12 @@ impl Topic {
         }
     }
 
+    /// The topic's name; for a tracked transaction or address only its kind, so it can go in a log
+    /// line without saying what someone looks at.
     pub fn name(self) -> &'static str {
         match self {
+            Self::Tx(_) => "tx",
+            Self::Address(_) => "address",
             Self::Blocks => "blocks",
             Self::Mempool => "mempool",
             Self::Projected => "projected",
@@ -385,7 +395,7 @@ where
     let (rd, mut wr) = tokio::io::split(io);
     // Milliseconds since `opened` of the last complete frame from the client.
     let last_seen = AtomicU64::new(0);
-    let mut reading = pin!(read_loop(rd, &ctx.hub, &conn, limits, opened, &last_seen));
+    let mut reading = pin!(read_loop(rd, &ctx.track, &conn, limits, opened, &last_seen));
     let mut watchdog = pin!(watchdog(
         &conn,
         limits.idle_timeout,
@@ -478,7 +488,7 @@ enum ClientMessage {
 /// Reads and handles client messages until the connection must close, then sets why.
 async fn read_loop<R: AsyncRead>(
     rd: R,
-    hub: &Hub,
+    track: &Arc<Tracking>,
     conn: &Arc<Conn>,
     limits: &WsLimits,
     opened: Instant,
@@ -486,7 +496,7 @@ async fn read_loop<R: AsyncRead>(
 ) {
     let mut rd = pin!(rd);
     let mut subs = Subscriptions {
-        hub,
+        track,
         conn,
         topics: HashSet::new(),
     };
@@ -577,12 +587,28 @@ fn peer_close(payload: &[u8]) -> Close {
 
 /// A connection's subscriptions, removed from the hub when the connection ends.
 struct Subscriptions<'a> {
-    hub: &'a Hub,
+    track: &'a Arc<Tracking>,
     conn: &'a Arc<Conn>,
     topics: HashSet<Topic>,
 }
 
 impl Subscriptions<'_> {
+    /// A topic name, strictly: a fixed topic, or a tracked transaction or address of this
+    /// network. Returns the topic and its name as the server writes it.
+    fn parse(&self, name: &str) -> Result<(Topic, String), Close> {
+        Topic::parse(name)
+            .map(|t| (t, String::new()))
+            .or_else(|| track::parse(name, self.track.hub().network()))
+            .ok_or(Close::BAD_MESSAGE)
+    }
+
+    fn leave(&self, topic: Topic) {
+        match topic {
+            Topic::Tx(_) | Topic::Address(_) => self.track.unsubscribe(topic, self.conn.id),
+            _ => self.track.hub().unsubscribe(topic, self.conn.id),
+        }
+    }
+
     fn handle(&mut self, text: &str, limits: &WsLimits) -> Result<(), Close> {
         // Echo for the conformance suite (dev/autobahn): its cases expect each message back.
         if cfg!(feature = "autobahn") {
@@ -593,27 +619,37 @@ impl Subscriptions<'_> {
         match request {
             ClientMessage::Subscribe { topics } => {
                 for name in topics {
-                    let topic = Topic::parse(&name).ok_or(Close::BAD_MESSAGE)?;
+                    let (topic, name) = self.parse(&name)?;
                     if self.topics.contains(&topic) {
                         continue;
                     }
+                    let count = |f: fn(&Topic) -> bool| self.topics.iter().filter(|t| f(t)).count();
                     let blocks = |t: &Topic| matches!(t, Topic::ProjectedTxs(_));
+                    let txs = |t: &Topic| matches!(t, Topic::Tx(_));
+                    let addresses = |t: &Topic| matches!(t, Topic::Address(_));
                     if self.topics.len() >= limits.max_subscriptions
-                        || blocks(&topic)
-                            && self.topics.iter().filter(|t| blocks(t)).count()
-                                >= limits.max_block_subscriptions
+                        || blocks(&topic) && count(blocks) >= limits.max_block_subscriptions
+                        || txs(&topic) && count(txs) >= limits.max_tracked_txs
+                        || addresses(&topic) && count(addresses) >= limits.max_tracked_addresses
                     {
                         return Err(Close::TOO_MANY_SUBSCRIPTIONS);
                     }
+                    if txs(&topic) || addresses(&topic) {
+                        // Beyond the server's total the client is told so, and stays connected.
+                        if self.track.subscribe(topic, &name, self.conn).is_err() {
+                            continue;
+                        }
+                    } else {
+                        self.track.hub().subscribe(topic, self.conn);
+                    }
                     self.topics.insert(topic);
-                    self.hub.subscribe(topic, self.conn);
                 }
             }
             ClientMessage::Unsubscribe { topics } => {
                 for name in topics {
-                    let topic = Topic::parse(&name).ok_or(Close::BAD_MESSAGE)?;
+                    let (topic, _) = self.parse(&name)?;
                     if self.topics.remove(&topic) {
-                        self.hub.unsubscribe(topic, self.conn.id);
+                        self.leave(topic);
                     }
                 }
             }
@@ -627,8 +663,8 @@ impl Subscriptions<'_> {
 
 impl Drop for Subscriptions<'_> {
     fn drop(&mut self) {
-        for topic in self.topics.drain() {
-            self.hub.unsubscribe(topic, self.conn.id);
+        for topic in std::mem::take(&mut self.topics) {
+            self.leave(topic);
         }
     }
 }

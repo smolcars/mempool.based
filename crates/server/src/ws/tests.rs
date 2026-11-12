@@ -169,12 +169,33 @@ fn subs_limits(max: usize) -> WsLimits {
     }
 }
 
-#[test]
-fn requests_are_parsed_strictly_and_subscriptions_capped() {
-    let hub = hub();
+/// Tracking on [`hub`], with the mempool engine on but not attached, and no Electrum client.
+fn track() -> Arc<Tracking> {
+    Arc::new(Tracking::new(
+        Network::Regtest,
+        Arc::new(hub()),
+        None,
+        true,
+        &WsLimits::default(),
+    ))
+}
+
+/// A regtest address paying to a made-up witness script hash.
+pub(super) fn address(n: u8) -> String {
+    use bitcoin::hashes::Hash;
+    let script = bitcoin::ScriptBuf::new_p2wsh(&bitcoin::WScriptHash::from_byte_array([n; 32]));
+    bitcoin::Address::from_script(&script, bitcoin::Network::Regtest)
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn requests_are_parsed_strictly_and_subscriptions_capped() {
+    let track = track();
+    let hub = track.hub();
     let (conn, mut rx) = conn(8);
     let mut subs = Subscriptions {
-        hub: &hub,
+        track: &track,
         conn: &conn,
         topics: HashSet::new(),
     };
@@ -193,6 +214,16 @@ fn requests_are_parsed_strictly_and_subscriptions_capped() {
         r#"{"op":"subscribe","topics":["projected-txs:"]}"#,
         r#"{"op":"subscribe","topics":["projected-txs:-1"]}"#,
         r#"{"op":"subscribe","topics":["projected-txs"]}"#,
+        // Tracked topics: strict hex in lower case, an address of this network only.
+        r#"{"op":"subscribe","topics":["tx:"]}"#,
+        r#"{"op":"subscribe","topics":["tx:0000000000000000000000000000000000000000000000000000000000000001 "]}"#,
+        r#"{"op":"subscribe","topics":["tx:000000000000000000000000000000000000000000000000000000000000000"]}"#,
+        r#"{"op":"subscribe","topics":["tx:000000000000000000000000000000000000000000000000000000000000000A"]}"#,
+        r#"{"op":"subscribe","topics":["tx:+00000000000000000000000000000000000000000000000000000000000000a"]}"#,
+        r#"{"op":"subscribe","topics":["address:"]}"#,
+        r#"{"op":"subscribe","topics":["address:bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"]}"#,
+        r#"{"op":"subscribe","topics":["address:bcrt1qnotanaddress"]}"#,
+        r#"{"op":"subscribe","topics":["tx"]}"#,
     ] {
         assert_eq!(
             subs.handle(bad, &subs_limits(8)),
@@ -202,6 +233,51 @@ fn requests_are_parsed_strictly_and_subscriptions_capped() {
     }
     assert_eq!(subs.handle(r#"{"op":"ping"}"#, &subs_limits(8)), Ok(()));
     assert_eq!(rx.try_recv().unwrap(), Frame::text(br#"{"type":"pong"}"#));
+    // Tracked transactions and addresses have caps of their own inside the total.
+    let id = |n: u8| format!("\"tx:{}\"", format!("{n:02x}").repeat(32));
+    let tracked = WsLimits {
+        max_tracked_txs: 2,
+        max_tracked_addresses: 1,
+        ..subs_limits(8)
+    };
+    let sub = |names: &str| format!(r#"{{"op":"subscribe","topics":[{names}]}}"#);
+    assert_eq!(
+        subs.handle(&sub(&format!("{},{}", id(1), id(2))), &tracked),
+        Ok(())
+    );
+    assert_eq!(
+        subs.handle(&sub(&id(3)), &tracked),
+        Err(Close::TOO_MANY_SUBSCRIPTIONS)
+    );
+    let first = format!("\"address:{}\"", address(1).to_uppercase());
+    assert_eq!(subs.handle(&sub(&first), &tracked), Ok(()));
+    assert_eq!(
+        subs.handle(&sub(&format!("\"address:{}\"", address(2))), &tracked),
+        Err(Close::TOO_MANY_SUBSCRIPTIONS)
+    );
+    assert_eq!(track.tracked(), (2, 1));
+    // Without a node connection the address is `unavailable`, under its name as the server
+    // writes it.
+    let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8_lossy(frame.as_bytes()).into_owned();
+    assert!(
+        text.contains(&format!("\"address:{}\"", address(1))),
+        "{text}"
+    );
+    assert!(text.contains("unavailable"), "{text}");
+    let unsub = format!(r#"{{"op":"unsubscribe","topics":[{},{first}]}}"#, id(1));
+    assert_eq!(subs.handle(&unsub, &tracked), Ok(()));
+    assert_eq!(track.tracked(), (1, 0));
+    assert_eq!(
+        subs.handle(
+            &format!(r#"{{"op":"unsubscribe","topics":[{}]}}"#, id(2)),
+            &tracked
+        ),
+        Ok(())
+    );
 
     assert_eq!(
         subs.handle(r#"{"op":"subscribe","topics":["blocks"]}"#, &subs_limits(0)),
@@ -407,7 +483,7 @@ async fn the_parser_survives_random_and_mutated_streams() {
         Close::TOO_MANY_SUBSCRIPTIONS,
         Close::GONE,
     ];
-    let hub = hub();
+    let track = track();
     let started = Instant::now();
     let mut seen = HashMap::new();
     let mut rng = Rng(0x5EED_CAFE_F00D_D00D);
@@ -425,7 +501,15 @@ async fn the_parser_survives_random_and_mutated_streams() {
         };
         let (conn, _rx) = conn(1024);
         let opened = Instant::now();
-        read_loop(&mut probe, &hub, &conn, &limits, opened, &AtomicU64::new(0)).await;
+        read_loop(
+            &mut probe,
+            &track,
+            &conn,
+            &limits,
+            opened,
+            &AtomicU64::new(0),
+        )
+        .await;
         let reason = conn.reason();
         assert!(
             reason.is_some_and(|r| defined.contains(&r)),

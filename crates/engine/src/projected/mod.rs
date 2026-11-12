@@ -16,7 +16,10 @@
 mod model;
 mod projector;
 
-pub use model::{BANDS, BlockSummary, Delta, Placed, Position, ProjectedBlock, Projection, band};
+pub use model::{
+    BANDS, BlockSummary, Delta, Group, GroupChunk, Placed, Position, ProjectedBlock, Projection,
+    band,
+};
 pub use projector::{ClusterSource, Config, Event, Expected, Projector, Subscription, UpdateStats};
 
 #[cfg(test)]

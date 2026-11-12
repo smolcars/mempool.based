@@ -107,6 +107,28 @@ pub struct Position {
     pub ahead_txs: u32,
 }
 
+/// A transaction's cluster as the projector holds it: the node's chunks, in its linearization
+/// order, with the members we know.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    pub chunks: Vec<GroupChunk>,
+    /// The index in `chunks` of the chunk holding the transaction asked about.
+    pub chunk: usize,
+}
+
+/// One mining chunk: its members are mined together, at its rate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupChunk {
+    /// The node's chunk fee in satoshis, `prioritisetransaction` deltas included; 0 if negative.
+    pub fee: u64,
+    /// The node's sigop-adjusted chunk weight. It counts members we do not know yet.
+    pub weight: u64,
+    /// Sat per 1,000 vB, the node's rounding: every member's effective rate.
+    pub rate: u32,
+    /// Known members in mining order, with their place after the last pack (`None` until then).
+    pub txs: Vec<(Txid, Option<Placed>)>,
+}
+
 /// How blocks are packed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Packing {
@@ -139,6 +161,8 @@ struct Chunk {
     key: Key,
     /// Raw weight of the members we know.
     raw: u64,
+    /// The node's sigop-adjusted weight of the whole chunk.
+    weight: u64,
     /// Known members, in the node's linearization order.
     txs: Vec<Txid>,
     cluster: u64,
@@ -181,6 +205,32 @@ impl Model {
         self.txs.get(txid)?.pos
     }
 
+    /// The cluster holding `txid`, chunk by chunk.
+    pub fn group(&self, txid: &Txid) -> Option<Group> {
+        let own = self.txs.get(txid)?.chunk;
+        let cluster = self.chunks.get(&own)?.cluster;
+        let ids = self.clusters.get(&cluster)?;
+        let chunks: Vec<GroupChunk> = ids
+            .iter()
+            .filter_map(|id| self.chunks.get(id).map(|c| (id, c)))
+            .map(|(_, c)| GroupChunk {
+                fee: c.key.fee.0,
+                weight: c.weight,
+                rate: u32::try_from(c.key.rate.0).unwrap_or(u32::MAX),
+                txs: c
+                    .txs
+                    .iter()
+                    .map(|t| (*t, self.txs.get(t).and_then(|x| x.pos).map(|p| p.placed)))
+                    .collect(),
+            })
+            .collect();
+        let chunk = ids
+            .iter()
+            .filter(|id| self.chunks.contains_key(id))
+            .position(|id| *id == own)?;
+        Some(Group { chunks, chunk })
+    }
+
     /// The cluster a transaction was last seen in, to ask the node once per cluster.
     pub fn cluster_of(&self, txid: &Txid) -> Option<u64> {
         Some(self.chunks.get(&self.txs.get(txid)?.chunk)?.cluster)
@@ -205,6 +255,7 @@ impl Model {
             Chunk {
                 key,
                 raw: u64::from(weight),
+                weight: u64::from(vsize) * 4,
                 txs: vec![txid],
                 cluster: id,
                 slot: None,
@@ -304,6 +355,7 @@ impl Model {
                 Chunk {
                     key,
                     raw,
+                    weight: ch.chunkweight,
                     txs: members,
                     cluster: id,
                     slot: None,

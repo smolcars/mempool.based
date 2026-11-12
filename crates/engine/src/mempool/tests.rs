@@ -138,6 +138,7 @@ fn pool(txs: &[&Transaction]) -> Mempool {
         tip: tip(&block(0, genesis(), &[]), 0),
         added,
         removed: Vec::new(),
+        replaced: Vec::new(),
     };
     assert!(m.apply(&d));
     m
@@ -219,6 +220,7 @@ fn apply_refuses_out_of_order_deltas_and_keeps_totals() {
         tip: m.tip().unwrap(),
         added: Vec::new(),
         removed: vec![(a.compute_txid(), Removal::Evicted)],
+        replaced: Vec::new(),
     };
     assert!(!m.apply(&d), "seq 3 after 1 is a gap");
     assert_eq!(m.len(), 2);
@@ -307,6 +309,25 @@ fn descendants_leave_with_their_replaced_ancestor() {
     for t in [&parent, &child, &grandchild] {
         assert_eq!(r[&t.compute_txid()], replaced(&replacement));
     }
+}
+
+#[test]
+fn links_find_parents_and_children_among_the_given() {
+    let parent = tx(&[coin(0)], 3, 1);
+    let child = tx(&[out(&parent, 0), out(&parent, 2)], 1, 2);
+    let grandchild = tx(&[out(&child, 0), coin(9)], 1, 3);
+    let other = tx(&[out(&parent, 1)], 1, 4);
+    let m = pool(&[&parent, &child, &grandchild, &other]);
+    let ids: Vec<Txid> = [&parent, &child, &grandchild, &other, &tx(&[coin(5)], 1, 9)]
+        .iter()
+        .map(|t| t.compute_txid())
+        .collect();
+    let mut links = m.links(&ids);
+    links.sort_unstable();
+    // Two inputs from one parent are one link; an unknown txid has none.
+    assert_eq!(links, vec![(0, 1), (0, 3), (1, 2)]);
+    // Only links among the txids given.
+    assert_eq!(m.links(&ids[1..3]), vec![(0, 1)]);
 }
 
 #[test]
@@ -622,6 +643,11 @@ async fn follows_sends_replacements_and_blocks_with_reasons() {
     let d = sub.recv().await.unwrap();
     assert_eq!(d.seq, mirror.0 + 1);
     assert_eq!(d.removed, vec![(b.compute_txid(), replaced(&b2))]);
+    // The replaced record comes along, as it was held.
+    assert_eq!(
+        d.replaced,
+        vec![(b.compute_txid(), mirror.1[&b.compute_txid()].clone())]
+    );
 
     // A block confirms `a` and `b2`; `child` stays.
     let blk = mock.mine(&[&a, &b2]);

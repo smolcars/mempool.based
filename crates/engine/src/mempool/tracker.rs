@@ -467,12 +467,18 @@ impl<S: Source> Poller<S> {
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         if !added.is_empty() || !removed.is_empty() || state.tip() != Some(tip) {
+            let replaced = removed
+                .iter()
+                .filter(|(_, r)| matches!(r, Removal::Replaced { .. }))
+                .filter_map(|(t, _)| Some((*t, state.get(t)?.clone())))
+                .collect();
             let delta = Delta {
                 seq: state.seq() + 1,
                 mempool_sequence: listing.mempool_sequence,
                 tip,
                 added,
                 removed,
+                replaced,
             };
             state.apply(&delta);
             stats.seq = Some(delta.seq);

@@ -101,6 +101,13 @@ fn started(config: &Config, log: logging::Settings) {
         ws_mempool_interval_ms: u64::try_from(config.ws.mempool_interval.as_millis())
             .unwrap_or(u64::MAX),
         ws_latest_txs: config.ws.latest_txs,
+        ws_max_tracked_txs: config.ws.max_tracked_txs,
+        ws_max_tracked_addresses: config.ws.max_tracked_addresses,
+        ws_tracked_txs_total: config.ws.tracked_txs_total,
+        ws_tracked_addresses_total: config.ws.tracked_addresses_total,
+        ws_position_interval_ms: u64::try_from(config.ws.position_interval.as_millis())
+            .unwrap_or(u64::MAX),
+        replacements_kept: config.ws.replacements_kept,
         block_summary_cache_mb: l.summary_cache_bytes >> 20,
         data_dir: config.data_dir.as_ref().map(|d| d.display().to_string()),
         backfill_enabled: config.backfill.enabled,

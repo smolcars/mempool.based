@@ -116,7 +116,12 @@ pub(crate) fn run(
     projector: &Projector,
 ) -> Vec<JoinHandle<()>> {
     let stats = Arc::new(Mutex::new(Sent::default()));
+    ctx.track.attach(tracker, projector);
     vec![
+        tokio::spawn(super::track::follow_txs(
+            Arc::clone(&ctx.track),
+            ctx.sockets.limits.mempool_interval,
+        )),
         tokio::spawn(hint(tracker.clone(), ctx.electrum.events())),
         tokio::spawn(projected_feed(
             Arc::clone(ctx),

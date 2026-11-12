@@ -141,6 +141,15 @@ How the tracker and projected blocks run in the server is in [`MEMPOOL.md`](MEMP
 | `projection_resynced` | warn | `network`, `txs` | The projector fell behind the tracker and rebuilt from a snapshot |
 | `mempool_subscriber_lagged` | warn | `network`, `source`, `missed`, `total` | A reader of the `tracker`'s or the `projector`'s change stream fell behind and started over. At a total of 1, 2, 4, 8… per source and network |
 
+### Following transactions and addresses
+
+The `tx:` and `address:` topics ([`WS.md`](WS.md#following-a-transaction-or-an-address)). **No event names a transaction or an address**: the log must not record what people look at, for the same reason as rule 4. A network writes one summary a minute while anything is followed or happened, and nothing while idle.
+
+| Event | Level | Fields | When |
+|---|---|---|---|
+| `tracking_summary` | info | `network`, `txs`, `addresses`, `subscribed`, `refused`, `messages`, `bytes`, `address_errors`, `replacements`, `replaced` | Once a minute per network while anything is followed or happened: transactions and addresses followed now, new ones followed in the minute, refused for a full server, messages sent and their bytes (encoded once), addresses the node would not or could not watch, the replacement record's size now and the replacements recorded in the minute |
+| `tracking_refused` | warn | `network`, `kind`, `reason`, `total` | A socket was refused a transaction (`kind` `tx`) or address (`address`) because the network already follows `WS_TRACKED_TXS_TOTAL` or `WS_TRACKED_ADDRESSES_TOTAL` (`reason` `server_full`). At a total of 1, 2, 4, 8… per kind and network |
+
 ### Derived data
 
 | Event | Level | Fields | When |
