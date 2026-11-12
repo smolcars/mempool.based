@@ -542,6 +542,13 @@ async fn coverage_is_reported_on_a_half_filled_table() {
         get(&addr, &format!("{V1}/pools/24h")).await.coverage(),
         (Some(TIP - 143), Some("true"))
     );
+    // A month reaches past the history's start: not complete, though every stored row is in.
+    let r = get(&addr, &format!("{V1}/pools/1m")).await;
+    assert_eq!(r.json()["blockCount"], 1024);
+    assert_eq!(r.coverage(), (Some(2000), Some("false")));
+    // The retarget at 2016 would be measured against height 0, below the gap: left out.
+    let r = get(&addr, &format!("{V1}/difficulty-adjustments")).await;
+    assert_eq!(r.json(), serde_json::json!([]));
     let r = get(&addr, &format!("{V1}/reward-stats/2000")).await;
     assert_eq!(r.json()["startBlock"], 2000);
     assert_eq!(r.coverage(), (Some(2000), Some("false")));

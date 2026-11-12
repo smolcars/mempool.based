@@ -55,6 +55,8 @@ pub const MAX_REWARD_BLOCKS: u32 = 52_560;
 /// While the backfill adds rows, the answers are recomputed at most this often.
 const BACKFILL_REFRESH: Duration = Duration::from_secs(60);
 const RETRY_MAX: Duration = Duration::from_secs(300);
+/// Answers for a period ending now are recomputed at least this often, blocks or not.
+const MAX_AGE: Duration = Duration::from_secs(600);
 const DAY: u64 = 86_400;
 
 /// One network's mining answers, held in [`NetworkContext`].
@@ -283,7 +285,9 @@ async fn cached(ctx: &NetworkContext, key: Key, route: &'static str) -> Response
         return NOT_READY.into_response();
     };
     match compute(store, table, key).await {
-        Ok(answers) => {
+        // The chain moved under the reads; the refresh that follows answers next time.
+        Ok(None) => NOT_READY.into_response(),
+        Ok(Some(answers)) => {
             m.failures.store(0, Ordering::Relaxed);
             m.insert(answers);
             match m.get(key) {
@@ -432,6 +436,9 @@ async fn reward_stats(State(ctx): Ctx, Path(count): Path<String>) -> Response {
             from: Some((lo, from)),
             complete: s.from <= want,
         };
+        if moved(store, table.span).await.map_err(|e| error(&e))? {
+            return Err(NOT_READY);
+        }
         Ok::<_, ApiError>(fresh(
             &ctx,
             table,
@@ -470,6 +477,9 @@ async fn pool_page(ctx: &NetworkContext, s: &str, below: Option<u32>) -> Respons
             from: Some((span.from, span.from_time)),
             complete: span.from == 0,
         };
+        if moved(store, table.span).await.map_err(|e| error(&e))? {
+            return Err(NOT_READY);
+        }
         Ok::<_, ApiError>(fresh(
             ctx,
             table,
@@ -500,6 +510,9 @@ async fn timestamp(State(ctx): Ctx, Path(t): Path<String>) -> Response {
             from: Some((span.from, span.from_time)),
             complete: span.from == 0,
         };
+        if moved(store, table.span).await.map_err(|e| error(&e))? {
+            return Err(NOT_READY);
+        }
         Ok::<_, ApiError>(fresh(
             &ctx,
             table,
@@ -878,7 +891,9 @@ async fn since(store: &Store, span: Span, start: u64) -> Result<Range, store::Er
     Ok(Range {
         lo: first.max(span.from),
         hi: span.tip,
-        complete: span.from <= first,
+        // Only rows are found, so `first` alone cannot tell a missing start: the history must
+        // begin before the period does.
+        complete: span.from == 0 || span.from_time < start,
     })
 }
 
@@ -901,8 +916,23 @@ async fn recent_hashrate(store: &Store, span: Span, n: u32) -> Result<Option<f64
         .and_then(|w| hashrate::estimate(w.difficulty_sum, w.max_time.saturating_sub(w.min_time))))
 }
 
-/// The answer for `key`; computing a pool's answers computes every pool's.
+/// The answer for `key` (a pool's comes with every pool's), or `None` if the table's chain moved
+/// while it was read: its reads are separate, so they could mix two chains.
 async fn compute(
+    store: &Store,
+    table: Table,
+    key: Key,
+) -> Result<Option<Vec<(Key, Answer)>>, store::Error> {
+    let answers = compute_unchecked(store, table, key).await?;
+    Ok((!moved(store, table.span).await?).then_some(answers))
+}
+
+/// Whether the table's top row is no longer the tip `span` was taken at.
+async fn moved(store: &Store, span: Span) -> Result<bool, store::Error> {
+    Ok(blocks::top(store).await? != Some((span.tip, span.tip_hash)))
+}
+
+async fn compute_unchecked(
     store: &Store,
     table: Table,
     key: Key,
@@ -972,7 +1002,7 @@ async fn compute(
             };
             let points = network_points(store, span, first_point, i.weekly_hashrate()).await?;
             let r = since(store, span, i.start(now)).await?;
-            let difficulty = blocks::retargets(store, r.lo, r.hi)
+            let difficulty = blocks::retargets(store, span.from, r.lo, r.hi)
                 .await?
                 .into_iter()
                 .map(|t| Adjustment {
@@ -1027,18 +1057,19 @@ async fn compute(
         }
         Key::Adjustments(i) => {
             let r = since(store, span, i.start(now)).await?;
-            let mut body: Vec<(u64, u32, f64, f64)> = blocks::retargets(store, r.lo, r.hi)
-                .await?
-                .into_iter()
-                .map(|t| {
-                    (
-                        t.time,
-                        t.height,
-                        t.difficulty,
-                        round(t.difficulty / t.previous, 5),
-                    )
-                })
-                .collect();
+            let mut body: Vec<(u64, u32, f64, f64)> =
+                blocks::retargets(store, span.from, r.lo, r.hi)
+                    .await?
+                    .into_iter()
+                    .map(|t| {
+                        (
+                            t.time,
+                            t.height,
+                            t.difficulty,
+                            round(t.difficulty / t.previous, 5),
+                        )
+                    })
+                    .collect();
             body.reverse();
             vec![(
                 key,
@@ -1353,11 +1384,13 @@ pub async fn run(ctx: Arc<NetworkContext>) {
     }
     let mut followed = table.followed.subscribe();
     let mut last = None;
+    let mut refreshed = Instant::now();
     let mut version = 0u64;
     failures = 0;
     loop {
         match fingerprint(store).await {
-            Ok(Some(fp)) if last != Some(fp) => {
+            // Also when time alone has moved: a day's or a week's answer must drop old blocks.
+            Ok(Some(fp)) if last != Some(fp) || refreshed.elapsed() >= MAX_AGE => {
                 version += 1;
                 let t = Table {
                     version,
@@ -1365,10 +1398,12 @@ pub async fn run(ctx: Arc<NetworkContext>) {
                 };
                 ctx.mining.table.send_replace(Some(t));
                 match refresh(&ctx.mining, network, store, t).await {
-                    Ok(()) => {
+                    Ok(true) => {
                         last = Some(fp);
+                        refreshed = Instant::now();
                         failures = 0;
                     }
+                    Ok(false) => {}
                     Err(e) => {
                         failures += 1;
                         failed(network, "refresh", &e, failures);
@@ -1408,13 +1443,14 @@ async fn fingerprint(store: &Store) -> Result<Option<(Span, u64, u64)>, store::E
     Ok(Some((span, rows, rated)))
 }
 
-/// Recomputes every answer a client has asked for, one at a time so requests interleave.
+/// Recomputes every answer a client has asked for, one at a time so requests interleave. `false`
+/// if the table's chain moved meanwhile: the caller takes a new span and tries again.
 async fn refresh(
     m: &Mining,
     network: Network,
     store: &Store,
     table: Table,
-) -> Result<(), store::Error> {
+) -> Result<bool, store::Error> {
     let started = Instant::now();
     let keys: Vec<Key> = m
         .answers
@@ -1436,7 +1472,9 @@ async fn refresh(
         if m.get(key).is_some_and(|a| a.version == table.version) {
             continue;
         }
-        let computed = compute(store, table, key).await?;
+        let Some(computed) = compute(store, table, key).await? else {
+            return Ok(false);
+        };
         answers += computed.len();
         m.insert(computed);
     }
@@ -1447,7 +1485,7 @@ async fn refresh(
         answers,
         duration_ms: started.elapsed().as_secs_f64() * 1000.0,
     });
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1487,7 +1525,7 @@ mod tests {
         let span = blocks::span(&store).await.unwrap().unwrap();
         let t1 = Table { version: 1, span };
         let all = Key::Pools(Interval::All);
-        m.insert(compute(&store, t1, all).await.unwrap());
+        m.insert(compute(&store, t1, all).await.unwrap().unwrap());
         let count = |m: &Mining| {
             let a = m.get(all).unwrap();
             let v: serde_json::Value = serde_json::from_slice(&a.body).unwrap();
@@ -1503,7 +1541,15 @@ mod tests {
             version: 2,
             span: span2,
         };
-        refresh(&m, Network::Regtest, &store, t2).await.unwrap();
+        // Refreshing with the old span while the table holds a new tip publishes nothing.
+        let t_stale = Table { version: 2, span };
+        assert!(
+            !refresh(&m, Network::Regtest, &store, t_stale)
+                .await
+                .unwrap()
+        );
+        assert_eq!(count(&m), (1, 10, 11));
+        assert!(refresh(&m, Network::Regtest, &store, t2).await.unwrap());
         assert_eq!(count(&m), (2, 11, 12));
         assert!(m.get(Key::Hashrate(Interval::All)).is_none());
         // Nothing changed: nothing recomputed.
@@ -1511,7 +1557,7 @@ mod tests {
         refresh(&m, Network::Regtest, &store, t2).await.unwrap();
         assert_eq!(Arc::as_ptr(&m.get(all).unwrap()), before);
         // A pool's answers come as a family: every pool's, from one computation.
-        m.insert(compute(&store, t2, Key::Pool(88)).await.unwrap());
+        m.insert(compute(&store, t2, Key::Pool(88)).await.unwrap().unwrap());
         assert!(m.get(Key::PoolHashrate(1)).is_some());
         store.close().await;
         let _ = std::fs::remove_dir_all(&dir);

@@ -1086,7 +1086,7 @@ async fn retargets_work_and_times() {
         .map(|h| mined(h, 10_000 + u64::from(h) * 600, b"", f64::from(h / 2016 + 1)))
         .collect();
     insert(&t.store, rows).await;
-    let r = retargets(&t.store, 0, 4032).await.unwrap();
+    let r = retargets(&t.store, 0, 0, 4032).await.unwrap();
     assert_eq!(
         r.iter()
             .map(|r| (r.height, r.difficulty, r.previous))
@@ -1094,7 +1094,7 @@ async fn retargets_work_and_times() {
         [(2016, 2.0, 1.0), (4032, 3.0, 2.0)]
     );
     assert_eq!(r[0].time, 10_000 + 2016 * 600);
-    assert_eq!(retargets(&t.store, 2017, 4031).await.unwrap(), []);
+    assert_eq!(retargets(&t.store, 0, 2017, 4031).await.unwrap(), []);
     // A retarget whose previous period is not stored is left out.
     t.store
         .write(|sql| {
@@ -1104,7 +1104,13 @@ async fn retargets_work_and_times() {
         })
         .await
         .unwrap();
-    assert_eq!(retargets(&t.store, 0, 4032).await.unwrap().len(), 0);
+    assert_eq!(retargets(&t.store, 0, 0, 4032).await.unwrap().len(), 0);
+    // Nor one whose previous period lies below the caller's floor.
+    let r = retargets(&t.store, 2017, 2017, 4032).await.unwrap();
+    assert!(
+        r.is_empty(),
+        "4032 is measured against 2016, below the floor"
+    );
 
     // The work of heights 11..=20 over the time from 10 to 20.
     let w = work(&t.store, 10, 20).await.unwrap().unwrap();
@@ -1242,7 +1248,7 @@ async fn mining_benchmark() {
         let d = periods(&store, 0, ROWS - 1, Period::Day).await.unwrap();
         let t_days = ms(s);
         let s = Instant::now();
-        retargets(&store, 0, ROWS - 1).await.unwrap();
+        retargets(&store, 0, 0, ROWS - 1).await.unwrap();
         let t_ret = ms(s);
         let s = Instant::now();
         pool_page(&store, c[0].pool, 0, ROWS, 100).await.unwrap();

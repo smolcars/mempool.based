@@ -68,6 +68,18 @@ pub async fn span(store: &Store) -> Result<Option<Span>, Error> {
         .await
 }
 
+/// The highest row's height and hash: whether the chain the table holds has moved.
+pub async fn top(store: &Store) -> Result<Option<(u32, BlockHash)>, Error> {
+    store
+        .read(|sql| {
+            Ok(sql
+                .prepare("SELECT height, hash FROM blocks ORDER BY height DESC LIMIT 1")?
+                .query_row([], |r| Ok((get(r, 0)?, read_hash(r, 1)?)))
+                .optional()?)
+        })
+        .await
+}
+
 /// Rows in the table, and how many of them have fee rates.
 pub async fn row_counts(store: &Store) -> Result<(u64, u64), Error> {
     store.read(super::db::counts).await
@@ -138,9 +150,15 @@ pub struct Retarget {
     pub previous: f64,
 }
 
-/// Retargets at heights in `from..=to` whose previous period's first block is stored too,
-/// oldest first.
-pub async fn retargets(store: &Store, from: u32, to: u32) -> Result<Vec<Retarget>, Error> {
+/// Retargets at heights in `from..=to` whose previous period's first block is stored at or above
+/// `floor` too, oldest first. `floor` is the bottom of the history the caller answers from, so a
+/// retarget is never measured against a row below a gap.
+pub async fn retargets(
+    store: &Store,
+    floor: u32,
+    from: u32,
+    to: u32,
+) -> Result<Vec<Retarget>, Error> {
     let first = from.max(INTERVAL).div_ceil(INTERVAL) * INTERVAL;
     let heights: Vec<u32> = (first..=to).step_by(INTERVAL as usize).collect();
     let heights = serde_json::to_string(&heights).unwrap_or_default();
@@ -149,9 +167,10 @@ pub async fn retargets(store: &Store, from: u32, to: u32) -> Result<Vec<Retarget
             let mut stmt = sql.prepare(
                 "SELECT a.height, a.time, a.difficulty, b.difficulty FROM blocks a \
                  JOIN blocks b ON b.height = a.height - ?2 \
-                 WHERE a.height IN (SELECT value FROM json_each(?1)) ORDER BY a.height",
+                 WHERE a.height IN (SELECT value FROM json_each(?1)) AND b.height >= ?3 \
+                 ORDER BY a.height",
             )?;
-            let rows = stmt.query_map(params![heights, INTERVAL], |r| {
+            let rows = stmt.query_map(params![heights, INTERVAL, floor], |r| {
                 Ok(Retarget {
                     height: get(r, 0)?,
                     time: get(r, 1)?,

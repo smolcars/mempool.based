@@ -197,7 +197,7 @@ The table is only as complete as the backfill ([`STORE.md`](STORE.md#backfill)),
 | Header | Value |
 |---|---|
 | `X-Data-From-Height`, `X-Data-From-Time` | The earliest block the answer includes, and its timestamp (Unix seconds). Absent when it includes none |
-| `X-Data-Complete` | `true` when the answer covers the whole period asked for (all of history for `all`, a pool's statistics and its blocks); `false` otherwise |
+| `X-Data-Complete` | `true` when the answer covers the whole period asked for: the stored history begins before the period does (with the genesis block for `all`, a pool's statistics and its blocks); `false` otherwise |
 
 A chart can then say "data from … onward" instead of drawing a false zero. Fee rates exist only for rated rows, the last year by default: a fee-rate point appears only when every block in it is rated, so an average of some is never presented as the whole, and a gap leaves `X-Data-Complete` `false`. A timestamp before the stored history is `404` (`no indexed block at or before that time`) rather than a wrong block. `reward-stats` starts at the stored history when asked for more (`startBlock` says where).
 
@@ -227,7 +227,7 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 - `currentHashrate` and `lastEstimatedHashrate1w` are the last 1,008 blocks; `lastEstimatedHashrate` 144 and `lastEstimatedHashrate3d` 432. A pool's `estimatedHashrate` is its share of the last 24 hours' blocks times the network's hashrate over them; its weekly `avgHashrate` is its share of the week times the week's.
 - **Against the node:** on mainnet, `getnetworkhashps 1008` gave 9.51382 × 10²⁰ and ours 9.51368 × 10²⁰; over 144 blocks 9.47105 × 10²⁰ and 9.47091 × 10²⁰ (the node times from the earliest timestamp in the window rather than the block before it). The node's value does not fit a `u64` either, and asking it would be a node call per request; ours is computed from the table.
 - **Against the reference:** `currentHashrate` within 0.3 % (its window is not stated). Its daily points move 9 % from day to day on average, ours 1.2 %: it uses one day per point.
-- **Retargets** come from the table: the first block of each 2,016-block period against the first of the period before (on testnet4 the last block of a period may be a minimum-difficulty one). Identical to the reference for the month compared.
+- **Retargets** come from the table: the first block of each 2,016-block period against the first of the period before (on testnet4 the last block of a period may be a minimum-difficulty one), both inside the stored history. Identical to the reference for the month compared.
 
 #### Differences from the reference
 
@@ -245,7 +245,7 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 
 #### Freshness and cost
 
-An answer is computed once per change to the table and served from memory. A task per network recomputes the answers clients have asked for whenever `follow` writes a new block, and at most once a minute while the backfill adds rows; between those, a request is a lookup. An answer nobody has asked for is computed by the first request, one computation at a time per network. A pool's statistics and weekly shares are computed for every pool together. The routes marked "no" above are a single bounded indexed read each. Headers as for every `/api/v1` route; `Age` appears while the node's tip is not the one the answer was computed at.
+An answer is computed once per change to the table and served from memory. A task per network recomputes the answers clients have asked for whenever `follow` writes a new block, at most once a minute while the backfill adds rows, and at least every 10 minutes even without either, so a day's answer drops blocks older than a day; between those, a request is a lookup. An answer's reads are separate statements, so one whose chain tip changed while it was read is thrown away (a request then gets `503` and retries; the refresh starts over at the new tip), never published with blocks from two chains. An answer nobody has asked for is computed by the first request, one computation at a time per network. A pool's statistics and weekly shares are computed for every pool together. The routes marked "no" above are a single bounded indexed read each. Headers as for every `/api/v1` route; `Age` appears while the node's tip is not the one the answer was computed at.
 
 Measured on the Apple M4 under the load described in [`STORE.md`](STORE.md#measurements), release build, from `curl` on the same machine. The reference backend (a stock mempool backend in front of the same node) was asked once per route, over the network; the pool routes for Foundry USA.
 
