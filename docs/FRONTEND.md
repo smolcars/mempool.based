@@ -1,6 +1,6 @@
 # Frontend
 
-How the Solid app in `web/` is put together, and the rules that let several people build pages at once without colliding. The visual rules are in [`DESIGN.md`](DESIGN.md); this file is about code.
+How the Solid 2 app in `web/` is put together (solid-js and @solidjs/web 2.0.0-rc.21, @solidjs/router 2.0.0-next.44, @solidjs/vite-plugin 3.0.0-next.57: pre-releases, pinned exactly), and the rules that let several people build pages at once without colliding. The visual rules are in [`DESIGN.md`](DESIGN.md); this file is about code.
 
 ## Layout
 
@@ -22,7 +22,7 @@ web/
       format.ts         Amounts, fee rates and bands, sizes, hashes, times
       network.ts        Networks, prefixes, `paths` for every page
       address.ts        An address's type and networks from its form (the address page and search)
-      api.ts            HTTP client and `createApi` resource
+      api.ts            HTTP client, and `createApi` and `createRequest` for components
       live.ts           The WebSocket client: `useTopic`, `useLiveStatus` (see "Live data")
       blocks-topic.ts   The `blocks` topic: its messages and how to keep a block list current
       projected-topic.ts The `projected` topic: every projected block's totals and the tip they sit on
@@ -48,7 +48,7 @@ web/
 
 ## Routing
 
-`@solidjs/router`. Mainnet pages are at the root and the other networks under `/signet`, `/testnet4` and `/regtest`, matching the server ([`ARCHITECTURE.md`](ARCHITECTURE.md)). `src/routes.ts` mounts every page's routes under all four prefixes, so a page is written once with network-free paths (`/tx/:txid`) and works on every network. The server sends the app shell for any page path, so deep links and reloads work; a disabled network's paths are a 404 from the server.
+`@solidjs/router`. `index.tsx` makes the router with `createRouter({ routes, scrollRestoration: false })` (the browser restores scroll on back and forward) and renders the shell as its render-prop child. Mainnet pages are at the root and the other networks under `/signet`, `/testnet4` and `/regtest`, matching the server ([`ARCHITECTURE.md`](ARCHITECTURE.md)). `src/routes.ts` mounts every page's routes under all four prefixes, so a page is written once with network-free paths (`/tx/:txid`) and works on every network. The server sends the app shell for any page path, so deep links and reloads work; a disabled network's paths are a 404 from the server.
 
 The network comes from the path. `useNetwork()` returns it; never keep it anywhere else.
 
@@ -83,7 +83,7 @@ Sub-pages (`/mining/pool/:slug`) go in the same `routes.ts`; you never touch `sr
 
 ### Links
 
-Internal links stay on the current network. Use `<Link href={paths.tx(txid)}>` from `components/Link.tsx`; it adds the prefix and the router handles the click. Build every path with `paths` in `lib/network.ts`, which encodes chain data into a single path segment so it can never change the route or the scheme ([`SECURITY.md`](SECURITY.md) rule 14). Add a function to `paths` for a new page rather than writing the path by hand. To navigate from code: `navigate(onNetwork(network(), paths.block(h)))`.
+Internal links stay on the current network. Use `<Link href={paths.tx(txid)}>` from `components/Link.tsx`; it adds the prefix and the router handles the click. The router handles every same-origin `<a>` and marks the ones that match the location: `aria-current="page"` on an exact match (it never touches an `aria-current` you set) and `data-active` on a match by path. Give an in-page `#` link `rel="external"`, as the skip link has, so the browser scrolls to it and it is not announced as the current page. Build every path with `paths` in `lib/network.ts`, which encodes chain data into a single path segment so it can never change the route or the scheme ([`SECURITY.md`](SECURITY.md) rule 14). Add a function to `paths` for a new page rather than writing the path by hand. To navigate from code: `navigate(onNetwork(network(), paths.block(h)))`.
 
 ### Page title
 
@@ -104,7 +104,7 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 </Show>
 ```
 
-- `createApi<T>(path, { as: "text" })` is a Solid resource. It refetches when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, answers at once from the cache, and stays loading while a busy refusal waits to be retried. Return a falsy path to wait for something else first.
+- `createApi<T>(path, { as: "text" })` returns `[request, { refetch }]`. `request()` is the answer: undefined before the first, the last one while it asks again, and it throws once the last attempt failed, so read `request.state` (`unresolved`, `pending`, `ready`, `refreshing`, `errored`) first where a failure is expected; `request.error`, `request.loading` and `request.latest` are there too. It asks again when the path or the network changes, aborts the request it replaces and the one in flight when the page unmounts, answers from the cache without a network request, and stays loading while a busy refusal waits to be retried. Return a falsy path to wait for something else first. `createRequest(source, (source, signal) => …)` is the same for a fetcher of your own (the block page's summary and transaction records).
 - `fetchApi<T>(network, path, { as, signal })` is the same call as a promise, for event handlers and loops. `fetchApp<T>` is the same for the app's own API under the network's `/app`.
 - **Chain-tip stamps.** `createApi<T>(path, { stamped: true })` and `fetchStamped<T>(network, path)` give `{ value, tip }`, where `tip` is the `X-Bitcoin-Chain-Tip` and its height that the reply is as of (undefined for an unstamped or cached reply). Take every figure that depends on the tip from one stamped reply, or compare the stamps of two: the block page counts confirmations from its status reply's stamp, and the home page's difficulty panel asks again while its answer's stamp trails the strip's tip.
 - **Busy servers.** Every call above retries a 503 or 429 by itself, no sooner than its `Retry-After` (kept on `ApiError.retryAfter`), backing off from 1 to 30 s with a little jitter, six times, then rejects with the last error. They are all GETs, safe to repeat. Four 503s are not retried, because a retry cannot change them: an address too large to total, an address index that is off ([`API.md`](API.md#error-bodies-are-ours)), mining history on a server without a block table ([`API.md`](API.md#mining)), and the relatives and replacements routes on a network whose mempool engine is switched off. Show a loading state, not an error, while a call is pending. `withRetry(call, signal)` is the loop itself, for a call that does not go through `api.ts`; only wrap a call that is safe to repeat. A refusal it already gave up on is never retried by a loop around it. The browser still logs each refused request to the console; browser tests that may meet one allow `/status of (429|503)/`.
@@ -112,14 +112,14 @@ const [block] = createApi<Block>(() => `/block/${encodeURIComponent(params.id)}`
 - `as: "text"` reads plain-text replies (`/blocks/tip/height`, `/block-height/:h`, `/tx/:txid/hex`), and `as: "bytes"` binary ones as an `ArrayBuffer` (`fetchApp(n, "/block/<hash>/txs", { as: "bytes" })`). The default is JSON.
 - Failures are `ApiError` with `status` (0 when the server cannot be reached, with a message that says so when the browser is offline) and a message fit to show. `isNotFound(e)` tests for 404. An abort is passed through as the abort error, not as an `ApiError`.
 - Replies the server marks as never changing (`immutable`, or `max-age` of a day or more) are kept in memory, at most 256, for the life of the page. Everything else is fetched every time and left to the browser's HTTP cache.
-- Reading a resource inside the shell's `<Suspense>` holds the whole page until it loads. To show the page frame first and fill sections as they arrive, give each section its own `<Suspense>` or test `resource.loading`.
-- An error thrown while rendering reaches the shell's error boundary, which shows "This page could not be shown". Catch expected failures (not found, node unavailable) in the page with `<ErrorState>` instead.
+- A request never suspends: the page frame shows at once and each section fills from `state` as its data arrives. Pages do not use Solid 2's async memos (`createMemo` returning a promise): read inside the shell's `<Loading>`, one would hold the whole page until it loads. The shell's `<Loading>` waits only for a page's code.
+- An error thrown while rendering reaches the shell's `<Errored>` boundary, which shows "This page could not be shown". Catch expected failures (not found, node unavailable) in the page with `<ErrorState>` instead.
 
 ### When a page's files fail to load
 
 Every page, and the transaction grid, is a chunk of code with its own stylesheet, downloaded on first use. A download can fail: a dropped connection, a busy proxy, or a deploy that replaced the files while a tab was open. Vite never asks for a failed stylesheet again by itself, so `lib/chunks.ts` notes every `<link rel="stylesheet">` that fails (`watchStyles`, started in `index.tsx`) and `retryStyles()` asks for each again through a fresh `<link>`. A failed script is fetched again when its `import()` runs again, which the router's `lazy()` does on the next render.
 
-The shell's error boundary handles both. On a chunk error it shows "Loading this page" and tries again after 1, 2 and 4 s: before each attempt it asks `/app/config` (never from a cache) whether the server's version changed since the tab loaded, then asks again for the failed stylesheets, and renders the page again only once they are in, so a page never appears unstyled. When the attempts run out it says that part of the page could not be downloaded, with "Try again", which asks for everything again. When the version changed, the files this tab needs were replaced by a deploy: it says the site has been updated and offers "Reload" rather than retrying files that are gone. A navigation starts the count afresh.
+The shell's `<Errored>` boundary handles both. On a chunk error it shows "Loading this page" and tries again after 1, 2 and 4 s: before each attempt it asks `/app/config` (never from a cache) whether the server's version changed since the tab loaded, then asks again for the failed stylesheets, and renders the page again only once they are in, so a page never appears unstyled. When the attempts run out it says that part of the page could not be downloaded, with "Try again", which asks for everything again. When the version changed, the files this tab needs were replaced by a deploy: it says the site has been updated and offers "Reload" rather than retrying files that are gone. A navigation starts the count afresh.
 
 `lib/esplora.ts` has hand-written types for the replies pages use, from rbitcoin v0.9.2's `docs/esplora-openapi.yaml`. Add a type when you use a new route; keep the field names exactly as the API sends them. Amounts are integer sats and times are unix seconds throughout.
 
@@ -359,13 +359,13 @@ For a figure without a component, use `lib/format.ts` directly: `formatBtc`, `fo
 | `scene.ts` | Where each square comes from and goes to, and when. Pure |
 | `gl.ts` | The WebGL2 program: one instanced draw call, animated in the vertex shader |
 
-**Load it lazily.** It is about 7 KB gzipped and only pages that draw it should fetch it. Import types with `import type`, which costs nothing, and the component with `lazy()` inside its own `<Suspense>`, so it never holds the page. Call `.preload()` when the page mounts, so the code downloads while the data does. `decode.ts` is small and may be imported statically.
+**Load it lazily.** It is about 7 KB gzipped and only pages that draw it should fetch it. Import types with `import type`, which costs nothing, and the component with `lazy()` inside its own `<Loading>`, so it never holds the page. Call `.preload()` in the page's `onSettled`, so the code downloads while the data does. `decode.ts` is small and may be imported statically.
 
 ```tsx
 const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 
 <div class="my-frame">{/* position: relative, with a size: the grid fills it */}
-  <Suspense>
+  <Loading>
     <TxGrid
       txs={txs()}                       // GridTx[]: { id, vsize, fee, value?, rate?, coinbase? }
       capacity={1_000_000}              // vB the frame stands for; more than that shrinks to fit
@@ -374,7 +374,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
       highlight={rowHovered()}          // an id to ring, or undefined
       onState={setGridState}            // "drawn" | "lost" | "unsupported"
     />
-  </Suspense>
+  </Loading>
 </div>
 ```
 
@@ -397,7 +397,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 | `scale.ts` | Linear and log scales, round value ticks, time ticks from hours to decades, `formatSi`, `formatHashrate`, `formatShare`, `formatDay`, `describeSeries`. Pure |
 | `geometry.ts` | Paths broken at gaps, `stackLayout`, `nearestIndex` and `layerAt` for hit testing, `extent`, `sorted`. Pure |
 
-**Load it lazily,** as the grid: `const Chart = lazy(() => import("../../components/chart/Chart"))`, call `Chart.preload()` when the page mounts, and hold its height while it loads (`pages/mining/parts.tsx`, `ChartSlot`, holds `height` + 5.75rem: readout, plot and caption). Import types and the pure modules statically; they cost nothing until used.
+**Load it lazily,** as the grid: `const Chart = lazy(() => import("../../components/chart/Chart"))`, call `Chart.preload()` in `onSettled`, and hold its height while it loads (`pages/mining/parts.tsx`, `ChartSlot`, holds `height` + 5.75rem: readout, plot and caption). Import types and the pure modules statically; they cost nothing until used.
 
 ```tsx
 <Chart
@@ -432,7 +432,7 @@ const TxGrid = lazy(() => import("../../components/txgrid/TxGrid"));
 - Plain CSS with the tokens in `design/tokens.css`, imported once in `index.tsx`. Never copy a token value; use the custom property.
 - Cascade layers, in this order: `reset, base, layout, components, pages`. Shared components write in `@layer components`, pages in `@layer pages`.
 - One CSS file per component, next to it, imported by the component. BEM-style names: `block`, `block__part`, `block--variant`. Prefix a page's classes with the page name (`tx-flow`, `block-grid`) so pages never share a class by accident.
-- Per-element values (a fee color, a position) are custom properties set through Solid's `style` object, with a value that comes from props or a signal: `style={{ "--swatch": feeColor(rate) }}`. Solid applies those through the CSSOM, which the Content-Security-Policy allows. Never write a `style` string, and never a `style` object whose values are all literals, because the compiler may turn it into an inline `style` attribute, which the policy blocks.
+- Per-element values (a fee color, a position) are custom properties set through Solid's `style` object, with a value that comes from props or a signal: `style={{ "--swatch": feeColor(rate) }}`. Solid applies those through the CSSOM, which the Content-Security-Policy allows. Never write a `style` string, and never put a literal value in a `style` object: Solid 2's compiler writes the literal entries of an object into the element's `style` attribute in its template, even beside dynamic ones, and the policy blocks that.
 - Breakpoints: 1040 px and 640 px ([`DESIGN.md`](DESIGN.md)).
 
 ## Theme
@@ -448,11 +448,20 @@ The font is preloaded, and `index.tsx` waits up to 1 s for it before the first r
 1. **Stay in your directory.** A page owns `pages/<page>/` and nothing else. Its only edit outside is the one line in `src/routes.ts`, plus a function in `paths` and types in `lib/esplora.ts` when it needs them; those are append-only.
 2. **Shared code changes in its own PR.** `components/`, `lib/`, `shell/` and `styles/` are shared. If a page needs a change there (a new prop, a fix, a new component), make it a small separate PR, or ask whoever is working on the shell. A component used by one page lives in that page's directory until a second page needs it.
 3. **Chain data is text.** No `innerHTML`, no markup built from data, no data in `href` or `src` except through `paths` ([`SECURITY.md`](SECURITY.md) rule 14).
-4. **No style attributes.** Custom properties through the `style` object with dynamic values only (see "CSS").
+4. **No style attributes.** Custom properties through the `style` object, every value dynamic (see "CSS").
 5. **Numbers through `lib/format.ts`.** Never `toFixed` a BTC amount or a fee rate in a page. Every amount, rate and size reaches a screen reader with its unit: in a table cell whose unit is in the header, use the components' `unit={false}`, or a `visually-hidden` unit after a number you format yourself.
 6. **No layout shift.** Reserve space for what loads later.
 7. **Stay in budget.** The shell and the home page together load at most 100 KB of gzipped JavaScript (`bun run size`). Other pages load on demand and should stay small too; a heavy component (the WebGL grid, the charts) loads only on the page that uses it.
-8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router at a given URL.
+8. **Test what has logic.** Pure functions get unit tests next to them. Components can be tested in Vitest's DOM: `mount()` in `components/test-utils.tsx` renders inside a router (`createRouter` with `memoryHistory(url)`) at a given URL.
+9. **Write for Solid 2.** Its migration guide and RFCs are in the solid repository under `documentation/solid-2.0/`; these are the rules that bite in this app:
+   - **A write is seen after the flush.** `setX(v); x()` still gives the old value until the update is applied (the next microtask, or `flush()`). Code that writes and then reads in the same turn keeps the value in a plain variable that the signal mirrors (`createBlockFeed`'s list, the pool page's count), or uses the updater form `setX((n) => n + 1)`. `batch` is gone: writes in one turn are applied together.
+   - **Effects are split.** `createEffect(() => source(), (value, previous) => { …; return cleanup })`: the first function tracks and only reads, the second does the work untracked and returns its cleanup. `on()` is gone: the first function is the dependency list, and `{ defer: true }` skips the first run. The first function runs when the effect is created, so declare an effect below everything it reads.
+   - **`onSettled` replaces `onMount`.** It returns its cleanup; `onCleanup` inside it throws. It runs once, untracked.
+   - **No writes from a component body or a memo** (development throws). Write in handlers, effects' second function, `onSettled`, or async callbacks. A value derived from another and also written (the address history's later pages) is a function-form `createSignal((prev) => …)`; `createComputed` is gone.
+   - **Boolean attributes are presence.** `true` writes an empty attribute and `false` removes it, so `aria-*` and other true/false attributes take the strings: `aria-busy={loading() ? "true" : "false"}`, `spellcheck="false"`. Attribute names are lowercase (`maxlength`, `tabindex`).
+   - **Classes and lists.** `classList` is gone: `class={["base", { "base--on": on() }]}`. `Index` is `<For keyed={false}>`, `splitProps` is `omit`, `Suspense` is `Loading`, `ErrorBoundary` is `Errored`.
+   - **Read props in JSX or a memo.** A read at the top of a component body is not tracked and warns in development; wrap a deliberate one-time read in `untrack`.
+   - **In tests, flush before you look.** After an event, a timer or a write the test made, call `flush()` before reading signals or the DOM. `FakeSocket` flushes after each message and close, as a browser's task boundary would.
 
 ## Checks
 
