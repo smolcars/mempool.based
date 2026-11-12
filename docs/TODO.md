@@ -63,8 +63,8 @@ Refined when M1 lands.
 | FE6 | The transaction and address pages, live: a transaction's place in the projected blocks, what replaced it, the group it will be mined with, and its confirmation, from the tracking topics instead of polling; an address page that refreshes when its history changes | MP5, FE4 | doing |
 | FE7 | Home page follow-ups: the fee panel from our own recommendations (MP4); a tile's size in the agreed convention (serialized size in B, kB, MB); tighten the new-block workarounds once the server's order is promised (MP7) | MP4, MP7, FE5 | todo |
 | W8 | Projected-block page: one projected block's transactions drawn with the grid and updated live | W7, MP3 | done ([#40](https://github.com/smolcars/mempool.based/pull/40)) |
-| MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | doing |
-| MI6 | Give each block its miner where pages show it: the pool in the block facts, in the WebSocket's `summary` message and in a recent-blocks answer, then on the block page, the home tiles and the mining page's recent blocks | MI2, FE3 | doing |
+| MP7 | When a block is found, update the projected blocks at once from that block's transactions; today they follow 3 to 6 s later, at the tracker's next poll, so pages see the new tip before the next block empties | MP3 | done ([#49](https://github.com/smolcars/mempool.based/pull/49)) |
+| MI6 | Give each block its miner where pages show it: the pool in the block facts, in the WebSocket's `summary` message and in a recent-blocks answer, then on the block page, the home tiles and the mining page's recent blocks | MI2, FE3 | done ([#47](https://github.com/smolcars/mempool.based/pull/47)) |
 | FX6 | Make the browser tests reliable under the real limits: the whole suite runs as one client, and the fixed per-client allowance for page loads refuses it about one local run in four. Each test worker should look like its own client, so the suite runs at the production defaults | E1, FX3 | done ([#46](https://github.com/smolcars/mempool.based/pull/46)) |
 | MP8 | A day-long evidence run for the fee recommendations on mainnet, scored with `fee_watch`, and tuning from it: the first run saw only four blocks, and the next-block level met its horizon in three of them. Needs the owner's agreement, since it keeps the mainnet mempool engine on for a day | MP4 | todo |
 | FL1 | Find the cause of two intermittent test failures builders saw once each and could not reproduce (a browser test unable to open the WebSocket; one unidentified Rust test failure) | E1 | done by FX6 ([#46](https://github.com/smolcars/mempool.based/pull/46)): the suite ran as one client, a mining test started before the server had caught up, a hover test aimed at moving squares, and one locator matched two elements |
@@ -81,8 +81,8 @@ Refined when M2 lands.
 | MI1 | Block summaries with backfill: totals from `getblockstats`; our own fee-rate percentiles from per-transaction data, newest first in the background | ST1, N1, N3 | done ([#34](https://github.com/smolcars/mempool.based/pull/34)); the full mainnet backfill has not been run |
 | MI2 | Mining pool attribution from coinbase tags and addresses; needs a pool list under an MIT-compatible licence, or our own | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
 | MI3 | Hashrate history | MI1 | done ([#38](https://github.com/smolcars/mempool.based/pull/38)) |
-| MI4 | Block audit: expected template against the mined block | MP2, MI1 | todo |
-| MI5 | Mempool history series, one sample a minute | ST1, MP1 | todo |
+| MI4 | Block audit: expected template against the mined block | MP2, MI1 | doing |
+| MI5 | Mempool history series, one sample a minute | ST1, MP1 | doing |
 | PR1 | Fiat prices with an off switch | ST1 | todo |
 | W9 | Mining dashboard and pool pages | MI2, MI3 | done ([#44](https://github.com/smolcars/mempool.based/pull/44)) |
 | W10 | Charts with uPlot | MI5 | done ([#44](https://github.com/smolcars/mempool.based/pull/44)): hand-written SVG charts, no library |
@@ -94,8 +94,8 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | done ([#37](https://github.com/smolcars/mempool.based/pull/37)); the graph is unverified until LN2 |
-| LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | doing |
-| LN3 | Channel opens and closes from blocks, with close classification | LN2 | todo |
+| LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | done ([#48](https://github.com/smolcars/mempool.based/pull/48)) |
+| LN3 | Channel opens and closes from blocks, with close classification | LN2 | doing |
 | LN4 | Lightning store, statistics snapshots and API | LN3, ST1 | todo |
 | W11 | Lightning pages: network statistics, node, channel, search | LN4, W1 | todo |
 
