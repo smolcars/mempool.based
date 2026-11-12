@@ -225,7 +225,7 @@ describe("BlockPage", () => {
     serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, miner }] } });
     const el = open(`/block/${HASH}`);
     await until(() => expect(fact(el, "Miner")).toContain("Foundry USA"));
-    expect(fact(el, "Miner")).toContain("Matched by payout address or tag");
+    expect(fact(el, "Miner")).toContain("By payout address or tag");
     const link = [...el.querySelectorAll<HTMLAnchorElement>(".block-fact a")].find(
       (a) => a.textContent === "Foundry USA",
     );
@@ -237,7 +237,7 @@ describe("BlockPage", () => {
     serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, miner }] } });
     const el = open(`/block/${HASH}`);
     await until(() => expect(fact(el, "Miner")).toContain("Unknown"));
-    expect(fact(el, "Miner")).toBe("UnknownNo listed payout address or tag matches");
+    expect(fact(el, "Miner")).toBe("UnknownNo listed address or tag");
     expect(el.querySelector('.block-fact a[href="/mining/pool/unknown"]')).not.toBeNull();
     // The tag is shown as the miner wrote it, in its own fact, as text.
     await until(() => expect(fact(el, "Coinbase tag")).toContain("<img src=x onerror=alert(1)>"));

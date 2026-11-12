@@ -105,7 +105,7 @@ test("every block names its miner: Unknown on regtest, which has no pools", asyn
     "href",
     "/regtest/mining/pool/unknown",
   );
-  await expect(miner).toContainText("No listed payout address or tag matches");
+  await expect(miner).toContainText("No listed address or tag");
 
   await page.goto("/regtest/");
   const lane = page.getByRole("list", { name: "Mined blocks, newest first" });

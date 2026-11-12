@@ -243,6 +243,13 @@
     font-weight: var(--weight-regular);
     color: var(--color-text-muted);
   }
+  /* One line however narrow the column, so the miner arriving never moves the facts below. */
+  .block-fact__line {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .block-fact__pending {
     font-size: var(--text-sm);
     color: var(--color-text-muted);

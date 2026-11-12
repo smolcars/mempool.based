@@ -493,7 +493,15 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                           )
                         }
                       >
-                        {(m) => <Link href={paths.pool(m().slug)}>{m().name}</Link>}
+                        {(m) => (
+                          <Link
+                            class="block-fact__line"
+                            href={paths.pool(m().slug)}
+                            title={m().name}
+                          >
+                            {m().name}
+                          </Link>
+                        )}
                       </Show>
                     )
                   ) : (
@@ -501,9 +509,13 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                   )
                 }
                 sub={
-                  sum()?.miner?.slug === "unknown"
-                    ? "No listed payout address or tag matches"
-                    : sum()?.miner && "Matched by payout address or tag"
+                  sum()?.miner && (
+                    <span class="block-fact__line">
+                      {sum()?.miner?.slug === "unknown"
+                        ? "No listed address or tag"
+                        : "By payout address or tag"}
+                    </span>
+                  )
                 }
               />
               <Fact

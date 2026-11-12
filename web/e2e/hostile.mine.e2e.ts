@@ -66,7 +66,7 @@ test("hostile chain data is shown as text on every page that shows it", async ({
   const tag = page.getByRole("definition").filter({ hasText: "Written by the miner" });
   await expect(tag).toContainText("<script>alert('cb')</script>· <b>pool</b>");
   // The tag names no listed pool, so the miner is Unknown: the tag's text is never a name.
-  const miner = page.getByRole("definition").filter({ hasText: "No listed payout address" });
+  const miner = page.getByRole("definition").filter({ hasText: "No listed address or tag" });
   await expect(miner.getByRole("link")).toHaveText("Unknown");
   // The miner claimed 1 000 sats less than the subsidy of an empty block.
   await expect(
