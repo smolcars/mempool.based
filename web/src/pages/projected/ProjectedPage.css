@@ -96,7 +96,7 @@
     width: 12px;
     height: 12px;
     overflow: visible;
-    fill: var(--color-positive);
+    fill: var(--color-live);
   }
   .projected-live--live .projected-live__icon {
     animation: projected-breathe 2.4s var(--ease-in-out) infinite;

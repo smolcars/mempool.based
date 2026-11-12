@@ -749,7 +749,7 @@
     height: 12px;
     flex: none;
     overflow: visible;
-    fill: var(--color-positive);
+    fill: var(--color-live);
   }
   .tx-live--live .tx-live__icon {
     animation: tx-breathe 2.4s var(--ease-in-out) infinite;

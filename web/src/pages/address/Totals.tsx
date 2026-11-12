@@ -53,7 +53,7 @@ export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => v
   const failure = () => (props.stats.state === "errored" ? refusal(props.stats.error) : undefined);
 
   return (
-    <section class="address-totals" aria-label="Totals" aria-busy={ready() ? "false" : "true"}>
+    <section class="address-totals panel" aria-label="Totals" aria-busy={ready() ? "false" : "true"}>
       <Switch>
         <Match when={failure() === "too-large"}>
           <Notice title="Totals are not available for this address">

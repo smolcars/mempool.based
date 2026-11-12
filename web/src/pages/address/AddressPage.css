@@ -33,7 +33,7 @@
 
   /* Totals: the balance leads, four figures follow. Every line exists while loading. */
   .address-totals {
-    margin-top: var(--space-6);
+    margin-top: var(--space-4);
   }
   .address-stats {
     display: grid;
@@ -360,7 +360,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0 var(--space-2);
-    margin-top: calc(-1 * var(--space-3));
+    margin-top: var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
   }
@@ -377,7 +377,7 @@
     stroke-width: 1.4;
   }
   .address-live--on .address-live__icon {
-    fill: var(--color-positive);
+    fill: var(--color-live);
     stroke: none;
     animation: address-breathe 2.4s var(--ease-in-out) infinite;
   }

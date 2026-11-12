@@ -373,7 +373,7 @@
     overflow: visible;
   }
   .home-live__dot {
-    fill: var(--color-positive);
+    fill: var(--color-live);
     stroke: none;
   }
   .home-live__cross {

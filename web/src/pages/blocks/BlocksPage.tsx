@@ -31,37 +31,48 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Height",
     cell: (b: Block | null) =>
       b ? (
-        <Link class="blocks-height num" href={paths.block(b.id)}>
-          {groupDigits(b.height)}
-        </Link>
+        <span class="blocks-heightcell">
+          <Link class="blocks-height num" href={paths.block(b.id)}>
+            {groupDigits(b.height)}
+          </Link>
+          {/* Phones drop the Mined column, so the age moves under the height. */}
+          <span class="blocks-heightcell__age" aria-hidden="true">
+            <TimeAgo time={b.timestamp} />
+          </span>
+        </span>
       ) : (
         <Skel size="s" />
       ),
   },
   {
-    header: "Hash",
-    optional: true,
-    cell: (b: Block | null) =>
-      b ? (
-        <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
-      ) : (
-        <span class="blocks-hash-skel">
-          <Skel />
-        </span>
-      ),
-  },
-  {
     header: "Mined",
+    optional: true,
     cell: (b: Block | null) => (b ? <TimeAgo time={b.timestamp} /> : <Skel size="s" />),
   },
   {
+    header: "Miner",
+    cell: (b: Block | null) => {
+      const f = b ? factsOf(b.id) : undefined;
+      if (f === undefined) return <Skel size="s" />;
+      const m = f === "failed" ? undefined : f.miner;
+      return m ? (
+        <Link class="blocks-miner" href={paths.pool(m.slug)} title={m.name}>
+          {m.name}
+        </Link>
+      ) : (
+        MISSING
+      );
+    },
+  },
+  {
     header: "Transactions",
+    short: "Txs",
     numeric: true,
-    optional: true,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
   },
   {
     header: "Median fee rate, sat/vB",
+    short: "Median, sat/vB",
     numeric: true,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
@@ -74,6 +85,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
   {
     header: "Match rate, %",
     numeric: true,
+    optional: true,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;
@@ -97,6 +109,18 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       if (f === undefined) return <Skel size="s" />;
       return f === "failed" ? MISSING : <Amount sats={f.fees} unit={false} />;
     },
+  },
+  {
+    header: "Hash",
+    optional: true,
+    cell: (b: Block | null) =>
+      b ? (
+        <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
+      ) : (
+        <span class="blocks-hash-skel">
+          <Skel />
+        </span>
+      ),
   },
   // Sizes carry their unit in the cell, as on the block page: they span B to MB (docs/DESIGN.md).
   {
@@ -214,11 +238,13 @@ export default function BlocksPage() {
             />
           }
         >
-          <DataTable
-            caption="Recent blocks, newest first"
-            columns={table}
-            rows={list() ?? Array.from({ length: PAGE }, () => null)}
-          />
+          <div class="panel">
+            <DataTable
+              caption="Recent blocks, newest first"
+              columns={table}
+              rows={list() ?? Array.from({ length: PAGE }, () => null)}
+            />
+          </div>
           <nav class="blocks-pager" aria-label="Block pages">
             <Show
               when={!atTip()}

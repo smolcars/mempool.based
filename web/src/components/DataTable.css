@@ -56,9 +56,24 @@
       padding-block: var(--space-3);
     }
   }
+  .table__short {
+    display: none;
+  }
   @media (max-width: 640px) {
     .table .table__optional {
       display: none;
+    }
+    /* The full header stays for screen readers; the short one is what fits. */
+    .table__long {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .table__short {
+      display: inline;
     }
     /* A header such as "Fee rate, sat/vB" wraps rather than widen its column past a phone's width. */
     .table th {

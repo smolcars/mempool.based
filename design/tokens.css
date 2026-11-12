@@ -47,6 +47,7 @@
   --color-positive: #1b6e43;
   --color-caution: #8a5a00;
   --color-negative: #b42318;
+  --color-live: #1f6f9c; /* the breathing dot of a page that updates itself: not a status of the data */
   --color-scrim: rgb(22 27 30 / 0.5);
 
   /* Fee bands, cheapest to dearest: one ramp, the same in both themes. Thresholds in docs/DESIGN.md. */
@@ -162,6 +163,7 @@
     --color-positive: #5fd39a;
     --color-caution: #f0b43c;
     --color-negative: #ff8a7a;
+    --color-live: #6cb0dc;
     --color-scrim: rgb(5 6 7 / 0.6);
     --series-1: #6cb0dc;
     --series-2: #d9a24c;
@@ -192,6 +194,7 @@
   --color-positive: #5fd39a;
   --color-caution: #f0b43c;
   --color-negative: #ff8a7a;
+  --color-live: #6cb0dc;
   --color-scrim: rgb(5 6 7 / 0.6);
   --series-1: #6cb0dc;
   --series-2: #d9a24c;

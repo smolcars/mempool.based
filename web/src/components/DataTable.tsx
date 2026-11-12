@@ -10,6 +10,8 @@ export interface Column<T> {
   numeric?: boolean;
   /** Dropped on phones. Mark the least important columns. */
   optional?: boolean;
+  /** A shorter header shown on phones ("Txs"); screen readers keep the full one. */
+  short?: string;
 }
 
 export interface DataTableProps<T> {
@@ -41,7 +43,16 @@ export function DataTable<T>(props: DataTableProps<T>) {
               <For each={props.columns}>
                 {(c) => (
                   <th scope="col" class={cellClass(c)}>
-                    {c.header}
+                    <Show when={c.short} fallback={c.header}>
+                      {(short) => (
+                        <>
+                          <span class="table__long">{c.header}</span>
+                          <span class="table__short" aria-hidden="true">
+                            {short()}
+                          </span>
+                        </>
+                      )}
+                    </Show>
                   </th>
                 )}
               </For>
