@@ -203,11 +203,7 @@ function InputDetails(props: { vin: Vin; version: number }) {
               {(item, i) => <Code label={`Item ${i()}`} value={item} bytes={item.length / 2} />}
             </For>
             <Show when={witness().length > witnessShown()}>
-              <button
-                class="btn"
-                type="button"
-                onClick={() => setWitnessPresses(witnessPresses() + 1)}
-              >
+              <button class="btn" type="button" onClick={() => setWitnessPresses((n) => n + 1)}>
                 Show {groupDigits(Math.min(witness().length - witnessShown(), MORE_STEP))} more of{" "}
                 {groupDigits(witness().length)} items
               </button>
