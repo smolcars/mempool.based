@@ -101,11 +101,7 @@ async fn client_frames_are_unmasked_and_checked() {
 
 fn conn(queue: usize) -> (Arc<Conn>, mpsc::Receiver<Frame>) {
     let (tx, rx) = mpsc::channel(queue);
-    let conn = Conn {
-        id: rand_id(),
-        queue: tx,
-        closing: watch::Sender::new(None),
-    };
+    let conn = Conn::test(rand_id(), tx);
     (Arc::new(conn), rx)
 }
 
@@ -177,6 +173,7 @@ fn track() -> Arc<Tracking> {
         None,
         true,
         &WsLimits::default(),
+        &crate::config::Limits::default(),
     ))
 }
 

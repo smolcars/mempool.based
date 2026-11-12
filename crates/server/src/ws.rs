@@ -42,6 +42,7 @@ use crate::NetworkContext;
 use crate::config::WsLimits;
 use crate::error::ApiError;
 use crate::limits::{self, Held, Hold, Refused};
+use crate::refusals::{Refusal, Refusals};
 
 pub use frame::Frame;
 pub use hub::{Fanout, Hub, Snapshot, feed};
@@ -193,6 +194,8 @@ pub struct Sockets {
     next_id: AtomicU64,
     /// Upgrades refused for their `Origin`, every network together.
     origin_refused: AtomicU64,
+    /// The server's refusal summary, which socket messages refused are counted in too.
+    pub(crate) refusals: Arc<Refusals>,
 }
 
 impl Sockets {
@@ -207,6 +210,7 @@ impl Sockets {
             grace,
             next_id: AtomicU64::new(0),
             origin_refused: AtomicU64::new(0),
+            refusals: Refusals::new(std::time::Instant::now()),
         })
     }
 
@@ -254,6 +258,8 @@ impl Sockets {
 #[derive(Debug)]
 pub struct Conn {
     id: u64,
+    /// The client, as the per-client limits key it.
+    who: Refusal,
     queue: mpsc::Sender<Frame>,
     closing: watch::Sender<Option<Close>>,
 }
@@ -281,6 +287,25 @@ impl Conn {
 
     fn reason(&self) -> Option<Close> {
         *self.closing.borrow()
+    }
+}
+
+#[cfg(test)]
+impl Conn {
+    /// A connection for tests, whose client address is made from `id`: one client each.
+    pub(crate) fn test(id: u64, queue: mpsc::Sender<Frame>) -> Self {
+        let client =
+            std::net::IpAddr::from(u32::try_from(id % (1 << 32)).unwrap_or(0).to_be_bytes());
+        Self {
+            id,
+            who: Refusal {
+                client,
+                untrusted_forwarded: false,
+                proxy_keyed: false,
+            },
+            queue,
+            closing: watch::Sender::new(None),
+        }
     }
 }
 
@@ -365,10 +390,11 @@ pub(crate) fn upgrade(
         Err(r) if r.reason == "client_concurrency" => return refused(r.error, client_cap),
         Err(r) => return r.into_response(),
     };
+    let who = client.who;
     let upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(async move {
         if let Ok(io) = upgrade.await {
-            run(ctx, TokioIo::new(io), (permit, hold), api).await;
+            run(ctx, TokioIo::new(io), (permit, hold), who, api).await;
         }
     });
     let mut res = StatusCode::SWITCHING_PROTOCOLS.into_response();
@@ -451,8 +477,13 @@ fn handshake(h: &HeaderMap) -> Result<HeaderValue, ApiError> {
 
 /// Runs one upgraded connection to its end. `slots` (the total and per-client caps) are held
 /// until then.
-async fn run<S>(ctx: Arc<NetworkContext>, io: S, slots: (OwnedSemaphorePermit, Hold), api: Api)
-where
+async fn run<S>(
+    ctx: Arc<NetworkContext>,
+    io: S,
+    slots: (OwnedSemaphorePermit, Hold),
+    who: Refusal,
+    api: Api,
+) where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
     let sockets = &ctx.sockets;
@@ -463,6 +494,7 @@ where
     let (closing, mut close_rx) = watch::channel(None);
     let conn = Arc::new(Conn {
         id: sockets.next_id.fetch_add(1, Ordering::Relaxed),
+        who,
         queue,
         closing,
     });
@@ -714,16 +746,17 @@ impl<'a> Subscriptions<'a> {
     }
 
     /// Subscribes to `topic` unless it already is, within the per-connection caps; over one,
-    /// `Err` with the close code `/app/ws` uses. `Ok(false)` when the server's total for a tracked
-    /// topic refused it: the client has been told, and stays.
+    /// `Err` with the close code `/app/ws` uses. `Ok(Some(why))` when tracking declined it (the
+    /// server's total, or the client's budget for new addresses): on `/app/ws` the client has
+    /// been told, and stays.
     pub(crate) fn join(
         &mut self,
         topic: Topic,
         name: &str,
         limits: &WsLimits,
-    ) -> Result<bool, Close> {
+    ) -> Result<Option<track::Declined>, Close> {
         if self.topics.contains(&topic) {
-            return Ok(true);
+            return Ok(None);
         }
         let count = |f: fn(&Topic) -> bool| self.topics.iter().filter(|t| f(t)).count();
         let blocks = |t: &Topic| matches!(t, Topic::ProjectedTxs(_));
@@ -742,15 +775,15 @@ impl<'a> Subscriptions<'a> {
             return Err(Close::TOO_MANY_SUBSCRIPTIONS);
         }
         if track::tracked(topic) {
-            // Beyond the server's total the client is told so, and stays connected.
-            if self.track.subscribe(topic, name, self.conn).is_err() {
-                return Ok(false);
+            // Beyond the server's total or the client's budget it is told so, and stays connected.
+            if let Err(why) = self.track.subscribe(topic, name, self.conn) {
+                return Ok(Some(why));
             }
         } else {
             self.track.hub().subscribe(topic, self.conn);
         }
         self.topics.insert(topic);
-        Ok(true)
+        Ok(None)
     }
 
     /// Unsubscribes from `topic`, if subscribed.

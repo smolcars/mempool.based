@@ -26,7 +26,9 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::time::Instant;
 
 use super::{Conn, Frame, Hub, Snapshot, Topic};
-use crate::config::{Network, WsLimits};
+use crate::config::{Limits, Network, WsLimits};
+use crate::esplora::HeavyShare;
+use crate::limits::Clients;
 use crate::replacements::{Batch, Facts, Kept, Link, MAX_LINKS, Mined, Replacements};
 use crate::{ApiError, esplora};
 use engine::replacements::{Answer, Ask, Lookup};
@@ -88,6 +90,10 @@ pub struct Tracking {
     mempool: bool,
     bounds: Bounds,
     engines: OnceLock<(Tracker, Projector)>,
+    /// Each client's budget for new node work from the sockets: an address subscription the
+    /// network does not hold yet, or an `/api/v1/ws` address's first history read. Its own
+    /// table, with the address routes' numbers (SECURITY.md rule 11).
+    follows: Arc<Clients>,
     state: Mutex<State>,
     /// A transaction is newly followed: [`follow_txs`] says its state now.
     wake: Notify,
@@ -221,9 +227,17 @@ impl Shown {
     }
 }
 
-/// Why a subscription to a tracked topic was not taken.
+/// Why a tracked topic was not subscribed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Full;
+pub enum Declined {
+    /// The network follows `WS_TRACKED_TXS_TOTAL` or `WS_TRACKED_ADDRESSES_TOTAL` already.
+    Full,
+    /// The client is starting new address follows faster than its budget.
+    Rate,
+}
+
+/// The refusal summary's reason, and `/app/ws`'s, for a follow over the client's budget.
+pub const FOLLOW_RATE: &str = "follow_rate";
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -242,8 +256,15 @@ impl Tracking {
         electrum: Option<electrum::Client>,
         mempool: bool,
         limits: &WsLimits,
+        client_limits: &Limits,
     ) -> Self {
+        let share = HeavyShare::of(client_limits);
         Self {
+            follows: Clients::with_rate(
+                share.per_sec,
+                share.burst,
+                client_limits.max_tracked_clients,
+            ),
             network,
             hub,
             electrum,
@@ -302,15 +323,16 @@ impl Tracking {
     }
 
     /// Adds `conn` to a tracked topic and queues its state to it. Beyond the server's total for
-    /// that kind, `conn` is sent a `refused` message instead (on `/app/ws`; the caller answers on
-    /// `/api/v1/ws`) and nothing is subscribed. An address's `name` is always `address:<address>`,
-    /// whichever protocol asks first: it names the `/app` messages.
+    /// that kind, or an address the node is not asked about yet past the client's budget, `conn`
+    /// is sent a `refused` message instead (on `/app/ws`; the caller answers on `/api/v1/ws`)
+    /// and nothing is subscribed. An address's `name` is always `address:<address>`, whichever
+    /// protocol asks first: it names the `/app` messages.
     pub(super) fn subscribe(
         self: &Arc<Self>,
         topic: Topic,
         name: &str,
         conn: &Arc<Conn>,
-    ) -> Result<(), Full> {
+    ) -> Result<(), Declined> {
         let mut st = lock(&self.state);
         match topic {
             Topic::Tx(txid) | Topic::V1Tx(txid) => {
@@ -318,7 +340,7 @@ impl Tracking {
                     st.stats.refused += 1;
                     st.stats.refused_txs += 1;
                     self.refuse(conn, topic, name, "tx", st.stats.refused_txs);
-                    return Err(Full);
+                    return Err(Declined::Full);
                 }
                 let entry = st.txs.entry(txid).or_insert(TxEntry {
                     refs: 0,
@@ -345,14 +367,29 @@ impl Tracking {
                     st.stats.refused += 1;
                     st.stats.refused_addresses += 1;
                     self.refuse(conn, topic, name, "address", st.stats.refused_addresses);
-                    return Err(Full);
+                    return Err(Declined::Full);
                 }
                 if let Some(e) = st.addresses.get_mut(&sh) {
+                    // The node is watching it, or still being asked (an entry nobody follows is
+                    // kept until it answers): nothing new for the node, so nothing is charged.
                     e.refs += 1;
                     if e.refs == 1 {
                         st.stats.subscribed += 1;
                     }
                 } else {
+                    let path = if topic == Topic::Address(sh) {
+                        "/app/ws"
+                    } else {
+                        "/api/v1/ws"
+                    };
+                    if !self.charge(conn, path) {
+                        if topic == Topic::Address(sh) {
+                            let msg =
+                                json!({ "topic": name, "type": "refused", "reason": FOLLOW_RATE });
+                            conn.send(Frame::text(msg.to_string().as_bytes()));
+                        }
+                        return Err(Declined::Rate);
+                    }
                     st.next_gen += 1;
                     let epoch = st.next_gen;
                     st.addresses.insert(
@@ -370,7 +407,7 @@ impl Tracking {
                     tokio::spawn(watch(Arc::clone(self), sh, epoch));
                 }
             }
-            _ => return Err(Full),
+            _ => return Err(Declined::Full),
         }
         // Under the same lock as every publish of these topics, so the state queued here is
         // always followed by the changes after it.
@@ -419,6 +456,20 @@ impl Tracking {
                 self.hub.remove(t);
             }
         }
+    }
+
+    /// Takes one token of `conn`'s client's budget for new node work. Without one, the refusal is
+    /// counted in the summary, never logged on its own (SECURITY.md rule 22).
+    pub(super) fn charge(&self, conn: &Conn, path: &str) -> bool {
+        let Err(r) = self.follows.take(conn.who.client) else {
+            return true;
+        };
+        let reason = match r.reason {
+            "route_rate" => FOLLOW_RATE,
+            other => other,
+        };
+        self.hub.sockets().refusals.count(reason, path, conn.who);
+        false
     }
 
     fn refuse(&self, conn: &Conn, topic: Topic, name: &str, kind: &'static str, total: u64) {

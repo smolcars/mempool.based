@@ -134,6 +134,10 @@ impl Hub {
     }
 
     /// The network this hub serves.
+    pub(crate) fn sockets(&self) -> &Sockets {
+        &self.sockets
+    }
+
     pub fn network(&self) -> Network {
         self.network
     }

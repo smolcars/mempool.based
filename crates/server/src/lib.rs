@@ -154,6 +154,7 @@ impl NetworkContext {
             Some(electrum.clone()),
             config.mempool,
             &all.ws,
+            &all.limits,
         ));
         let lister = Arc::new(summary::lister(config.network));
         let table = all
@@ -362,7 +363,7 @@ impl App {
             |v| SetResponseHeaderLayer::overriding(CACHE_CONTROL, HeaderValue::from_static(v));
 
         let limiter = Limiter::new(&config.limits);
-        let refusals = refusals::Refusals::new(std::time::Instant::now());
+        let refusals = Arc::clone(&sockets.refusals);
         if tokio::runtime::Handle::try_current().is_ok() {
             tokio::spawn(refusals::report(
                 Arc::clone(&refusals),

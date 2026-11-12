@@ -16,7 +16,7 @@ use axum::extract::Path;
 use bitcoin::hashes::Hash;
 use engine::projected::{Placed, Position};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use super::*;
 use crate::config::Network;
@@ -37,11 +37,7 @@ impl Client {
     fn new() -> Self {
         static IDS: AtomicU64 = AtomicU64::new(3_000_000);
         let (tx, rx) = mpsc::channel(256);
-        let conn = Arc::new(Conn {
-            id: IDS.fetch_add(1, Ordering::Relaxed),
-            queue: tx,
-            closing: watch::Sender::new(None),
-        });
+        let conn = Arc::new(Conn::test(IDS.fetch_add(1, Ordering::Relaxed), tx));
         Self {
             conn,
             rx,
