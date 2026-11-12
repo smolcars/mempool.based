@@ -1,0 +1,279 @@
+@layer pages {
+  .block-page {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+    padding-top: var(--space-5);
+    padding-bottom: var(--space-8);
+  }
+
+  /* ---- Messages: bad input, not found ---- */
+  .block-message {
+    gap: var(--space-4);
+    padding-top: var(--space-7);
+  }
+  .block-message__text {
+    max-width: 60ch;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+
+  /* ---- Previous and next ---- */
+  .block-pager {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: 1.5em;
+    font-size: var(--text-sm);
+  }
+  .block-pager a {
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+  .block-pager a:hover {
+    color: var(--color-accent);
+  }
+  .block-pager__next {
+    margin-left: auto;
+    text-align: right;
+  }
+
+  /* ---- Title and hash ---- */
+  .block-head {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .block-head__title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+  }
+  .block-head__hash {
+    max-width: 46rem;
+    min-height: 1.5em;
+  }
+
+  /* A hidden copy of a hash: its groups show as grey bars where the real hash will be. */
+  .block-head__ghost {
+    visibility: hidden;
+  }
+  .block-head__ghost .hash__group {
+    visibility: visible;
+    color: transparent;
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+  }
+
+  .block-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-3) 2px var(--space-2);
+    border: 1.5px solid currentColor;
+    border-radius: var(--radius-pill);
+    color: var(--color-negative);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .block-status__icon {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+  }
+  .block-notice {
+    max-width: 72ch;
+    padding: var(--space-3) var(--space-4);
+    border-left: 3px solid var(--color-negative);
+    border-radius: 0 var(--radius-m) var(--radius-m) 0;
+    background: var(--color-surface);
+    font-size: var(--text-sm);
+  }
+
+  /* ---- Core sample and facts ---- */
+  .block-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: var(--space-7);
+    align-items: start;
+  }
+
+  .block-core__frame {
+    position: relative;
+    /* The transaction map will draw into this same box. */
+    aspect-ratio: 6 / 5;
+    overflow: hidden;
+    border-radius: var(--radius-l);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+  /* Settled layers of neutral sediment, as high as the block is full. Never a fee color. */
+  .block-core__fill {
+    position: absolute;
+    inset: auto 0 0;
+    height: calc(var(--fill) * 100%);
+    min-height: 2px;
+    border-top: 2px solid var(--color-text);
+    background:
+      repeating-linear-gradient(
+        to top,
+        transparent 0 13px,
+        color-mix(in srgb, var(--color-line-strong) 30%, transparent) 13px 14px
+      ),
+      color-mix(in srgb, var(--color-line) 70%, var(--color-surface-sunken));
+    animation: block-core-settle var(--dur-slow) var(--ease-settle) both;
+  }
+  .block-core__limit {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-3);
+    z-index: 1;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  .block-core__level {
+    position: absolute;
+    left: var(--space-3);
+    bottom: calc(100% + var(--space-1));
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+  }
+  .block-core__fill--high .block-core__level {
+    bottom: auto;
+    top: var(--space-2);
+  }
+  @keyframes block-core-settle {
+    from {
+      opacity: 0;
+      transform: translateY(-12px);
+    }
+  }
+  .block-core__caption {
+    margin-top: var(--space-3);
+    max-width: 60ch;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+
+  .block-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 var(--space-5);
+    align-content: start;
+  }
+  .block-fact {
+    min-width: 0;
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-line);
+  }
+  .block-fact--wide {
+    grid-column: 1 / -1;
+  }
+  .block-fact dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .block-fact dd {
+    display: grid;
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
+  }
+  .block-fact__value {
+    min-height: 1.5em;
+  }
+  /* Always one line tall, empty or not, so facts never move when their data arrives. */
+  .block-fact__sub {
+    min-height: 1.5em;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    color: var(--color-text-muted);
+  }
+  .block-fact__pending {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    font-weight: var(--weight-regular);
+  }
+
+  .block-fact--tall .block-fact__value {
+    min-height: 3em;
+  }
+  .block-tag {
+    white-space: pre-wrap;
+  }
+  .block-tag--hex {
+    font-family: var(--font-mono);
+    font-variation-settings: var(--mono-on);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .block-tag__hidden {
+    color: var(--color-text-muted);
+    font-weight: var(--weight-light);
+    letter-spacing: -0.1em;
+  }
+
+  .block-side__title {
+    margin-top: var(--space-6);
+    padding-bottom: var(--space-2);
+    border-bottom: 2px solid var(--color-text);
+    font-size: var(--text-md);
+  }
+  .block-facts--header {
+    grid-template-columns: minmax(0, 1fr);
+    font-size: var(--text-sm);
+  }
+  .block-facts--header .block-fact {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: baseline;
+    padding: var(--space-2) 0;
+  }
+  .block-facts--header dd {
+    display: block;
+  }
+
+  /* ---- Transactions ---- */
+  .block-txs {
+    margin-top: var(--space-5);
+  }
+  /* Rows load above this button; never let the browser anchor the scroll on it and jump. */
+  .block-txs__more {
+    display: grid;
+    justify-items: center;
+    margin-top: var(--space-4);
+    overflow-anchor: none;
+  }
+  .block-txs__more .btn[aria-disabled="true"] {
+    cursor: progress;
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 1040px) {
+    .block-layout {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-6);
+    }
+  }
+  @media (max-width: 640px) {
+    .block-page {
+      padding-top: var(--space-4);
+    }
+    .block-facts {
+      gap: 0 var(--space-4);
+    }
+    .block-fact--wide-phone {
+      grid-column: 1 / -1;
+    }
+    /* Copy lives on the transaction page; here the room goes to the numbers. */
+    .block-txs .copy {
+      display: none;
+    }
+    .block-facts--header .block-fact {
+      grid-template-columns: 6.5rem minmax(0, 1fr);
+    }
+  }
+}
