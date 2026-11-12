@@ -8,6 +8,7 @@ import ChannelPage from "./ChannelPage";
 import LightningPage from "./LightningPage";
 import NodePage from "./NodePage";
 import RankingsPage from "./RankingsPage";
+import { LightningNav } from "./parts";
 import SearchPage from "./SearchPage";
 import { TxLightning } from "./TxLightning";
 import {
@@ -340,6 +341,10 @@ describe("search and rankings", () => {
     const el = mount(() => <SearchPage />, "/lightning/search?q=811984x2037x0");
     await shows(el, "Closed");
     expect(links(el)).toContain("/lightning/channel/811984x2037x0");
+    // A result opened from here leads back to the search, query and all.
+    const nav = mount(() => <LightningNav here="detail" />);
+    expect(nav.querySelector(".ln-nav__back")?.textContent).toBe("← Search results");
+    expect(links(nav)).toContain("/lightning/search?q=811984x2037x0");
   });
 
   it("says when nothing matches, and refuses a search too short to ask", async () => {

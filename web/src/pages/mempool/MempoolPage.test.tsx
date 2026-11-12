@@ -55,10 +55,11 @@ describe("mempool history page", () => {
   });
 
   it("bridges a few missing minutes, and breaks the line where recording paused longer", async () => {
-    // Three missing minutes (T0+120 to T0+240) are drawn across; ten (T0+420 to T0+960) break it.
+    // Five missing minutes (T0+120 to T0+360), the most bridged, are drawn across; ten (T0+540 to
+    // T0+1080) break it.
     replies["/app/mempool/history/2h"] = answer(
       history({
-        points: [point(T0), point(T0 + 60), point(T0 + 300), point(T0 + 360), point(T0 + 1020)],
+        points: [point(T0), point(T0 + 60), point(T0 + 420), point(T0 + 480), point(T0 + 1140)],
       }),
     );
     const el = mount(() => <MempoolPage />, "/mempool?interval=2h");

@@ -22,6 +22,8 @@ export function Amount(props: {
 }) {
   const parts = () => btcParts(props.sats);
   const direction = () => (props.signed && props.sats > 0 ? "in" : undefined);
+  // Where the quiet part starts: after two decimals for `lead`, else after the last non-zero one.
+  const cut = (p: { significant: string }) => (props.lead ? 2 : p.significant.length);
   return (
     <Show when={parts()} fallback={<span class="amount">{MISSING}</span>}>
       {(p) => (
@@ -40,8 +42,8 @@ export function Amount(props: {
         >
           <span class="amount num" title={`${formatSats(props.sats)} sats`}>
             {direction() === "in" ? "+" : p().sign}
-            {p().whole}.{p().significant}
-            <span class="amount__zeros">{p().zeros}</span>
+            {p().whole}.{(p().significant + p().zeros).slice(0, cut(p()))}
+            <span class="amount__zeros">{(p().significant + p().zeros).slice(cut(p()))}</span>
             <span class={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>
           </span>
         </Show>

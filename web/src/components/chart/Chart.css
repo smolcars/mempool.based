@@ -5,7 +5,8 @@
     container-type: inline-size;
   }
   @container (max-width: 480px) {
-    .chart__value--empty {
+    /* Doubled class: it must beat the plain .chart__value rule below. */
+    .chart__value.chart__value--empty {
       display: none;
     }
   }

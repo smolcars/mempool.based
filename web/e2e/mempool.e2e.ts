@@ -66,3 +66,15 @@ test("the page shows the minutes the server stored, with the gap where none was"
   const counts = await figures.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
   expect(counts.slice(-STORED.length)).toEqual(STORED);
 });
+
+test("a phone's chart reads out only the layers that hold anything", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/mempool?interval=2h");
+  const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
+  await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+  // The seeded minutes sit in one or two fee bands, so most of the ten are empty.
+  const empty = page.locator(".chart__value--empty");
+  expect(await empty.count()).toBeGreaterThan(0);
+  for (const value of await empty.all()) await expect(value).toBeHidden();
+  await expect(page.locator(".chart__value:not(.chart__value--empty)").first()).toBeVisible();
+});

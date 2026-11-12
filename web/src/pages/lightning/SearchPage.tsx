@@ -10,7 +10,15 @@ import { createRequest } from "../../lib/api";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isSearchResult, type SearchResult, searchProblem, STATE_WORDS } from "./lightning";
-import { ask, ChannelLink, Gate, LightningSearch, nodeColumns, LightningNav } from "./parts";
+import {
+  ask,
+  ChannelLink,
+  Gate,
+  LightningSearch,
+  nodeColumns,
+  LightningNav,
+  rememberList,
+} from "./parts";
 
 export default function SearchPage() {
   const [search] = useSearchParams();
@@ -44,6 +52,7 @@ export default function SearchPage() {
 }
 
 function Results(props: { network: Network; q: string }) {
+  rememberList(paths.lightningSearch(props.q), "Search results");
   const [found, { refetch }] = createRequest(
     () => props.q,
     (q, signal) => ask(props.network, `/search?q=${encodeURIComponent(q)}`, isSearchResult, signal),

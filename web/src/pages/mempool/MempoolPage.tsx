@@ -220,7 +220,8 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
   const fitted = () => (props.fit ? dataFrom(props.h) : undefined);
   // A missing minute or few is bridged, not drawn as a stripe that looks like a fault; a longer
   // pause in recording still breaks the line, and the table lists only what was stored.
-  const bridged = () => props.h.step * BRIDGE_STEPS;
+  // Points either side of n missing steps stand n + 1 steps apart.
+  const bridged = () => props.h.step * (BRIDGE_STEPS + 1);
   const s = createMemo(() => seriesOf(props.h));
   const domain = () => [fitted() ?? props.h.from, props.h.to] as const;
   const hatchFrom = () => (fitted() === undefined ? dataFrom(props.h) : undefined);
