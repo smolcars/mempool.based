@@ -33,7 +33,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | FE1 | Frontend follow-ups from the page tasks: let the API client expose the chain-tip header so a page can tell when the tip moved between its requests; stop the footer jumping when a page first mounts | LX1 | done ([#33](https://github.com/smolcars/mempool.based/pull/33)) |
 | E1 | End-to-end harness: headless browser against the server on regtest, inside the CI budget; fix the image build broken by the app shell and guard against a repeat | F0, R2, S1, W1 | done ([#15](https://github.com/smolcars/mempool.based/pull/15), [#21](https://github.com/smolcars/mempool.based/pull/21)) |
 | P1 | Docker image and compose file beside rbitcoin | S1 | done ([#10](https://github.com/smolcars/mempool.based/pull/10)) |
-| A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | doing |
+| A1 | Scheduled dependency audit against the advisory database, outside the PR path | F0 | done ([#60](https://github.com/smolcars/mempool.based/pull/60)); the first run found no advisories |
 | CI2 | Get the browser-test job back to 90 s or less: the recorded-minute test waits up to two minutes for a real sample; seed the store instead | FE9 | done ([#58](https://github.com/smolcars/mempool.based/pull/58)); the browser-test job is back to 77 s |
 | QA1 | Acceptance check of milestone M1 against its exit criteria: the built server and the Docker image on all three networks in a real browser, numbers cross-checked with the node, hostile input, the performance budgets; findings become tasks | W6 | done: exit criteria met on all three networks; findings became FX3, FE4 and FX5 |
 | FX3 | Server fixes from the M1 acceptance check: the per-client limits must not break an ordinary page load (assets were rate-limited); the proxy header must not be trusted by default or from an untrusted peer; a cost limit on address routes; same-origin WebSocket upgrades on `/app/ws`; a wrong RPC password reported as such; the acceptance check's hostile-request scripts turned into tests | QA1 | done ([#39](https://github.com/smolcars/mempool.based/pull/39)) |
@@ -98,7 +98,7 @@ Refined when M3 lands. Design in [`LIGHTNING.md`](LIGHTNING.md).
 |---|---|---|---|
 | LN1 | Gossip peer with LDK: peer connections, graph sync, graph persistence | F0 | done ([#37](https://github.com/smolcars/mempool.based/pull/37)); the graph is unverified until LN2 |
 | LN2 | Funding-output lookups through rbitcoin's position routes: batched, rate-limited | LN1, N1 | done ([#48](https://github.com/smolcars/mempool.based/pull/48)) |
-| LN3 | Channel opens and closes from blocks, with close classification | LN2 | doing |
+| LN3 | Channel opens and closes from blocks, with close classification | LN2 | done ([#61](https://github.com/smolcars/mempool.based/pull/61)) |
 | LN4a | Run the Lightning peer inside the server: settings, lifecycle, logging, the stored channel history and statistics snapshots, and a first read surface | LN3, ST1 | doing |
 | LN4b | The Lightning node, channel, search and ranking routes, in `/app` and in the `/api/v1/lightning` shapes | LN4a | todo |
 | W11 | Lightning pages: network statistics, node, channel, search | LN4b, W1 | todo |
@@ -115,6 +115,6 @@ Refined when M4 lands.
 | C1 | Remaining [`COMPAT.md`](COMPAT.md) rows marked for delivery | M4 | todo |
 | Q1 | Link previews for block, transaction and address pages | W3, W4, W5 | todo |
 | Q2 | Accessibility pass | M4 | todo |
-| Q3 | Performance pass against the budgets | M4 | todo |
+| Q3 | Performance pass against the budgets | M4 | doing |
 | Q4 | Operator guide and release workflow with multi-architecture images; the guide must say that the reverse proxy compresses `/api` and `/app` answers, since the server does not | P1 | todo |
-| Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | todo |
+| Q5 | Cross-browser check in Safari and Firefox, including the WebSocket under the Content-Security-Policy | M4 | doing |
