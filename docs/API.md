@@ -195,7 +195,7 @@ A faster level is never lower than a slower one, and none is below `minimumFee`.
 
 When neither is available (the node's estimates are older than 90 s or never came), the fee routes answer `503` rather than an old number. `mempool-blocks` is `503 the mempool engine is off on this server` with the engine off, and otherwise serves the last projection, with `Age` while it is stale.
 
-**Answered from memory.** A task per network recomputes the recommendation once per `WS_MEMPOOL_INTERVAL_MS` (2 s) from the latest projection, and the projected blocks once per new projection; a request reads the result. The only node calls are the task's `/fee-estimates` (and `getmempoolinfo` with the engine off), at most once per 30 s, and only while the node's estimates are what is served and a fee route was asked in the last ten minutes (or the `fees` topic has a subscriber). After a quiet spell the first request is therefore a `503` with `Retry-After: 1`, and the answer follows within a few seconds.
+**Answered from memory.** A task per network recomputes the recommendation once per `WS_MEMPOOL_INTERVAL_MS` (2 s) from the latest projection, and the projected blocks once per new projection; a request reads the result. The only node calls are the task's `/fee-estimates` and `getmempoolinfo` (for the node's minimum now), at most once per 30 s, and only while the node's estimates are what is served and a fee route was asked in the last ten minutes (or the `fees` topic has a subscriber). After a quiet spell the first request is therefore a `503` with `Retry-After: 1`, and the answer follows within a few seconds.
 
 #### Differences from the reference
 

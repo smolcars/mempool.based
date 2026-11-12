@@ -305,3 +305,28 @@ async fn with_the_engine_off_the_nodes_estimates_are_served_and_marked() {
     assert_eq!(node.hits.load(Ordering::SeqCst), before);
     task.abort();
 }
+
+#[tokio::test]
+async fn an_old_answer_is_withdrawn_before_waiting_on_a_node_that_hangs() {
+    // A node that accepts connections and never answers.
+    let hang = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = hang.local_addr().unwrap().to_string();
+    let ctx = context(false, Some(&addr));
+    ctx.fees.set(Some(answer(Source::Projected)));
+    let (conn, mut rx) = crate::ws::mempool::tests::conn(64);
+    ctx.hub.subscribe(Topic::Fees, &conn);
+    let task = tokio::spawn(run(Arc::clone(&ctx), None, Recommender::default()));
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while ctx.fees.current().is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the old answer stayed while the node hung"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let f = rx.recv().await.unwrap();
+    let v: Value = serde_json::from_slice(crate::ws::mempool::tests::open(&f).1).unwrap();
+    assert_eq!(v["type"], "unavailable");
+    task.abort();
+    drop(hang);
+}

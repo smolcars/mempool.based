@@ -11,6 +11,7 @@ use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
 
 use super::*;
+use crate::projected::Projection;
 
 const B: u64 = BLOCK_VSIZE;
 
@@ -234,6 +235,34 @@ fn fee_range_is_seven_rates_by_vsize() {
     let txs = (1..=100u32).map(|r| (r * 10, 100));
     assert_eq!(fee_range(txs), vec![10, 100, 250, 500, 750, 900, 1_000]);
     assert_eq!(fee_range([(7, 1)]), vec![7; 7]);
+}
+
+#[test]
+fn time_without_a_projection_is_not_counted_as_quiet_minutes() {
+    let current = Projection {
+        tip: tip(1),
+        ..Projection::default()
+    };
+    let stale = Projection {
+        stale: true,
+        ..current.clone()
+    };
+    let mut r = Recommender::default();
+    // Down from the start for ten minutes: nothing was watched, so no warm-up passed.
+    for t in (0..600).step_by(2) {
+        assert_eq!(r.update(t, &Projection::default(), 100), None);
+    }
+    assert_eq!(r.update(600, &current, 100), None);
+    assert_eq!(r.update(600 + 299, &current, 100), None);
+    assert!(r.update(600 + 300, &current, 100).is_some());
+    // A blip under a minute keeps what was watched…
+    assert_eq!(r.update(1_000, &stale, 100), None);
+    assert!(r.update(1_030, &current, 100).is_some());
+    // …a longer outage starts the warm-up over.
+    assert_eq!(r.update(1_100, &stale, 100), None);
+    assert_eq!(r.update(1_200, &current, 100), None);
+    assert_eq!(r.update(1_499, &current, 100), None);
+    assert!(r.update(1_500, &current, 100).is_some());
 }
 
 // Properties over random mempools from a deterministic generator.

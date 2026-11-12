@@ -330,7 +330,13 @@ impl Smoother {
 pub struct Recommender {
     inflow: Inflow,
     smoother: Smoother,
+    /// Since when the projection has been stale or missing: arrivals are not being watched.
+    unobserved: Option<u64>,
 }
+
+/// An outage at least this long throws the arrivals away and starts the warm-up over: its
+/// minutes would otherwise count as quiet ones.
+pub const OUTAGE_SECS: u64 = 60;
 
 impl Recommender {
     /// A transaction entered the mempool at `now`, paying `fee` satoshis for `vsize`.
@@ -349,11 +355,21 @@ impl Recommender {
     }
 
     /// The answer for projection `p` with the node's minimum `floor`. `None` while the projection
-    /// is stale or empty of a tip, or fewer than [`WARM_UP_MINUTES`] of arrivals were watched:
-    /// the caller falls back to the node's estimates then.
+    /// is stale or empty of a tip, or fewer than [`WARM_UP_MINUTES`] of arrivals were watched
+    /// since it was last current: the caller falls back to the node's estimates then.
     pub fn update(&mut self, now: u64, p: &Projection, floor: u32) -> Option<Rates> {
+        if p.stale || p.tip.is_none() {
+            self.unobserved.get_or_insert(now);
+            self.smoother.reset();
+            return None;
+        }
+        if let Some(since) = self.unobserved.take()
+            && now.saturating_sub(since) >= OUTAGE_SECS
+        {
+            self.inflow = Inflow::default();
+        }
         self.inflow.roll(now);
-        if p.stale || p.tip.is_none() || !self.inflow.ready() {
+        if !self.inflow.ready() {
             self.smoother.reset();
             return None;
         }

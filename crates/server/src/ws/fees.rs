@@ -24,6 +24,8 @@ use crate::NetworkContext;
 
 /// How often the node's estimates are asked for while they are served.
 const NODE_EVERY: Duration = Duration::from_secs(30);
+/// The longest the task waits on the node for its estimates; arrivals queue meanwhile.
+const NODE_WAIT: Duration = Duration::from_secs(5);
 /// Node estimates older than this are not served: nothing is better than an old answer.
 const NODE_MAX_AGE: Duration = Duration::from_secs(90);
 /// The node's estimates are fetched only while fees were asked for this recently, or the topic
@@ -204,6 +206,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     }
                     None => (None, "engine_off"),
                 };
+                let mut fetch = false;
                 let answer = match own {
                     Some((rates, tip)) => {
                         if let Some((since, _)) = fallback.take() {
@@ -221,27 +224,19 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                             fallback = Some((Instant::now(), reason));
                         }
                         let wanted = ctx.fees.wanted(unix(now)) || ctx.hub.subscribers(Topic::Fees) > 0;
-                        if wanted && asked.is_none_or(|a| a.elapsed() >= NODE_EVERY) {
-                            asked = Some(Instant::now());
-                            let floor = engines.as_ref().and_then(|e| e.tracker.node_info()).map(|i| floor_of(i.mempoolminfee));
-                            if let Some(r) = node_estimates(&ctx, floor).await {
-                                node = Some((Instant::now(), r));
-                            }
-                        }
-                        node.filter(|(at, _)| at.elapsed() < NODE_MAX_AGE).map(|(at, rates)| Answer {
-                            rates,
-                            source: Source::Node,
-                            tip: None,
-                            at: now - at.elapsed(),
-                        })
+                        fetch = wanted && asked.is_none_or(|a| a.elapsed() >= NODE_EVERY);
+                        node_answer(node, now)
                     }
                 };
-                let msg = message(answer.as_ref());
-                ctx.fees.set(answer);
-                if published.as_ref() != Some(&msg) {
-                    ctx.hub.publish(Topic::Fees, &Frame::text(msg.to_string().as_bytes()), Snapshot::Replace);
-                    published = Some(msg);
-                    messages += 1;
+                // Our own answer withdrawn, or an aged one dropped, before any wait on the node.
+                messages += u64::from(serve(&ctx, answer, &mut published));
+                if fetch {
+                    asked = Some(Instant::now());
+                    if let Ok(Some(r)) = tokio::time::timeout(NODE_WAIT, node_estimates(&ctx)).await {
+                        node = Some((Instant::now(), r));
+                        let answer = node_answer(node, SystemTime::now());
+                        messages += u64::from(serve(&ctx, answer, &mut published));
+                    }
                 }
             }
             _ = summary.tick() => {
@@ -263,15 +258,41 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
     }
 }
 
-/// The node's own estimates, with its minimum: from the tracker when it runs, else asked, and
-/// only once the estimates came.
-async fn node_estimates(ctx: &NetworkContext, floor: Option<u32>) -> Option<Rates> {
+/// The node's own estimates with its minimum now, both asked: the tracker's copy of the
+/// minimum may be as old as its last good cycle. The minimum is asked only once the estimates
+/// came.
+async fn node_estimates(ctx: &NetworkContext) -> Option<Rates> {
     let est = ctx.esplora.fee_estimates().await.ok()?;
-    let floor = match floor {
-        Some(f) => f,
-        None => floor_of(ctx.rpc.mempool_info().await.ok()?.mempoolminfee),
-    };
+    let floor = floor_of(ctx.rpc.mempool_info().await.ok()?.mempoolminfee);
     fees::from_node(&est.value, floor)
+}
+
+/// The node's estimates as an answer while they are young enough to serve.
+fn node_answer(node: Option<(Instant, Rates)>, now: SystemTime) -> Option<Answer> {
+    node.filter(|(at, _)| at.elapsed() < NODE_MAX_AGE)
+        .map(|(at, rates)| Answer {
+            rates,
+            source: Source::Node,
+            tip: None,
+            at: now - at.elapsed(),
+        })
+}
+
+/// Stores the answer for the routes, and publishes the topic when the message changed. Returns
+/// whether it published.
+fn serve(ctx: &NetworkContext, answer: Option<Answer>, published: &mut Option<Value>) -> bool {
+    let msg = message(answer.as_ref());
+    ctx.fees.set(answer);
+    if published.as_ref() == Some(&msg) {
+        return false;
+    }
+    ctx.hub.publish(
+        Topic::Fees,
+        &Frame::text(msg.to_string().as_bytes()),
+        Snapshot::Replace,
+    );
+    *published = Some(msg);
+    true
 }
 
 /// Each projected block's totals, its size from the tracker's records.
