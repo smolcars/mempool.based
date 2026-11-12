@@ -48,6 +48,8 @@ export interface ChartSeries {
   tone?: 1 | 2;
   /** The value in the readout and the figures. */
   format: (v: number) => string;
+  /** A step holds its last value on to this time (a balance that has not changed since). */
+  until?: number;
 }
 
 /** A band between two series, such as the 10th to 90th percentile. Bands lie under the lines. */
@@ -225,7 +227,13 @@ export default function Chart(props: ChartProps) {
       areas: series().map((s) =>
         s.draw === "area" ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver) : "",
       ),
-      lines: series().map((s) => linePath(xs, s.values, sx, yOf(s), gap, s.draw === "step")),
+      lines: series().map(
+        (s) =>
+          linePath(xs, s.values, sx, yOf(s), gap, s.draw === "step") +
+          (s.draw === "step" && s.until !== undefined && typeof s.values.at(-1) === "number"
+            ? `H${Math.round(sx(s.until) * 10) / 10}`
+            : ""),
+      ),
       floor,
       fee: props.left.fee === true ? feeStrip(yl.scale) : [],
     };

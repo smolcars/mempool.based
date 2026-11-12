@@ -26,6 +26,16 @@ test("a taproot address shows its totals, history and unspent outputs from the c
   await expect(rows.nth(0)).toContainText("+0.25000000");
   await expect(rows.nth(1)).toContainText("+0.49000000");
   await expect(rows.nth(2)).toContainText("+1.00000000");
+
+  // Its balance over time: two confirmed steps; the unconfirmed payment stays in the figures above.
+  const chart = page.getByRole("slider", { name: "Confirmed balance after each block" });
+  await expect(chart).toHaveAttribute("aria-valuemax", "1");
+  await expect(chart).toHaveAttribute(
+    "aria-valuetext",
+    /UTC: Balance 1\.49000000 BTC, Block 107, Change \+0\.49000000 BTC$/,
+  );
+  await chart.press("Home");
+  await expect(chart).toHaveAttribute("aria-valuetext", /Balance 1\.00000000 BTC, Block 106,/);
   await rows.nth(1).getByRole("link").click();
   await expect(page).toHaveURL(`/regtest/tx/${chain.txs.spend_p2sh_p2a}`);
   await page.goBack();
