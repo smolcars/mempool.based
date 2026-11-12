@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,10 @@ struct Node {
     getblock: AtomicUsize,
     /// Route calls, the genesis probe left out.
     route: AtomicUsize,
+    /// The next genesis listing answers as the node was when asked, 1.5 s later.
+    slow_probe: AtomicBool,
+    /// Set once that slow listing has been asked.
+    probing: AtomicBool,
 }
 
 impl Node {
@@ -98,7 +102,10 @@ fn hash(i: u8) -> String {
 const GENESIS: &str = "00000000000000000000000000000000000000000000000000000000000000ff";
 
 async fn rpc(State(node): N, Json(req): Json<Value>) -> Json<Value> {
-    assert_eq!(req["method"], "getblock");
+    // Other tasks ask too (the health check); only `getblock` concerns these tests.
+    if req["method"] != "getblock" {
+        return Json(json!({"result": null, "error": {"code": -32601, "message": "not here"}}));
+    }
     assert_eq!(req["params"][1], 2);
     let h = req["params"][0].as_str().unwrap();
     if !known(h) {
@@ -129,7 +136,12 @@ async fn summary(State(node): N, Path(h): Path<String>) -> Response {
         node.route.fetch_add(1, Ordering::SeqCst);
     }
     let rows = fixture("esplora/testnet4/block-160394-txs-summary.json");
-    match node.mode.load(Ordering::SeqCst) {
+    let mode = node.mode.load(Ordering::SeqCst);
+    if h == GENESIS && node.slow_probe.swap(false, Ordering::SeqCst) {
+        node.probing.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+    match mode {
         0 => rows.into_response(),
         1 => (
             StatusCode::BAD_REQUEST,
@@ -179,6 +191,7 @@ async fn start(net: &str, node: &Arc<Node>) -> (App, TcpListener) {
         ("RPC_PASSWORD", "p".to_owned()),
         ("ESPLORA_URL", format!("http://{addr}")),
         ("ELECTRUM_ADDR", electrum.local_addr().unwrap().to_string()),
+        ("MEMPOOL_ENABLED", "false".to_owned()),
     ]
     .into_iter()
     .map(|(k, v)| (format!("{net}_{k}"), v))
@@ -443,4 +456,31 @@ async fn detects_on_each_connection_and_falls_back_per_block() {
     assert_eq!(s["source"], "summary_route");
     summary(8).await;
     assert_eq!(node.calls(), (5, 6));
+}
+
+/// A reconnect while a probe is in flight is probed again: the first probe's answer belongs to
+/// the connection before it.
+#[tokio::test]
+async fn a_reconnect_during_a_probe_is_probed_again() {
+    let node = Arc::new(Node::default());
+    node.set(Mode::V092);
+    node.slow_probe.store(true, Ordering::SeqCst);
+    let (_app, electrum) = start("REGTEST", &node).await;
+    let peer = Peer::connect(&electrum).await;
+    // The node is upgraded and the connection replaced while the probe waits for its answer.
+    let deadline = Instant::now() + WAIT;
+    while !node.probing.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "no probe");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    node.set(Mode::Route);
+    drop(peer);
+    let _peer = Peer::connect(&electrum).await;
+    let s = logged("regtest", "block_txs_source", 1).await;
+    assert_eq!(s["source"], "getblock", "the old connection's answer");
+    let s = logged("regtest", "block_txs_source", 2).await;
+    assert_eq!(
+        (&s["source"], &s["reason"]),
+        (&json!("summary_route"), &json!("probe"))
+    );
 }

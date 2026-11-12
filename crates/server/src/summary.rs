@@ -445,6 +445,12 @@ pub async fn detect_listing(ctx: Arc<NetworkContext>) {
         let now = health.borrow_and_update().ready;
         if now && !ready {
             ctx.lister.detect(&ctx.esplora).await;
+            // The watch keeps only the latest value: a reconnect during the probe would read as
+            // still ready, so any change meanwhile counts as one and is probed again.
+            if health.has_changed().unwrap_or(false) {
+                ready = false;
+                continue;
+            }
         }
         ready = now;
     }

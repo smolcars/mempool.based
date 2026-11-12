@@ -149,7 +149,19 @@ impl Transport {
         path: &str,
         body: Option<(Bytes, &'static str)>,
     ) -> Result<Response, Error> {
-        tokio::time::timeout(self.timeout, self.send_inner(method, path, body))
+        self.send_limited(method, path, body, self.max_body).await
+    }
+
+    /// [`Transport::send`] with a cap of `max_body` bytes, if that is below the transport's own.
+    pub async fn send_limited(
+        &self,
+        method: hyper::Method,
+        path: &str,
+        body: Option<(Bytes, &'static str)>,
+        max_body: usize,
+    ) -> Result<Response, Error> {
+        let max_body = max_body.min(self.max_body);
+        tokio::time::timeout(self.timeout, self.send_inner(method, path, body, max_body))
             .await
             .map_err(|_| Error::Timeout)?
     }
@@ -159,6 +171,7 @@ impl Transport {
         method: hyper::Method,
         path: &str,
         body: Option<(Bytes, &'static str)>,
+        max_body: usize,
     ) -> Result<Response, Error> {
         let uri: Uri = format!("{}{path}", self.prefix)
             .parse()
@@ -193,19 +206,16 @@ impl Transport {
             .headers
             .get(CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
-        if announced.is_some_and(|n| n > self.max_body as u64) {
+        if announced.is_some_and(|n| n > max_body as u64) {
             return Err(Error::ResponseTooBig);
         }
-        let body = Limited::new(body, self.max_body)
-            .collect()
-            .await
-            .map_err(|e| {
-                if e.downcast_ref::<LengthLimitError>().is_some() {
-                    Error::ResponseTooBig
-                } else {
-                    Error::Unavailable(error_chain(e.as_ref()))
-                }
-            })?;
+        let body = Limited::new(body, max_body).collect().await.map_err(|e| {
+            if e.downcast_ref::<LengthLimitError>().is_some() {
+                Error::ResponseTooBig
+            } else {
+                Error::Unavailable(error_chain(e.as_ref()))
+            }
+        })?;
         let body = body.to_bytes();
         self.received
             .fetch_add(body.len() as u64, Ordering::Relaxed);

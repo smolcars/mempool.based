@@ -6,7 +6,7 @@
 //! at verbosity 2, about 10 MB. Each network's [`Lister`] learns which one its node serves and
 //! gives the same [`Block`] from either.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bitcoin::BlockHash;
 use node::esplora::{self, Esplora};
@@ -63,14 +63,17 @@ impl Why {
     }
 }
 
-const OPEN: u8 = 0;
-const ROUTE: u8 = 1;
-const GETBLOCK: u8 = 2;
+const OPEN: u64 = 0;
+const ROUTE: u64 = 1;
+const GETBLOCK: u64 = 2;
+/// The low bits of the state hold the source; the rest count probes, so a block's answer that
+/// was asked before a probe cannot overwrite what the probe found.
+const SOURCE: u64 = 0b11;
 
 /// Which source lists a network's blocks. One per network, shared by everything that lists them,
 /// whatever node clients each uses.
 pub struct Lister {
-    state: AtomicU8,
+    state: AtomicU64,
     observer: Box<dyn Fn(Event) + Send + Sync>,
 }
 
@@ -90,7 +93,7 @@ impl Lister {
     /// Open until the node says: the first block listed tries the route.
     pub fn new(observer: impl Fn(Event) + Send + Sync + 'static) -> Self {
         Self {
-            state: AtomicU8::new(OPEN),
+            state: AtomicU64::new(OPEN),
             observer: Box::new(observer),
         }
     }
@@ -105,7 +108,7 @@ impl Lister {
 
     /// The source in use; `None` while open.
     pub fn via(&self) -> Option<Via> {
-        match self.state.load(Ordering::Relaxed) {
+        match self.state.load(Ordering::Relaxed) & SOURCE {
             ROUTE => Some(Via::Route),
             GETBLOCK => Some(Via::GetBlock),
             _ => None,
@@ -127,17 +130,25 @@ impl Lister {
             },
             Err(_) => None,
         };
-        match found {
-            Some(via) => {
-                self.state.store(code(via), Ordering::Relaxed);
-                (self.observer)(Event::Source {
-                    via,
-                    why: Why::Probe,
-                });
-            }
-            None => self.state.store(OPEN, Ordering::Relaxed),
-        }
+        self.probed(found);
         found
+    }
+
+    /// Records a probe's answer, starting a new generation.
+    fn probed(&self, found: Option<Via>) {
+        let source = found.map_or(OPEN, code);
+        // The closure always returns `Some`, so this cannot fail.
+        let _ = self
+            .state
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+                Some(((s >> 2) + 1) << 2 | source)
+            });
+        if let Some(via) = found {
+            (self.observer)(Event::Source {
+                via,
+                why: Why::Probe,
+            });
+        }
     }
 
     /// The block, from the route unless the node is known not to serve it, else from `getblock`.
@@ -150,13 +161,14 @@ impl Lister {
         esplora: &Esplora,
         hash: BlockHash,
     ) -> (Result<Block, rpc::Error>, Via) {
-        if self.state.load(Ordering::Relaxed) != GETBLOCK {
+        let seen = self.state.load(Ordering::Relaxed);
+        if seen & SOURCE != GETBLOCK {
             match from_route(esplora, hash).await {
                 Ok(block) => {
-                    self.settle(Via::Route, Why::Answered);
+                    self.settle(seen, Via::Route, Why::Answered);
                     return (Ok(block), Via::Route);
                 }
-                Err(Miss::Refused) => self.settle(Via::GetBlock, Why::Refused),
+                Err(Miss::Refused) => self.settle(seen, Via::GetBlock, Why::Refused),
                 Err(Miss::Failed(reason)) => (self.observer)(Event::FellBack { reason }),
             }
         }
@@ -165,14 +177,22 @@ impl Lister {
         (rpc.block(hash).await, Via::GetBlock)
     }
 
-    fn settle(&self, via: Via, why: Why) {
-        if self.state.swap(code(via), Ordering::Relaxed) != code(via) {
+    /// Moves to `via` if the state is still the `seen` the block started from; a probe or another
+    /// block's answer since then wins.
+    fn settle(&self, seen: u64, via: Via, why: Why) {
+        let next = (seen & !SOURCE) | code(via);
+        if next != seen
+            && self
+                .state
+                .compare_exchange(seen, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             (self.observer)(Event::Source { via, why });
         }
     }
 }
 
-fn code(via: Via) -> u8 {
+fn code(via: Via) -> u64 {
     match via {
         Via::Route => ROUTE,
         Via::GetBlock => GETBLOCK,
@@ -258,4 +278,75 @@ async fn from_route(esplora: &Esplora, hash: BlockHash) -> Result<Block, Miss> {
             outputs: coinbase.output,
         },
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    fn lister() -> (Lister, Arc<Mutex<Vec<Event>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&seen);
+        (Lister::new(move |e| s.lock().unwrap().push(e)), seen)
+    }
+
+    #[test]
+    fn a_block_asked_before_a_probe_cannot_undo_it() {
+        let (l, events) = lister();
+        // A block starts on the old node, a reconnect's probe finds the route, then the block's
+        // late refusal arrives: the probe stands.
+        let before = l.state.load(Ordering::Relaxed);
+        l.probed(Some(Via::Route));
+        l.settle(before, Via::GetBlock, Why::Refused);
+        assert_eq!(l.via(), Some(Via::Route));
+        // The same the other way round, and for a probe that got no answer.
+        let before = l.state.load(Ordering::Relaxed);
+        l.probed(Some(Via::GetBlock));
+        l.settle(before, Via::Route, Why::Answered);
+        assert_eq!(l.via(), Some(Via::GetBlock));
+        let before = l.state.load(Ordering::Relaxed);
+        l.probed(None);
+        l.settle(before, Via::GetBlock, Why::Refused);
+        assert_eq!(l.via(), None);
+        let probes = |v| Event::Source {
+            via: v,
+            why: Why::Probe,
+        };
+        assert_eq!(
+            *events.lock().unwrap(),
+            [probes(Via::Route), probes(Via::GetBlock)]
+        );
+    }
+
+    #[test]
+    fn a_blocks_answer_moves_the_source_once() {
+        let (l, events) = lister();
+        let (a, b) = (
+            l.state.load(Ordering::Relaxed),
+            l.state.load(Ordering::Relaxed),
+        );
+        l.settle(a, Via::Route, Why::Answered);
+        // Asked at the same time as the first, answered after it: the first stands.
+        l.settle(b, Via::GetBlock, Why::Refused);
+        assert_eq!(l.via(), Some(Via::Route));
+        // A refusal seen from the route: the node no longer serves it.
+        l.settle(l.state.load(Ordering::Relaxed), Via::GetBlock, Why::Refused);
+        assert_eq!(l.via(), Some(Via::GetBlock));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                Event::Source {
+                    via: Via::Route,
+                    why: Why::Answered
+                },
+                Event::Source {
+                    via: Via::GetBlock,
+                    why: Why::Refused
+                },
+            ]
+        );
+    }
 }

@@ -186,9 +186,14 @@ impl Esplora {
         }
         let mut path = String::with_capacity(160);
         route.write_path(&mut path);
+        // The listing route has a bound of its own, enforced while reading.
+        let cap = match route {
+            Route::BlockTxsSummary(_) => MAX_SUMMARY_BYTES,
+            _ => usize::MAX,
+        };
         let res = self
             .transport
-            .send(route.method(), &path, route.body())
+            .send_limited(route.method(), &path, route.body(), cap)
             .await?;
         Ok(RawResponse {
             status: res.status,
@@ -276,15 +281,13 @@ impl Esplora {
     /// Every transaction's txid, fee, weight and output value, coinbase first: rbitcoin's
     /// `/block/:hash/txs/summary`, newer than v0.9.2. v0.9.2 answers `Rejected` (400); an unknown,
     /// off-best-chain or pruned block is `NotFound`. An answer over [`MAX_SUMMARY_BYTES`] is
-    /// `ResponseTooBig` and one over [`MAX_BLOCK_TXS`] rows a `Decode` error.
+    /// `ResponseTooBig`, refused while reading, and one over [`MAX_BLOCK_TXS`] rows a `Decode`
+    /// error.
     pub async fn block_txs_summary(
         &self,
         hash: BlockHash,
     ) -> Result<Stamped<Vec<BlockTxSummary>>, Error> {
         self.typed(Route::BlockTxsSummary(hash), |b| {
-            if b.len() > MAX_SUMMARY_BYTES {
-                return Err(Error::ResponseTooBig);
-            }
             let rows: Vec<BlockTxSummary> =
                 serde_json::from_slice(b).map_err(|e| Error::Decode(e.to_string()))?;
             if rows.len() > MAX_BLOCK_TXS {

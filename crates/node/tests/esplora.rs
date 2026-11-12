@@ -520,6 +520,13 @@ async fn decodes_block_txs_summaries_defensively() {
             "0016" => br#"{"txid":"x"}"#.to_vec(),
             "0020" => huge.clone().into_bytes(),
             "0021" => vec![b' '; MAX_SUMMARY_BYTES + 1],
+            // The same, streamed without a length: refused while reading, not after.
+            "0022" => {
+                return Reply {
+                    close_delimited: true,
+                    ..Reply::new(200, vec![b' '; MAX_SUMMARY_BYTES + 1])
+                };
+            }
             "0030" => return Reply::new(404, "Not Found"),
             "0031" => return Reply::new(404, "pruned"),
             // What rbitcoin v0.9.2 answers: the path falls through to `/txs/:start_index`.
@@ -579,10 +586,13 @@ async fn decodes_block_txs_summaries_defensively() {
         c.block_txs_summary(hash("0020")).await,
         Err(Error::Decode(_))
     ));
-    assert_eq!(
-        c.block_txs_summary(hash("0021")).await.unwrap_err(),
-        Error::ResponseTooBig
-    );
+    for p in ["0021", "0022"] {
+        assert_eq!(
+            c.block_txs_summary(hash(p)).await.unwrap_err(),
+            Error::ResponseTooBig,
+            "{p}"
+        );
+    }
 
     // Unknown, off the best chain or pruned: 404, whatever the text.
     for p in ["0030", "0031"] {
