@@ -57,9 +57,12 @@ test("the balance chart steps with each block and follows a new payment", async 
   mine,
 }) => {
   // The P2SH address received 0.5 BTC in block 106 and spent it in 107; now it receives again.
-  await mine(0);
-  await pay(rpc, chain.addresses.p2sh, 30_000_000n);
-  await mine(1);
+  // Each block holds only the test's own payment: later tests count on the scenario's mempool.
+  const block = async (txid: string) => {
+    await mine(0);
+    await rpc("generateblock", [chain.addresses.miner, [txid]]);
+  };
+  await block(await pay(rpc, chain.addresses.p2sh, 30_000_000n));
   await page.goto(`/regtest/address/${chain.addresses.p2sh}`);
   const chart = page.getByRole("slider", { name: "Confirmed balance after each block" });
   await expect(chart).toHaveAttribute("aria-valuemax", "2");
@@ -70,8 +73,7 @@ test("the balance chart steps with each block and follows a new payment", async 
   await expect(figures.nth(1)).toContainText("107");
 
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  await pay(rpc, chain.addresses.p2sh, 20_000_000n);
-  await mine(1);
+  await block(await pay(rpc, chain.addresses.p2sh, 20_000_000n));
   await expect(chart).toHaveAttribute("aria-valuemax", "3");
   await expect
     .poll(balances)
