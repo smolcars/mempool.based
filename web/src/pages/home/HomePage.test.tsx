@@ -6,6 +6,7 @@ import { FakeSocket, fakeBlock } from "../../lib/fakes";
 import { groupDigits } from "../../lib/format";
 import { type BlockSummary, clearSummaries } from "../../lib/summary";
 import HomePage from "./HomePage";
+import { FEES_CONFIRM_MS, FEES_POLL_MS } from "./fees";
 import { PACE_MS } from "./RecentTxs";
 
 const chain = (from: number, to: number, branch = "a") =>
@@ -1084,6 +1085,47 @@ describe("the fee panel", () => {
       const asked = count("/v1/fees/precise");
       await vi.advanceTimersByTimeAsync(20_000);
       expect(count("/v1/fees/precise")).toBe(asked);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes down an HTTP answer the next ask cannot confirm, while the server refuses", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let ok = true;
+      replies["/v1/fees/precise"] = () =>
+        ok
+          ? Response.json({
+              fastestFee: 5.2,
+              halfHourFee: 1.1,
+              hourFee: 0.5,
+              economyFee: 0.12,
+              minimumFee: 0.1,
+            })
+          : Response.json(
+              { error: "no fee recommendation" },
+              { status: 503, headers: { "retry-after": "1" } },
+            );
+      const { el, ws } = await open(true);
+      ws.drop(1006);
+      await vi.waitFor(() => expect(feeList(el)[3]).toBe("Highnext block5.200 sat/vB"));
+      // The server withdraws its answer: every ask is refused, and retried, from now on.
+      ok = false;
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + FEES_CONFIRM_MS);
+      expect(feeList(el).every((t) => t?.endsWith("–"))).toBe(true);
+      for (let i = 0; i < 6; i++) {
+        await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
+        expect(el.querySelector(".home-fees")?.textContent).not.toContain("5.200");
+      }
+      // Once the retries give up, it says there is no answer.
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.waitFor(() =>
+        expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation"),
+      );
+      // And keeps saying so through the asks that follow, without flickering back to waiting.
+      await vi.advanceTimersByTimeAsync(FEES_POLL_MS + FEES_CONFIRM_MS);
+      expect(el.querySelector(".home-fees")?.textContent).toContain("No recommendation");
     } finally {
       vi.useRealTimers();
     }

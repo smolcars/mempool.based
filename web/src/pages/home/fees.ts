@@ -80,6 +80,11 @@ export function fromPrecise(reply: Stamped<unknown>): FeeAnswer | undefined {
 
 /** How often the precise route is asked while the topic cannot be heard. */
 export const FEES_POLL_MS = 10_000;
+/**
+ * How long the last answer stays up while the next ask has not settled. A refusal is retried for
+ * up to a minute (`withRetry`), and a withdrawn answer is a 503: it must not stay up meanwhile.
+ */
+export const FEES_CONFIRM_MS = 2_000;
 
 /**
  * The recommendation to show: undefined until one is known, null when there is none. The topic
@@ -114,18 +119,23 @@ export function createFees(
       if (!polling) return undefined;
       // An answer heard before the socket dropped can be withdrawn without our hearing it.
       if (was === false) setAnswer(undefined);
-      let controller: AbortController | undefined;
+      const controller = new AbortController();
+      let asking = false;
+      let doubt: ReturnType<typeof setTimeout> | undefined;
       const ask = () => {
-        controller?.abort();
-        const c = new AbortController();
-        controller = c;
-        fetchStamped<unknown>(network, "/v1/fees/precise", { signal: c.signal }).then(
-          (r) => {
-            if (!c.signal.aborted) setAnswer(fromPrecise(r) ?? null);
-          },
-          () => {
-            if (!c.signal.aborted) setAnswer(null);
-          },
+        // One ask at a time: aborting a retrying one would keep its refusal from ever landing.
+        if (asking) return;
+        asking = true;
+        // Only a number is taken down: "no answer" stays until there is one.
+        doubt = setTimeout(() => setAnswer((now) => (now ? undefined : now)), FEES_CONFIRM_MS);
+        const settle = (a: FeeAnswer | null) => {
+          clearTimeout(doubt);
+          asking = false;
+          if (!controller.signal.aborted) setAnswer(a);
+        };
+        fetchStamped<unknown>(network, "/v1/fees/precise", { signal: controller.signal }).then(
+          (r) => settle(fromPrecise(r) ?? null),
+          () => settle(null),
         );
       };
       ask();
@@ -134,7 +144,8 @@ export function createFees(
       }, FEES_POLL_MS);
       return () => {
         clearInterval(timer);
-        controller?.abort();
+        clearTimeout(doubt);
+        controller.abort();
       };
     },
   );
