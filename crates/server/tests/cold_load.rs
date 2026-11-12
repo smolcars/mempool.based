@@ -67,7 +67,7 @@ impl Server {
                 }
             })
             .layer(middleware::from_fn_with_state(
-                Limiter::new(&Limits::default()),
+                Arc::new(Limiter::new(&Limits::default())),
                 limits::limit,
             ));
         Self {

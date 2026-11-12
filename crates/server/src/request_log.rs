@@ -21,7 +21,7 @@ use logging::events::HttpRequest;
 
 use crate::config::{Config, Network, RequestLog, TrustedProxy};
 use crate::esplora::{ApiOutcome, Source};
-use crate::limits::{Refused, client_addr};
+use crate::limits::{Counted, Refused, client_addr};
 use crate::refusals::{Refusal, Refusals};
 
 pub const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -89,7 +89,9 @@ pub async fn log_request(State(log): State<RequestLogger>, req: Request, next: N
                 untrusted_forwarded: false,
                 proxy_keyed: false,
             });
-        if !log.refusals.record(r.reason, path.path(), who) {
+        // `serve` counted it already when it chose to route it, to be written here.
+        let counted = res.extensions().get::<Counted>().is_some();
+        if !counted && !log.refusals.record(r.reason, path.path(), who) {
             return res;
         }
     }
@@ -138,7 +140,7 @@ fn ms(micros: u128) -> f64 {
 
 /// Unique within the process and unguessable across restarts: a counter through a randomly
 /// keyed SipHash, as 16 hex digits.
-fn request_id() -> String {
+pub(crate) fn request_id() -> String {
     static KEYS: OnceLock<RandomState> = OnceLock::new();
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);

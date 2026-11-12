@@ -501,3 +501,45 @@ async fn a_proxy_missing_from_trusted_proxies_is_told_apart() {
     assert_eq!(s["clients"], 1);
     assert_eq!(s["top_client_refused"], 49);
 }
+
+#[tokio::test]
+async fn a_refusal_answered_before_routing_is_the_routed_one() {
+    let limits = Limits {
+        client_burst: 1,
+        client_rate_per_sec: 1,
+        ..Limits::default()
+    };
+    for path in ["/signet/api/blocks/tip/height", "/app/config", "/healthz"] {
+        let addr = start(config(&[], limits.clone())).await;
+        let mut stream = TcpStream::connect(&addr).await.unwrap();
+        let req = |close| format!("GET {path} HTTP/1.1\r\nHost: t\r\nConnection: {close}\r\n\r\n");
+        let reqs = [req("keep-alive"), req("keep-alive"), req("close")].concat();
+        stream.write_all(reqs.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        let raw = String::from_utf8(raw).unwrap();
+        // Served; refused and routed to be logged; refused before routing.
+        let responses: Vec<String> = raw
+            .split("HTTP/1.1 ")
+            .skip(1)
+            .map(|r| {
+                r.lines()
+                    .filter(|l| {
+                        !["x-request-id:", "date:", "connection:"]
+                            .iter()
+                            .any(|h| l.starts_with(h))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect();
+        assert_eq!(responses.len(), 3, "{raw}");
+        assert!(responses[1].starts_with("429"), "{}", responses[1]);
+        assert_eq!(responses[1], responses[2], "{path}");
+        assert_eq!(
+            raw.matches("x-request-id:").count(),
+            3,
+            "every response has an id"
+        );
+    }
+}

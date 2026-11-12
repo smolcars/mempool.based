@@ -1427,10 +1427,13 @@ async fn refused_upgrades_and_oversized_messages_write_a_bounded_log() {
         .filter(|v| v["event"] == "http_request" && v["refused"] == "client_sockets")
         .count();
     assert!(refused <= 3, "{refused} refused upgrades written");
-    // Oversized messages: a line at the 1st, 2nd, 4th… drop, never one each.
-    let dropped = lines
+    // Oversized messages: a line at the 1st, 2nd, 4th… drop, never one each. Other tests drop
+    // two at most, so the lines past a total of 2 are this server's: 4, 8, 16 and 32 of 40.
+    let totals: Vec<u64> = lines
         .iter()
         .filter(|v| v["event"] == "ws_clients_dropped" && v["reason"] == "too_big")
-        .count();
-    assert!(dropped <= 6 + 3, "{dropped} lines for {MESSAGES} drops");
+        .map(|v| v["total"].as_u64().unwrap())
+        .collect();
+    assert!(totals.iter().all(|t| t.is_power_of_two()), "{totals:?}");
+    assert_eq!(totals.iter().filter(|t| **t > 2).count(), 4, "{totals:?}");
 }

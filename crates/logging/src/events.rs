@@ -1969,9 +1969,10 @@ mod tests {
 
     /// Names declared in this file, read from its source so a new event cannot be missed.
     fn declared() -> Vec<&'static str> {
+        // rustfmt may wrap a long `event!(` call over several lines.
         include_str!("events.rs")
-            .lines()
-            .filter_map(|l| l.strip_prefix("event!("))
+            .split("\nevent!(")
+            .skip(1)
             .filter_map(|l| l.split('"').nth(1))
             .collect()
     }
