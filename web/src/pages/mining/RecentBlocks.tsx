@@ -98,12 +98,14 @@ function Tile(props: { block: Block; facts: BlockSummary | undefined }) {
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
   const layers = () => (props.facts ? strataLayers(props.facts.fee_bands, full(), LAYER_MIN) : []);
   const rate = () => props.facts?.fee_rate ?? undefined;
+  const miner = () => props.facts?.miner?.name;
   return (
     <li class="mining-tile">
       <Link class="mining-tile__body" href={paths.block(b().id)}>
         <span class="mining-tile__height num">
           <span class="visually-hidden">Block </span>
           {groupDigits(b().height)}
+          <Show when={miner()}>{(m) => <span class="visually-hidden">, mined by {m()}</span>}</Show>
         </span>
         <span class="mining-tile__fee num">
           <Show when={rate()} fallback={props.facts ? "No fees" : ""}>
@@ -125,6 +127,10 @@ function Tile(props: { block: Block; facts: BlockSummary | undefined }) {
           </time>
         </span>
       </Link>
+      {/* Its line is always there, so the name lands without moving anything; the link says it. */}
+      <span class="mining-tile__pool" aria-hidden="true" title={miner()}>
+        {miner()}
+      </span>
     </li>
   );
 }

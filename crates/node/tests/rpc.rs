@@ -165,6 +165,18 @@ async fn every_method_decodes_its_fixture_and_sends_fixed_params() {
     assert_eq!((block.tx[1].vsize, block.tx[1].weight), (218, 870));
     assert_eq!(block.tx[0].value, Amount::from_sat(313_975_029));
     assert_eq!(block.tx[1].value, Amount::from_sat(62_213_389));
+    // The coinbase's script and outputs are kept for pool attribution: ViaBTC's tag, four outputs.
+    let tag = block.coinbase.script.as_bytes();
+    assert!(tag.windows(8).any(|w| w == b"/ViaBTC/"));
+    assert_eq!(block.coinbase.outputs.len(), 4);
+    let paid: u64 = block
+        .coinbase
+        .outputs
+        .iter()
+        .map(|o| o.value.to_sat())
+        .sum();
+    assert_eq!(paid, block.tx[0].value.to_sat());
+    assert_eq!(block.coinbase.outputs[0].script_pubkey.len(), 25);
     assert!(block.weight <= 4_000_000);
     let stats = rpc
         .block_stats(BlockRef::Height(info.blocks))

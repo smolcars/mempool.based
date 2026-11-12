@@ -86,5 +86,8 @@ test("a new block's tile fills from the WebSocket's summary, not over HTTP", asy
   await expect(tile).toHaveAttribute("href", `/regtest/block/${hash}`);
   // Well before the page would fall back to asking over HTTP.
   await expect(tile).toHaveAccessibleName(/median fee|only the coinbase/, { timeout: 3_000 });
+  // The push names the miner too: regtest has no pools, so Unknown, under the tile and in its name.
+  await expect(tile).toHaveAccessibleName(/^Block \d+, mined by Unknown,/);
+  await expect(lane.locator(".home-tile__pool").first()).toHaveText("Unknown");
   expect(asked.filter((u) => u.includes(hash))).toEqual([]);
 });

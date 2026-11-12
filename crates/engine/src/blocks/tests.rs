@@ -102,6 +102,7 @@ fn mock_facts(height: u32, hash: BlockHash) -> Facts {
             max: r,
         }),
         fee_bands: [u64::from(height); 10],
+        miner: Miner::UNKNOWN,
     }
 }
 
@@ -330,6 +331,9 @@ fn a_rated_row_gives_the_facts_the_route_serves() {
     want.vsize = want.fee_bands.iter().sum();
     want.tx_count = row.tx_count as usize;
     assert_eq!(row.facts(), Some(want));
+    // The miner comes from the stored coinbase: a listed tag names its pool.
+    row.coinbase.tag = b"\x03\x01\x02\x03/ViaBTC/".to_vec();
+    assert_eq!(row.facts().unwrap().miner.slug, "viabtc");
 }
 
 // Reading.

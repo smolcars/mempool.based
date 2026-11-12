@@ -14,6 +14,14 @@ export interface FeeRates {
   max: number;
 }
 
+/** Who mined a block: a pool from the server's shipped list, or Unknown (`slug` "unknown"). */
+export interface Miner {
+  /** The list's name, never text from the block. */
+  name: string;
+  /** The pool page's slug: lowercase letters and digits. */
+  slug: string;
+}
+
 export interface BlockSummary {
   id: Hash;
   height: number;
@@ -26,6 +34,8 @@ export interface BlockSummary {
   fee_rate: FeeRates | null;
   /** Virtual size paying in each of the ten fee bands, cheapest first: the strata. */
   fee_bands: number[];
+  /** Absent from a server that does not name miners. */
+  miner?: Miner;
 }
 
 /** The batch route takes at most this many hashes. */
@@ -33,6 +43,18 @@ export const SUMMARY_BATCH = 10;
 
 const RATE_KEYS = ["min", "p10", "p25", "median", "p75", "p90", "max"] as const;
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+
+function isMiner(v: unknown): v is Miner {
+  if (typeof v !== "object" || v === null) return false;
+  const m = v as Record<string, unknown>;
+  return (
+    typeof m["name"] === "string" &&
+    m["name"].length > 0 &&
+    m["name"].length <= 64 &&
+    typeof m["slug"] === "string" &&
+    /^[a-z0-9]{1,64}$/.test(m["slug"])
+  );
+}
 
 /** Whether a reply (or a WebSocket message's `summary`) is a summary this app can draw. */
 export function isSummary(v: unknown): v is BlockSummary {
@@ -51,7 +73,8 @@ export function isSummary(v: unknown): v is BlockSummary {
         RATE_KEYS.every((k) => isCount((rates as Record<string, unknown>)[k])))) &&
     Array.isArray(bands) &&
     bands.length === 10 &&
-    bands.every((b) => isCount(b))
+    bands.every((b) => isCount(b)) &&
+    (s["miner"] === undefined || isMiner(s["miner"]))
   );
 }
 

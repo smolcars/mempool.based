@@ -87,6 +87,41 @@ test("a block page shows the fee facts its summary gives, and the tile agrees", 
   await expect(tile).toContainText(range);
 });
 
+test("every block names its miner: Unknown on regtest, which has no pools", async ({
+  page,
+  request,
+}) => {
+  const reply = await request.get(`/regtest/app/block/${chain.blocks[106]}/summary`);
+  expect(((await reply.json()) as { miner: unknown }).miner).toStrictEqual({
+    name: "Unknown",
+    slug: "unknown",
+  });
+
+  await page.goto("/regtest/block/106");
+  const miner = page
+    .locator(".block-fact")
+    .filter({ has: page.getByText("Miner", { exact: true }) });
+  await expect(miner.getByRole("link", { name: "Unknown", exact: true })).toHaveAttribute(
+    "href",
+    "/regtest/mining/pool/unknown",
+  );
+  await expect(miner).toContainText("No listed address or tag");
+
+  await page.goto("/regtest/");
+  const lane = page.getByRole("list", { name: "Mined blocks, newest first" });
+  await expect(lane.getByRole("link").first()).toHaveAccessibleName(
+    /^Block \d+, mined by Unknown,/,
+  );
+  await expect(lane.locator(".home-tile__pool")).toHaveText(
+    Array.from({ length: 10 }, () => "Unknown"),
+  );
+
+  await page.goto("/regtest/mining");
+  const recent = page.getByRole("list", { name: "Latest blocks, newest first" });
+  await expect(recent.getByRole("link").first()).toContainText("mined by Unknown");
+  await expect(recent.locator(".mining-tile__pool").first()).toHaveText("Unknown");
+});
+
 test("a coinbase-only block says it pays no fees", async ({ page }) => {
   await page.goto("/regtest/block/105");
   await expect(page.getByText("Only the coinbase, which pays none")).toBeVisible();

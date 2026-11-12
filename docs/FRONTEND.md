@@ -144,12 +144,14 @@ What the public API cannot give cheaply: a mined block's fee facts and every tra
   "tx_count": 4198, "fees": 1475029, "vsize": 999391, "weight": 3991349,
   "fee_rate": {"min": 0.10071942446043165, "p10": 0.12, "p25": 0.12698412698412698,
     "median": 1.0850888512305468, "p75": 2.007012551450785, "p90": 3.150749063670412, "max": 62.10091743119266},
-  "fee_bands": [367013, 9447, 153, 5069, 233233, 20986, 238267, 102460, 17310, 5453]
+  "fee_bands": [367013, 9447, 153, 5069, 233233, 20986, 238267, 102460, 17310, 5453],
+  "miner": {"name": "Foundry USA", "slug": "foundryusa"}
 }
 ```
 
 - `tx_count` counts every transaction. Everything else leaves the coinbase out, as `getblockstats` does: `fees` in sats, `vsize` and `weight` summed over the paying transactions.
 - `fee_rate` is in sat/vB, unrounded, `null` for a block holding only its coinbase. Percentiles are weighted by virtual size: `p25` is the rate of the transaction where the cheapest quarter of the block's vbytes ends. Print them with `formatFeeRate`.
+- `miner` is who mined the block, by the pool list's rules ([`API.md`](API.md#who-mined-a-block)): a payout to a listed address first, then a listed tag, else `{"name": "Unknown", "slug": "unknown"}`. `name` is the list's spelling and `slug` its pool page (`paths.pool`); a coinbase tag only selects one of the list's names and is never itself the answer. It comes from the stored row's coinbase, or from the coinbase in the `getblock` the summary already reads, so it costs no node call and a server without a block table names miners too. A server older than this field leaves it out: say the miner is not known.
 - `fee_bands` is the virtual size paying in each of the ten design bands, cheapest first: the strata. They sum to `vsize`. Each transaction is banded on its rate as printed, as `feeBand` does, so a stratum's color agrees with the numbers beside it. How full the block is comes from the block's own `weight` (Esplora) over 4,000,000.
 
 `/txs` is `application/octet-stream`, little-endian: an 8-byte header, then one 20-byte record per transaction in block order, the coinbase first.
@@ -164,7 +166,7 @@ What the public API cannot give cheaply: a mined block's fee facts and every tra
 
 Read it with a `DataView`; a `u64` here is below 2^53, so `Number(view.getBigUint64(o, true))` is exact. A record has no txid: when a square is hovered or clicked, ask `/api/block/:hash/txid/:index`, which is cached for good. Mainnet block 975 511, 4,198 transactions, is 83,968 bytes: 16.6 KB gzipped and 12.7 KB with brotli, if the proxy in front compresses (the server itself does not). The facts are about 400 bytes. Check the version before reading; a different one means a newer server and a page that needs a reload.
 
-**In the frontend.** `lib/summary.ts` has the type, `isSummary`, and `fetchSummaries(network, hashes, signal)`, which asks for up to ten at a time with `withRetry` and keeps every summary it sees, fetched or pushed, for the life of the page (`knownSummary`). The home page asks for its ten tiles in one batch on first paint and then takes each new block's from the WebSocket, asking over HTTP only if the push has not come within 4 s. The blocks list asks per row, two at a time, so an old page fills in row by row. Draw the bands with `Strata`, and the records with the transaction grid below.
+**In the frontend.** `lib/summary.ts` has the type, `isSummary`, and `fetchSummaries(network, hashes, signal)`, which asks for up to ten at a time with `withRetry` and keeps every summary it sees, fetched or pushed, for the life of the page (`knownSummary`). The home page asks for its ten tiles in one batch on first paint and then takes each new block's from the WebSocket, asking over HTTP only if the push has not come within 4 s. The blocks list asks per row, two at a time, so an old page fills in row by row. Draw the bands with `Strata`, and the records with the transaction grid below. The home strip's and the mining page's tiles put `miner.name` on the line under each tile (`aria-hidden`, its space always kept) and in the tile link's text; the block page links it to the pool's page.
 
 **Caching.** A summary is fixed by its hash, so success is `Cache-Control: public, max-age=31536000, immutable`, and `api.ts`-style in-memory caching is right. Errors are `no-store`.
 

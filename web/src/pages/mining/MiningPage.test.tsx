@@ -3,6 +3,8 @@ import { render } from "solid-js/web";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "../../components/test-utils";
 import { clearApiCache } from "../../lib/api";
+import { fakeBlock } from "../../lib/fakes";
+import { clearSummaries } from "../../lib/summary";
 import MiningPage from "./MiningPage";
 import PoolPage from "./PoolPage";
 
@@ -86,6 +88,44 @@ describe("mining page", () => {
     expect(pools?.textContent).toContain("713 EH/s");
     await vi.waitFor(() => expect(text(el)).toContain("Paid to miners"));
     expect(text(el)).toContain("126.00000000 BTC");
+  });
+
+  it("names each recent block's miner from one batch of facts", async () => {
+    clearSummaries();
+    const blocks = [fakeBlock(12), fakeBlock(11)];
+    replies["/blocks"] = () => Response.json(blocks);
+    const miners = [
+      { name: "Foundry USA", slug: "foundryusa" },
+      { name: "Unknown", slug: "unknown" },
+    ];
+    replies[`/app/blocks/summary?hashes=${blocks.map((b) => b.id).join(",")}`] = () =>
+      Response.json(
+        blocks.map((b, i) => ({
+          id: b.id,
+          height: b.height,
+          tx_count: 1,
+          fees: 0,
+          vsize: 0,
+          weight: 0,
+          fee_rate: null,
+          fee_bands: Array.from({ length: 10 }, () => 0),
+          miner: miners[i],
+        })),
+      );
+    const el = mount(() => <MiningPage />, "/mining");
+    const tiles = () => [...el.querySelectorAll<HTMLElement>(".mining-tile")];
+    await vi.waitFor(() =>
+      expect(tiles().map((t) => t.querySelector(".mining-tile__pool")?.textContent)).toStrictEqual([
+        "Foundry USA",
+        "Unknown",
+      ]),
+    );
+    expect(requests.filter((r) => r.startsWith("/app/blocks/summary"))).toHaveLength(1);
+    // Read with the tile's link, not twice.
+    expect(tiles()[0]?.querySelector("a")?.textContent).toContain("Block 12, mined by Foundry USA");
+    expect(tiles()[0]?.querySelector(".mining-tile__pool")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
   });
 
   it("takes the period from the address and marks it current", async () => {

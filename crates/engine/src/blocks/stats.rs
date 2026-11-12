@@ -4,6 +4,9 @@ use bitcoin::BlockHash;
 use node::rpc::model::{Block, BlockTx};
 use serde::Serialize;
 
+use super::Coinbase;
+use crate::mining::pools;
+
 /// Upper bounds of the design's fee bands 1–9 in hundredths of a sat/vB (`FEE_BOUNDS` in
 /// `web/src/lib/format.ts`); band 10 is everything above.
 const BAND_BOUNDS: [u64; 9] = [20, 30, 50, 100, 150, 200, 300, 500, 1000];
@@ -33,6 +36,35 @@ pub struct Facts {
     /// Virtual size paid at each of the ten design bands, cheapest first, banded on the rate as
     /// the frontend prints it (two decimals), so a stratum's color agrees with its number.
     pub fee_bands: [u64; 10],
+    /// Who mined it, by the pool list's rules.
+    pub miner: Miner,
+}
+
+/// Who mined a block: a pool from the shipped list, or Unknown. Never text from the block, whose
+/// coinbase tag is whatever its miner wrote; a tag only selects one of the list's names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Miner {
+    pub name: &'static str,
+    /// The pool page's slug, `unknown` for Unknown.
+    pub slug: &'static str,
+}
+
+impl Miner {
+    pub const UNKNOWN: Self = Self {
+        name: "Unknown",
+        slug: "unknown",
+    };
+
+    /// The pool [`pools::Pools::attribute`] gives this coinbase: its payout address first, then
+    /// its tag.
+    pub fn of(coinbase: &Coinbase) -> Self {
+        let list = pools::list();
+        let (id, _) = list.attribute(&coinbase.tag, &coinbase.payouts);
+        list.by_id(id).map_or(Self::UNKNOWN, |p| Self {
+            name: &p.name,
+            slug: &p.slug,
+        })
+    }
 }
 
 /// Fee rates in sat/vB, unrounded. Percentiles are weighted by virtual size: `p25` is the rate
@@ -71,6 +103,10 @@ pub fn facts(block: &Block) -> Facts {
         weight,
         fee_rate: rates(paying),
         fee_bands,
+        miner: Miner::of(&Coinbase::from_parts(
+            block.coinbase.script.as_bytes(),
+            &block.coinbase.outputs,
+        )),
     }
 }
 
@@ -166,6 +202,7 @@ mod tests {
             weight: 0,
             previousblockhash: None,
             tx: tx_list,
+            coinbase: Default::default(),
         }
     }
 
@@ -190,6 +227,57 @@ mod tests {
         assert_eq!(
             (f.tx_count, f.fees, f.vsize, f.weight),
             (5, 2961, 10_400, 41_600)
+        );
+    }
+
+    fn mined(tag: &[u8], pays: &str) -> Miner {
+        use std::str::FromStr;
+        let script = bitcoin::Address::from_str(pays)
+            .unwrap()
+            .assume_checked()
+            .script_pubkey();
+        let mut b = block(&[]);
+        b.coinbase = node::rpc::model::Coinbase {
+            script: bitcoin::ScriptBuf::from_bytes(tag.to_vec()),
+            outputs: vec![
+                bitcoin::TxOut {
+                    value: Amount::ZERO,
+                    script_pubkey: bitcoin::ScriptBuf::new_op_return([0xaa; 4]),
+                },
+                bitcoin::TxOut {
+                    value: Amount::from_sat(312_500_000),
+                    script_pubkey: script,
+                },
+            ],
+        };
+        facts(&b).miner
+    }
+
+    #[test]
+    fn the_miner_is_a_listed_name_payout_first() {
+        const ELSEWHERE: &str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        // Tagged ViaBTC but paying Foundry USA's listed address: Foundry USA's.
+        let m = mined(
+            b"\x03\x97\xe2\x0e/ViaBTC/",
+            "12KKDt4Mj7N5UAkQMN7LtPZMayenXHa8KL",
+        );
+        assert_eq!((m.name, m.slug), ("Foundry USA", "foundryusa"));
+        // A tag alone names its pool, by the list's spelling.
+        let m = mined(b"\x03\x97\xe2\x0e/viabtc/", ELSEWHERE);
+        assert_eq!((m.name, m.slug), ("ViaBTC", "viabtc"));
+        // Anything else is Unknown, and the tag's text never becomes a name.
+        for tag in [
+            &b"<img src=x onerror=alert(1)>"[..],
+            b"\x00\x1b[31m\xe2\x80\xaeMy Pool",
+            b"",
+        ] {
+            assert_eq!(mined(tag, ELSEWHERE), Miner::UNKNOWN);
+        }
+        assert_eq!(facts(&block(&[])).miner, Miner::UNKNOWN, "no coinbase read");
+        let json = serde_json::to_value(facts(&block(&[]))).unwrap();
+        assert_eq!(
+            json["miner"],
+            serde_json::json!({"name": "Unknown", "slug": "unknown"})
         );
     }
 

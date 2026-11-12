@@ -616,9 +616,11 @@ function MinedTile(props: {
     [],
     { equals: sameLayers },
   );
+  const miner = () => summary()?.miner?.name;
   const label = () =>
     [
       `Block ${groupDigits(b().height)}`,
+      miner() && `mined by ${miner()}`,
       formatRelative(b().timestamp, props.now()),
       `${groupDigits(b().tx_count)} ${b().tx_count === 1 ? "transaction" : "transactions"}`,
       tileFeeText(facts()),
@@ -696,8 +698,10 @@ function MinedTile(props: {
           </time>
         </span>
       </Link>
-      {/* The miner's name goes here; the line is kept so it lands without moving anything. */}
-      <span class="home-tile__pool" />
+      {/* Its line is always there, so the name lands without moving anything; the link says it. */}
+      <span class="home-tile__pool" aria-hidden="true" title={miner()}>
+        {miner()}
+      </span>
     </li>
   );
 }

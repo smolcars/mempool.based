@@ -191,7 +191,8 @@ describe("BlockPage", () => {
     expect(fact(el, "Reward")).toContain("3.12500000 BTC subsidy");
     expect(fact(el, "Confirmations")).toContain("10");
     expect(fact(el, "Weight")).toContain("99.8% of the limit");
-    expect(fact(el, "Miner")).toContain("Not available yet");
+    // This summary is from a server that does not name miners.
+    await until(() => expect(fact(el, "Miner")).toBe("Not known on this server"));
     expect(fact(el, "Bits")).toContain("0x1701e5ac");
     const prev = el.querySelector<HTMLAnchorElement>('a[rel="prev"]');
     const next = el.querySelector<HTMLAnchorElement>('a[rel="next"]');
@@ -217,6 +218,36 @@ describe("BlockPage", () => {
     expect(caption).toContain("Layers, cheapest first: under 0.20 sat/vB: 367.01 kvB, 37%");
     expect(caption).toContain("10.0 sat/vB and up: 5 453 vB, under 1%");
     expect(el.querySelector(".block-core .feekey")).not.toBeNull();
+  });
+
+  it("names the miner, linking to its pool's page", async () => {
+    const miner = { name: "Foundry USA", slug: "foundryusa" };
+    serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, miner }] } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Miner")).toContain("Foundry USA"));
+    expect(fact(el, "Miner")).toContain("By payout address or tag");
+    const link = [...el.querySelectorAll<HTMLAnchorElement>(".block-fact a")].find(
+      (a) => a.textContent === "Foundry USA",
+    );
+    expect(link?.getAttribute("href")).toBe("/mining/pool/foundryusa");
+  });
+
+  it("says Unknown as such, never the miner's own tag", async () => {
+    const miner = { name: "Unknown", slug: "unknown" };
+    serve({ ...normal(), [summaryPath(HASH)]: { body: [{ ...SUMMARY, miner }] } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Miner")).toContain("Unknown"));
+    expect(fact(el, "Miner")).toBe("UnknownNo listed address or tag");
+    expect(el.querySelector('.block-fact a[href="/mining/pool/unknown"]')).not.toBeNull();
+    // The tag is shown as the miner wrote it, in its own fact, as text.
+    await until(() => expect(fact(el, "Coinbase tag")).toContain("<img src=x onerror=alert(1)>"));
+    expect(el.querySelector("img")).toBeNull();
+  });
+
+  it("offers a retry for the miner when the facts fail", async () => {
+    serve({ ...normal(), [summaryPath(HASH)]: { status: 502, body: { error: "node failed" } } });
+    const el = open(`/block/${HASH}`);
+    await until(() => expect(fact(el, "Miner")).toContain("Could not load. Try again"));
   });
 
   it("says when a block holds only its coinbase", async () => {

@@ -76,6 +76,32 @@ async fn rpc(
     )
 }
 
+/// Foundry USA's first listed payout address, 12KKDt4Mj7N5UAkQMN7LtPZMayenXHa8KL.
+const FOUNDRY_PAYOUT: &str = "76a9140e6ed2f95e8a7f3131535472e1009a1c77bd01e588ac";
+/// Hostile text a miner could write in its coinbase.
+const HOSTILE_TAG: &str = "<img src=x onerror=alert(1)>";
+
+/// The mock's coinbase for `hash`: block 1 is tagged ViaBTC but pays Foundry USA's address,
+/// every other block carries [`HOSTILE_TAG`] and pays an address no pool lists.
+fn coinbase_json(hash: &str) -> (Value, Value) {
+    let (tag, payout) = if hash == self::hash(1) {
+        (
+            b"\x03\x00\x35\x0c/ViaBTC/".to_vec(),
+            FOUNDRY_PAYOUT.to_owned(),
+        )
+    } else {
+        let mut tag = b"\x03\x00\x35\x0c".to_vec();
+        tag.extend_from_slice(HOSTILE_TAG.as_bytes());
+        (tag, format!("0014{}", "ab".repeat(20)))
+    };
+    let hex: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+    (
+        json!([{"coinbase": hex, "sequence": 0}]),
+        json!([{"value": 0.0001, "n": 0, "scriptPubKey": {"hex": payout}},
+            {"value": 0.00000002, "n": 1, "scriptPubKey": {"hex": "6a04aaaaaaaa"}}]),
+    )
+}
+
 /// The block the mock answers for `hash`.
 fn block_json(hash: &str) -> Value {
     let tx = (0..TXS)
@@ -84,6 +110,10 @@ fn block_json(hash: &str) -> Value {
                 "vout": [{"value": 0.0001, "n": 0}, {"value": 0.00000002, "n": 1}]});
             if i > 0 {
                 t["fee"] = json!(i as f64 * 10.0 / 1e8);
+            } else {
+                let (vin, vout) = coinbase_json(hash);
+                t["vin"] = vin;
+                t["vout"] = vout;
             }
             t
         })
@@ -273,6 +303,11 @@ async fn facts_records_and_batches_are_served_and_cached_for_good() {
         .map(|v| v.as_u64().unwrap())
         .sum();
     assert_eq!(bands, 9_900);
+    // Tagged ViaBTC, paid to Foundry USA's address: the payout decides, by the list's name.
+    assert_eq!(
+        f["miner"],
+        json!({"name": "Foundry USA", "slug": "foundryusa"})
+    );
     let e = request_event(&r).await;
     assert_eq!(
         (e["endpoint"].as_str(), e["source"].as_str()),
@@ -314,6 +349,17 @@ async fn facts_records_and_batches_are_served_and_cached_for_good() {
         .collect();
     assert_eq!(ids, [b.as_str(), a.as_str(), b.as_str()]);
     assert_eq!((node.calls(&a), node.calls(&b)), (1, 1));
+    // Every block in a batch names its miner; a hostile tag is Unknown and never text here.
+    assert_eq!(
+        all[0]["miner"],
+        json!({"name": "Unknown", "slug": "unknown"})
+    );
+    assert_eq!(all[1]["miner"]["slug"], "foundryusa");
+    let body = String::from_utf8_lossy(&r.body);
+    assert!(
+        !body.contains("onerror") && !body.contains("ViaBTC"),
+        "{body}"
+    );
 
     // HEAD is GET without the body.
     let mut stream = TcpStream::connect(&addr).await.unwrap();
@@ -328,25 +374,37 @@ async fn facts_records_and_batches_are_served_and_cached_for_good() {
     assert!(raw.ends_with("\r\n\r\n"), "{raw}");
 }
 
-/// Writes a rated row for the mock's block `hash`, as the backfill would.
+/// Writes a rated row for the mock's block `hash`, as the backfill would, with its coinbase:
+/// the tag and the payouts as length-prefixed scripts.
 async fn store_row(dir: &std::path::Path, hash: &str) {
     use engine::store::{Options, Store, params};
     let block: node::rpc::model::Block = serde_json::from_value(block_json(hash)).unwrap();
     let f = engine::blocks::stats::facts(&block);
     let r = f.fee_rate.unwrap();
+    let tag = block.coinbase.script.to_bytes();
+    let mut payouts = Vec::new();
+    for o in block
+        .coinbase
+        .outputs
+        .iter()
+        .filter(|o| o.value.to_sat() > 0)
+    {
+        payouts.push(o.script_pubkey.len() as u8);
+        payouts.extend_from_slice(o.script_pubkey.as_bytes());
+    }
     let store = Store::open(dir, "regtest", Options::default()).unwrap();
     let id = *bitcoin::hashes::Hash::as_byte_array(&f.id);
     let b = f.fee_bands.map(|b| b as i64);
     store
         .write(move |sql| {
             sql.prepare(
-                "INSERT INTO blocks VALUES (?1, ?2, 1, ?3, 1000, 4000, ?4, ?5, 0, 0, 1.0, x'', x'', \
+                "INSERT INTO blocks VALUES (?1, ?2, 1, ?3, 1000, 4000, ?4, ?5, 0, 0, 1.0, ?23, ?24, \
                  1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 0)",
             )?
             .execute(params![
                 f.height, &id[..], f.tx_count as i64, f.weight as i64, f.fees as i64,
                 r.min, r.p10, r.p25, r.median, r.p75, r.p90, r.max,
-                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9]
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], tag, payouts
             ])?;
             Ok(())
         })
@@ -379,6 +437,11 @@ async fn a_block_in_the_table_is_answered_without_the_node() {
     assert_eq!(r.status, 200, "{r:?}");
     assert_eq!(r.header("cache-control"), Some(IMMUTABLE));
     assert_eq!(r.body, computed.body, "the same answer, byte for byte");
+    assert_eq!(
+        r.json()["miner"]["slug"],
+        "foundryusa",
+        "from the stored coinbase"
+    );
     assert_eq!(request_event(&r).await["source"], "stored");
     assert_eq!(node.total(), 0, "no node call");
 

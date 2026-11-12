@@ -609,8 +609,7 @@ pub async fn worker(ctx: Arc<NetworkContext>) {
                 };
                 let Some((summary, fresh)) = found else { break };
                 if depth == 0 || fresh {
-                    let msg =
-                        json!({ "topic": "blocks", "type": "summary", "summary": summary.facts });
+                    let msg = message(&summary.facts);
                     ctx.hub
                         .announce(Topic::Blocks, "summary", &msg, Snapshot::Keep, since);
                 }
@@ -621,6 +620,12 @@ pub async fn worker(ctx: Arc<NetworkContext>) {
             return;
         }
     }
+}
+
+/// The `blocks` topic's `summary` message: the facts exactly as the routes serve them, the miner
+/// included, so a new tile can name its miner without asking.
+fn message(facts: &Facts) -> serde_json::Value {
+    json!({ "topic": "blocks", "type": "summary", "summary": facts })
 }
 
 /// Summaries by hash, least recently used out first once their size passes the budget.
@@ -679,7 +684,7 @@ impl Lru {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use bitcoin::hashes::Hash;
 
@@ -696,6 +701,7 @@ mod tests {
                 weight: 0,
                 fee_rate: None,
                 fee_bands: [0; 10],
+                miner: engine::blocks::Miner::UNKNOWN,
             },
             txs: vec![0; records].into(),
             prev: None,
@@ -728,6 +734,22 @@ mod tests {
         assert!(lru.get(&h(5)).is_none(), "larger than the budget: not kept");
         lru.insert(h(4), summary(2500));
         assert_eq!(lru.bytes, 1000 + 2500 + 2 * ENTRY_OVERHEAD);
+    }
+
+    #[test]
+    fn the_summary_message_names_the_miner() {
+        let mut facts = summary(1).facts.clone();
+        facts.miner = engine::blocks::Miner {
+            name: "Foundry USA",
+            slug: "foundryusa",
+        };
+        let msg = message(&facts);
+        assert_eq!(msg["type"], "summary");
+        assert_eq!(msg["summary"], serde_json::to_value(&facts).unwrap());
+        assert_eq!(
+            msg["summary"]["miner"],
+            json!({"name": "Foundry USA", "slug": "foundryusa"})
+        );
     }
 
     #[test]
