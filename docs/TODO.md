@@ -10,7 +10,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 |---|---|---|---|
 | F0 | Rust workspace, skeleton server (`/healthz`, static files), skeleton frontend, CI within budget | — | done ([#1](https://github.com/smolcars/mempool.based/pull/1)) |
 | R1 | Parity inventory: fill [`COMPAT.md`](COMPAT.md) from mempool.space's observable API and rbitcoin's surface | — | doing |
-| R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | doing |
+| R2 | Regtest harness: rbitcoin v0.9.1 in Docker, scripts to mine and transact, `docs/REGTEST.md` | — | done ([#2](https://github.com/smolcars/mempool.based/pull/2)) |
 | D1 | Design language and static prototype; rewrite [`DESIGN.md`](DESIGN.md) | — | doing |
 
 ## M1 — Explorer skeleton
@@ -18,7 +18,7 @@ Status is one of: `todo`, `doing`, `done` (with the PR), `skipped` (with the rea
 | ID | Task | Needs | Status |
 |---|---|---|---|
 | N1 | Esplora client: TCP and unix socket, typed models, chain-tip stamp handling | F0 | doing |
-| N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | todo |
+| N2 | Electrum client: requests, subscriptions (headers, scripthash, outpoint), reconnect | F0 | doing |
 | N3 | RPC client: fixed set of typed read-only methods | F0 | todo |
 | S1 | Server core: multi-network config, limits and rate-limit middleware, error model, security headers | F0 | doing |
 | S2 | Esplora pass-through at `/api`: route allow-list, typed parameters, cache headers | N1, S1 | todo |

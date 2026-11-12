@@ -30,7 +30,7 @@ The repository builds, tests and merges quickly.
 - The parity inventory in [`COMPAT.md`](COMPAT.md).
 - A design language and a static prototype.
 
-**Done when:** a change to either the server or the frontend goes from push to green in under 3 minutes, and `docker compose up` gives a working regtest node.
+**Done when:** a change to either the server or the frontend goes from push to green in under 3 minutes, and `dev/regtest/regtest.py up` gives a working regtest node.
 
 ### M1 — Explorer skeleton
 A usable explorer for confirmed data.
