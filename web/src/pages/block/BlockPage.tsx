@@ -853,20 +853,14 @@ const columns = [
     },
   },
   {
-    header: "Size, vB",
+    // Sizes keep their unit in the cell, as one column can span vB to kvB (docs/DESIGN.md).
+    header: "Virtual size",
     numeric: true,
     optional: true,
     cell: (tx: Transaction | null) => {
       if (!tx) return <Skel size="s" />;
       const v = vsize(tx);
-      return v === undefined ? (
-        MISSING
-      ) : (
-        <>
-          {groupDigits(v)}
-          <span class="visually-hidden"> vB</span>
-        </>
-      );
+      return v === undefined ? MISSING : formatSize(v);
     },
   },
   {

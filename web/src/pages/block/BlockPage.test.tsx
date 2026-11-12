@@ -209,6 +209,10 @@ describe("BlockPage", () => {
     expect(text(next as Element)).toContain("975 412");
     expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
     expect(text(el.querySelector("tbody tr") as Element)).toContain("Coinbase");
+    // A size keeps its unit in the cell, as on every other page: weight 800 is 200 vB.
+    expect(text(el.querySelector("thead") as Element)).toContain("Virtual size");
+    const cells = [...(el.querySelectorAll("tbody tr")[1]?.querySelectorAll("td") ?? [])];
+    expect(cells.map((c) => text(c))).toContain("200 vB");
     expect(document.title).toBe("Block 975 411 | rbitcoin.space".replace(" 4", " 4"));
   });
 

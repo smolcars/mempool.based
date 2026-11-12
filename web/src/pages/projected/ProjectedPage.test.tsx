@@ -94,6 +94,12 @@ describe("projected-block page", () => {
     expect(el.textContent).toContain("block 101 would hold these transactions");
     expect(el.querySelector(".projected-facts")?.textContent).toContain("Transactions3");
     expect(rows(el)).toStrictEqual([2, 3, 1].map((n) => `/regtest/tx/${fakeTxid(n)}`));
+    // A size keeps its unit in the cell, as on every other page.
+    const table = el.querySelector(".projected-txs table") as HTMLElement;
+    expect(table.querySelector("thead")?.textContent).toContain("Virtual size");
+    expect(table.querySelector("tbody tr td:last-child")?.textContent).toMatch(
+      /^\d[\d\u202F]* vB$/,
+    );
     const prev = el.querySelector("a[rel=prev]");
     expect(prev?.getAttribute("href")).toBe(`/regtest/block/${hash(100)}`);
   });

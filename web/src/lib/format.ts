@@ -18,6 +18,25 @@ export function groupDigits(n: number): string {
   return rounded < 0 ? `−${digits}` : digits;
 }
 
+const SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+
+/**
+ * A number too small or too large to write out, with `digits` significant digits and its power
+ * of ten: `4.6566 × 10⁻¹⁰` (regtest's difficulty). Trailing zeros are dropped: `1 × 10³⁰`.
+ */
+export function formatPowerOfTen(n: number, digits = 3): string {
+  if (!Number.isFinite(n) || n === 0) return MISSING;
+  const [mantissa = "", exponent = ""] = Math.abs(n)
+    .toExponential(digits - 1)
+    .split("e");
+  const m = mantissa.includes(".") ? mantissa.replace(/\.?0+$/, "") : mantissa;
+  const e = Number(exponent);
+  const power = Math.abs(e)
+    .toString()
+    .replaceAll(/\d/g, (d) => SUPERSCRIPTS[Number(d)] ?? "");
+  return `${n < 0 ? "−" : ""}${m}${NNBSP}×${NNBSP}10${e < 0 ? "⁻" : ""}${power}`;
+}
+
 /** BTC split into parts so the trailing zeros can be dimmed. */
 export interface BtcParts {
   /** `"−"` or `""`. */

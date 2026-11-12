@@ -1,6 +1,6 @@
 // What the block page computes in the browser: subsidy and reward, fullness, the coinbase tag.
 import type { Transaction } from "../../lib/esplora";
-import { groupDigits, MISSING } from "../../lib/format";
+import { formatPowerOfTen, groupDigits, MISSING } from "../../lib/format";
 import type { Network } from "../../lib/network";
 
 /** Blocks between halvings. Regtest halves every 150 blocks so tests can reach late eras. */
@@ -211,11 +211,18 @@ export function coinbaseTag(scriptsigHex: string | undefined, height: number): C
   };
 }
 
-/** Difficulty, compact: `148.36 T` above a million, grouped below, three significant digits under 1. */
+/**
+ * Difficulty, compact: `148.36 T` above a million, grouped below, three significant digits under
+ * 1, and a power of ten where writing it out would not fit: `4.66 × 10⁻¹⁰` (regtest).
+ */
 export function formatDifficulty(d: number): { short: string; full: string } {
   if (!Number.isFinite(d) || d < 0) return { short: MISSING, full: MISSING };
+  if (d >= 1e21 || (d > 0 && d < 0.001)) {
+    return { short: formatPowerOfTen(d, 3), full: formatPowerOfTen(d, 6) };
+  }
   const full = d >= 1 ? groupDigits(d) : d.toPrecision(3);
   const units: [number, string][] = [
+    [1e18, "E"],
     [1e15, "P"],
     [1e12, "T"],
     [1e9, "G"],

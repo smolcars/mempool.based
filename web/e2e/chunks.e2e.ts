@@ -6,10 +6,6 @@ import { chain, expect, test } from "./fixtures";
 // Each refused download is logged by the browser.
 test.use({ consoleErrorsAllowed: [/status of (404|503)/] });
 
-// shortcut: WebKit never asks for a page's script again after its download failed, so the page
-// stays at "Loading this page" (docs/FRONTEND.md "Other engines"); remove once recovery works there.
-test.fixme(({ browserName }) => browserName === "webkit", "WebKit does not retry a failed chunk");
-
 const BLOCK = `/regtest/block/${chain.blocks[106]}`;
 
 /** Refuses the block page's stylesheet and script `times` times each, then lets them through. */
@@ -36,7 +32,9 @@ test("a page whose stylesheet and code fail once loads by itself, styled", async
     timeout: 15_000,
   });
   expect(await styled(page)).toBe("flex");
-  expect(seen).toStrictEqual({ css: 2, js: 2 });
+  // The script: its failed preload, the request that proves it downloads now, then the page's own
+  // import (WebKit's comes from a reloaded page, as it holds the failure; docs/FRONTEND.md).
+  expect(seen).toStrictEqual({ css: 2, js: 3 });
 });
 
 test("when retries run out, Try again asks for everything again", async ({ page }) => {

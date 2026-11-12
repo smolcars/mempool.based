@@ -59,6 +59,8 @@ export default function TxGrid(props: TxGridProps) {
   let raf = 0;
   let arrived = 0;
   let drawn = false;
+  /** Frames drawn at the end of the scene since it last changed: see `frame`. */
+  let finals = 0;
   // CSS pixels of the canvas, and device pixels per CSS pixel.
   let width = 0;
   let height = 0;
@@ -138,9 +140,13 @@ export default function TxGrid(props: TxGridProps) {
       performance.measure("txgrid first frame", { start: arrived });
       props.onState?.("drawn");
     }
-    if (now < scene.end && !document.hidden) raf = requestAnimationFrame(frame);
+    // The last frame is drawn twice: WebKit on Linux shows a frame only once the next is drawn, so a
+    // single frame (a restore, a resize, a theme switch) would never appear there.
+    finals = now < scene.end ? 0 : finals + 1;
+    if (finals < 2 && !document.hidden) raf = requestAnimationFrame(frame);
   };
   const schedule = () => {
+    finals = 0;
     if (raf === 0 && !document.hidden) raf = requestAnimationFrame(frame);
   };
 

@@ -11,7 +11,7 @@ import {
 } from "solid-js";
 import { Empty, ErrorState, Loading } from "../components/States";
 import { createRequest } from "../lib/api";
-import { CHUNK_ATTEMPTS, chunkDelay, isChunkError, retryStyles } from "../lib/chunks";
+import { CHUNK_ATTEMPTS, chunkDelay, isChunkError, reloadOnce, retryFiles } from "../lib/chunks";
 import { fetchConfig } from "../lib/config";
 import { NETWORK_NAMES, type Network, onNetwork, stripNetwork } from "../lib/network";
 import { useNetwork } from "../lib/page";
@@ -56,6 +56,7 @@ export function Shell(props: { children?: JSX.Element }) {
     () => location.pathname,
     () => {
       chunkAttempts = 0;
+      checkedAt = Number.NEGATIVE_INFINITY;
     },
   );
 
@@ -109,6 +110,10 @@ export function Shell(props: { children?: JSX.Element }) {
 
 /** Automatic attempts made so far at the page's files; the reader's own "Try again" starts afresh. */
 let chunkAttempts = 0;
+/** When an attempt last rendered the page again after proving its scripts download now. */
+let checkedAt = Number.NEGATIVE_INFINITY;
+/** A chunk error this soon after that came from the browser's memory of the failure, not the network. */
+const HELD_MS = 2000;
 
 /**
  * A page that could not be shown. When its code or styles failed to download, they are asked for
@@ -119,7 +124,10 @@ let chunkAttempts = 0;
 function PageFailure(props: { error: unknown; reset: () => void; version: string | undefined }) {
   // The failure this fallback was made for: a new one makes a new fallback.
   const chunk = isChunkError(untrack(() => props.error));
-  const first = chunk && chunkAttempts < CHUNK_ATTEMPTS ? "waiting" : "failed";
+  // The code failed again right after it was shown to download: the browser holds on to the
+  // failure (WebKit does, for the life of the document), so only a reload gets past it.
+  const reloading = chunk && Date.now() - checkedAt < HELD_MS && reloadOnce();
+  const first = reloading || (chunk && chunkAttempts < CHUNK_ATTEMPTS) ? "waiting" : "failed";
   const [state, setState] = createSignal<"waiting" | "updated" | "failed">(first);
   let alive = true;
   onCleanup(() => {
@@ -144,16 +152,19 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
       }
       try {
         // oxlint-disable-next-line no-await-in-loop -- the page is shown only once its styles are in
-        await retryStyles();
-        if (alive) props.reset();
+        const { scripts } = await retryFiles();
+        // A page left meanwhile must not hand its evidence to the next one.
+        if (!alive) return;
+        if (scripts) checkedAt = Date.now();
+        props.reset();
         return;
       } catch {
-        // A stylesheet failed again: wait longer and try once more.
+        // A file failed again: wait longer and try once more.
       }
     }
     if (alive) setState("failed");
   };
-  if (first === "waiting") void recover();
+  if (first === "waiting" && !reloading) void recover();
 
   const tryAgain = async () => {
     chunkAttempts = CHUNK_ATTEMPTS;
@@ -163,11 +174,10 @@ function PageFailure(props: { error: unknown; reset: () => void; version: string
       return;
     }
     // A render error can follow a stylesheet that failed too; either way everything is asked again.
-    const styles = await retryStyles().then(
-      () => true,
-      () => false,
-    );
-    if (styles || !chunk) props.reset();
+    const files = await retryFiles().catch(() => undefined);
+    if (!alive) return;
+    if (files?.scripts) checkedAt = Date.now();
+    if (files || !chunk) props.reset();
     else setState("failed");
   };
 

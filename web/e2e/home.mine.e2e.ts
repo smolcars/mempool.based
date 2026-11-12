@@ -97,6 +97,9 @@ test("mining takes the projected next block across the line and empties the proj
   }).toPass({ timeout: PROJECTION_LAG_MS });
   const key = await next.getAttribute("data-key");
   await record(page);
+  // A frame before the block, to compare with: WebKit on Linux can go a while without a frame
+  // while nothing on the page moves.
+  await expect.poll(async () => (await recorded(page)).length).toBeGreaterThan(0);
 
   const [hash = ""] = await mine(1);
   const lane = page.getByRole("list", { name: "Mined blocks, newest first" });
