@@ -255,6 +255,18 @@ describe("a node", () => {
     );
   });
 
+  it("shows a node that never announced itself", async () => {
+    // What the server sends for a node it holds only through its channels (nodes.rs app_node).
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(
+      acinq({ alias: null, addresses: null, features: [], last_update: null }),
+    );
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Unnamed node");
+    expect(text(el)).toContain("It has sent no announcement");
+    expect(text(el)).toContain("AddressesNone announced");
+    expect(text(el)).toContain("Open channels1 807");
+  });
+
   it("says when this server knows no such node, or the key is not one", async () => {
     const el = open(`/lightning/node/${"02".padEnd(66, "0")}`);
     await shows(el, "This server knows no such node");

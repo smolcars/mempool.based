@@ -170,9 +170,9 @@ function Body(props: { node: NodeDetail; network: Network }) {
           <div class="ln-fact">
             <dt>Addresses</dt>
             <dd>
-              <Show when={props.node.addresses.length > 0} fallback="None announced">
+              <Show when={(props.node.addresses ?? []).length > 0} fallback="None announced">
                 <ul class="ln-chips ln-chips--mono">
-                  <For each={props.node.addresses}>
+                  <For each={props.node.addresses ?? []}>
                     {(a) => <li>{cut(cleanAlias(a) ?? "", 128).text}</li>}
                   </For>
                 </ul>

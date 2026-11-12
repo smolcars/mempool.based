@@ -136,7 +136,8 @@ export interface Feature {
 export interface NodeDetail {
   id: string;
   alias: string | null;
-  addresses: string[];
+  /** Null for a node that sent no announcement. */
+  addresses: string[] | null;
   features: Feature[];
   last_update: number | null;
   first_seen: number | null;
@@ -294,7 +295,7 @@ const isFeature = (v: unknown): v is Feature =>
 
 export const isNodeDetail = (v: unknown): v is NodeDetail =>
   obj(v) &&
-  list(v["addresses"], str) &&
+  nullable(v["addresses"], (x) => list(x, str)) &&
   list(v["features"], isFeature) &&
   num(v["capacity"]) &&
   obj(v["channels"]) &&
