@@ -67,13 +67,15 @@ test("regtest says it never adjusts its difficulty", async ({ page }) => {
 test("the unconfirmed scenario transactions wait in the projected next block", async ({ page }) => {
   await page.goto("/regtest/");
   const projected = page.getByRole("list", { name: "Projected blocks, next first" });
-  const next = projected.getByRole("listitem").first();
+  const next = projected.getByRole("link").first();
   // Four from the scenario, and maybe the broadcast test's.
-  await expect(next).toContainText(/Next block, projected: \d+ transactions, median fee about/);
-  const label = (await next.locator(".visually-hidden").textContent()) ?? "";
+  await expect(next).toHaveAccessibleName(/^Next block, projected: \d+ transactions, median fee/);
+  const label = (await next.getAttribute("aria-label")) ?? "";
   expect(Number(/projected: (\d+)/.exec(label)?.[1])).toBeGreaterThanOrEqual(4);
-  await expect(next.getByRole("link")).toHaveCount(0);
   await expect(page.getByText("Everything waiting fits in the next block.")).toBeVisible();
+  // It opens that block's page.
+  await next.click();
+  await expect(page).toHaveURL(/\/regtest\/block\/next$/);
 });
 
 test("a cold load asks for each thing once, and nothing the mempool topics send", async ({

@@ -7,7 +7,7 @@
 // a block the strip has not shown yet is held back for a moment, so the tile people were watching
 // is still there to cross the line when that block lands.
 import type { Block } from "../../lib/esplora";
-import type { Off, ProjectedBlock, Projection } from "../../lib/mempool-topics";
+import type { ProjectedBlock, ProjectedMessage, Projection } from "../../lib/projected-topic";
 
 /** Tiles left of the "now" line: three blocks and one for everything after them. */
 export const SLOTS = 4;
@@ -32,14 +32,12 @@ export interface ProjectionModel {
 
 export const EMPTY_MODEL: ProjectionModel = { mode: "waiting", entries: [] };
 
-export function receive(model: ProjectionModel, m: Projection | Off, now: number): ProjectionModel {
+export function receive(model: ProjectionModel, m: ProjectedMessage, now: number): ProjectionModel {
   if (m.type === "off") return { mode: "off", entries: [] };
-  const same = (e: Entry) => e.p.tip?.hash === m.tip?.hash;
+  const p = m.projection;
+  const same = (e: Entry) => e.p.tip?.hash === p.tip?.hash;
   const kept = model.entries.find(same);
-  const entries = [
-    ...model.entries.filter((e) => !same(e)),
-    { p: m, firstAt: kept?.firstAt ?? now },
-  ];
+  const entries = [...model.entries.filter((e) => !same(e)), { p, firstAt: kept?.firstAt ?? now }];
   return { mode: "on", entries: entries.slice(-KEPT) };
 }
 

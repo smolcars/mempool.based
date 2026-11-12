@@ -29,7 +29,7 @@ import {
   vsizeFromWeight,
 } from "../../lib/format";
 import type { LiveStatus } from "../../lib/live";
-import type { ProjectedBlock } from "../../lib/mempool-topics";
+import type { ProjectedBlock } from "../../lib/projected-topic";
 import { type Network, paths } from "../../lib/network";
 import { STRIP_MAX } from "./feeds";
 import { LiveIndicator } from "./LiveIndicator";

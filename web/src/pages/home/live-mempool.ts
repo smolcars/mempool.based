@@ -7,11 +7,11 @@ import { type LiveStatus, useTopic } from "../../lib/live";
 import {
   type MempoolState,
   mempoolTopic,
-  projectedTopic,
   type SeenTxs,
   transactionsTopic,
 } from "../../lib/mempool-topics";
 import type { Network } from "../../lib/network";
+import { projectedTopic } from "../../lib/projected-topic";
 import { createPoll, type Feed } from "./feeds";
 import {
   figuresFromSummary,

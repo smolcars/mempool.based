@@ -15,11 +15,12 @@ test("mining takes the projected next block across the line and empties the proj
   await page.goto("/regtest/");
   const projected = page.getByRole("list", { name: "Projected blocks, next first" });
   const next = projected.getByRole("listitem").first();
+  const nextLink = next.getByRole("link");
   // The projection trails the node by a cycle or so: wait until it holds the node's whole mempool.
   let waiting = 0;
   await expect(async () => {
     const node = (await (await request.get("/regtest/api/mempool")).json()) as { count: number };
-    const label = (await next.locator(".visually-hidden").textContent()) ?? "";
+    const label = (await nextLink.getAttribute("aria-label")) ?? "";
     waiting = Number(/projected: (\d+) transactions/.exec(label)?.[1]);
     expect(waiting).toBe(node.count);
   }).toPass({ timeout: 15_000 });
@@ -32,7 +33,7 @@ test("mining takes the projected next block across the line and empties the proj
   // The block that was projected next: its height, and everything that waited, plus its coinbase.
   await expect(lane.getByRole("listitem").first()).toHaveAttribute("data-height", key ?? "");
   await expect(tile).toHaveAccessibleName(new RegExp(`, ${waiting + 1} transactions,`));
-  await expect(next).toContainText("Next block, projected: nothing waiting");
+  await expect(nextLink).toHaveAccessibleName("Next block, projected: nothing waiting");
   await expect(page.getByText("Nothing is waiting.", { exact: false })).toBeVisible();
 });
 

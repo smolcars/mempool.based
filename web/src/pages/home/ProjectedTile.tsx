@@ -2,7 +2,8 @@ import { type Accessor, createMemo, createSignal, onCleanup, Show } from "solid-
 import { FeeRate } from "../../components/FeeRate";
 import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { formatFeeRate, groupDigits } from "../../lib/format";
-import type { Network } from "../../lib/network";
+import { Link } from "../../components/Link";
+import { type Network, paths } from "../../lib/network";
 import type { ProjectedTile as Tile } from "./projection";
 
 const MAX_WEIGHT = 4_000_000;
@@ -38,9 +39,9 @@ export const projectedLayers = (t: Pick<Tile, "bands" | "weight">): Layer[] =>
   strataLayers(t.bands, Math.min(1, t.weight / MAX_WEIGHT), TILE_LAYER_MIN);
 
 /**
- * A projected block: dashed and open, its figures approximate. Not a link (yet), so it takes no
- * focus and shows no hover. Its figures change in place as the mempool does; only a tile that
- * forms after the strip is drawn lets its layers settle in.
+ * A projected block: dashed and open, its figures approximate. It opens that block's page; the
+ * last tile opens the first block it holds. Its figures change in place as the mempool does; only
+ * a tile that forms after the strip is drawn lets its layers settle in.
  */
 export function ProjectedTile(props: {
   tile: Accessor<Tile | undefined>;
@@ -69,8 +70,11 @@ export function ProjectedTile(props: {
           classList={{ "home-tile--empty": tile().txs === 0 }}
           data-key={tile().key}
         >
-          <span class="visually-hidden">{projectedLabel(tile(), props.network)}</span>
-          <div class="home-tile__body" aria-hidden="true">
+          <Link
+            class="home-tile__body"
+            href={paths.projected(tile().slot + 1)}
+            aria-label={projectedLabel(tile(), props.network)}
+          >
             <span class="home-tile__title">{projectedTitle(tile(), props.network)}</span>
             <span class="home-tile__fee num">
               <Show when={tile().txs > 0} fallback="Nothing waiting">
@@ -96,7 +100,7 @@ export function ProjectedTile(props: {
               <span class="num">{groupDigits(tile().txs)} tx</span>
               <span>{tile().slot === 0 && props.network !== "regtest" ? "~10 min" : ""}</span>
             </span>
-          </div>
+          </Link>
           <span class="home-tile__pool" />
         </li>
       )}

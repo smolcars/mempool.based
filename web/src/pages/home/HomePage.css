@@ -260,10 +260,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Projected tiles hold layers on the sunken band, seamed in its color. Not links: no hover. */
+  /* Projected tiles hold layers on the sunken band, seamed in its color. */
   .home-tile--projected .home-tile__body {
     --strata-seam: var(--color-surface-sunken);
-    cursor: default;
   }
   /* An empty block: a dashed floor, so the empty tile reads as measured, not as missing. */
   .home-tile__fill--floor {

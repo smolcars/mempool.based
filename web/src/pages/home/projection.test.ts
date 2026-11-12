@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block } from "../../lib/esplora";
 import { fakeBlock } from "../../lib/fakes";
-import type { ProjectedBlock, Projection } from "../../lib/mempool-topics";
+import type { ProjectedBlock, ProjectedMessage } from "../../lib/projected-topic";
 import {
   EMPTY_MODEL,
   HOLD_MS,
@@ -29,10 +29,9 @@ const pb = (txs: number, median = 1, weight = 3_990_000): ProjectedBlock => ({
   bands: Array.from({ length: 10 }, (_, i) => (txs > 0 && i === 4 ? weight / 4 : 0)),
 });
 
-/** A projection made on `tip`, eight blocks: medians 8, 7, …, 1, the last one ten blocks' worth. */
-function projection(tip: Block | null, blocks?: ProjectedBlock[], stale = false): Projection {
-  return {
-    type: "projected",
+/** A `projected` message on `tip`, eight blocks: medians 8, 7, …, 1, the last one ten blocks' worth. */
+function projection(tip: Block | null, blocks?: ProjectedBlock[], stale = false) {
+  const p = {
     seq: 1,
     tip: tip ? { height: tip.height, hash: tip.id } : null,
     stale,
@@ -40,6 +39,7 @@ function projection(tip: Block | null, blocks?: ProjectedBlock[], stale = false)
       blocks ??
       Array.from({ length: 8 }, (_, i) => (i === 7 ? pb(30_000, 1, 40_000_000) : pb(3000, 8 - i))),
   };
+  return { type: "projected", projection: p } satisfies ProjectedMessage;
 }
 
 const keys = (m: ProjectionModel, mined: Block[] | undefined, now = 0) =>
@@ -109,7 +109,7 @@ describe("the projected tiles", () => {
   it("change figures in place when a new projection on the same tip arrives", () => {
     const mined = chain(1, 10);
     const a = receive(EMPTY_MODEL, projection(fakeBlock(10)), 0);
-    const blocks = projection(fakeBlock(10)).blocks;
+    const blocks = projection(fakeBlock(10)).projection.blocks;
     for (const b of blocks) b.medianRate = 9;
     const b = receive(a, projection(fakeBlock(10), blocks), 2_000);
     expect(sameTiles(projectedView(a, mined, 0), projectedView(b, mined, 2_000))).toBe(true);

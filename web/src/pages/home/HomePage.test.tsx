@@ -763,13 +763,17 @@ describe("the projected tiles", () => {
     expect(next.querySelector(".home-tile__fee")?.textContent).toBe("~8.00 sat/vB");
     expect(next.querySelector(".home-tile__range")?.textContent).toBe("0.50 – 50.0");
     expect(next.querySelector(".home-tile__foot")?.textContent).toBe("3 000 tx~10 min");
-    expect(next.querySelector(".visually-hidden")?.textContent).toBe(
+    const link = next.querySelector("a");
+    expect(link?.getAttribute("aria-label")).toBe(
       "Next block, projected: 3 000 transactions, median fee about 8.00 sat/vB, fee range 0.50 to 50.0 sat/vB",
     );
-    // Not a link and not focusable: it opens nothing yet.
-    expect(
-      el.querySelector(".home-strip__projected a, .home-strip__projected [tabindex]"),
-    ).toBeNull();
+    // Each opens its projected block's page; the last opens the first block it holds.
+    expect(tiles.map((t) => t.querySelector("a")?.getAttribute("href"))).toStrictEqual([
+      "/signet/block/next",
+      "/signet/block/next/2",
+      "/signet/block/next/3",
+      "/signet/block/next/4",
+    ]);
     // The swatch is the band of the rate as printed.
     expect(
       next.querySelector<HTMLElement>(".fee__swatch")?.style.getPropertyValue("--swatch"),
