@@ -734,23 +734,30 @@ describe("the live mempool", () => {
     expect(stats).toContain("≈ 3 blocks");
     expect(stats).toContain("0.10 sat/vB");
     expect(stats).toContain("node minimum");
-    // One row per fee band, dearest first, each with its size; a band with nothing says so.
+    // One row per fee band, dearest first: its size against one block, and how deep the queue is
+    // by its end. A band with nothing says so.
     const rows = [...el.querySelectorAll<HTMLElement>(".home-depth__row")];
-    expect(rows.map((r) => r.style.getPropertyValue("--w"))).toStrictEqual([
-      "0.4",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0.2",
-      "0",
-      "0",
-      "0",
-      "0.4",
+    expect(rows.map((r) => Number(r.style.getPropertyValue("--w")).toFixed(3))).toStrictEqual([
+      "1.000",
+      "0.000",
+      "0.000",
+      "0.000",
+      "0.000",
+      "0.925",
+      "0.000",
+      "0.000",
+      "0.000",
+      "1.000",
     ]);
-    expect(rows[0]?.querySelector(".home-depth__range")?.textContent).toBe("10+");
-    expect(rows[9]?.querySelector(".home-depth__range")?.textContent).toBe("< 0.2");
-    expect(rows[1]?.querySelector(".home-depth__size")?.textContent).toContain("–");
+    const cells = (r: HTMLElement | undefined) =>
+      [...(r?.querySelectorAll("td") ?? [])].map((c) => c.textContent);
+    expect(cells(rows[0])).toStrictEqual(["10+", "", "1.00 MvB", "1.0"]);
+    expect(cells(rows[1])).toStrictEqual(["5–10", "", "–", "1.0"]);
+    expect(cells(rows[9])).toStrictEqual(["< 0.2", "", "1.00 MvB", "2.5"]);
+    // The answer above: the next block's worth runs out in the dearest band.
+    expect(el.querySelector(".home-depth__answer")?.textContent).toBe(
+      "The next block's worth reaches down to 10+ sat/vB.",
+    );
     expect(el.querySelector(".home-recent tbody")?.textContent).toContain("dddddddd");
     expect(el.querySelector(".home-recent tbody")?.textContent).toContain("250 vB");
     expect(el.querySelector(".home-recent thead")?.textContent).toContain("Virtual size");

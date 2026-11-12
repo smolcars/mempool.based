@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { bandShares, isMempoolSummary, isRecentList, lowestRate } from "./mempool";
+import {
+  bandShares,
+  depthRows,
+  isMempoolSummary,
+  isRecentList,
+  lowestRate,
+  nextBlockReach,
+  sharesOf,
+} from "./mempool";
 
 describe("bandShares", () => {
   it("puts each histogram entry in the band of its rate as printed", () => {
@@ -48,5 +56,31 @@ describe("reply checks", () => {
     );
     expect(isRecentList([{ txid: "a".repeat(64), fee: 1, vsize: 1, value: 1 }])).toBe(true);
     expect(isRecentList([{ txid: "<b>", fee: 1, vsize: 1, value: 1 }])).toBe(false);
+  });
+});
+
+describe("depthRows", () => {
+  it("measures each band in blocks' worth, dearest first, and how deep the queue is by its end", () => {
+    const vsize = [
+      29_000_000, 5_000, 25_000, 117_000, 286_000, 62_000, 376_000, 625_000, 327_000, 37_000,
+    ];
+    const rows = depthRows(sharesOf(vsize));
+    expect(rows.map((r) => r.band)).toStrictEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    expect(rows[0]?.blocks).toBeCloseTo(0.037, 6);
+    expect(rows[2]?.deep).toBeCloseTo(0.989, 6);
+    // On a log scale from 100 vB to a block: the bulk row fills its bar and no more, and rows of
+    // a few kvB keep a length that can be compared.
+    expect(rows[9]?.bar).toBe(1);
+    expect(rows[2]?.bar).toBeCloseTo(Math.log10(6250) / 4, 6);
+    expect(rows[8]?.bar).toBeCloseTo(Math.log10(50) / 4, 6);
+    expect(rows[9]?.deep).toBeCloseTo(30.86, 2);
+    // The next block's worth runs out in the 2–3 band.
+    expect(nextBlockReach(rows)?.band).toBe(7);
+  });
+
+  it("says nothing reaches a block when everything waiting fits in one", () => {
+    const rows = depthRows(sharesOf([1000, 0, 0, 0, 0, 0, 0, 0, 0, 2000]));
+    expect(nextBlockReach(rows)).toBeUndefined();
+    expect(rows.at(-1)?.deep).toBeCloseTo(0.003, 6);
   });
 });

@@ -135,3 +135,37 @@ export function enqueueTxs<T extends { txid: string }>(
   const fresh = incoming.filter((t) => !known.has(t.txid)).reverse();
   return [...queue, ...fresh].slice(-max);
 }
+
+/** vB in one block's worth: what the depth rows measure in. */
+export const BLOCK_VSIZE = 1_000_000;
+
+/** One band's row in the home page's breakdown, dearest first. */
+export interface DepthRow extends FeeBandShare {
+  /** Its size in blocks' worth. */
+  blocks: number;
+  /** Blocks' worth from the dearest down to the end of this band: how deep the queue is here. */
+  deep: number;
+  /** The bar's length, 0–1, on a log scale from 100 vB to one block: past a block it is full. */
+  bar: number;
+}
+
+/**
+ * The bands as rows, dearest first, each measured against one block so they can be compared: the
+ * bar is on a log scale from 100 vB to a block, so a band of a few kvB shows beside one of 30 MvB,
+ * which fills its bar and is labelled. `deep` is what a reader at that rate has ahead.
+ */
+export function depthRows(bands: readonly FeeBandShare[]): DepthRow[] {
+  let deep = 0;
+  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
+  return [...bands].reverse().map((b) => {
+    const blocks = b.vsize / BLOCK_VSIZE;
+    deep += blocks;
+    const bar = b.vsize > 0 ? Math.min(1, Math.max(0, Math.log10(b.vsize / 100) / 4)) : 0;
+    return { ...b, blocks, deep, bar };
+  });
+}
+
+/** The band in which the dearest block's worth runs out: the next block reaches down to it. */
+export function nextBlockReach(rows: readonly DepthRow[]): DepthRow | undefined {
+  return rows.find((r) => r.deep >= 1) ?? undefined;
+}

@@ -418,10 +418,14 @@
   }
 
   /* ---------- Below the strip ---------- */
+  /* Two columns whose panels share each row's height, so both columns end together. */
   .home-grid {
     display: grid;
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    align-items: start;
+    grid-template-areas:
+      "fees mempool"
+      "difficulty recent";
+    align-items: stretch;
     gap: var(--space-5);
     padding-top: var(--space-5);
     padding-bottom: var(--space-7);
@@ -430,6 +434,18 @@
   .home-fees,
   .home-recent {
     min-width: 0;
+  }
+  .home-fees {
+    grid-area: fees;
+  }
+  .home-mempool {
+    grid-area: mempool;
+  }
+  .home-recent {
+    grid-area: recent;
+  }
+  .home-difficulty {
+    grid-area: difficulty;
   }
 
   .home-stats {
@@ -473,37 +489,84 @@
   }
 
   .home-depth {
-    margin-top: var(--space-5);
+    margin-top: var(--space-4);
   }
-  .home-depth__caption {
-    margin-bottom: var(--space-2);
+  .home-depth__answer {
+    min-height: 1.5em;
+    font-size: var(--text-sm);
+  }
+  .home-depth__answer strong {
+    font-weight: var(--weight-bold);
+  }
+  .home-depth__more {
+    margin-top: var(--space-2);
+  }
+  .home-depth__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--touch);
     font-size: var(--text-sm);
     color: var(--color-text-muted);
+    cursor: pointer;
+    list-style: none;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 0.2em;
   }
-  .home-depth__list {
-    display: grid;
-    gap: 3px;
+  .home-depth__summary::-webkit-details-marker {
+    display: none;
   }
-  .home-depth__row {
-    display: grid;
-    grid-template-columns: 4.5rem minmax(0, 1fr) 6.5rem;
-    align-items: center;
-    gap: var(--space-3);
-    min-height: 1.375rem;
+  .home-depth__summary::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform var(--dur-quick) var(--ease-out);
+  }
+  .home-depth__more[open] > .home-depth__summary::before {
+    transform: rotate(45deg);
+  }
+  .home-depth__table {
+    width: 100%;
     font-size: var(--text-sm);
   }
+  .home-depth__table th {
+    padding: 0 0 var(--space-1);
+    font-weight: var(--weight-regular);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    text-align: left;
+  }
+  .home-depth__table td {
+    padding: 3px 0;
+  }
+  .home-depth__table :is(th, td) + :is(th, td) {
+    padding-left: var(--space-3);
+  }
+  .home-depth__table .home-depth__num {
+    text-align: right;
+    white-space: nowrap;
+  }
   .home-depth__range {
+    width: 4.5rem;
     color: var(--color-text-muted);
     white-space: nowrap;
   }
+  .home-depth__barcell {
+    width: 100%;
+  }
+  /* A track one block long on a log scale: each band's size against it, past a block filling it. */
   .home-depth__bar {
+    position: relative;
+    display: block;
     height: 10px;
+    overflow: hidden;
     border-radius: var(--radius-s);
     background: var(--color-surface-sunken);
-    position: relative;
-    overflow: hidden;
   }
-  /* The share, at least a sliver when anything waits in the band. */
   .home-depth__bar::before {
     content: "";
     position: absolute;
@@ -514,13 +577,20 @@
   .home-depth__row--none .home-depth__bar::before {
     display: none;
   }
-  .home-depth__size {
-    text-align: right;
-    white-space: nowrap;
+  /* Past one block: the bar's end is cut, so a capped row never reads as exactly one block. */
+  .home-depth__row--full .home-depth__bar::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 6px;
+    width: 3px;
+    background: var(--color-surface);
+    transform: skewX(-20deg);
   }
-  .home-depth__empty {
+  .home-depth__note {
     margin-top: var(--space-2);
-    font-size: var(--text-sm);
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
   }
 
@@ -622,8 +692,16 @@
 
   /* ---------- Narrow screens ---------- */
   @media (max-width: 1040px) {
+    /* One column in the page's order: fees, mempool, latest transactions, difficulty. */
     .home-grid {
       grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: none;
+    }
+    .home-fees,
+    .home-mempool,
+    .home-recent,
+    .home-difficulty {
+      grid-area: auto;
     }
   }
   @media (max-width: 640px) {

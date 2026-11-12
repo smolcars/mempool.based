@@ -63,8 +63,8 @@ function Home(props: { network: Network }) {
       <div class="home-grid wrap">
         <FeePanel answer={fees} />
         <MempoolPanel feed={live.mempool} />
-        <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
         <RecentTxs feed={live.recent} />
+        <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
       </div>
     </div>
   );

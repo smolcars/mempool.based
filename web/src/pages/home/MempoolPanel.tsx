@@ -8,7 +8,13 @@ import { ErrorState } from "../../components/States";
 import { formatSize, groupDigits } from "../../lib/format";
 import { paths } from "../../lib/network";
 import type { Feed } from "./feeds";
-import { type FeeBandShare, type MempoolFigures, sharesOf } from "./mempool";
+import {
+  depthRows,
+  type FeeBandShare,
+  type MempoolFigures,
+  nextBlockReach,
+  sharesOf,
+} from "./mempool";
 
 const BLOCK_VSIZE = 1_000_000;
 
@@ -19,12 +25,6 @@ export function blocksOf(vsize: number): string {
   return `≈ ${groupDigits(n)} ${n === 1 ? "block" : "blocks"}`;
 }
 
-/** The bands, dearest first: the order they are mined in. */
-function dearestFirst(bands: readonly FeeBandShare[]): FeeBandShare[] {
-  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
-  return [...bands].reverse();
-}
-
 /** A band's range in sat/vB, as short as a row allows: `10+`, `0.5–1`, `< 0.2`. */
 export function rangeLabel(b: FeeBandShare): string {
   if (b.to === null) return `${b.from}+`;
@@ -32,16 +32,22 @@ export function rangeLabel(b: FeeBandShare): string {
   return `${b.from}–${b.to}`;
 }
 
-const percent = (share: number) =>
-  share > 0 && share < 0.01 ? "under 1%" : `${Math.round(share * 100)}%`;
+/** How deep the queue is, in blocks: `< 0.1`, `0.4`, `31`. */
+function deepText(deep: number): string {
+  if (deep <= 0) return "–";
+  if (deep < 0.1) return "< 0.1";
+  return deep < 10 ? deep.toFixed(1) : groupDigits(deep);
+}
 
 /**
- * Mempool: four figures, then what waits in each fee band, dearest first, as a row of figures with a
- * bar of its share. The numbers carry today's structure even when one cheap band holds nearly all.
+ * Mempool: four figures, the fee rate the next block's worth reaches down to, then each fee band,
+ * dearest first: its size against one block (a band past a block fills its bar) and how many
+ * blocks deep the queue is by its end.
  */
 export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
   const m = () => props.feed.data();
-  const bands = createMemo(() => m()?.bands ?? sharesOf([]));
+  const rows = createMemo(() => depthRows(m()?.bands ?? sharesOf([])));
+  const wide = typeof matchMedia === "function" && matchMedia("(min-width: 641px)").matches;
 
   return (
     <section class="home-mempool" aria-labelledby="mempool-title">
@@ -90,33 +96,81 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
             </Show>
           </Stat>
         </dl>
-        <figure class="home-depth">
-          <figcaption class="home-depth__caption">
-            Waiting, by fee rate: the dearest are mined first.
-          </figcaption>
-          <ol class="home-depth__list" aria-busy={m() ? "false" : "true"}>
-            <For each={dearestFirst(bands())}>
-              {(b) => (
-                <li
-                  class={["home-depth__row", { "home-depth__row--none": b.vsize === 0 }]}
-                  style={{ "--w": String(b.share), "--c": `var(--fee-${b.band})` }}
+        <div class="home-depth" aria-busy={m() ? "false" : "true"}>
+          <p class="home-depth__answer">
+            <Show when={m()} fallback={<span class="home-bone" />}>
+              {(s) => (
+                <Show
+                  when={nextBlockReach(rows())}
+                  fallback={
+                    s().vsize === 0
+                      ? "Nothing is waiting. The next block would hold only its coinbase."
+                      : "Everything waiting fits in the next block."
+                  }
                 >
-                  <span class="home-depth__range num">{rangeLabel(b)}</span>
-                  <span class="home-depth__bar" aria-hidden="true" />
-                  <span class="home-depth__size num">
-                    {m() ? (b.vsize > 0 ? formatSize(b.vsize) : "–") : ""}
-                    <span class="visually-hidden">, {percent(b.share)} of the mempool</span>
-                  </span>
-                </li>
+                  {(reach) => (
+                    <>
+                      The next block's worth reaches down to{" "}
+                      <strong class="num">{rangeLabel(reach())} sat/vB</strong>.
+                    </>
+                  )}
+                </Show>
               )}
-            </For>
-          </ol>
-          <Show when={m() && m()?.vsize === 0}>
-            <p class="home-depth__empty">
-              Nothing is waiting. The next block would hold only its coinbase.
+            </Show>
+          </p>
+          {/* Open on wide screens; a phone shows the answer and keeps the rows one tap away. */}
+          <details class="home-depth__more" open={wide}>
+            <summary class="home-depth__summary">By fee rate</summary>
+            <table class="home-depth__table">
+              <caption class="visually-hidden">
+                Waiting by fee rate, dearest first, each band's size and how many blocks deep the
+                queue is by its end
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">sat/vB</th>
+                  <th scope="col">
+                    <span class="visually-hidden">Size against one block, log scale</span>
+                  </th>
+                  <th scope="col" class="home-depth__num">
+                    Size
+                  </th>
+                  <th scope="col" class="home-depth__num">
+                    Blocks deep
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={rows()}>
+                  {(r) => (
+                    <tr
+                      class={[
+                        "home-depth__row",
+                        {
+                          "home-depth__row--none": r.vsize === 0,
+                          "home-depth__row--full": r.blocks > 1,
+                        },
+                      ]}
+                      style={{ "--w": String(r.bar), "--c": `var(--fee-${r.band})` }}
+                    >
+                      <td class="home-depth__range num">{rangeLabel(r)}</td>
+                      <td class="home-depth__barcell" aria-hidden="true">
+                        <span class="home-depth__bar" />
+                      </td>
+                      <td class="home-depth__num num">
+                        {m() ? (r.vsize > 0 ? formatSize(r.vsize) : "–") : ""}
+                      </td>
+                      <td class="home-depth__num num">{m() ? deepText(r.deep) : ""}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+            <p class="home-depth__note">
+              Bars on a log scale, from 100 vB to one block's worth, which fills a bar.
             </p>
-          </Show>
-        </figure>
+          </details>
+        </div>
       </Show>
     </section>
   );
