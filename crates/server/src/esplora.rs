@@ -386,7 +386,17 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
     });
     // Learned in the call's own task, so a client that hangs up first does not lose it.
     let size = verdicts::unpaged_script(&route).map(|s| (s, Arc::clone(&ctx.api.verdicts)));
+    let known = verdicts::history_page(&route).map(|p| (p, Arc::clone(&ctx.api.verdicts)));
     match heavy_call(ctx, client, key, deadline, move |esplora| async move {
+        // A verdict learned while this call waited for its slot still spares the node.
+        if let Some(((script, page), verdicts)) = known
+            && let Some(verdict) = verdicts.check(script, page, Instant::now())
+        {
+            return Err(match verdict {
+                Verdict::TooLarge => Error::TooLarge,
+                Verdict::Slow => Error::Timeout,
+            });
+        }
         let answer = esplora.raw(&call).await;
         if let Some((script, verdicts)) = size
             && matches!(&answer, Ok(raw) if Error::from_status(raw.status, &raw.body) == Error::TooLarge)

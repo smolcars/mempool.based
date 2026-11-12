@@ -229,6 +229,37 @@ async fn a_size_refusal_is_remembered_when_its_client_has_hung_up() {
 }
 
 #[tokio::test]
+async fn a_page_waiting_for_a_slot_is_refused_by_a_verdict_learned_meanwhile() {
+    use rbitcoin_space::esplora::HEAVY_RUNNING;
+    let (addr, seen) = start().await;
+    let spawn = |client: u8, path: String| {
+        let addr = addr.clone();
+        tokio::spawn(async move { get_as(&addr, client, &path).await })
+    };
+    // Slow pages take all slots but one; the last goes to totals the node refuses after 500 ms.
+    let busy: Vec<_> = (0..HEAVY_RUNNING - 1)
+        .map(|n| {
+            spawn(
+                u8::try_from(n + 10).unwrap(),
+                format!("/api/address/{SLOW}/txs?asof={n:064x}"),
+            )
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let totals = spawn(20, format!("/api/address/{LATE}"));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Its history arrives before that answer, so it passes the first check and waits for a slot.
+    let history = spawn(21, format!("/api/address/{LATE}/txs"));
+    assert_eq!(totals.await.unwrap().status, 503);
+    let r = history.await.unwrap();
+    assert_eq!((r.status, r.error.as_str()), TOO_LARGE);
+    assert_eq!(calls(&seen, &format!("{LATE}/txs")), 0);
+    for b in busy {
+        assert_eq!(b.await.unwrap().status, 504);
+    }
+}
+
+#[tokio::test]
 async fn a_slow_page_releases_its_client_is_remembered_and_still_holds_its_slot() {
     use rbitcoin_space::esplora::HEAVY_RUNNING;
     let (addr, seen) = start().await;
