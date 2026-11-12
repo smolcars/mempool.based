@@ -456,25 +456,25 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
         .handle_reply_channel_range(a, reply(vec![1, 2, 3, 4]))
         .unwrap();
     assert_eq!(queries(&h), [(a, vec![2, 3, 4])]);
-    // b's list overlaps a's: only what nobody was asked for, up to the ceiling of 5.
+    // b's list overlaps a's: only what nobody was asked for, up to the ceiling of 5 for b
+    // alone, so a list of invented ids cannot crowd out another peer's.
     h.gossip
-        .handle_reply_channel_range(b, reply(vec![3, 4, 5, 6, 7]))
+        .handle_reply_channel_range(b, reply((3..=11).collect()))
         .unwrap();
-    assert_eq!(queries(&h), [(b, vec![5, 6])]);
-    assert_eq!(h.gossip.range_pending(), 5);
+    assert_eq!(queries(&h), [(b, vec![5, 6, 7, 8, 9])]);
+    assert_eq!(h.gossip.range_pending(), 8);
     // One batch at a time per peer.
     h.gossip
         .handle_reply_short_channel_ids_end(a, end())
         .unwrap();
-    assert_eq!(h.gossip.range_pending(), 2);
-    h.gossip
-        .handle_reply_channel_range(b, reply(vec![8]))
-        .unwrap();
+    assert_eq!(h.gossip.range_pending(), 5);
+    // b's list has ended: more of it is refused.
+    assert!(
+        h.gossip
+            .handle_reply_channel_range(b, reply(vec![12]))
+            .is_err()
+    );
     assert!(queries(&h).is_empty());
-    h.gossip
-        .handle_reply_short_channel_ids_end(b, end())
-        .unwrap();
-    assert_eq!(queries(&h), [(b, vec![8])]);
     // A peer that leaves frees what it owed.
     h.gossip.peer_disconnected(b);
     assert_eq!(h.gossip.range_pending(), 0);
@@ -2048,3 +2048,4 @@ async fn stored_channels_keep_their_place_under_the_ceiling() {
 }
 
 mod closes;
+mod hostile;

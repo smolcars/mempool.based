@@ -71,7 +71,8 @@ const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Default)]
 struct RangeSync {
     peers: HashMap<PublicKey, PeerRange>,
-    /// Channel ids wanted from or requested of some peer. Bounded by the graph ceiling.
+    /// Channel ids wanted from or requested of some peer. Bounded by the graph ceiling per
+    /// connected peer.
     queued: HashSet<u64>,
     /// Unannounced nodes a channel was already requested for: many never announce, and asking
     /// again on every connection would fetch their channels each time. Nodes that leave the graph
@@ -405,7 +406,9 @@ impl Gossip {
             // A stored channel found early is still the file's: wait for it too (about 12 blocks
             // at most, see `chain::EARLY_AHEAD`).
             r.sent.retain(|id| self.lookup.holds(*id));
-            let done = r.channels.is_empty() && r.sent.is_empty() && self.lookup.waiting() == 0;
+            // Not `waiting() == 0`: a peer that keeps sending new channels would keep the replay
+            // open for ever. The stored ones are answered once none is held or being resolved.
+            let done = r.channels.is_empty() && r.sent.is_empty() && self.lookup.resolving() == 0;
             (r.nodes.keys().copied().collect::<Vec<NodeId>>(), done)
         };
         let graph = self.graph().read_only();
@@ -916,7 +919,11 @@ impl RoutingMessageHandler for Gossip {
             queued,
             asked,
         } = &mut *r;
-        let Some(p) = peers.get_mut(&their_node_id) else {
+        // Only while the list we asked for is arriving.
+        let Some(p) = peers
+            .get_mut(&their_node_id)
+            .filter(|p| p.listing.is_some())
+        else {
             return Err(ignore("unsolicited reply_channel_range"));
         };
         if msg.chain_hash != self.chain {
@@ -928,7 +935,9 @@ impl RoutingMessageHandler for Gossip {
         p.listing = (end < u64::from(u32::MAX)).then(Instant::now);
         let graph = self.graph().read_only();
         for scid in msg.short_channel_ids {
-            if queued.len() >= self.max_channels {
+            // Each peer's list is capped on its own, so one listing invented ids cannot crowd
+            // out the others'.
+            if p.wanted.len() >= self.max_channels {
                 break;
             }
             let want = match graph.channel(scid) {

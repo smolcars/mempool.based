@@ -255,10 +255,11 @@ impl Cache {
     }
 }
 
-/// An announcement waiting in LDK, and the script its keys require.
+/// An announcement waiting in LDK, the script its keys require, and when it was queued.
 struct Waiter {
     future: UtxoFuture,
     script: ScriptBuf,
+    since: Instant,
 }
 
 struct State {
@@ -427,10 +428,26 @@ impl Lookup {
         s.waiting.contains_key(&scid) || s.early.contains_key(&scid)
     }
 
+    /// Announcements answered and being handed to LDK.
+    pub(crate) fn resolving(&self) -> usize {
+        self.lock().resolving
+    }
+
     /// Announcements waiting for a lookup or being resolved.
     pub(crate) fn waiting(&self) -> usize {
         let s = self.lock();
         s.waiting_len + s.resolving
+    }
+
+    /// Every lookup waiting now was queued at or after `mark`: whatever waited then was answered.
+    /// A peer that keeps sending new channels keeps the queue from ever being empty, but not
+    /// this from coming true once the backlog of `mark` is through.
+    pub(crate) fn answered_before(&self, mark: Instant) -> bool {
+        self.lock()
+            .waiting
+            .values()
+            .flatten()
+            .all(|w| w.since >= mark)
     }
 
     pub(crate) fn queue_high(&self) -> bool {
@@ -562,6 +579,7 @@ impl UtxoLookup for Lookup {
         let waiter = Waiter {
             future: future.clone(),
             script,
+            since: Instant::now(),
         };
         if s.early.contains_key(&scid) {
             if s.early_len >= self.max_early {
