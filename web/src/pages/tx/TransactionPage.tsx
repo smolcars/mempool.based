@@ -2,11 +2,9 @@ import { useParams } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   For,
   Match,
-  on,
   onCleanup,
   Show,
   Switch,
@@ -19,7 +17,7 @@ import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
-import { createApi, fetchApi, fetchApp, isNotFound } from "../../lib/api";
+import { createApi, createRequest, fetchApi, fetchApp, isNotFound } from "../../lib/api";
 import { type BlocksMessage, blocksTopic } from "../../lib/blocks-topic";
 import type { Outspend, Transaction, TxStatus } from "../../lib/esplora";
 import { formatSize, groupDigits, MISSING, truncateMiddle } from "../../lib/format";
@@ -116,9 +114,9 @@ function TransactionView(props: { txid: string }) {
     as: "text",
   });
   const retry = () => {
-    void refetch();
-    void refetchSpends();
-    void refetchTip();
+    refetch();
+    refetchSpends();
+    refetchTip();
   };
 
   const ready = () => (tx.state === "ready" ? tx() : undefined);
@@ -138,14 +136,12 @@ function TransactionView(props: { txid: string }) {
   const live = createMemo(() => liveness(model(), socket(), quiet()));
   const shownNow = createMemo(() => shown(model(), live() === "live"));
   createEffect(
-    on(
-      () => tx.state,
-      () => {
-        const t = ready();
-        if (t) setModel((m) => answered(m, t.status, txAsked, txReq));
-        else if (missing()) setModel((m) => answered(m, "missing", txAsked, txReq));
-      },
-    ),
+    () => tx.state,
+    () => {
+      const t = ready();
+      if (t) setModel((m) => answered(m, t.status, txAsked, txReq));
+      else if (missing()) setModel((m) => answered(m, "missing", txAsked, txReq));
+    },
   );
 
   const [polledTip, setPolledTip] = createSignal<number>();
@@ -188,14 +184,17 @@ function TransactionView(props: { txid: string }) {
   });
   const polling = createMemo(() => watching() && polls(live()));
   // A socket that is live while the topic says nothing for a while: check over HTTP meanwhile.
-  createEffect(() => {
-    if (!following() || socket() !== "live" || model().last !== undefined) {
-      setQuiet(false);
-      return;
-    }
-    const timer = setTimeout(() => setQuiet(true), QUIET_MS);
-    onCleanup(() => clearTimeout(timer));
-  });
+  createEffect(
+    () => following() && socket() === "live" && model().last === undefined,
+    (silent) => {
+      if (!silent) {
+        setQuiet(false);
+        return undefined;
+      }
+      const timer = setTimeout(() => setQuiet(true), QUIET_MS);
+      return () => clearTimeout(timer);
+    },
+  );
 
   const controller = new AbortController();
   onCleanup(() => controller.abort());
@@ -282,8 +281,8 @@ function TransactionView(props: { txid: string }) {
   };
 
   // Not live: check over HTTP at a modest pace while the tab is visible, as before the socket.
-  createEffect(() => {
-    if (!polling()) return;
+  createEffect(polling, (on) => {
+    if (!on) return undefined;
     let busy = false;
     const tick = async () => {
       if (busy || document.visibilityState !== "visible") return;
@@ -296,25 +295,23 @@ function TransactionView(props: { txid: string }) {
     const timer = setInterval(() => void tick(), POLL_MS);
     const onVisible = () => void tick();
     document.addEventListener("visibilitychange", onVisible);
-    onCleanup(() => {
+    return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
-    });
+    };
   });
 
   // A transaction the node did not know at first may arrive (or confirm) while the page is open.
   createEffect(
-    on(
-      () => shownNow().kind,
-      (kind) => {
-        if (missing() && (kind === "mempool" || kind === "confirmed")) {
-          txAsked = model().clock;
-          txReq = ++requests;
-          void refetch();
-        }
-      },
-      { defer: true },
-    ),
+    () => shownNow().kind,
+    (kind) => {
+      if (missing() && (kind === "mempool" || kind === "confirmed")) {
+        txAsked = model().clock;
+        txReq = ++requests;
+        refetch();
+      }
+    },
+    { defer: true },
   );
 
   // What replaced it, or what it replaced: asked when it may have been replaced, never when the
@@ -328,7 +325,9 @@ function TransactionView(props: { txid: string }) {
     const t = ready();
     return t && !t.status.confirmed ? "waiting" : false;
   };
-  const [replacements] = createResource(replacementsKey, async () => {
+  // The page's own abort signal, not the request's: an answer a newer request replaced still
+  // records what it learned in the model.
+  const [replacements] = createRequest(replacementsKey, async () => {
     try {
       const r = parseReplacements(
         await fetchApp<unknown>(network(), `/tx/${props.txid}/replacements`, {
@@ -348,7 +347,7 @@ function TransactionView(props: { txid: string }) {
     const s = shownNow();
     return s.kind === "mempool" && s.position ? `${s.position.effectiveRate}` : false;
   };
-  const [relatives] = createResource(relativesKey, async () => {
+  const [relatives] = createRequest(relativesKey, async () => {
     try {
       return (
         parseRelatives(
@@ -366,21 +365,19 @@ function TransactionView(props: { txid: string }) {
   const [announcement, setAnnouncement] = createSignal("");
   const [justConfirmed, setJustConfirmed] = createSignal(false);
   const [reorged, setReorged] = createSignal<number>();
-  createEffect(
-    on(shownNow, (after, before) => {
-      if (!before) return;
-      const said = sayChange(before, after);
-      if (said !== undefined) setAnnouncement(said);
-      if (after.kind === "confirmed") {
-        // Once, when it confirms; the block's time arriving a moment later changes nothing.
-        if (before.kind !== "confirmed") setJustConfirmed(before.kind === "mempool");
-        setReorged(undefined);
-      } else {
-        setJustConfirmed(false);
-        if (after.kind === "mempool" && before.kind === "confirmed") setReorged(before.height);
-      }
-    }),
-  );
+  createEffect(shownNow, (after, before) => {
+    if (!before) return;
+    const said = sayChange(before, after);
+    if (said !== undefined) setAnnouncement(said);
+    if (after.kind === "confirmed") {
+      // Once, when it confirms; the block's time arriving a moment later changes nothing.
+      if (before.kind !== "confirmed") setJustConfirmed(before.kind === "mempool");
+      setReorged(undefined);
+    } else {
+      setJustConfirmed(false);
+      if (after.kind === "mempool" && before.kind === "confirmed") setReorged(before.height);
+    }
+  });
 
   const topic = txTopic(props.txid);
   return (

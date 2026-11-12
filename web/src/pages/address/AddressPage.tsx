@@ -1,16 +1,7 @@
 import { useParams } from "@solidjs/router";
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  For,
-  Match,
-  onCleanup,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import { HashFull } from "../../components/Hash";
-import { createApi } from "../../lib/api";
+import { createApi, createRequest } from "../../lib/api";
 import { fetchConfig } from "../../lib/config";
 import { type LiveStatus, useLiveStatus, useTopic } from "../../lib/live";
 import type { AddressStats, Transaction } from "../../lib/esplora";
@@ -91,7 +82,9 @@ export default function AddressPage() {
 
 function AddressBody(props: { address: string; found: Recognised | null }) {
   const network = useNetwork();
-  const path = `/address/${encodeURIComponent(props.address)}`;
+  // The page is made afresh for each address (AddressPage keys it).
+  const address = untrack(() => props.address);
+  const path = `/address/${encodeURIComponent(address)}`;
   const [stats, { refetch: refetchStats }] = createApi<AddressStats>(() => path);
   const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(() => `${path}/txs`);
   let refreshHistory = () => {
@@ -108,8 +101,8 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
     return undefined;
   };
   const retryAll = () => {
-    void refetchStats();
-    if (first.state === "errored") void refetchFirst();
+    refetchStats();
+    if (first.state === "errored") refetchFirst();
   };
 
   // The address topic says when its history changes; the page then refetches what it shows.
@@ -117,8 +110,8 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const asked = (state: string) =>
     state === "ready" || state === "refreshing" || state === "pending";
   const refresh = () => {
-    if (asked(stats.state)) void refetchStats();
-    if (asked(first.state)) void refetchFirst();
+    if (asked(stats.state)) refetchStats();
+    if (asked(first.state)) refetchFirst();
     refreshHistory();
   };
   // The node's status can change a moment before its address index answers with the change
@@ -143,7 +136,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const [watch, setWatch] = createSignal<AddressMessage>();
   /** The last status heard; undefined before the first. */
   let token: string | null | undefined;
-  useTopic(addressTopic(props.address), {
+  useTopic(addressTopic(address), {
     message: (m) => {
       setWatch(m);
       if (m.type !== "watching") return;
@@ -182,7 +175,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
           address={props.address}
           stats={stats}
           first={first}
-          retryFirst={() => void refetchFirst()}
+          retryFirst={() => refetchFirst()}
           onRefresh={(fn) => {
             refreshHistory = fn;
           }}
@@ -214,7 +207,7 @@ function LiveLine(props: { watch: AddressMessage | undefined; socket: LiveStatus
   };
   return (
     <Show when={why() !== undefined}>
-      <p class="address-live" classList={{ "address-live--on": why() === "" }}>
+      <p class={["address-live", { "address-live--on": why() === "" }]}>
         <svg class="address-live__icon" viewBox="0 0 12 12" aria-hidden="true">
           <circle cx="6" cy="6" r="4" />
         </svg>
@@ -238,7 +231,7 @@ function Malformed(props: { network: Network }) {
 
 /** An address of another network's form: name its network, and link there when it is served. */
 function WrongNetwork(props: { found: Recognised; network: Network }) {
-  const [config] = createResource(fetchConfig);
+  const [config] = createRequest(() => true, fetchConfig);
   const theirs = () => props.found.networks.filter((n) => n !== props.network);
   const served = () => theirs().filter((n) => config()?.networks.includes(n));
   const names = (list: readonly Network[]) => {
