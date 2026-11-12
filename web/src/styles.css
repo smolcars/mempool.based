@@ -1,0 +1,100 @@
+/* Placeholder tokens until D1 sets the design language (docs/DESIGN.md). */
+:root {
+  color-scheme: light dark;
+  --bg: #fbf8fc;
+  --ink: #1d1420;
+  --muted: #5f5266;
+  --accent: #a21caf;
+  --down: #b42318;
+  --line: #e4d9e8;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #150f17;
+    --ink: #f3ecf5;
+    --muted: #b3a6b8;
+    --accent: #e879f9;
+    --down: #ff8a80;
+    --line: #34283a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 18vh 1rem 2rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.brand-mark {
+  flex: none;
+  border-radius: 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 3.25rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.tagline {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+.health {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.health p {
+  margin: 0;
+}
+
+/* A block tile: hollow while checking, filled when up, red when down. */
+.health-tile {
+  flex: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--muted);
+  border-radius: 2px;
+}
+
+.health[data-state="up"] .health-tile {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.health[data-state="down"] .health-tile {
+  background: var(--down);
+  border-color: var(--down);
+}
+
+.checked {
+  color: var(--muted);
+}
