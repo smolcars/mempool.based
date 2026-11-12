@@ -863,6 +863,7 @@ function Body(props: {
                 <dd>
                   <span class="tx-summary__value">
                     <Link href={paths.block(st().block_hash ?? st().block_height ?? "")}>
+                      <span class="visually-hidden">block </span>
                       <span class="num">{groupDigits(st().block_height ?? Number.NaN)}</span>
                     </Link>
                   </span>

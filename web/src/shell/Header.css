@@ -181,7 +181,6 @@
     .nav {
       overflow-x: auto;
       scrollbar-width: none;
-      justify-self: start;
     }
     .nav::-webkit-scrollbar {
       display: none;

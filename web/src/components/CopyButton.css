@@ -16,6 +16,14 @@
       color var(--dur-quick) var(--ease-out),
       background-color var(--dur-quick) var(--ease-out);
   }
+  /* A 44 px target around the small drawn button, on touch screens. */
+  @media (pointer: coarse) {
+    .copy::after {
+      content: "";
+      position: absolute;
+      inset: -8px;
+    }
+  }
   .copy svg {
     width: 15px;
     height: 15px;

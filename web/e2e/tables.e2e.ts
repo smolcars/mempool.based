@@ -39,3 +39,28 @@ for (const width of [320, 360]) {
     }
   });
 }
+
+// Without the web font every engine draws figures in its own monospace, which can be wider: the
+// blocks list must still fit a 320 px phone.
+test.describe("without the web font", () => {
+  // Each engine reports the refused font in its own words.
+  test.use({
+    consoleErrorsAllowed: [/status of (429|503)|font|Failed to load resource|ERR_FAILED/i],
+  });
+
+  test("the blocks list fits 320 px when the web font never arrives", async ({ page }) => {
+    await page.route(/\.woff2$/, (route) => route.abort());
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto("/regtest/blocks");
+    const t = page.getByRole("table", { name: "Recent blocks, newest first" });
+    await expect(t.getByRole("link").first()).toBeVisible();
+    const box = await t.evaluate((el) => ({
+      table: el.scrollWidth,
+      room: (el.parentElement as HTMLElement).clientWidth,
+    }));
+    expect(box.table).toBeLessThanOrEqual(box.room);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      320,
+    );
+  });
+});

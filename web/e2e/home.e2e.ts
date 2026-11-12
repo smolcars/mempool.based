@@ -39,7 +39,7 @@ test("the home page fits a phone without scrolling sideways", async ({ page }) =
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
-test("each tile shows its block's strata and fee figures, and a coinbase-only block says so", async ({
+test("each tile shows its fee gauge and figures, and a coinbase-only block says so", async ({
   page,
 }) => {
   await page.goto("/regtest/");
@@ -122,7 +122,9 @@ test("the fee panel shows what the server says now, and no number when it has no
       await expect(panel).toContainText("No recommendation right now", { timeout: 100 });
     } else {
       const fees = (await res.json()) as { fastestFee: number };
-      await expect(panel).toContainText(fees.fastestFee.toFixed(3), { timeout: 100 });
+      // Rounded up to two decimals, as the panel prints a recommendation.
+      const shown = (Math.ceil(Math.round(fees.fastestFee * 1e6) / 1e4) / 100).toFixed(2);
+      await expect(panel).toContainText(shown, { timeout: 100 });
     }
   }).toPass({ timeout: 15_000 });
 });
@@ -162,15 +164,15 @@ test("the fee panel follows the fees topic: an update, the node's fallback, then
   const high = panel.getByRole("definition").last();
 
   send?.(levels([1031, 500, 200, 100], "projected"));
-  await expect(high).toHaveText("1.031 sat/vB");
-  await expect(panel).toContainText("read from the projected blocks");
+  await expect(high).toHaveText("1.04 sat/vB");
+  await expect(panel).toContainText("Read from the projected blocks");
   // The mempool filled up: the next message is the new answer.
   send?.(levels([2501, 1031, 200, 100], "projected"));
-  await expect(high).toHaveText("2.501 sat/vB");
+  await expect(high).toHaveText("2.51 sat/vB");
   send?.(levels([3000, 1000, 500, 120], "node"));
-  await expect(high).toHaveText("3.000 sat/vB");
+  await expect(high).toHaveText("3.00 sat/vB");
   await expect(panel).toContainText("The node's own estimates");
   send?.({ topic: "fees", type: "unavailable" });
   await expect(panel).toContainText("No recommendation right now");
-  await expect(panel).not.toContainText("3.000");
+  await expect(panel).not.toContainText("3.00");
 });

@@ -16,6 +16,11 @@
       background-color var(--dur-quick) var(--ease-out),
       transform var(--dur-instant) var(--ease-out);
   }
+  @media (pointer: coarse) {
+    .btn {
+      min-height: var(--touch);
+    }
+  }
   .btn:hover:not(:disabled) {
     background: var(--color-surface-sunken);
   }

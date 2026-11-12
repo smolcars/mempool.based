@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { feeBand } from "../../lib/format";
-import { type GridTx, gridSize, hitTest, type Layout, layout, rank } from "./layout";
+import { type GridTx, gridSize, hitTest, type Layout, layout, MIN_AREA, rank } from "./layout";
 import { COINBASE_COLOR, colorOf } from "./scene";
 
 /** A repeatable pseudo-random source (mulberry32). */
@@ -43,22 +43,33 @@ const FULL = block(999_000);
 function check(l: Layout, txs: readonly GridTx[]) {
   const faults: string[] = [];
   const eps = 1e-6;
+  // Each area is the vsize's, at least MIN_AREA, all shrunk alike when the minimums overrun.
+  const wanted = [...l.order].map((i) => {
+    const v = txs[i]?.vsize ?? 0;
+    return v > 0 ? Math.max(MIN_AREA, v / l.unit) : 0;
+  });
+  const packed = l.width * (l.rows - l.offset);
+  const fit =
+    packed /
+    Math.max(
+      packed,
+      wanted.reduce((sum, a) => sum + a, 0),
+    );
   let sum = 0;
   for (let r = 0; r < l.order.length; r++) {
     const [x, y, w, h] = [l.x[r] ?? -1, l.y[r] ?? -1, l.w[r] ?? 0, l.h[r] ?? 0];
-    if (x < -eps || y < l.offset - eps || x + w > l.cols + eps || y + h > l.rows + eps)
+    if (x < -eps || y < l.offset - eps || x + w > l.width + eps || y + h > l.rows + eps)
       faults.push(`rect ${r} is outside`);
-    const v = txs[l.order[r] ?? 0]?.vsize ?? 0;
-    if (Math.abs(w * h * l.unit - v) > 1e-6 * Math.max(1, v))
-      faults.push(`rect ${r} area ${w * h * l.unit} for ${v} vB`);
+    const a = (wanted[r] ?? 0) * fit;
+    if (Math.abs(w * h - a) > 1e-6 * Math.max(1, a))
+      faults.push(`rect ${r} area ${w * h} for ${a}`);
     sum += w * h;
   }
-  const packed = (l.rows - l.offset) * l.cols;
   if (Math.abs(sum - packed) > 1e-6 * Math.max(1, packed)) faults.push(`areas ${sum} of ${packed}`);
   const steps = 157;
   for (let i = 0; i < steps; i++) {
     for (let j = 0; j < steps; j++) {
-      const cx = ((i + 0.5) / steps) * l.cols;
+      const cx = ((i + 0.5) / steps) * l.width;
       const cy = l.offset + ((j + 0.5) / steps) * (l.rows - l.offset);
       const r = hitTest(l, cx, cy);
       const inside =
@@ -146,12 +157,25 @@ describe("layout", () => {
     }
   });
 
-  it("draws a block holding only its coinbase as one thin layer on the floor", () => {
+  it("draws a nearly empty block as a small rectangle on the floor at the left, seen", () => {
     const only = [{ id: 0, vsize: 180, fee: 0, value: 1, coinbase: true }];
     const l = layout(only, 6 / 5, 1_000_000);
     check(l, only);
-    expect(l.w[0]).toBeCloseTo(l.cols, 6);
+    expect(l.x[0]).toBe(0);
     expect((l.y[0] ?? 0) + (l.h[0] ?? 0)).toBeCloseTo(l.rows, 6);
+    // A square of at least a few cells, not a sliver across the frame.
+    expect(l.w[0]).toBeCloseTo(l.h[0] ?? 0, 6);
+    expect(l.w[0]).toBeGreaterThanOrEqual(2);
+    // Regtest's blocks: a coinbase and two small transactions, each big enough to point at.
+    const few = [
+      ...only,
+      { id: 1, vsize: 150, fee: 300, value: 1 },
+      { id: 2, vsize: 200, fee: 100, value: 1 },
+    ];
+    const k = layout(few, 6 / 5, 1_000_000);
+    check(k, few);
+    for (let r = 0; r < 3; r++)
+      expect((k.w[r] ?? 0) * (k.h[r] ?? 0)).toBeGreaterThanOrEqual(MIN_AREA - 1e-9);
   });
 
   it("fits one enormous transaction beside thousands of small ones", () => {

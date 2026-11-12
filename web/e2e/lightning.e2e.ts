@@ -181,3 +181,53 @@ for (const width of [320, 360]) {
     }
   });
 }
+
+// Right-aligned figures once ran into the next column's text ("RankNode", "0.17000000Active"):
+// at every width, the text of neighbouring cells keeps a gutter between them.
+for (const width of [360, 768, 1440]) {
+  test(`every Lightning table keeps a gutter between columns at ${width} px`, async ({ page }) => {
+    await serve(page, mainnet());
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [`/regtest/lightning/node/${ACINQ}`, "/regtest/lightning/rankings"]) {
+      await page.goto(path);
+      await expect(page.locator('main a[href*="/lightning/node/"]').first()).toBeVisible();
+      const tight = await page.evaluate(() => {
+        const out: string[] = [];
+        for (const row of document.querySelectorAll("main table tr")) {
+          const boxes = [...row.querySelectorAll("th, td")]
+            .filter((c) => (c as HTMLElement).offsetParent !== null)
+            .map((c) => {
+              // The visible text only: a unit hidden for screen readers takes no room.
+              let left = Number.POSITIVE_INFINITY;
+              let right = Number.NEGATIVE_INFINITY;
+              const walk = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+              for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+                if (n.parentElement?.closest(".visually-hidden, .table__long")) continue;
+                const range = document.createRange();
+                range.selectNodeContents(n);
+                for (const r of range.getClientRects()) {
+                  if (r.width === 0) continue;
+                  left = Math.min(left, r.left);
+                  right = Math.max(right, r.right);
+                }
+              }
+              return {
+                left,
+                right,
+                extent: right > left ? right - left : 0,
+                text: c.textContent ?? "",
+              };
+            })
+            .filter((b) => b.extent > 0);
+          for (let i = 1; i < boxes.length; i++) {
+            const a = boxes[i - 1];
+            const b = boxes[i];
+            if (a && b && b.left - a.right < 8) out.push(`${a.text}|${b.text}`);
+          }
+        }
+        return out.slice(0, 5);
+      });
+      expect(tight, `${path} at ${width} px`).toStrictEqual([]);
+    }
+  });
+}

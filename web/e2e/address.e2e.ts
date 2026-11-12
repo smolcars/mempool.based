@@ -124,3 +124,16 @@ test("an address of another network and a malformed one are named as such", asyn
   await page.goto("/regtest/address/bcrt1qnotanaddress");
   await expect(page.getByText("This is not a valid address")).toBeVisible();
 });
+
+test("the live line never sits on the address", async ({ page }) => {
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/regtest/address/${chain.addresses.p2wpkh}`);
+    const live = page.locator(".address-live");
+    await expect(live).toBeVisible();
+    const a = await page.locator(".address-head .hash--full").boundingBox();
+    const b = await live.boundingBox();
+    if (!a || !b) throw new Error("missing address or live line");
+    expect(b.y, `at ${width} px`).toBeGreaterThanOrEqual(a.y + a.height);
+  }
+});

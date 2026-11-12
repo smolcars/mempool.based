@@ -375,6 +375,7 @@
     min-width: 24px;
   }
   .tx-flow__open {
+    position: relative;
     display: grid;
     place-items: center;
     width: 28px;
@@ -386,6 +387,13 @@
     color: var(--color-text-muted);
     cursor: pointer;
     transition: background-color var(--dur-quick) var(--ease-out);
+  }
+  @media (pointer: coarse) {
+    .tx-flow__open::after {
+      content: "";
+      position: absolute;
+      inset: -10px;
+    }
   }
   .tx-flow__open:hover {
     background: var(--color-surface-sunken);

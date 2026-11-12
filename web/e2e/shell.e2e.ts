@@ -53,3 +53,56 @@ test("digit groups show the same visible gap in every engine", async ({ page }) 
   expect(gaps[0]).toBeCloseTo(0.15, 2);
   expect(gaps[1]).toBeCloseTo(0.15, 2);
 });
+
+test("the not-found page offers the search and ways on", async ({ page }) => {
+  await page.goto("/regtest/no/such/page");
+  const main = page.getByRole("main");
+  await expect(main.getByRole("searchbox")).toBeVisible();
+  await expect(main.getByRole("navigation", { name: "Where to go" }).getByRole("link")).toHaveCount(
+    5,
+  );
+});
+
+/** Whether two boxes overlap by more than a hairline. */
+const overlaps = (
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+) =>
+  a.x + 1 < b.x + b.width &&
+  b.x + 1 < a.x + a.width &&
+  a.y + 1 < b.y + b.height &&
+  b.y + 1 < a.y + a.height;
+
+// A desktop at 200% zoom lays the page out at half its width in CSS pixels: the header must
+// switch to its two-row form before the search and the sections collide.
+for (const [name, viewport] of [
+  ["a desktop at 200% zoom", { width: 720, height: 450 }],
+  ["a phone", { width: 390, height: 844 }],
+  ["a small phone", { width: 320, height: 640 }],
+] as const) {
+  test(`the header keeps search, network and sections apart on ${name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/regtest/blocks");
+    const header = page.getByRole("banner");
+    // The search's box, which holds the field and its hints; the network switch is a plain label
+    // when the server serves one network, as here.
+    const search = await header.locator(".search__field").boundingBox();
+    const network = await header.locator(".network__button").boundingBox();
+    const links = await header.getByRole("navigation", { name: "Main" }).getByRole("link").all();
+    expect(search && search.width).toBeGreaterThan(150);
+    for (const link of links) {
+      const box = await link.boundingBox();
+      if (!box || !search || !network) throw new Error("missing header part");
+      expect(overlaps(box, search), "a section over the search").toBe(false);
+      expect(overlaps(box, network), "a section over the network").toBe(false);
+      // A thumb's target.
+      expect(box.height).toBeGreaterThanOrEqual(43.5);
+    }
+    // About 100 px at most on a phone, so the page starts in the first screen.
+    const height = (await header.boundingBox())?.height ?? 0;
+    expect(height).toBeLessThanOrEqual(viewport.width < 700 ? 101 : 110);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+  });
+}

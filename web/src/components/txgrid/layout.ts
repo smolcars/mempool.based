@@ -33,6 +33,8 @@ export interface Layout {
   unit: number;
   /** Rows left empty above the rectangles: the block's unused capacity. */
   offset: number;
+  /** How wide the rectangles' area is, in cells: all of `cols` but for a nearly empty block. */
+  width: number;
   /** Index in the input of the transaction at each rank. */
   order: Int32Array;
   /** Left edge, top edge (`offset` included), width and height of each rectangle, in cells. */
@@ -48,6 +50,17 @@ export interface Layout {
 
 /** About this many cells in a frame: it sets the frame's shape steps, not the drawing's detail. */
 export const GRID_CELLS = 160_000;
+/**
+ * The least area a transaction is drawn with, in cells (about 25 vB at a block's scale), so the
+ * smallest can be seen and pointed at; no mainnet transaction is that small.
+ */
+export const MIN_AREA = 4;
+/**
+ * The least height, in cells, of the rectangle the transactions make. A nearly empty block is a
+ * small rectangle on the floor at the left, as wide as tall up to this, rather than a sliver too
+ * thin to see; the caption and the facts give its true fullness.
+ */
+export const MIN_ROWS = 10;
 
 /** A fee rate in sat/vB, 0 when the size is not positive. */
 export const rateOf = (tx: GridTx): number =>
@@ -105,9 +118,10 @@ export function gridSize(aspect: number): { cols: number; rows: number } {
  * transactions' total if that is more, as an ordered squarified treemap: in rank order, each run of
  * rectangles is laid along the shorter side of the space still free, a column down its left edge
  * or a row along its top, and the run grows while that makes its rectangles closer to square. Every
- * rectangle's area is its virtual size and the runs tile the space exactly, so the transactions
- * make one clean rectangle on the floor of the frame, as high as the block is full, the dearest at
- * the top left; the empty band above it is the capacity left unused.
+ * rectangle's area is its virtual size (at least {@link MIN_AREA}) and the runs tile the space
+ * exactly, so the transactions make one clean rectangle on the floor of the frame, as high as the
+ * block is full (at least {@link MIN_ROWS}, narrower then), the dearest at the top left; the empty
+ * band above it is the capacity left unused.
  */
 export function layout(txs: readonly GridTx[], aspect: number, capacity: number): Layout {
   const n = txs.length;
@@ -120,18 +134,37 @@ export function layout(txs: readonly GridTx[], aspect: number, capacity: number)
   let total = 0;
   for (let r = 0; r < n; r++) total += size(r);
   const unit = Math.max(capacity, total) / (cols * rows) || 1;
+  // Areas in cells, each at least MIN_AREA.
+  const areas = Float64Array.from({ length: n }, (_, r) => {
+    const a = size(r) / unit;
+    return a > 0 ? Math.max(MIN_AREA, a) : 0;
+  });
+  const packed = Math.min(
+    cols * rows,
+    areas.reduce((sum, a) => sum + a, 0),
+  );
   const x = new Float64Array(n);
   const y = new Float64Array(n);
   const w = new Float64Array(n);
   const h = new Float64Array(n);
-  const offset = rows - total / unit / cols;
+  // As high as the block is full; a nearly empty one keeps at least a small square's height.
+  const tall = Math.min(rows, Math.max(packed / cols, Math.min(Math.sqrt(packed), MIN_ROWS)));
+  const offset = rows - tall;
   const strips: number[] = [];
   const boxes: number[] = [];
   // The space still free.
   let fx = 0;
   let fy = offset;
-  let fw = cols;
-  let fh = rows - offset;
+  const width = tall > 0 ? packed / tall : 0;
+  let fw = width;
+  let fh = tall;
+  // Areas shrink in proportion when the minimum sizes overrun the frame.
+  const fit =
+    packed /
+      Math.max(
+        packed,
+        areas.reduce((sum, a) => sum + a, 0),
+      ) || 1;
   let start = 0;
   while (start < n) {
     const column = fw >= fh;
@@ -144,7 +177,7 @@ export function layout(txs: readonly GridTx[], aspect: number, capacity: number)
     let worst = Number.POSITIVE_INFINITY;
     let end = start;
     while (end < n) {
-      const a = size(end) / unit;
+      const a = (areas[end] ?? 0) * fit;
       const nextBig = Math.max(big, a);
       const nextSmall = a > 0 ? Math.min(small, a) : small;
       const t = (area + a) / side;
@@ -162,7 +195,7 @@ export function layout(txs: readonly GridTx[], aspect: number, capacity: number)
     const thick = side > 0 ? area / side : 0;
     let along = 0;
     for (let r = start; r < end; r++) {
-      const length = thick > 0 ? size(r) / unit / thick : 0;
+      const length = thick > 0 ? ((areas[r] ?? 0) * fit) / thick : 0;
       x[r] = column ? fx : fx + along;
       y[r] = column ? fy + along : fy;
       w[r] = column ? thick : length;
@@ -186,6 +219,7 @@ export function layout(txs: readonly GridTx[], aspect: number, capacity: number)
     rows,
     unit,
     offset,
+    width,
     order,
     x,
     y,
@@ -198,7 +232,7 @@ export function layout(txs: readonly GridTx[], aspect: number, capacity: number)
 
 /** The rank of the rectangle under a point given in cells, or -1 for none. */
 export function hitTest(l: Layout, cx: number, cy: number): number {
-  if (!(cx >= 0 && cx < l.cols && cy >= l.offset && cy < l.rows)) return -1;
+  if (!(cx >= 0 && cx < l.width && cy >= l.offset && cy < l.rows)) return -1;
   // The runs tile the area in order, so the first whose box holds the point is the one.
   for (let k = 0; k + 1 < l.strips.length; k++) {
     const o = k * 5;
