@@ -225,6 +225,8 @@ impl Drop for Hold {
 #[derive(Debug, Clone)]
 pub struct Client {
     pub addr: IpAddr,
+    /// Who it is in the refusal summary, for a refusal decided after the response: a socket's.
+    pub who: Refusal,
     clients: Arc<Clients>,
 }
 
@@ -455,14 +457,20 @@ pub async fn limit(State(limiter): State<Arc<Limiter>>, mut req: Request, next: 
     if req.method() == Method::OPTIONS && crate::is_api(req.uri().path()) {
         return StatusCode::NO_CONTENT.into_response();
     }
-    let mut res = admitted(&limiter, addr, req, next).await;
+    let mut res = admitted(&limiter, addr, who, req, next).await;
     if res.extensions().get::<Refused>().is_some() {
         res.extensions_mut().insert(who);
     }
     res
 }
 
-async fn admitted(limiter: &Limiter, addr: IpAddr, mut req: Request, next: Next) -> Response {
+async fn admitted(
+    limiter: &Limiter,
+    addr: IpAddr,
+    who: Refusal,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let Ok(_permit) = limiter.in_flight.clone().try_acquire_owned() else {
         return Refused {
             error: ApiError::OVERLOADED,
@@ -472,6 +480,7 @@ async fn admitted(limiter: &Limiter, addr: IpAddr, mut req: Request, next: Next)
     };
     req.extensions_mut().insert(Client {
         addr,
+        who,
         clients: Arc::clone(&limiter.clients),
     });
     // A task of its own turns a handler panic into a 500 instead of a dropped connection.

@@ -6,7 +6,9 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    // The bound tests print what they measured, for docs/WS.md.
+    clippy::print_stderr
 )]
 
 use std::collections::HashMap;
@@ -26,7 +28,7 @@ use engine::projected::{self, ClusterSource, Projection, Projector};
 use node::esplora::ChainTip;
 use node::rpc::model::{Cluster, ClusterChunk, EntryFees, MempoolEntry, MempoolInfo, RawMempool};
 use serde_json::Value;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::*;
@@ -223,6 +225,23 @@ impl Mock {
         n.sequence += 1;
     }
 
+    /// Replaces the `k` oldest transactions with `k` new ones paying `fee`: a busy mempool's
+    /// turnover, in one step.
+    fn churn(&self, k: usize, fee: u64, vsize: u64) {
+        {
+            let mut n = self.node();
+            let k = k.min(n.txs.len());
+            let gone: Vec<Txid> = n.txs.drain(..k).map(|t| t.tx.compute_txid()).collect();
+            for id in &gone {
+                n.clusters.remove(id);
+            }
+            n.sequence += 1;
+        }
+        for _ in 0..k {
+            self.add(fee, vsize);
+        }
+    }
+
     fn set_down(&self, down: bool) {
         self.node().down = down;
     }
@@ -271,10 +290,12 @@ impl Source for Mock {
         txids: &[Txid],
     ) -> Result<Vec<Option<(MempoolEntry, Transaction)>>, SourceError> {
         let n = self.check()?;
+        let by_id: HashMap<Txid, &MockTx> =
+            n.txs.iter().map(|t| (t.tx.compute_txid(), t)).collect();
         Ok(txids
             .iter()
             .map(|id| {
-                let t = n.txs.iter().find(|t| t.tx.compute_txid() == *id)?;
+                let t = *by_id.get(id)?;
                 let fee = Amount::from_sat(t.fee);
                 let signed = fee.to_signed().unwrap();
                 let entry = MempoolEntry {
@@ -437,11 +458,7 @@ static IDS: AtomicU64 = AtomicU64::new(1_000_000);
 
 pub(crate) fn conn(queue: usize) -> (Arc<Conn>, mpsc::Receiver<Frame>) {
     let (tx, rx) = mpsc::channel(queue);
-    let conn = Conn {
-        id: IDS.fetch_add(1, Ordering::Relaxed),
-        queue: tx,
-        closing: watch::Sender::new(None),
-    };
+    let conn = Conn::test(IDS.fetch_add(1, Ordering::Relaxed), tx);
     (Arc::new(conn), rx)
 }
 
@@ -828,6 +845,73 @@ async fn a_client_that_falls_behind_is_closed_and_a_new_subscription_catches_up(
     subscribe_all(&s.ctx, &again);
     let mut c = Client::default();
     converge(&s, &mut c, &mut rx).await;
+}
+
+/// Subscribers that never read, on a busy mempool: each holds at most `WS_SEND_QUEUE` frames,
+/// then is closed as too slow. The frames are shared, so sixteen of them (one address's
+/// allowance) on the same topics hold the same bytes as one.
+#[tokio::test]
+async fn subscribers_that_never_read_hold_at_most_their_queues() {
+    const QUEUE: usize = 64; // `WS_SEND_QUEUE`
+    let mock = Mock::new();
+    // Small transactions, so frames are large for their count. A full block of the smallest
+    // makes a snapshot of about 800 KB; this one is a quarter of that, to run in a debug build.
+    for i in 0..4_000 {
+        mock.add(2_000 + i % 1_000, 60);
+    }
+    let s = Server::start(&mock, Duration::from_millis(20));
+    s.settle().await;
+    // What one socket may hold at once: two projected blocks, and the other mempool topics.
+    let topics = [
+        Topic::Mempool,
+        Topic::Projected,
+        Topic::Transactions,
+        Topic::ProjectedTxs(0),
+        Topic::ProjectedTxs(1),
+    ];
+    let mut socks: Vec<_> = (0..16).map(|_| conn(QUEUE)).collect();
+    for (c, _) in &socks {
+        for t in topics {
+            s.ctx.hub.subscribe(t, c);
+        }
+    }
+    // A quarter of the mempool replaced at a higher rate every step: large deltas, fast.
+    let started = Instant::now();
+    let mut fee = 4_000;
+    while socks.iter().any(|(c, _)| c.reason().is_none()) {
+        assert!(started.elapsed() < WAIT * 6, "never closed");
+        fee += 60;
+        mock.churn(1_000, fee, 60);
+        s.settle().await;
+    }
+    let took = started.elapsed();
+    let mut largest = 0;
+    let mut distinct: HashMap<*const u8, usize> = HashMap::new();
+    let mut held = Vec::new();
+    for (c, rx) in &mut socks {
+        assert_eq!(c.reason(), Some(Close::SLOW));
+        let (mut frames, mut bytes) = (0, 0);
+        while let Ok(f) = rx.try_recv() {
+            frames += 1;
+            bytes += f.len();
+            largest = largest.max(f.len());
+            distinct.insert(f.as_bytes().as_ptr(), f.len());
+        }
+        assert_eq!(frames, QUEUE, "a full queue, and nothing past it");
+        held.push(bytes);
+    }
+    let one = held.iter().copied().max().unwrap_or(0);
+    let shared: usize = distinct.values().sum();
+    eprintln!(
+        "never reading: {one} bytes in {QUEUE} frames each (largest {largest}), closed after \
+         {took:?}; 16 sockets hold {shared} distinct bytes"
+    );
+    assert!(one <= QUEUE * largest);
+    // Sixteen hold what one does: the same frames, never copies.
+    assert!(
+        shared <= one,
+        "{shared} distinct bytes for 16 sockets, {one} for one"
+    );
 }
 
 #[tokio::test]
