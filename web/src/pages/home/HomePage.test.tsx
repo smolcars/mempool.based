@@ -635,7 +635,7 @@ describe("the live mempool", () => {
     expect(stats).toContain("2.50 MvB");
     expect(stats).toContain("≈ 3 blocks");
     expect(stats).toContain("0.10 sat/vB");
-    expect(stats).toContain("the node's minimum");
+    expect(stats).toContain("node minimum");
     const segs = [...el.querySelectorAll<HTMLElement>(".home-feebar__seg")];
     expect(segs.map((s) => s.style.getPropertyValue("--w"))).toStrictEqual([
       "0.4",

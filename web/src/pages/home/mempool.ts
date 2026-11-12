@@ -199,7 +199,7 @@ export function figuresFromTopic(m: MempoolState): MempoolFigures {
     vsize: m.vsize,
     fees: m.fees,
     lowest: m.minFeeRate ?? undefined,
-    lowestNote: "the node's minimum",
+    lowestNote: "node minimum",
     bands: sharesOf(m.bands),
   };
 }

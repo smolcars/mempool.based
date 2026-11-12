@@ -224,6 +224,18 @@ When a block is found, in 900 ms:
 
 The sequence uses FLIP: measure every tile, change the DOM, then animate each tile from its old place to its new one with `transform`.
 
+### The projected side
+
+Decided while building it, where the rest of this document left it open:
+
+- **Four tiles:** the next three blocks and one for everything after them, which names how many blocks' worth it holds ("+14 blocks"). They read "Next block", "In ~20 min", "In ~30 min"; regtest has no block interval, so there they read "Second block" and "Third block". The next block's foot says "~10 min". Each shows `~` before its median, its range and its transaction count.
+- **Projected tiles are not links yet.** They take no focus, show no hover and keep the default cursor until the projected-block page exists. Each carries its meaning as text for a screen reader ("Next block, projected: 3 214 transactions, median fee about 1.50 sat/vB, …").
+- **Ordinary updates do not move.** The mempool changes every two seconds; a tile's figures and layers change where they stand, with no transition, so the strip is simply different the next time you look. Motion is kept for tiles changing places: a block mined, a projection catching up after a burst or a reorg, a tile forming or leaving. A tile that appears outside a crossing (the first state, a mempool growing into a second block) fades in and settles its layers; one that leaves fades where it stood.
+- **The crossing shows the projection becoming the block.** The tile that crosses is the one that projected that height, and it carries the projected figures (with `~`) and layers until it lands, however soon the block's own facts arrive. Then each real layer grows out of the same band's projected layer while the projected ones fade: a block close to its projection barely moves, a different one visibly re-forms, and an empty block drains to its coinbase. In a burst each block leaves from the tile that projected it.
+- **A small mempool is information.** One short tile is the whole mempool, and the space beside it says "Everything waiting fits in the next block." An empty next block says "Nothing waiting" over a dashed floor, and the space beside it "Nothing is waiting. The next block would hold only its coinbase." (Phones hide that sentence; the tile still says it.)
+- **Not live, honestly.** When the server has lost its node, the last projection stays, the space beside it says it is the last one before the server lost touch, and the live indicator says "Node not answering". When the server does not track the mempool, the strip keeps the single "Next block" tile with the time since the last block.
+- **New transactions come in at a readable pace,** one row at a time, at most one every 0.7 s, newest on top with the row flash; on a busy day the rows that could not be shown in time are skipped rather than queued.
+
 ### The transaction grid
 
 Decided while building it, where the rest of this document left it open:

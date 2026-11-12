@@ -274,8 +274,11 @@
     background: none;
     transform: none;
   }
+  /* "Nothing waiting" takes the two lines the median and the range would. */
   .home-tile--empty .home-tile__fee {
+    min-height: calc(2em * var(--leading-body));
     font-size: var(--text-xs);
+    white-space: normal;
     color: var(--color-text-muted);
   }
   /* A crossing block's projected layers, clearing as its real ones grow out of them. */

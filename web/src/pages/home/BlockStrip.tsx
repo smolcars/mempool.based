@@ -333,7 +333,8 @@ export function BlockStrip(props: {
       el.classList.add("home-tile--landing");
       if (m.reduced) {
         play(el, [{ opacity: 0 }, { opacity: 1 }], { duration: m.fade, delay, fill: "backwards" });
-        later(delay + m.fade + m.slow, () => el.classList.remove("home-tile--landing"));
+        // Nothing travels, but the accent still marks the new block for about as long.
+        later(delay + m.fade * 6, () => el.classList.remove("home-tile--landing"));
         return;
       }
       // Provisional while it travels; it sets, solid, at the top of its arc.
@@ -574,7 +575,7 @@ function MinedTile(props: {
     [
       `Block ${groupDigits(b().height)}`,
       formatRelative(b().timestamp, props.now()),
-      `${groupDigits(b().tx_count)} transactions`,
+      `${groupDigits(b().tx_count)} ${b().tx_count === 1 ? "transaction" : "transactions"}`,
       tileFeeText(facts()),
       fullness(b().weight),
     ]

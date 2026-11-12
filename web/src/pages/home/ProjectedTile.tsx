@@ -76,11 +76,11 @@ export function ProjectedTile(props: {
                 <FeeRate rate={tile().medianRate} approx />
               </Show>
             </span>
-            <span class="home-tile__range num">
-              <Show when={tile().txs > 0} fallback="Coinbase only">
+            <Show when={tile().txs > 0}>
+              <span class="home-tile__range num">
                 {`${formatFeeRate(tile().minRate)} – ${formatFeeRate(tile().maxRate)}`}
-              </Show>
-            </span>
+              </span>
+            </Show>
             <span class="home-tile__strata">
               <Show
                 when={layers().length > 0}
