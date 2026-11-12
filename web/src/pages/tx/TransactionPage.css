@@ -949,6 +949,14 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-3);
     }
+    /* An amount can run to thousands of bitcoin in eight decimals: a row of its own, so it fits a
+       320 px phone in any face, its unit free to wrap. */
+    .tx-summary__item--amount {
+      grid-column: 1 / -1;
+    }
+    .tx-summary__item--amount .amount {
+      white-space: normal;
+    }
     .tx-facts--single .tx-fact,
     .tx-inspector .tx-fact {
       grid-template-columns: 7rem minmax(0, 1fr);

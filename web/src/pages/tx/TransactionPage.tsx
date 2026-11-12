@@ -804,17 +804,6 @@ function Body(props: {
           </dd>
         </div>
         <div class="tx-summary__item">
-          <dt>Amount</dt>
-          <dd>
-            <span class="tx-summary__value">
-              <Amount sats={totalOut()} />
-            </span>
-            <span class="tx-summary__sub">
-              {`Sent to ${groupDigits(props.tx.vout.length)} output${props.tx.vout.length === 1 ? "" : "s"}`}
-            </span>
-          </dd>
-        </div>
-        <div class="tx-summary__item">
           <dt>Fee</dt>
           <dd>
             <Show
@@ -829,6 +818,17 @@ function Body(props: {
                 {effective() === undefined ? "" : ", effective rate with its group"}
               </span>
             </Show>
+          </dd>
+        </div>
+        <div class="tx-summary__item tx-summary__item--amount">
+          <dt>Amount</dt>
+          <dd>
+            <span class="tx-summary__value">
+              <Amount sats={totalOut()} />
+            </span>
+            <span class="tx-summary__sub">
+              {`Sent to ${groupDigits(props.tx.vout.length)} output${props.tx.vout.length === 1 ? "" : "s"}`}
+            </span>
           </dd>
         </div>
         <div class="tx-summary__item">

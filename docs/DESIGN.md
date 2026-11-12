@@ -315,7 +315,7 @@ Decided while building it, where the rest of this document left it open. The pag
 | Hash | Truncated or grouped, monospace, with copy; `whole` wraps the full value |
 | Stat | Label above a figure, optional muted sub-line |
 | Fact list | `dl` of label and value pairs, two columns or one |
-| Summary | The transaction page's answer: Status, Amount, Fee and Block (or First seen), four label-value pairs in a panel, two by two on a phone |
+| Summary | The transaction page's answer: Status, Fee, Amount and Block (or First seen), four label-value pairs in a panel. On a phone, status and fee share a row and the amount has one of its own, so thousands of bitcoin in eight decimals fit 320 px in any face |
 | Table | Units in headers, bare numbers in cells, numeric columns right-aligned in the monospace, a gutter on both sides of every column, row rules. Phones drop the least important columns and may show a shorter header (`short`) |
 | More | The second reading layer: a disclosure ("How these figures are made") holding methodology and longer notes, under the one sentence that stays visible |
 | Packed map | Rectangles sized by vsize and coloured by fee band, the dearest at top left, one clean block on the floor of the frame ([The transaction grid](#the-transaction-grid)). Tooltip on hover, click opens the transaction, rows in the table below ring their rectangle. Comes with a caption and the fee key; the table is its text alternative |
@@ -378,7 +378,7 @@ The facts come first in reading order; on a phone the map follows them, then the
 ```text
 Transaction  (✓ Confirmed)
 65428488 a6202f1d 681d053b …  [copy]
-┌ summary: Status · Amount · Fee · Block ──────────────────────────┐
+┌ summary: Status · Fee · Amount · Block ──────────────────────────┐
 └──────────────────────────────────────────────────────────────────┘
 [notice: this version was replaced → replacement txid]   (replaced only)
 ① Broadcast  ② Confirmed  ③ Six confirmations 3 of 6     (one line once confirmed)
