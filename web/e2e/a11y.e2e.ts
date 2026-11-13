@@ -98,12 +98,12 @@ async function walk(page: Page) {
     if (!s || (i > 0 && s.name === stops[0]?.name)) break;
     stops.push(s);
   }
-  expect(stops[0]?.name, "the first stop").toBe('a "Skip to content"');
-  expect(
+  expect.soft(stops[0]?.name, "the first stop").toBe('a "Skip to content"');
+  expect.soft(
     stops.filter((s) => !s.ring).map((s) => s.name),
     "stops without a focus ring",
   ).toEqual([]);
-  expect(
+  expect.soft(
     stops.filter((s) => s.covered).map((s) => s.name),
     "stops under the header, tabbing down",
   ).toEqual([]);
@@ -132,9 +132,9 @@ async function walk(page: Page) {
         .filter((p) => p >= 0),
     };
   });
-  expect(order.positive, "a positive tabindex, which reorders the page").toBe(0);
-  expect(order.missed, "controls Tab never reached").toEqual([]);
-  expect(order.parts, "header, then main, then footer").toEqual(order.parts.toSorted());
+  expect.soft(order.positive, "a positive tabindex, which reorders the page").toBe(0);
+  expect.soft(order.missed, "controls Tab never reached").toEqual([]);
+  expect.soft(order.parts, "header, then main, then footer").toEqual(order.parts.toSorted());
   // Back up the page: focus scrolled into view from below must clear the sticky header.
   const back: string[] = [];
   for (let i = 1; i < stops.length; i++) {
@@ -144,7 +144,7 @@ async function walk(page: Page) {
     const s = await here(page);
     if (s?.covered) back.push(s.name);
   }
-  expect(back, "stops under the header, tabbing up").toEqual([]);
+  expect.soft(back, "stops under the header, tabbing up").toEqual([]);
 }
 
 /** Records every animation that moves something, from the first paint on. */
@@ -278,13 +278,13 @@ test.describe("every page type", () => {
     }) => {
       await watchMotion(page);
       await open(page, t);
-      expect(await axe(page), "axe-core, light").toEqual([]);
+      expect.soft(await axe(page), "axe-core, light").toEqual([]);
       await page.emulateMedia({ colorScheme: "dark" });
-      expect(await axe(page, ["color-contrast"]), "contrast, dark").toEqual([]);
+      expect.soft(await axe(page, ["color-contrast"]), "contrast, dark").toEqual([]);
       await page.emulateMedia({ colorScheme: "light" });
       // A keyboard is a desktop's; a phone's run checks the rest.
       if ((page.viewportSize()?.width ?? 0) > 640) await walk(page);
-      expect(await moved(page), "movement under reduced motion").toEqual([]);
+      expect.soft(await moved(page), "movement under reduced motion").toEqual([]);
     });
   }
 });
