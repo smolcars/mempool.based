@@ -73,6 +73,17 @@ export function formatBtc(sats: number): string {
 }
 
 /**
+ * BTC as a program reads it, for the clipboard: digits and a point, eight decimals, no grouping
+ * and no unit (`5954.38071385`). A wallet or a spreadsheet may refuse the page's grouping space.
+ */
+export function plainBtc(sats: number): string {
+  if (!Number.isSafeInteger(sats)) return MISSING;
+  const abs = Math.abs(sats);
+  const fraction = String(abs % SATS_PER_BTC).padStart(8, "0");
+  return `${sats < 0 ? "-" : ""}${Math.floor(abs / SATS_PER_BTC)}.${fraction}`;
+}
+
+/**
  * BTC to the precision a summary needs, magnitude first: whole bitcoins from 1 000 (`2 799`), two
  * decimals from 1 (`3.15`), three significant digits below (`0.0225`, `0.00149`). Rounded to
  * nearest; the exact amount belongs in a title or a detail page.

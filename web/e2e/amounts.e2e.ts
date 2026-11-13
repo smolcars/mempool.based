@@ -188,3 +188,55 @@ test("an exact amount closes on a tap elsewhere, on scrolling, and when another 
   });
   await expect(open).toHaveCount(0);
 });
+
+// A copied value is pasted into wallets, spreadsheets and calculators: it once carried the page's
+// grouping space ("5 954.38071385"). Every copy control copies plain text of its kind, checked
+// as the page hands it to the clipboard, the same in every engine.
+const COPIED: [RegExp, RegExp][] = [
+  [/transaction ID|block hash|merkle root/, /^[0-9a-f]{64}$/],
+  [/public key/, /^0[23][0-9a-f]{64}$/],
+  [/address$/, /^(?:bcrt1[02-9ac-hj-np-z]{8,87}|[1-9A-HJ-NP-Za-km-z]{25,35})$/],
+  [/in BTC$/, /^-?\d+\.\d{8}$/],
+  [/hex$|^Copy item \d+$/, /^(?:[0-9a-f]{2})+$/],
+];
+
+test("every copy control copies plain text of its kind", async ({ page }) => {
+  await lightning(page);
+  await esplora(page);
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { copied });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          copied.push(text);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  for (const path of [
+    `/regtest/block/${chain.blocks[106]}`,
+    `/regtest/tx/${chain.txs.script_types}`,
+    `/regtest/address/${chain.addresses.p2tr}`,
+    "/regtest/lightning/channel/811984x2037x0",
+    `/regtest/lightning/node/${ACINQ}`,
+  ]) {
+    await load(page, path);
+    // Every one on the page, those in closed pop-ups and disclosures too, in one call.
+    const pairs = await page.evaluate(() => {
+      const copied = (window as unknown as { copied: string[] }).copied;
+      return [...document.querySelectorAll<HTMLButtonElement>("main button.copy")].map((b) => {
+        b.click();
+        return [b.title, copied.at(-1) ?? ""] as const;
+      });
+    });
+    expect(pairs.length, `${path}: copy controls`).toBeGreaterThan(0);
+    for (const [label, text] of pairs) {
+      const kind = COPIED.find(([name]) => name.test(label));
+      expect(kind, `${path}: "${label}" is a kind this test knows`).toBeDefined();
+      expect(text, `${path}: "${label}"`).toMatch(kind?.[1] ?? /^$/);
+    }
+  }
+});

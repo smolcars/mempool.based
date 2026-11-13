@@ -6,7 +6,7 @@ import { Exact } from "../../components/Exact";
 import { CopyButton } from "../../components/CopyButton";
 import { ErrorState } from "../../components/States";
 import type { AddressStats } from "../../lib/esplora";
-import { formatBtc, groupDigits } from "../../lib/format";
+import { formatBtc, groupDigits, plainBtc } from "../../lib/format";
 import { refusal } from "./address";
 import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
 
@@ -55,7 +55,7 @@ function Total(props: { sats: number; what: string }) {
       }
     >
       <span class="num">{formatBtc(props.sats)}</span>
-      <CopyButton value={formatBtc(props.sats)} label={`Copy the exact ${props.what}`} />
+      <CopyButton value={plainBtc(props.sats)} label={`Copy the exact ${props.what}, in BTC`} />
     </Exact>
   );
 }
