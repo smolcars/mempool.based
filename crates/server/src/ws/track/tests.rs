@@ -2098,7 +2098,10 @@ async fn the_replacements_topic_says_each_change_of_the_record() {
     s.ctx.hub.subscribe(Topic::Replacements, &c.conn);
     // A subscriber is told the record as it stands, at once.
     let version = |v: &Value| v["version"].as_u64().unwrap_or(u64::MAX);
-    let first = version(&c.wait("replacements", |v| v["type"] == "replacements").await);
+    let first = version(
+        &c.wait("replacements", |v| v["type"] == "replacements")
+            .await,
+    );
 
     // A replacement changes it.
     let a2 = mock.send(&[coin(1)], 1, 900, 200);

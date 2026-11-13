@@ -116,6 +116,8 @@ struct State {
     applied: u64,
     /// Distinguishes an address entry from a later one for the same script.
     next_gen: u64,
+    /// The `replacements` topic has been told the record's version.
+    record_said: bool,
     stats: Stats,
 }
 
@@ -282,6 +284,7 @@ impl Tracking {
                 replacements: Replacements::new(limits.replacements_kept),
                 applied: 0,
                 next_gen: 0,
+                record_said: false,
                 stats: Stats::default(),
             }),
         }
@@ -491,6 +494,7 @@ impl Tracking {
     /// Tells the `replacements` topic the record's version, so a page listing replacements asks
     /// for them again when it changes.
     fn say_record(&self, st: &mut State) {
+        st.record_said = true;
         let msg = json!({
             "topic": "replacements",
             "type": "replacements",
@@ -614,7 +618,8 @@ impl Tracking {
                 moved = true;
             }
         }
-        if st.replacements.version() != version {
+        // The first delta says the record as it stands, for new subscribers; then each change.
+        if st.replacements.version() != version || !st.record_said {
             self.say_record(&mut st);
         }
         (moved, st.replacements.take_changes())
@@ -1079,8 +1084,6 @@ pub(crate) async fn follow_txs<L: Lookup + Clone + 'static>(
         if let Some(k) = restore.take() {
             k.restore(&track).await;
         }
-        // The topic's state for new subscribers, before anything changes it.
-        track.say_record(&mut lock(&track.state));
         // Its lock is held through a pack: take it on a blocking thread.
         let p = projector.clone();
         let Ok((_, mut projections)) = tokio::task::spawn_blocking(move || p.subscribe()).await

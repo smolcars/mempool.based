@@ -61,8 +61,8 @@ fn topics() -> impl Iterator<Item = Topic> {
         Topic::Transactions,
         Topic::Replacements,
     ]
-        .into_iter()
-        .chain((0..TXS_TOPICS).filter_map(|i| u8::try_from(i).ok().map(Topic::ProjectedTxs)))
+    .into_iter()
+    .chain((0..TXS_TOPICS).filter_map(|i| u8::try_from(i).ok().map(Topic::ProjectedTxs)))
 }
 
 /// Starts the network's tracker and projector on their own node clients, and the tasks that
