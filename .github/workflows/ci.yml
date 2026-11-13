@@ -171,7 +171,8 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_TERM_COLOR: always
       E2E_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-      JOB_LIMIT: 125
+      # Each shard's limit, with room for the pages being added (docs/CI.md "Browser test shards").
+      JOB_LIMIT: 145
     steps:
       - run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
