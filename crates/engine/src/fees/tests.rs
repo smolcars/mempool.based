@@ -465,7 +465,9 @@ fn the_time_allowed_is_the_gamma_quantile_of_block_times() {
 }
 
 /// Each level's lowest share of samples met on `fixtures/fees/replay.json`, high, medium, low.
-const MET_AT_LEAST: [f64; 3] = [0.0, 0.0, 0.0];
+/// The tuning chosen on 2026-11-13 meets 14 of 17, 15 of 15 and 8 of 9; the one before it met
+/// 12, 11 and 3, under every bound.
+const MET_AT_LEAST: [f64; 3] = [0.8, 0.9, 0.85];
 
 /// A stretch of mainnet recorded by `examples/fee_watch.rs` and trimmed as
 /// `fixtures/fees/README.md` says: the method is replayed through it, and each level must still
@@ -508,7 +510,7 @@ fn replayed_on_recorded_mainnet_each_level_is_met_often_enough() {
             next += 1;
         }
         inflow.roll(t);
-        assert!(inflow.minutes() >= INFLOW_MINUTES);
+        assert!(inflow.ready());
         let r = recommend(
             &Depth::new(pairs(&s[2])),
             &inflow,
