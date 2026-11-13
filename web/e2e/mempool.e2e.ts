@@ -134,6 +134,9 @@ test("a phone sees the whole size chart, time axis and all, on its first screen"
     for (const band of await readout.locator(".chart__value--band").all()) {
       await expect(band).toBeHidden();
     }
+    // "Show the figures" is a finger's target.
+    const figures = page.locator(".chart__figures > summary").first();
+    expect((await figures.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   }
 });
 

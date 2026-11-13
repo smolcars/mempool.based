@@ -69,6 +69,14 @@
     font-weight: var(--weight-bold);
     white-space: nowrap;
   }
+  /* Beside a page's own ID it would cover the ID's end: it rises above the button instead, where
+     nothing scrolls to clip it. */
+  :is(.hash--full, .hash--whole) .copy__note {
+    top: auto;
+    right: 4px;
+    bottom: calc(100% - 6px);
+    translate: none;
+  }
   /* The copy command's text: in the page for a moment, out of sight and never scrolled to. */
   .copy__scratch {
     position: fixed;

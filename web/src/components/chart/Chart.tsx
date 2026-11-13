@@ -258,7 +258,7 @@ export default function Chart(props: ChartProps) {
     const floor = yl.scale(yl.scale.domain[0]);
     const time = timeTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 84)));
     // Too narrow for ticks a reader can place (a phone): the axis names its two ends instead.
-    const ends = right - left < 420 ? endLabels(domain[0], domain[1]) : undefined;
+    const ends = right - left < 420 ? endLabels(domain[0], domain[1], right - left) : undefined;
     const covered = props.dataFrom;
     return {
       w,

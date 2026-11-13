@@ -758,6 +758,9 @@
   .tx-group__who {
     color: var(--color-text-muted);
   }
+  .tx-group__more {
+    justify-self: start;
+  }
 
   /* ---- Live state: an icon and a word, and what the page does instead ---- */
   .tx-live {

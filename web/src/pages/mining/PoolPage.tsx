@@ -5,6 +5,7 @@ import { formatDay, formatHashrate, formatShare } from "../../components/chart/s
 import { DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -167,8 +168,7 @@ function Pool(props: { network: Network; slug: string }) {
               </Stat>
             </dl>
             <Show when={(s()?.pool.regexes.length ?? 0) + (s()?.pool.addresses.length ?? 0) > 0}>
-              <details class="mining-recognised">
-                <summary>How its blocks are recognised</summary>
+              <More label="How its blocks are recognised">
                 <p>
                   By {groupDigits(s()?.pool.addresses.length ?? 0)} payout{" "}
                   {s()?.pool.addresses.length === 1 ? "address" : "addresses"} and these coinbase
@@ -179,7 +179,7 @@ function Pool(props: { network: Network; slug: string }) {
                     <li class="num">{t}</li>
                   ))}
                 </ul>
-              </details>
+              </More>
             </Show>
           </div>
         </section>
@@ -189,7 +189,8 @@ function Pool(props: { network: Network; slug: string }) {
           </SectionHeader>
           <Section
             what="the pool's weeks"
-            reserve={`calc(${chartHeight(240)} + 4.75rem)`}
+            // The chart alone: a pool whose weeks are all stored has no coverage note above it.
+            reserve={chartHeight(240)}
             hold={series().x.length > 0}
             ready={weeks.answer() !== undefined}
             error={weeks.error()}

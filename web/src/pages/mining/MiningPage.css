@@ -410,14 +410,6 @@
     font-size: var(--text-sm);
     overflow-wrap: anywhere;
   }
-  .mining-recognised {
-    margin: var(--space-4) 0;
-    font-size: var(--text-sm);
-  }
-  .mining-recognised > summary {
-    cursor: pointer;
-    color: var(--color-text-muted);
-  }
   .mining-tags {
     display: flex;
     flex-wrap: wrap;

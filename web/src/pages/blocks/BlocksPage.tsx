@@ -49,6 +49,8 @@ const columns = (factsOf: (id: string) => RowFacts) => [
   {
     header: "Mined",
     optional: true,
+    // When a block was found reads before what it paid: the fee total goes first (step 5).
+    drop: 6,
     cell: (b: Block | null) => (b ? <TimeAgo time={b.timestamp} /> : <Skel size="s" />),
   },
   {
@@ -71,7 +73,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     short: "Txs",
     numeric: true,
     // The last to go, and only where even the phone's columns are too wide (320 px, wide faces).
-    drop: 6,
+    drop: 7,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
   },
   {

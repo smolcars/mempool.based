@@ -220,6 +220,14 @@
       color: var(--color-text);
     }
   }
+  /* A finger's target on a phone. */
+  @media (max-width: 640px) {
+    .chart__figures > summary {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--touch);
+    }
+  }
   .chart__figures[open] > summary {
     margin-bottom: var(--space-3);
   }

@@ -10,10 +10,11 @@ import {
   untrack,
 } from "solid-js";
 import "../../components/SectionHeader.css";
+import { formatMoment } from "../../components/chart/scale";
 import { Loading, ErrorState } from "../../components/States";
 import { type ApiResource, fetchStamped, type Stamped } from "../../lib/api";
 import type { AddressStats } from "../../lib/esplora";
-import { formatBtc, formatUtc, groupDigits } from "../../lib/format";
+import { formatBtc, groupDigits } from "../../lib/format";
 import { useNetwork } from "../../lib/page";
 import { refusal } from "./address";
 import { advance, type History, loadHistory, points, readRows } from "./balance";
@@ -190,7 +191,7 @@ export function BalanceChart(props: {
                         },
                         { name: "Change", values: v().pts.map((p) => p.change), format: signedBtc },
                       ]}
-                      time={formatUtc}
+                      time={formatMoment}
                     />
                   </Pending>
                 )}

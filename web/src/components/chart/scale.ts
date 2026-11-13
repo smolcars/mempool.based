@@ -130,9 +130,10 @@ export function formatMoment(t: number): string {
 /**
  * The two ends of a time axis too narrow for ticks (a phone): the first and last moment, each
  * saying as much as the span needs. Under two days the hours lead, the first with its day:
- * `12 Nov 11:14` and `20:35`; longer, the days: `9 Nov` and `12 Nov`, with the years when they differ.
+ * `12 Nov 11:14` and `20:35`; longer, the days: `9 Nov` and `12 Nov`, with the years when they differ, or `Nov 2020` and `Nov 2026` where
+ * `room` (px) is short.
  */
-export function endLabels(from: number, to: number): [string, string] {
+export function endLabels(from: number, to: number, room = Infinity): [string, string] {
   const a = utc(from);
   const b = utc(to);
   const day = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""}`;
@@ -140,7 +141,14 @@ export function endLabels(from: number, to: number): [string, string] {
   if (to - from < 2 * 86_400) {
     return [`${day(a)} ${hm(a)}`, a.getUTCDate() === b.getUTCDate() ? hm(b) : `${day(b)} ${hm(b)}`];
   }
-  if (a.getUTCFullYear() !== b.getUTCFullYear()) return [formatDay(from), formatDay(to)];
+  if (a.getUTCFullYear() !== b.getUTCFullYear()) {
+    // Two whole dates need about 150 px in a wide face: a narrower plot (a pool's, between two axes) names months.
+    if (room < 170) {
+      const month = (d: Date) => `${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}`;
+      return [month(a), month(b)];
+    }
+    return [formatDay(from), formatDay(to)];
+  }
   return [day(a), day(b)];
 }
 

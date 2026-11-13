@@ -164,9 +164,30 @@ const RELATION: Record<string, string> = {
   related: "Related",
 };
 
+/**
+ * Rows a group's list shows before "Show all": a long list beside the fee would leave the details
+ * column beside it empty for a screen or more.
+ */
+export const GROUP_ROWS = 8;
+
+/** The button that lists the rest. */
+function ShowAll(props: { count: number; shown: number; onShow: () => void }) {
+  return (
+    <Show when={props.count > props.shown}>
+      <button class="btn tx-group__more" type="button" onClick={() => props.onShow()}>
+        Show all {groupDigits(props.count)}
+      </button>
+    </Show>
+  );
+}
+
 /** Who it is mined with, when that is not itself alone: the group and why (CPFP, in words). */
 export function Group(props: { relatives: Relatives; txid: string; rate: number | null }) {
   const g = () => group(props.relatives, props.txid);
+  const [all, setAll] = createSignal(false);
+  // The transaction itself always stays in the list, wherever it falls in the order.
+  const together = () =>
+    all() ? g().together : g().together.filter((m, i) => i < GROUP_ROWS || m.relation === "this");
   const others = () => g().together.filter((m) => m.relation !== "this");
   const who = () => {
     const o = others();
@@ -215,7 +236,7 @@ export function Group(props: { relatives: Relatives; txid: string; rate: number 
             this way it is called child pays for parent.
           </p>
           <ul class="tx-group__list" aria-label="Mined together, in mining order">
-            <For each={g().together}>
+            <For each={together()}>
               {(m) => (
                 <li class="tx-group__member">
                   <span class="tx-group__who">{RELATION[m.relation]}</span>
@@ -233,6 +254,11 @@ export function Group(props: { relatives: Relatives; txid: string; rate: number 
               )}
             </For>
           </ul>
+          <ShowAll
+            count={g().together.length}
+            shown={together().length}
+            onShow={() => setAll(true)}
+          />
         </Show>
         <Show when={g().before.length > 0}>
           <p class="tx-group__text">
@@ -250,16 +276,21 @@ export function Group(props: { relatives: Relatives; txid: string; rate: number 
 }
 
 function TxList(props: { txids: string[]; label: string }) {
+  const [all, setAll] = createSignal(false);
+  const txids = () => (all() ? props.txids : props.txids.slice(0, GROUP_ROWS));
   return (
-    <ul class="tx-group__list" aria-label={props.label}>
-      <For each={props.txids}>
-        {(id) => (
-          <li class="tx-group__member">
-            <Hash value={id} href={paths.tx(id)} copy={false} />
-          </li>
-        )}
-      </For>
-    </ul>
+    <>
+      <ul class="tx-group__list" aria-label={props.label}>
+        <For each={txids()}>
+          {(id) => (
+            <li class="tx-group__member">
+              <Hash value={id} href={paths.tx(id)} copy={false} />
+            </li>
+          )}
+        </For>
+      </ul>
+      <ShowAll count={props.txids.length} shown={txids().length} onShow={() => setAll(true)} />
+    </>
   );
 }
 

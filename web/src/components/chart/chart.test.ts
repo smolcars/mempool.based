@@ -19,6 +19,7 @@ import {
   niceStep,
   scale,
   timeTicks,
+  endLabels,
 } from "./scale";
 
 const DAY = 86_400;
@@ -73,6 +74,13 @@ describe("value ticks", () => {
 });
 
 describe("time ticks", () => {
+  it("names the ends with their years, or months and years where there is little room", () => {
+    const from = utc(2020, 11, 2, 0);
+    const to = utc(2026, 11, 9, 0);
+    expect(endLabels(from, to)).toStrictEqual(["2 Nov 2020", "9 Nov 2026"]);
+    expect(endLabels(from, to, 136)).toStrictEqual(["Nov 2020", "Nov 2026"]);
+    expect(endLabels(utc(2026, 11, 2, 0), to, 136)).toStrictEqual(["2 Nov", "9 Nov"]);
+  });
   it("steps by hours over a day", () => {
     const from = utc(2026, 11, 11, 13);
     const { ticks, label } = timeTicks(from, from + DAY, 8);

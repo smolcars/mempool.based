@@ -802,14 +802,14 @@ describe("balance chart", () => {
     expect(chart.getAttribute("aria-valuemax")).toBe("2");
     // The latest step first: the time, the balance, the block and what it changed.
     expect(chart.getAttribute("aria-valuetext")).toBe(
-      "2026-11-06 21:40:00 UTC: Balance 0.00030000 BTC, Block 102, Change +0.00030000 BTC",
+      "6 Nov 2026, 21:40 UTC: Balance 0.00030000 BTC, Block 102, Change +0.00030000 BTC",
     );
     key(chart, "ArrowLeft");
     expect(chart.getAttribute("aria-valuetext")).toContain(
       "Balance 0.00000000 BTC, Block 101, Change −0.00050000 BTC",
     );
     key(chart, "Home");
-    expect(chart.getAttribute("aria-valuetext")).toContain("21:20:00 UTC: Balance 0.00050000 BTC");
+    expect(chart.getAttribute("aria-valuetext")).toContain("21:20 UTC: Balance 0.00050000 BTC");
     key(chart, "Escape");
     expect(chart.getAttribute("aria-valuetext")).toContain("Block 102");
     // The plot starts 66 px in, with the first step at its left edge: left of that is the first.
