@@ -235,10 +235,12 @@
   .mining-period-shares__part--6 {
     background: var(--pool-6);
   }
+  /* Each name with its share beside it, wrapping as a row of entries: a wide panel spaces the
+     entries, never a name from its figure. */
   .mining-period-shares__key {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-    gap: var(--space-1) var(--space-4);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-5);
     margin-top: var(--space-3);
     font-size: var(--text-sm);
   }
@@ -248,7 +250,6 @@
     gap: var(--space-2);
   }
   .mining-period-shares__name {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
