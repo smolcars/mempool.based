@@ -908,14 +908,14 @@
     min-height: 4.75rem;
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .tx-layout {
       grid-template-columns: minmax(0, 1fr);
       grid-template-areas: "flow" "fee" "details";
       grid-template-rows: none;
     }
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .tx-timeline {
       grid-auto-flow: row;
       gap: var(--space-4);
@@ -1018,6 +1018,23 @@
     .tx-step--current.tx-step--caution .tx-step__marker,
     .tx-step.tx-step--landed .tx-step__marker {
       animation: none;
+    }
+  }
+}
+
+@layer pages {
+  /* Narrower than any phone held upright (a page zoomed in or set in a large text size): the
+     inputs above the outputs, each card the width of the panel, without the ribbons between. */
+  @media (max-width: 18.75em) {
+    .tx-flow {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: var(--space-5);
+    }
+    .tx-flow__ribbons {
+      display: none;
+    }
+    .tx-timeline.tx-timeline--line .tx-step {
+      flex-wrap: wrap;
     }
   }
 }

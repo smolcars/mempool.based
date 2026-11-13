@@ -88,7 +88,7 @@
   .difficulty__arrow {
     margin-right: 0.2em;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     /* A phone wraps the sentence to three lines. */
     .difficulty__pace-text {
       min-height: 4.5em;
@@ -97,7 +97,7 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
-  @media (max-width: 360px) {
+  @media (max-width: 22.5em) {
     .difficulty__pace-text {
       min-height: 6em;
     }

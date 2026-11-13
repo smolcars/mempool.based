@@ -42,7 +42,7 @@
     font-size: var(--text-sm);
   }
   /* Phones: a full thumb's height, and 16 px text so iOS does not zoom in on focus. */
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .search__field {
       min-height: var(--touch);
     }
@@ -120,7 +120,7 @@
   }
   /* A keyboard's hint, where there is one and room for it: on a narrow window it took the room
      the placeholder needs ("Searc"). */
-  @media (hover: hover) and (pointer: fine) and (min-width: 641px) {
+  @media (hover: hover) and (pointer: fine) and (min-width: 40.0625em) {
     .search__field:not(:focus-within) input:placeholder-shown ~ .search__slash {
       display: inline-grid;
     }

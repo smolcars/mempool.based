@@ -16,7 +16,7 @@
   }
   /* A finger's target on a phone ("Mempool history" was 21 px tall), taking no more of the line's
      room than its text. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .section__meta a {
       display: inline-flex;
       align-items: center;

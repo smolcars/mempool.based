@@ -97,7 +97,7 @@
   }
   /* On a phone each reading has a line (Chart.css): the time, the balance, the block and the
      change, 1.5625rem each with its gap, then a 44 px "Show the figures". */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .address-balance__slot {
       min-height: calc(200px + 4 * 1.5625rem + 3.5rem);
     }
@@ -325,7 +325,7 @@
   }
 
   /* Below this the four figures beside the balance get too narrow, so the balance takes a row. */
-  @media (max-width: 1280px) {
+  @media (max-width: 80em) {
     .address-stats {
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
@@ -333,7 +333,7 @@
       grid-column: 1 / -1;
     }
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .address {
       padding-top: var(--space-5);
     }

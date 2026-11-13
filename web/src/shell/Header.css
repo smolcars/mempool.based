@@ -185,7 +185,7 @@
     }
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .site-header__inner {
       grid-template-columns: auto minmax(0, 1fr) auto;
       grid-template-areas:
@@ -212,7 +212,7 @@
   }
   /* Phones: the mark alone carries the brand; the network sits beside the search, and the four
      sections share the second row evenly, so every one is in sight at 320 px. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .site-header__inner {
       grid-template-columns: auto auto minmax(0, 1fr) auto;
       grid-template-areas:
@@ -262,14 +262,14 @@
     }
   }
   /* The smallest phones: the network's name alone, without its arrow. */
-  @media (max-width: 360px) {
+  @media (max-width: 22.5em) {
     .network__chevron {
       display: none;
     }
   }
   /* Narrower than any phone held upright (a page zoomed to 150%): the search takes a row of its
      own at a usable width, and the sections a size smaller so their names never touch. */
-  @media (max-width: 300px) {
+  @media (max-width: 18.75em) {
     .site-header__inner {
       grid-template-columns: auto auto minmax(0, 1fr) auto;
       grid-template-areas:
@@ -284,6 +284,16 @@
     /* The network has room on its row again: its arrow says it opens. */
     .network__chevron {
       display: block;
+    }
+  }
+  /* A short screen (a phone on its side, a page zoomed in or in a large text size): the header
+     stays at the top of the page rather than covering a share of every screen. */
+  @media (max-height: 30em) {
+    .site-header {
+      position: relative;
+    }
+    :root {
+      scroll-padding-top: var(--space-2);
     }
   }
 }

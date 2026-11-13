@@ -21,7 +21,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     /* Headers wrap, so the figures, not the units, set each column's width. */
     .rbf-recent th {
       white-space: normal;

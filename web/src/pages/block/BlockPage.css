@@ -350,7 +350,7 @@
     color: var(--color-text-muted);
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .block-layout {
       grid-template-columns: minmax(0, 1fr);
       grid-template-areas: "side" "core" "more";
@@ -358,7 +358,7 @@
       gap: var(--space-4);
     }
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .block-page {
       padding-top: var(--space-4);
     }

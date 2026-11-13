@@ -188,7 +188,7 @@
     width: 100%;
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .audit__top {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -197,7 +197,7 @@
   .audit__says {
     display: none;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .audit__kinds {
       grid-template-columns: minmax(0, 1fr);
     }

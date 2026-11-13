@@ -19,6 +19,8 @@ export interface Column<T> {
   drop?: number | undefined;
   /** A shorter header shown on phones ("Txs"); screen readers keep the full one. */
   short?: string;
+  /** The header for screen readers only, where the rows name themselves in sight. */
+  hidden?: boolean;
 }
 
 export interface DataTableProps<T> {
@@ -106,7 +108,12 @@ export function DataTable<T>(props: DataTableProps<T>) {
               <For each={props.columns}>
                 {(c) => (
                   <th scope="col" class={cellClass(c)}>
-                    <Show when={c.short} fallback={c.header}>
+                    <Show
+                      when={c.short}
+                      fallback={
+                        c.hidden ? <span class="visually-hidden">{c.header}</span> : c.header
+                      }
+                    >
                       {(short) => (
                         <>
                           <span class="table__long">{c.header}</span>

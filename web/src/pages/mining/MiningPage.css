@@ -117,7 +117,7 @@
   }
   /* The smallest phones: regtest's difficulty, a power of ten, ran out of its half of 320 px in
      the wide faces Linux falls back to. */
-  @media (max-width: 380px) {
+  @media (max-width: 23.75em) {
     .mining-stat__value {
       font-size: var(--text-lg);
     }
@@ -160,7 +160,7 @@
   .mining-slot {
     --readout: 5.75rem;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .mining-chart,
     .mining-slot {
       --readout: calc(var(--lines, 3) * 1.5625rem + 3.5rem);
@@ -447,7 +447,7 @@
     overflow-wrap: anywhere;
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .mining-now__grid,
     .mining-pools {
       grid-template-columns: minmax(0, 1fr);
@@ -465,7 +465,7 @@
   .mining-pools--bar .mining-pools__shares {
     order: -1;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .mining {
       --tile-w: 7.5rem;
       --tile-h: 10rem;
@@ -475,7 +475,7 @@
       width: 3rem;
     }
   }
-  @media (max-width: 400px) {
+  @media (max-width: 25em) {
     /* The percentage alone, so rank, pool, share and blocks fit the narrowest phones. */
     .mining-share__bar {
       display: none;
@@ -515,9 +515,18 @@
     font-size: var(--text-xs);
     color: var(--color-text-muted);
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .mining-retarget__age {
       display: block;
+    }
+  }
+}
+
+@layer pages {
+  /* Narrower than any phone held upright: a page zoomed in or set in a large text size. */
+  @media (max-width: 18.75em) {
+    .mining-periods ul {
+      flex-wrap: wrap;
     }
   }
 }

@@ -74,7 +74,7 @@ export function Shell(props: { children?: JSX.Element }) {
         Skip to content
       </a>
       <Show when={network() !== "mainnet"}>
-        <div class="network-band">
+        <div class="network-band" role="region" aria-label="Test network">
           <p class="network-band__text">
             {NETWORK_NAMES[network()]} is a test network. Coins here have no value.
           </p>

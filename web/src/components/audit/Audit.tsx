@@ -82,7 +82,7 @@ function Body(props: { audit: AuditTotals; hash: string | undefined }) {
   ];
   type Row = ReturnType<typeof rows>[number];
   const columns = [
-    { header: "", cell: (r: Row) => r.label },
+    { header: "Measure", hidden: true, cell: (r: Row) => r.label },
     { header: "Expected", numeric: true, cell: (r: Row) => r.expected },
     { header: "Mined", numeric: true, cell: (r: Row) => r.mined },
   ];

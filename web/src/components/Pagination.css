@@ -13,7 +13,7 @@
   }
   /* A phone: the page and its count on a line of their own, so a long count never breaks or
      squeezes the buttons, which keep the row under it. */
-  @media (max-width: 420px) {
+  @media (max-width: 26.25em) {
     .pagination {
       flex-wrap: wrap;
     }

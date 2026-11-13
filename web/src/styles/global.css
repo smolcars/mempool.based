@@ -49,6 +49,8 @@
     --safe-r: env(safe-area-inset-right, 0px);
   }
   html {
+    /* Focus and in-page links scroll clear of the sticky header (its height from Header.tsx). */
+    scroll-padding-top: calc(var(--header-h, 0px) + var(--space-2));
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
     background: var(--color-bg);

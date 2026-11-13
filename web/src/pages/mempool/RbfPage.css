@@ -267,7 +267,7 @@
   }
 
   /* A phone tells the story down the row: each version on its line, the time it stood between. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .rbf-lead {
       min-height: calc(2em * var(--leading-body));
     }
@@ -316,7 +316,7 @@
     }
   }
   /* The narrowest phones: the rate goes under its id rather than wrap to the mark's side. */
-  @media (max-width: 380px) {
+  @media (max-width: 23.75em) {
     .rbf-v__body {
       display: grid;
       grid-template-columns: auto 1fr;

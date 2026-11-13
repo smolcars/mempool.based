@@ -701,7 +701,7 @@
   }
 
   /* ---------- Narrow screens ---------- */
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     /* One column in the page's order: fees, mempool, latest transactions, difficulty. */
     .home-grid {
       grid-template-columns: minmax(0, 1fr);
@@ -715,7 +715,7 @@
       grid-area: auto;
     }
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .home-strip {
       --tile-w: 7.5rem;
       --tile-h: 10rem;
@@ -753,5 +753,22 @@
 @layer pages {
   .home-difficulty {
     min-width: 0;
+  }
+}
+
+@layer pages {
+  /* Narrower than any phone held upright: a page zoomed in or set in a large text size. */
+  @media (max-width: 18.75em) {
+    .home-fees__list,
+    .home-stats {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* The bars repeat the sizes beside them; the figures need the room. */
+    .home-depth__table :is(th, td):nth-child(2) {
+      display: none;
+    }
+    .home-depth__table .home-depth__num {
+      white-space: normal;
+    }
   }
 }

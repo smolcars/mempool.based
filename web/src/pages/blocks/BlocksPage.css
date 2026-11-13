@@ -69,7 +69,7 @@
     font-size: var(--text-sm);
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .blocks-page {
       padding-top: var(--space-4);
     }
@@ -82,7 +82,7 @@
   }
   /* The smallest phones: smaller headers and a shorter miner, so four columns of mainnet's
      figures fit 320 px in any font. */
-  @media (max-width: 360px) {
+  @media (max-width: 22.5em) {
     .blocks-miner {
       max-width: 4.25rem;
     }

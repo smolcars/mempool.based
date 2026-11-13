@@ -20,6 +20,19 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
   const isRouting = useIsRouting();
   const page = () => stripNetwork(location.pathname);
   let search: HTMLInputElement | undefined;
+  let header: HTMLElement | undefined;
+
+  // The header is sticky and its height follows the width and the reader's text size: the page
+  // keeps that much clear above whatever focus or a link scrolls to (global.css), so it is not hidden under it.
+  onSettled(() => {
+    const el = header;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const seen = new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--header-h", `${el.offsetHeight}px`);
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  });
 
   // "/" jumps to search from anywhere but a text field.
   onSettled(() => {
@@ -40,7 +53,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
   });
 
   return (
-    <header class="site-header">
+    <header class="site-header" ref={header}>
       <div class="site-header__inner">
         <Link class="brand" href="/">
           <Logo />
