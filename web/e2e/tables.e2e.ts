@@ -135,12 +135,17 @@ const LISTS: { path: string; table: string | RegExp }[] = [
 ];
 
 // Only a row's small link text was a target once, and on four lists the whole row did nothing.
-test("a tap anywhere on any list's row opens its item, at a phone's width", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  for (const { path, table } of LISTS) {
-    await page.goto(path);
-    await tapRow(page, page.getByRole("table", { name: table }), path);
-  }
+test.describe("a tap anywhere on any list's row", () => {
+  // Each tap leaves a page whose fetches may still run: WebKit calls the ones the next load
+  // cancels "access control" failures, though the app is same-origin and catches them.
+  test.use({ consoleErrorsAllowed: [/status of (429|503)|due to access control checks/] });
+  test("opens its item, at a phone's width", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const { path, table } of LISTS) {
+      await page.goto(path);
+      await tapRow(page, page.getByRole("table", { name: table }), path);
+    }
+  });
 });
 
 test("every table fits its panel or shows that it scrolls, at 320, 390 and 720 px", async ({
