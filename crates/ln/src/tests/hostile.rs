@@ -896,6 +896,11 @@ async fn channels_a_peer_answers_with_false_announcements_are_asked_of_another()
     withheld_then_asked_elsewhere(Withhold::FalseScript).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn false_announcements_refused_after_the_batch_ended_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::FalseScriptLate).await;
+}
+
 enum Withhold {
     /// The end marker, without the channels.
     End,
@@ -904,6 +909,9 @@ enum Withhold {
     /// For each channel an announcement signed with keys of its own, which the funding output
     /// does not pay, then the end marker.
     FalseScript,
+    /// The same, as its answer to the query, while the node does not answer: they are still
+    /// being checked when the batch ends, and refused only after.
+    FalseScriptLate,
 }
 
 /// A hostile peer and an honest one list the same real channels. The hostile one lists first, so
@@ -920,12 +928,22 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
         .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 1, 2))]))
         .collect();
     *honest.script.answers.lock().unwrap() = Some(answers);
+    let late = matches!(how, Withhold::FalseScriptLate);
+    if late {
+        let false_ones = ids
+            .iter()
+            .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))]))
+            .collect();
+        *h.script.answers.lock().unwrap() = Some(false_ones);
+    }
     let peer = ours(&dir, vec![h.addr, honest.addr], &node);
     wait_for("both lists asked for", || {
         h.script.range_queries.load(Ordering::Relaxed) == 1
             && honest.script.range_queries.load(Ordering::Relaxed) == 1
     })
     .await;
+    // Its answers wait for a node that does not answer.
+    node.0.down.store(late, Ordering::Relaxed);
     h.send([listing(&ids)]);
     wait_for("the hostile peer asked", || {
         h.script.scid_queries.load(Ordering::Relaxed) == 1
@@ -945,6 +963,17 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
                     .map(|id| raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))),
             );
             h.send([end_marker()]);
+        }
+        Withhold::FalseScriptLate => {
+            wait_for("its answers held", || {
+                peer.gossip().lookup.waiting() == ids.len()
+            })
+            .await;
+            // Past a tick after its batch ended: they are still the hostile peer's.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 0);
+            assert_eq!(peer.gossip().range_pending(), ids.len());
+            node.0.down.store(false, Ordering::Relaxed);
         }
     }
     let started = std::time::Instant::now();

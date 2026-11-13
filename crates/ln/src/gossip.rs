@@ -99,17 +99,13 @@ struct PeerRange {
     listed: HashMap<u64, bool>,
     /// Channel ids this peer has and we lack, not yet requested.
     wanted: VecDeque<u64>,
-    /// The batch requested.
-    in_flight: Option<Batch>,
-    /// Batches that ended with channels it listed still missing from the graph.
+    /// The batch requested, and when. It ends at its end marker or [`BATCH_TIMEOUT`], not when
+    /// everything arrived: a late end marker would end the next one.
+    in_flight: Option<(Vec<u64>, Instant)>,
+    /// Ids of ended batches still being checked: it answers for them until they settle.
+    checking: Vec<u64>,
+    /// Batches, or later checks, that left channels it listed neither in the graph nor checked.
     withheld: u32,
-}
-
-struct Batch {
-    ids: Vec<u64>,
-    sent: Instant,
-    /// Its end marker came.
-    ended: bool,
 }
 
 impl PeerRange {
@@ -756,46 +752,63 @@ impl Gossip {
                 p.listing = None;
             }
         }
-        self.settle(&mut r);
+        let peers: Vec<PublicKey> = r.peers.keys().copied().collect();
+        for peer in peers {
+            let Some(p) = r.peers.get_mut(&peer) else {
+                continue;
+            };
+            let mut ids = std::mem::take(&mut p.checking);
+            if p.in_flight
+                .as_ref()
+                .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
+                && let Some((batch, _)) = p.in_flight.take()
+            {
+                ids.extend(batch);
+            }
+            if !ids.is_empty() {
+                self.judge(&mut r, peer, ids);
+            }
+        }
         self.next_batches(&mut r);
     }
 
-    /// Ends each batch whose end marker came once none of its channels waits for a lookup, or
-    /// [`BATCH_TIMEOUT`] after it was asked whatever came (a peer cannot hold it longer by
-    /// sending channels that wait as early). Channels then neither in the graph nor being
-    /// checked, refused or never sent, are withheld. Not before the end marker even when all
-    /// arrived: a late marker would end the next batch (BOLT 7 asks for one query at a time).
-    fn settle(&self, r: &mut RangeSync) {
+    /// Judges ids asked of a peer once its batch ended (its end marker, or [`BATCH_TIMEOUT`]):
+    /// those in the graph are done; those neither in it nor being checked (never sent, or sent and
+    /// refused) are withheld and offered to another peer; the rest stay with the peer in
+    /// `checking`, judged again each tick until their lookups settle. So the peer has its next
+    /// turn at once, and a channel refused after the batch ended is still asked elsewhere.
+    fn judge(&self, r: &mut RangeSync, peer: PublicKey, ids: Vec<u64>) {
         let graph = self.graph().read_only();
-        let mut done = Vec::new();
-        for (peer, p) in &r.peers {
-            let Some(b) = &p.in_flight else { continue };
-            if b.sent.elapsed() >= BATCH_TIMEOUT
-                || (b.ended && !b.ids.iter().any(|id| self.lookup.holds(*id)))
-            {
-                let ids: Vec<(u64, bool)> = b
-                    .ids
-                    .iter()
-                    .map(|id| {
-                        let missing = graph.channel(*id).is_none() && !self.lookup.holds(*id);
-                        (*id, missing)
-                    })
-                    .collect();
-                done.push((*peer, ids));
-            }
-        }
+        // `None`: still being checked.
+        let verdicts: Vec<(u64, Option<bool>)> = ids
+            .into_iter()
+            .map(|id| match graph.channel(id) {
+                Some(_) => (id, Some(false)),
+                None if self.lookup.holds(id) => (id, None),
+                None => (id, Some(true)),
+            })
+            .collect();
+        // Read last, under the graph's lock: an answer that left the queue after its `holds`
+        // check counts as resolving until LDK has put its channel in the graph.
+        let resolving = self.lookup.resolving() > 0;
         drop(graph);
-        for (peer, ids) in done {
-            let withheld = ids.iter().any(|(_, missing)| *missing);
-            if let Some(p) = r.peers.get_mut(&peer) {
-                p.in_flight = None;
-                if withheld {
-                    p.withheld += 1;
-                    self.counters.withheld.fetch_add(1, Ordering::Relaxed);
-                }
+        let (mut release, mut wait) = (Vec::new(), Vec::new());
+        for (id, verdict) in verdicts {
+            match verdict {
+                Some(true) if resolving => wait.push(id),
+                Some(missing) => release.push((id, missing)),
+                None => wait.push(id),
             }
-            r.release(&peer, ids);
         }
+        let withheld = release.iter().any(|(_, missing)| *missing);
+        if let Some(p) = r.peers.get_mut(&peer) {
+            p.checking.extend(wait);
+            if withheld {
+                p.withheld += 1;
+                self.counters.withheld.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        r.release(&peer, release);
     }
 
     /// Requests every idle peer's next batch. Peers that lost their turn go first, so what they
@@ -848,11 +861,7 @@ impl Gossip {
             return;
         }
         batch.sort_unstable();
-        p.in_flight = Some(Batch {
-            ids: batch.clone(),
-            sent: Instant::now(),
-            ended: false,
-        });
+        p.in_flight = Some((batch.clone(), Instant::now()));
         self.send(MessageSendEvent::SendShortIdsQuery {
             node_id: peer,
             msg: QueryShortChannelIds {
@@ -920,9 +929,10 @@ impl BaseMessageHandler for Gossip {
             && let Some(p) = r.peers.remove(&their_node_id)
         {
             let graph = self.graph().read_only();
-            let asked = p.in_flight.map(|b| b.ids).unwrap_or_default();
+            let asked = p.in_flight.map(|(ids, _)| ids).unwrap_or_default();
             let ids = asked
                 .into_iter()
+                .chain(p.checking)
                 .map(|id| (id, graph.channel(id).is_none()))
                 .chain(p.wanted.into_iter().map(|id| (id, true)))
                 .collect();
@@ -1122,9 +1132,10 @@ impl RoutingMessageHandler for Gossip {
                 break;
             }
             let want = match graph.channel(scid) {
-                // Unless it is being checked: stored, or waiting for its lookup.
+                // Unless it is being checked: stored, or waiting for its lookup. One another peer
+                // is answering for is kept in this peer's list, in case it is refused.
                 None => {
-                    !self.lookup.holds(scid)
+                    (!self.lookup.holds(scid) || queued.contains(&scid))
                         && !self
                             .replay
                             .lock()
@@ -1163,14 +1174,13 @@ impl RoutingMessageHandler for Gossip {
         let Ok(mut r) = self.range.lock() else {
             return Ok(());
         };
-        if let Some(b) = r
+        if let Some((ids, _)) = r
             .peers
             .get_mut(&their_node_id)
-            .and_then(|p| p.in_flight.as_mut())
+            .and_then(|p| p.in_flight.take())
         {
-            b.ended = true;
+            self.judge(&mut r, their_node_id, ids);
         }
-        self.settle(&mut r);
         self.next_batches(&mut r);
         Ok(())
     }
