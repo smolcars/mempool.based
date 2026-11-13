@@ -281,3 +281,61 @@ test.describe("the join between ten and twelve bands", () => {
     });
   }
 });
+
+// A band under the pointer was once repainted in the pink accent: a 25 MvB magenta slab on the
+// most natural gesture, its colour no longer its key's. It keeps its own colour now.
+test("a band under the pointer, a finger or the keys keeps its colour, and a tap away lets it go", async ({
+  browser,
+  page,
+}) => {
+  const plotLayers = (p: typeof page) =>
+    p.locator(".mempool-chart--size svg path.chart__layer").evaluateAll((all) => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-accent)";
+      document.body.append(probe);
+      const accent = getComputedStyle(probe).color;
+      probe.remove();
+      return {
+        accent,
+        layers: all.map((l) => ({
+          on: l.classList.contains("chart__layer--on"),
+          fill: getComputedStyle(l).fill,
+          stroke: getComputedStyle(l).stroke,
+        })),
+      };
+    });
+  await page.goto("/regtest/mempool?interval=2h");
+  const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
+  await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+  const before = await plotLayers(page);
+  // The pointer over the stack's lowest part, at the right, where the seeded minutes are.
+  const box = await chart.boundingBox();
+  if (!box) throw new Error("no chart");
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.85);
+  await expect(page.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(1);
+  const during = await plotLayers(page);
+  for (const [k, l] of during.layers.entries()) {
+    expect(l.fill, `layer ${k}`).toBe(before.layers[k]?.fill);
+    expect(l.fill, `layer ${k}`).not.toBe(during.accent);
+    expect(l.stroke, `layer ${k}`).not.toBe(during.accent);
+  }
+  // The keys move the reading, and paint nothing in the accent either.
+  await chart.focus();
+  await page.keyboard.press("ArrowLeft");
+  for (const l of (await plotLayers(page)).layers) expect(l.fill).not.toBe(during.accent);
+
+  // A finger: a tap picks a band; a tap anywhere else lets it go.
+  const touch = await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  const phone = await touch.newPage();
+  await phone.goto(`${new URL(page.url()).origin}/regtest/mempool?interval=2h`);
+  const phoneChart = phone.getByRole("slider", { name: /The mempool's size by fee rate/ });
+  await expect(phoneChart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+  const pbox = await phoneChart.boundingBox();
+  if (!pbox) throw new Error("no chart");
+  await phone.touchscreen.tap(pbox.x + pbox.width * 0.6, pbox.y + pbox.height * 0.85);
+  await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(1);
+  for (const l of (await plotLayers(phone)).layers) expect(l.fill).not.toBe(during.accent);
+  await phone.getByRole("heading", { level: 1 }).tap();
+  await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(0);
+  await touch.close();
+});

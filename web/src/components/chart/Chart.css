@@ -48,7 +48,7 @@
   }
   .chart__value--on {
     color: var(--color-text);
-    box-shadow: 0 2px 0 var(--color-accent);
+    box-shadow: 0 2px 0 var(--color-text);
   }
   .chart__figure {
     color: var(--color-text);
@@ -155,8 +155,15 @@
   .chart__layer--fee {
     fill: var(--fill);
   }
+  /* The layer under the pointer keeps its own colour, so it still matches its key: the others
+     step back and it takes an outline in the text colour. Never the accent, which means
+     "current" or "found" elsewhere. */
+  .chart:has(.chart__layer--on) .chart__layer:not(.chart__layer--on) {
+    opacity: 0.45;
+  }
   .chart__layer--on {
-    fill: var(--color-accent);
+    stroke: var(--color-text);
+    stroke-width: 1.5;
   }
   .chart__cursor line {
     stroke: var(--color-text);

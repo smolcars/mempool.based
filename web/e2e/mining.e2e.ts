@@ -251,6 +251,18 @@ test("the share graphics draw each period's six largest pools, each in its own c
     const drawn = swatches.map(([name]) => name).filter((name) => name !== "Other pools");
     expect(drawn, `pools drawn at ${id}`).toStrictEqual(top);
     expect(swatches.at(-1)?.[0], `the rest at ${id}`).toBe("Other pools");
+    // A pool under the pointer keeps its own colour, the one its key shows.
+    if (id === "1m") {
+      const plot = pools.getByRole("slider");
+      await expect(plot.locator("path.chart__layer").first()).toBeAttached();
+      const box = await plot.boundingBox();
+      if (box) await plot.hover({ position: { x: box.width * 0.75, y: box.height * 0.7 } });
+      const on = pools.locator(".chart__layer--on");
+      await expect(on).toHaveCount(1);
+      const fill = await on.evaluate((l) => getComputedStyle(l).fill);
+      expect(swatches.map(([, c]) => c)).toContain(fill);
+      await page.mouse.move(0, 0);
+    }
     for (const [name, colour] of swatches) {
       expect(colour, `${name} at ${id}`).not.toBe("");
       expect(colour, `${name} at ${id}`).toBe(seen.get(name) ?? colour);

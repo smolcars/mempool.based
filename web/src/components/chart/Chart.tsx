@@ -179,10 +179,22 @@ export default function Chart(props: ChartProps) {
 
   onSettled(() => {
     if (!box) return undefined;
+    const plot = box;
     setWidth(box.clientWidth);
     const ro = new ResizeObserver(() => setWidth(box?.clientWidth ?? 0));
     ro.observe(box);
-    return () => ro.disconnect();
+    // A finger's reading stays after it lifts; a press anywhere outside the plot lets it go.
+    const away = (e: PointerEvent) => {
+      if (e.target instanceof Node && !plot.contains(e.target)) {
+        setPicked(undefined);
+        setHoverLayer(-1);
+      }
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => {
+      ro.disconnect();
+      document.removeEventListener("pointerdown", away, true);
+    };
   });
 
   const height = () => props.height ?? 240;
