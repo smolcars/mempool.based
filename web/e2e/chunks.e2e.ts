@@ -39,9 +39,20 @@ test("a page whose stylesheet and code fail once loads by itself, styled", async
 
 test("when retries run out, Try again asks for everything again", async ({ page }) => {
   const seen = await refuse(page, 4);
+  // The automatic attempts wait 1, 2 and 4 s: the test steps a paused clock through them rather
+  // than sleeping 7 s of the browser job's budget.
+  await page.clock.install();
   await page.goto(BLOCK);
   const again = page.getByRole("button", { name: "Try again" });
-  await expect(again).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(
+      async () => {
+        await page.clock.runFor(1000);
+        return again.isVisible();
+      },
+      { timeout: 15_000, intervals: [50] },
+    )
+    .toBe(true);
   await expect(page.getByText("Part of it could not be downloaded")).toBeVisible();
   await page.unrouteAll();
   await again.click();
