@@ -52,7 +52,7 @@ impl Bands {
     pub fn new(b: [u64; BANDS]) -> Self {
         let [b0, b1, b2, rest @ ..] = b;
         let mut stored = [0; STORED_BANDS];
-        stored[0] = b0 + b1 + b2;
+        stored[0] = b0.saturating_add(b1).saturating_add(b2);
         stored[1..].copy_from_slice(&rest);
         Self {
             stored,
