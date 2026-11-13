@@ -107,6 +107,12 @@
     cursor: crosshair;
     border-radius: var(--radius-s);
   }
+  /* Each point opens its item. */
+  .chart__plot--links {
+    cursor: pointer;
+    /* A tap reads a point: the browser's flash over the whole plot would say it was pressed. */
+    -webkit-tap-highlight-color: transparent;
+  }
   .chart__svg {
     display: block;
     overflow: visible;

@@ -1,4 +1,5 @@
-import { chain, expect, test } from "./fixtures";
+import { chain, expect, stubRetargets, test } from "./fixtures";
+import { tapRow } from "./rows";
 
 // The scenario's blocks are stamped from 2026-01-01, ten minutes apart, by no pool on the list.
 
@@ -9,7 +10,14 @@ test("regtest's mining page says what is and is not meaningful there", async ({ 
     page.getByText(/There are no pools and the hashrate is not meaningful/),
   ).toBeVisible();
   await expect(
-    page.getByText("Regtest never adjusts its difficulty", { exact: false }),
+    page
+      .getByRole("region", { name: "The network now" })
+      .getByText("Regtest never adjusts its difficulty", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Difficulty adjustments" })
+      .getByText("Regtest never adjusts its difficulty, so there are none to list."),
   ).toBeVisible();
   // Nothing was mined in the last week: the page says so and offers all of history.
   const pools = page.getByRole("region", { name: "Pools" });
@@ -272,4 +280,54 @@ test("the share graphics draw each period's six largest pools, each in its own c
   // Every pool drawn has a colour no other pool has, and "Other pools" its own grey.
   expect(new Set(seen.values()).size).toBe(seen.size);
   expect([...seen.keys()]).toContain("Poolin");
+});
+
+// Regtest never retargets: its answer is mainnet's last twelve, at the scenario's heights.
+test("past adjustments read newest first, up and down in words, and each row opens its block", async ({
+  page,
+}) => {
+  await stubRetargets(page);
+  await page.goto("/regtest/mining");
+  const section = page.getByRole("region", { name: "Difficulty adjustments" });
+  const table = section.getByRole("table", { name: "Difficulty adjustments, newest first" });
+  const rows = table.locator("tbody tr");
+  await expect(rows).toHaveCount(10, { timeout: 30_000 });
+  await expect(rows.first()).toContainText(/Up 5\.54%.*148\.36\s?T/);
+  await expect(rows.nth(2)).toContainText("Down 0.03%");
+  // The arrow repeats the word; it is not read aloud, and no colour carries the direction.
+  await expect(rows.first().locator(".mining-arrow")).toHaveAttribute("aria-hidden", "true");
+  await section.getByRole("button", { name: "Show all 12 adjustments" }).click();
+  await expect(rows).toHaveCount(12);
+  await expect(rows.last()).toContainText("Up 1.72%");
+  await tapRow(page, table, "a past adjustment");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("110");
+});
+
+test.describe("block health", () => {
+  test.use({ consoleErrorsAllowed: [/status of 500/] });
+  test("says when nothing is audited, and when the server refuses", async ({ page }) => {
+    let refuse = true;
+    await page.route(/\/regtest\/api\/v1\/mining\/blocks\/predictions\/\w+$/, (route) =>
+      refuse
+        ? route.fulfill({ status: 500, json: { error: "store unavailable" } })
+        : route.continue(),
+    );
+    await page.goto("/regtest/mining");
+    const health = page.getByRole("region", { name: "Block health" });
+    await expect(health.getByText("Could not load the block audits")).toBeVisible({
+      timeout: 30_000,
+    });
+    refuse = false;
+    await health.getByRole("button", { name: "Try again" }).click();
+    // Only the mining tests make audits, and they run after this one: regtest has none yet.
+    await expect(health.getByText("No block audits stored for the last week")).toBeVisible();
+    await expect(health.locator(".section__head")).toHaveText(
+      "Block health0 audited blocks in the last week",
+    );
+    await health.getByRole("link", { name: "See all stored history" }).click();
+    await expect(health.getByText("No block audits stored for all time")).toBeVisible();
+    await expect(health.locator(".section__head")).toHaveText(
+      "Block health0 audited blocks in all time",
+    );
+  });
 });

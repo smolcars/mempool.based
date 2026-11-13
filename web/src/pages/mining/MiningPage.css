@@ -113,6 +113,13 @@
   .mining-stat__value .amount {
     font-size: var(--text-lg);
   }
+  /* The smallest phones: regtest's difficulty, a power of ten, ran out of its half of 320 px in
+     the wide faces Linux falls back to. */
+  @media (max-width: 380px) {
+    .mining-stat__value {
+      font-size: var(--text-lg);
+    }
+  }
   .mining-stat__sub {
     font-size: var(--text-sm);
     font-weight: var(--weight-regular);
@@ -475,6 +482,37 @@
     .mining-head {
       flex-direction: column;
       align-items: flex-start;
+    }
+  }
+
+  /* Difficulty adjustments: the next one expected, then the past ones. */
+  .mining-next {
+    margin-bottom: var(--space-4);
+    font-size: var(--text-md);
+  }
+  .mining-next__label,
+  .mining-next__when {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .mining-next strong {
+    font-weight: var(--weight-bold);
+  }
+  .mining-arrow {
+    margin-right: 0.2em;
+  }
+  .mining-retarget {
+    display: grid;
+    justify-items: start;
+  }
+  .mining-retarget__age {
+    display: none;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  @media (max-width: 640px) {
+    .mining-retarget__age {
+      display: block;
     }
   }
 }

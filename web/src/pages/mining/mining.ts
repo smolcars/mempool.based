@@ -2,7 +2,7 @@
 // page computes from them. Pure.
 import type { Coverage } from "../../lib/api";
 import { sorted } from "../../components/chart/geometry";
-import { formatDay } from "../../components/chart/scale";
+import { formatDay, formatMoment } from "../../components/chart/scale";
 import type { Network } from "../../lib/network";
 
 const DAY = 86_400;
@@ -24,6 +24,11 @@ export const DEFAULT_PERIOD: PeriodId = "1w";
 export function parsePeriod(value: unknown): Period {
   const id: unknown = Array.isArray(value) ? (value as unknown[])[0] : value;
   return PERIODS.find((p) => p.id === id) ?? periodById(DEFAULT_PERIOD);
+}
+
+/** The period an answer's route names, if it names one. */
+export function answeredPeriod(a: { path: string } | undefined): Period | undefined {
+  return PERIODS.find((p) => a?.path.endsWith(`/${p.id}`));
 }
 
 export function periodById(id: PeriodId): Period {
@@ -459,4 +464,138 @@ export function safeLink(link: string): { href: string; host: string } | undefin
   if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
   if (url.username !== "" || url.password !== "") return undefined;
   return { href: url.href, host: url.host.replace(/^www\./, "") };
+}
+
+// Past difficulty adjustments and block health (docs/API.md "Mining" and "Block audits").
+
+/** `difficulty-adjustments`: `[time, height, difficulty, ratio]`, newest first. */
+export type Adjustment = readonly [time: number, height: number, difficulty: number, ratio: number];
+/** `predictions`: `[timestamp, height, matchRate]`, lowest height first. */
+export type Prediction = readonly [time: number, height: number, matchRate: number];
+
+const numbers = (v: unknown, n: number): boolean =>
+  Array.isArray(v) && v.length === n && v.every((x) => isNum(x));
+export const isAdjustments = listOf((v): v is Adjustment => numbers(v, 4));
+export const isPredictions = listOf((v): v is Prediction => numbers(v, 3));
+
+/** An adjustment's ratio as a change in percent: 1.05539 is 5.539. */
+export const adjustmentPercent = (ratio: number): number => (ratio - 1) * 100;
+
+/** At most this many points in the health chart: past it, each point is a run of blocks. */
+export const HEALTH_POINTS = 1000;
+
+export interface Health {
+  /** Each point's time, ascending; a gap's is between its neighbours. */
+  x: number[];
+  /** The point's match rate, its lowest when it stands for several blocks; null for a gap. */
+  rate: (number | null)[];
+  /** The block that rate is of, which the point opens. */
+  height: (number | null)[];
+  /** How many of the run's blocks were audited. */
+  audited: (number | null)[];
+  /** Blocks a point stands for. */
+  per: number;
+  /** Audited blocks in all. */
+  count: number;
+  /** The earliest audited block's time. */
+  first: number | undefined;
+}
+
+/**
+ * The match rate per block, in height order, with a gap wherever a block between two audited
+ * ones has no audit. Past `max` blocks, each point is the lowest of a run of `per` heights, so a
+ * bad block still shows, and a run missing a block breaks the line after it. A block stamped
+ * before the one below it is drawn at that one's time, since times must ascend.
+ */
+export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS): Health {
+  const by = sorted(points, (a, b) => a[1] - b[1]);
+  const lo = by[0]?.[1] ?? 0;
+  const hi = by.at(-1)?.[1] ?? 0;
+  const per = Math.max(1, Math.ceil((hi - lo + 1) / max));
+  const out: Health = {
+    x: [],
+    rate: [],
+    height: [],
+    audited: [],
+    per,
+    count: by.length,
+    // A loop, not a spread: a long record has more audits than a call takes arguments.
+    first: by.reduce<number | undefined>(
+      (m, p) => (m === undefined || p[0] < m ? p[0] : m),
+      undefined,
+    ),
+  };
+  const push = (x: number, rate: number | null, height: number | null, n: number | null) => {
+    out.x.push(Math.max(x, out.x.at(-1) ?? x));
+    out.rate.push(rate);
+    out.height.push(height);
+    out.audited.push(n);
+  };
+  let run: { g: number; t: number; h: number; r: number; n: number } | undefined;
+  const close = () => {
+    if (run) push(run.t, run.r, run.h, run.n);
+  };
+  let below: number | undefined;
+  /** A height with no audit since the last break: the line breaks after the point holding it. */
+  let hole = false;
+  for (const [t, h, r] of by) {
+    if (below !== undefined && h > below + 1) hole = true;
+    below = h;
+    const g = Math.floor(h / per);
+    if (run && g === run.g) {
+      run.n += 1;
+      if (r < run.r) Object.assign(run, { t, h, r });
+      continue;
+    }
+    close();
+    // A block with no audit between two that have one: a gap, drawn as a break.
+    if (run && hole) push((Math.max(run.t, out.x.at(-1) ?? run.t) + t) / 2, null, null, null);
+    hole = false;
+    run = { g, t, h, r, n: 1 };
+  }
+  close();
+  return out;
+}
+
+/**
+ * How many blocks the period holds, from the pools ranking's answer: only when that answer is of
+ * the same period and covers all of it (a history still filling in counts fewer blocks).
+ */
+export function periodBlocks(
+  ranking:
+    | { path: string; value: { blockCount: number }; coverage: Coverage | undefined }
+    | undefined,
+  p: Period,
+): number | undefined {
+  return answeredPeriod(ranking)?.id === p.id && ranking?.coverage?.complete === true
+    ? ranking.value.blockCount
+    : undefined;
+}
+
+/** A share of a whole, never rounded up to all of it: `15%`, `under 1%`, `99%`. */
+function shareOf(part: number, whole: number): string {
+  const pct = whole > 0 ? (part / whole) * 100 : 0;
+  return pct > 0 && pct < 1 ? "under 1%" : `${Math.floor(Math.min(100, pct))}%`;
+}
+
+/** A moment to the minute, its year left out when it is this one, so the line fits a phone. */
+const shortMoment = (t: number, now: number): string =>
+  formatMoment(t).replace(` ${new Date(now * 1000).getUTCFullYear()},`, ",");
+
+/**
+ * How much of the period the audits cover, in one short line: what share of its blocks (when
+ * `blocks`, the period's count, is known) and from when; undefined when every block has one. "15% audited, from 12 Nov,
+ * 11:14 UTC."
+ */
+export function healthCoverage(
+  h: Health,
+  blocks: number | undefined,
+  now = Date.now() / 1000,
+): string | undefined {
+  if (h.first === undefined) return undefined;
+  const from = shortMoment(h.first, now);
+  if (blocks === undefined || blocks <= 0) return `Audited from ${from}.`;
+  if (h.count >= blocks) return undefined;
+  const pct = shareOf(h.count, blocks);
+  return `${pct.charAt(0).toUpperCase()}${pct.slice(1)} audited, from ${from}.`;
 }

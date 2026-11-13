@@ -1,5 +1,5 @@
 // Every browser test imports `test` and `expect` from here, never from @playwright/test.
-import { type Browser, test as base, expect } from "@playwright/test";
+import { type Browser, type Page, test as base, expect } from "@playwright/test";
 
 export { expect } from "@playwright/test";
 
@@ -217,4 +217,31 @@ async function caughtUp(
   } finally {
     await context.close();
   }
+}
+
+/**
+ * Past retargets for regtest, which never retargets: mainnet's last twelve, as
+ * `/api/v1/mining/difficulty-adjustments` answers them, at heights the scenario's chain has, so
+ * each row opens a real block.
+ */
+export const RETARGETS = [
+  [1_793_301_298, 110, 148_364_561_003_867.4, 1.05539],
+  [1_792_154_251, 108, 140_577_680_051_919.6, 1.05924],
+  [1_791_011_796, 106, 132_716_002_350_731.28, 0.99969],
+  [1_789_801_745, 104, 132_757_073_449_487.52, 1.04163],
+  [1_788_640_367, 102, 127_450_789_715_843.14, 1.01307],
+  [1_787_446_127, 100, 125_807_076_547_197.56, 0.98688],
+  [1_786_217_755, 98, 127_479_855_693_691.4, 1.00989],
+  [1_785_019_866, 96, 126_231_507_121_868.2, 0.99262],
+  [1_783_800_551, 94, 127_170_500_429_035.2, 0.94996],
+  [1_782_525_607, 92, 133_869_853_540_305.4, 1.07153],
+  [1_781_396_637, 90, 124_932_866_006_548.16, 0.89909],
+  [1_780_050_586, 88, 138_955_357_012_247.3, 1.01719],
+] as const;
+
+/** Answers regtest's past retargets with `RETARGETS`. */
+export async function stubRetargets(page: Page): Promise<void> {
+  await page.route(/\/regtest\/api\/v1\/mining\/difficulty-adjustments$/, (route) =>
+    route.fulfill({ json: RETARGETS }),
+  );
 }

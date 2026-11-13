@@ -1,6 +1,6 @@
 // Every table fits a phone's width with nothing cut off, and no page scrolls sideways (WCAG 1.4.10).
 import type { Locator, Page } from "@playwright/test";
-import { chain, expect, test } from "./fixtures";
+import { chain, expect, stubRetargets, test } from "./fixtures";
 import { AUDIT } from "../src/components/audit/fakes";
 import { tablesFit, tapRow } from "./rows";
 
@@ -117,8 +117,8 @@ test.describe("without the web font", () => {
   });
 });
 
-/** Lists on the regtest chain, each with what its rows open. */
-const LISTS: { path: string; table: string | RegExp }[] = [
+/** Lists on the regtest chain, each with what its rows open, and answers a list needs stubbed. */
+const LISTS: { path: string; table: string | RegExp; stub?: (page: Page) => Promise<void> }[] = [
   { path: "/regtest/", table: /newest transactions/ },
   { path: "/regtest/blocks", table: "Recent blocks, newest first" },
   { path: `/regtest/block/${chain.blocks[106]}`, table: "Transactions in this block" },
@@ -133,6 +133,8 @@ const LISTS: { path: string; table: string | RegExp }[] = [
   },
   { path: "/regtest/mining?period=all", table: /^Pools ranked by blocks found/ },
   { path: "/regtest/mining/pool/unknown", table: /^Blocks found by/ },
+  // Regtest never retargets, so its past adjustments are mainnet's.
+  { path: "/regtest/mining", table: "Difficulty adjustments, newest first", stub: stubRetargets },
 ];
 
 // Only a row's small link text was a target once, and on four lists the whole row did nothing.
@@ -142,7 +144,8 @@ test.describe("a tap anywhere on any list's row", () => {
   test.use({ consoleErrorsAllowed: [/status of (429|503)|due to access control checks/] });
   test("opens its item, at a phone's width", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    for (const { path, table } of LISTS) {
+    for (const { path, table, stub } of LISTS) {
+      await stub?.(page);
       await page.goto(path);
       await tapRow(page, page.getByRole("table", { name: table }), path);
     }
@@ -153,7 +156,8 @@ test.describe("a tap anywhere on any list's row", () => {
 for (const width of [320, 390, 720]) {
   test(`every table fits its panel or shows that it scrolls, at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    for (const { path, table } of LISTS) {
+    for (const { path, table, stub } of LISTS) {
+      await stub?.(page);
       await page.goto(path);
       await expect(
         page.getByRole("table", { name: table }).locator("tbody tr").first(),

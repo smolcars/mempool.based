@@ -1,9 +1,13 @@
 // A time-series chart in SVG: lines, areas, steps, percentile bands and stacked shares, with a
 // readout that follows the pointer, the finger or the arrow keys (docs/FRONTEND.md "Charts").
 // The default export so pages load it with lazy().
+import { useNavigate } from "@solidjs/router";
 import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { FEE_KEY_BOUNDS } from "../../lib/format";
+import { onNetwork } from "../../lib/network";
+import { useNetwork } from "../../lib/page";
 import { DataTable } from "../DataTable";
+import { Link } from "../Link";
 import {
   areaPath,
   extent,
@@ -128,7 +132,16 @@ export interface ChartProps {
   summary?: string;
   /** Plot height in px. */
   height?: number;
+  /**
+   * Where a point leads (a path from `paths`), when each point is an item of its own: a click,
+   * a second tap on the point a finger picked, or Enter opens it, and its row in the figures links
+   * to it.
+   */
+  href?: (i: number) => string | undefined;
 }
+
+/** How far from the picked point, in px, a second tap still means that point. */
+const TAP_SLOP = 16;
 
 const MARGIN = { top: 10, bottom: 26, left: 66, right: 14, rightAxis: 58 };
 /** Shades of the text color for stacked layers, alternating so neighbours stand apart. */
@@ -177,6 +190,10 @@ export default function Chart(props: ChartProps) {
   const [picked, setPicked] = createSignal<number>();
   const [hoverLayer, setHoverLayer] = createSignal(-1);
   const [figures, setFigures] = createSignal(false);
+  const navigate = useNavigate();
+  const network = useNetwork();
+  /** The point picked before the press under way, and where the press began. */
+  let press: { was: number | undefined; x: number } | undefined;
   let box: HTMLDivElement | undefined;
 
   onSettled(() => {
@@ -385,6 +402,25 @@ export default function Chart(props: ChartProps) {
     if (i >= 0) setPicked(i);
     setHoverLayer(layerAt(f.stack, i, f.yl.scale.invert(e.clientY - r.top)));
   };
+  const open = (i: number | undefined) => {
+    const to = i === undefined ? undefined : props.href?.(i);
+    if (to !== undefined) navigate(onNetwork(network(), to));
+  };
+  const down = (e: PointerEvent) => {
+    press = { was: picked(), x: e.clientX };
+    pick(e);
+  };
+  // A press that ends where it began, on the point already picked (by the hover a mouse brings,
+  // or a finger's first tap), opens it: the first tap only reads it, so a tap never navigates.
+  const up = (e: PointerEvent) => {
+    const f = frame();
+    const el = e.currentTarget;
+    const p = press;
+    press = undefined;
+    if (!props.href || !f || !p || p.was === undefined || !(el instanceof Element)) return;
+    const at = f.sx(props.x[p.was] ?? Number.NaN) + el.getBoundingClientRect().left;
+    if (Math.abs(e.clientX - p.x) <= TAP_SLOP && Math.abs(e.clientX - at) <= TAP_SLOP) open(p.was);
+  };
   const leave = (e: PointerEvent) => {
     // A finger lifts: keep its reading, as a tap shows it.
     if (e.pointerType === "touch") return;
@@ -406,7 +442,10 @@ export default function Chart(props: ChartProps) {
     if (step !== undefined) next = index() + step;
     else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = n - 1;
-    else if (e.key === "Escape") {
+    else if (e.key === "Enter") {
+      open(index());
+      return;
+    } else if (e.key === "Escape") {
       setPicked(undefined);
       return;
     }
@@ -416,7 +455,14 @@ export default function Chart(props: ChartProps) {
   };
 
   const columns = () => [
-    { header: "Time", cell: (i: number) => when(i) },
+    {
+      header: "Time",
+      cell: (i: number) => (
+        <Show when={props.href?.(i)} fallback={when(i)}>
+          {(to) => <Link href={to()}>{when(i)}</Link>}
+        </Show>
+      ),
+    },
     ...readings(0).map((r, k) => ({
       header: r.name,
       numeric: true,
@@ -456,7 +502,7 @@ export default function Chart(props: ChartProps) {
         </ul>
       </div>
       <div
-        class="chart__plot"
+        class={["chart__plot", { "chart__plot--links": props.href !== undefined }]}
         ref={box}
         style={{ "--h": `${height()}px` }}
         tabindex="0"
@@ -478,7 +524,8 @@ export default function Chart(props: ChartProps) {
               viewBox={`0 0 ${f().w} ${f().h}`}
               aria-hidden="true"
               onPointerMove={pick}
-              onPointerDown={pick}
+              onPointerDown={down}
+              onPointerUp={up}
               onPointerLeave={leave}
             >
               <defs>
@@ -668,6 +715,7 @@ export default function Chart(props: ChartProps) {
                 caption={props.label}
                 columns={columns()}
                 rows={Array.from({ length: props.x.length }, (_, i) => props.x.length - 1 - i)}
+                {...(props.href ? { rowHref: props.href } : {})}
               />
             </div>
           </Show>

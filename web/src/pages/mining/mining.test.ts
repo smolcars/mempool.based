@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  adjustmentPercent,
   byTime,
   coverageNote,
   fillWeeks,
   hashrateInterval,
   hashrateSeries,
+  healthCoverage,
+  healthSeries,
+  isAdjustments,
+  isPredictions,
   isPoolStats,
   isRanking,
   networkHashrate,
   networkNote,
   OTHER_POOLS,
   parsePeriod,
+  periodBlocks,
   periodDomain,
   poolLayers,
   type Ranking,
@@ -295,5 +301,92 @@ describe("ordering and gaps", () => {
       [3 * W, 0.2],
     ]);
     expect(fillWeeks([])).toStrictEqual([]);
+  });
+});
+
+describe("difficulty adjustments and block health", () => {
+  it("reads the routes' tuples and nothing else", () => {
+    expect(isAdjustments([[1_793_301_298, 973_728, 1.48e14, 1.05539]])).toBe(true);
+    expect(isAdjustments([[1, 2, 3]])).toBe(false);
+    expect(isAdjustments([[1, 2, 3, "1.05"]])).toBe(false);
+    expect(isPredictions([[1_794_482_500, 975_542, 100]])).toBe(true);
+    expect(isPredictions([[1, 2, null]])).toBe(false);
+    expect(isPredictions({})).toBe(false);
+    expect(adjustmentPercent(1.05539)).toBeCloseTo(5.539, 9);
+    expect(adjustmentPercent(0.98688)).toBeCloseTo(-1.312, 9);
+  });
+
+  it("draws a block per point, with a gap wherever a block between two has no audit", () => {
+    const h = healthSeries([
+      [1_000, 100, 99.5],
+      [1_600, 101, 97],
+      // 102 was not audited; 103 was stamped before 101.
+      [1_500, 103, 100],
+      [2_000, 104, 60],
+    ]);
+    expect(h.per).toBe(1);
+    expect(h.count).toBe(4);
+    expect(h.first).toBe(1_000);
+    expect(h.rate).toStrictEqual([99.5, 97, null, 100, 60]);
+    expect(h.height).toStrictEqual([100, 101, null, 103, 104]);
+    // Times ascend: the block stamped early is drawn at the time of the one before it.
+    expect(h.x).toStrictEqual([1_000, 1_600, 1_600, 1_600, 2_000]);
+  });
+
+  it("past its limit, a point is the lowest block of a run, and opens that one", () => {
+    const points = Array.from(
+      { length: 10 },
+      (_, i) => [i * 600, 200 + i, i === 3 ? 40 : 99] as const,
+    );
+    const h = healthSeries(points, 5);
+    expect(h.per).toBe(2);
+    expect(h.rate).toStrictEqual([99, 40, 99, 99, 99]);
+    expect(h.height).toStrictEqual([200, 203, 204, 206, 208]);
+    expect(h.audited).toStrictEqual([2, 2, 2, 2, 2]);
+    expect(healthSeries([]).x).toStrictEqual([]);
+    // A block without an audit inside a run still breaks the line, after that run.
+    const holed = healthSeries(
+      Array.from({ length: 1002 }, (_, k) => [k * 600, k, 99] as const).filter(
+        ([, k]) => k !== 501,
+      ),
+    );
+    expect(holed.per).toBe(2);
+    const gap = holed.rate.indexOf(null);
+    expect(holed.height[gap - 1]).toBe(500);
+    expect(holed.audited[gap - 1]).toBe(1);
+    expect(holed.rate.filter((r) => r === null)).toHaveLength(1);
+  });
+
+  it("finds the first audit in a record longer than a call takes arguments", () => {
+    const many = Array.from({ length: 200_000 }, (_, i) => [1_000 + i, i, 100] as const);
+    expect(healthSeries(many).first).toBe(1_000);
+  });
+
+  it("says what share of the period's blocks have an audit, and from when", () => {
+    const now = Date.UTC(2026, 10, 13) / 1000;
+    const h = healthSeries([[Date.UTC(2026, 10, 12, 11, 14) / 1000, 975_542, 100]]);
+    expect(healthCoverage(h, 1_008, now)).toBe("Under 1% audited, from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, 5, now)).toBe("20% audited, from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, undefined, now)).toBe("Audited from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, 1, now)).toBeUndefined();
+    expect(healthCoverage(h, 5, Date.UTC(2027, 0, 2) / 1000)).toBe(
+      "20% audited, from 12 Nov 2026, 11:14 UTC.",
+    );
+    expect(healthCoverage(healthSeries([]), 5, now)).toBeUndefined();
+  });
+
+  it("counts the period's blocks only from a ranking of that period that covers all of it", () => {
+    const week = parsePeriod("1w");
+    const ranking = (path: string, complete: boolean | undefined) => ({
+      path,
+      value: { blockCount: 144 },
+      coverage: complete === undefined ? undefined : { fromHeight: 0, fromTime: 0, complete },
+    });
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", true), week)).toBe(144);
+    // Backfill has stored only the latest day: 144 is not the week's count.
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", false), week)).toBeUndefined();
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", undefined), week)).toBeUndefined();
+    expect(periodBlocks(ranking("/v1/mining/pools/24h", true), week)).toBeUndefined();
+    expect(periodBlocks(undefined, week)).toBeUndefined();
   });
 });
