@@ -386,6 +386,15 @@ docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 gh attestation verify oci://ghcr.io/smolcars/rbitcoin-space:0.1.0 --repo smolcars/rbitcoin-space
 ```
 
+**Images of `master`.** Every merge to `master` that changes the image is published too, as `sha-<full commit>`, never moved, and `master`, which moves to the newest such merge and never back. They have passed the same checks and carry the same attestation, but no release notes and no promise about what changed: a release is what to run, and a `master` image is for trying a change before it is released. Its `version` label is the one in `Cargo.toml`, not a release. To run one, pin it by digest, so a pull never changes it under you:
+
+```sh
+skopeo inspect --raw docker://ghcr.io/smolcars/rbitcoin-space:master | sha256sum   # the index digest
+echo "SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space@sha256:<digest>" >> .env
+```
+
+`docker buildx imagetools inspect ghcr.io/smolcars/rbitcoin-space:master` prints the same digest, and the `org.opencontainers.image.revision` label names the commit. The compose file and `.env.example` come from a checkout of that commit. Moving between a `master` image and a release is an upgrade like any other: back up first, since the store's migrations are one-way (below).
+
 **Migrations run by themselves and are one-way.** A new release may add tables to the store; it applies them at start, each once, and logs a `store_migration_applied` line for each. An older release refuses a store a newer one has migrated: `store_open_failed`, and that network runs without a store. So **back up before upgrading**.
 
 To upgrade, read the release's notes, then:
