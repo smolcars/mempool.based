@@ -365,6 +365,10 @@
   .projected-fact__value {
     min-height: 1.5em;
   }
+  /* A figure and its unit on one line (Firefox breaks at the unit's own element otherwise). */
+  .projected-fact__value .num {
+    white-space: nowrap;
+  }
   /* Always one line tall, empty or not, so facts never move when their data arrives. */
   .projected-fact__sub {
     min-height: 1.5em;
