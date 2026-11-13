@@ -177,3 +177,30 @@ test("a tap anywhere on a list's row opens its item, and the keyboard meets it o
   await expect(table.locator(".table__rowlink").first()).toHaveAttribute("tabindex", "-1");
   await expect(table.locator(".table__rowlink").first()).toHaveAttribute("aria-hidden", "true");
 });
+
+// Fitting once ran only when the panel changed width: figures that arrived later and widened the
+// table left it scrolling, droppable columns and all.
+test("a table that grows after it is drawn drops another column to fit", async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto("/regtest/blocks");
+  const table = page.getByRole("table", { name: "Recent blocks, newest first" });
+  await expect(table.locator("tbody tr").first()).toBeVisible();
+  await expect(table.getByRole("link", { name: "Unknown" }).first()).toBeVisible();
+  const gone = () => table.locator("thead th.table__gone").count();
+  const before = await gone();
+  // A wide name lands in a row, as a long pool name might.
+  await table
+    .locator("tbody tr")
+    .first()
+    .locator("td")
+    .filter({ visible: true })
+    .nth(1)
+    .evaluate((td) => {
+      const wide = document.createElement("span");
+      wide.style.display = "inline-block";
+      wide.style.width = "260px";
+      td.append(wide);
+    });
+  await expect.poll(gone).toBeGreaterThan(before);
+  await tablesFit(page, "/regtest/blocks after a wider row");
+});

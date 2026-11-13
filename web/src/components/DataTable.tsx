@@ -57,19 +57,25 @@ export function DataTable<T>(props: DataTableProps<T>) {
   const fit = (scroller: HTMLElement) => {
     const last = Math.max(0, ...props.columns.map(step));
     let width = -1;
+    const over = () => scroller.scrollWidth > scroller.clientWidth + 1;
     const refit = () => {
-      if (scroller.clientWidth === width) return;
+      // A new width starts over, so columns come back where there is room again; content that
+      // arrived and widened the table (a miner's name, a fee) drops more from where it is.
+      const same = scroller.clientWidth === width;
+      if (same && !over()) return;
       width = scroller.clientWidth;
-      for (let d = 0; d <= last; d++) {
+      for (let d = same ? dropped() : 0; d <= last; d++) {
         setDropped(d);
         flush();
-        if (scroller.scrollWidth <= scroller.clientWidth + 1) break;
+        if (!over()) break;
       }
     };
     // Absent where there is no layout (tests): the phone's CSS still drops the optional columns.
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(refit);
     observer.observe(scroller);
+    // The table too: its content can widen it while the panel stays as it was.
+    if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
     onCleanup(() => observer.disconnect());
   };
   return (
