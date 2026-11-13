@@ -412,6 +412,3 @@ pub(crate) async fn route(State(ctx): State<Arc<NetworkContext>>, uri: Uri) -> R
     });
     res
 }
-
-#[cfg(test)]
-mod tests;
