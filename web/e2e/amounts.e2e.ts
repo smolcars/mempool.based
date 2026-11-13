@@ -187,6 +187,24 @@ test("an exact amount closes on a tap elsewhere, on scrolling, and when another 
     window.scrollBy(0, 120);
   });
   await expect(open).toHaveCount(0);
+  // A figure just under the sticky header opens its note below it, never over the header. A short
+  // window, so the page scrolls far enough to put the figure there.
+  await page.setViewportSize({ width: 390, height: 360 });
+  const first = controls.first();
+  const gap = await first.evaluate((el) => {
+    const header = () =>
+      document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+    window.scrollBy(0, el.getBoundingClientRect().top - header() - 4);
+    return el.getBoundingClientRect().top - header();
+  });
+  expect(gap, "the figure sits just under the header").toBeLessThan(12);
+  await first.click();
+  await expect(open).toHaveCount(1);
+  const [top, header] = await open.evaluate((el) => [
+    el.getBoundingClientRect().top,
+    document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0,
+  ]);
+  expect(top).toBeGreaterThanOrEqual(header ?? 0);
 });
 
 // A copied value is pasted into wallets, spreadsheets and calculators: it once carried the page's

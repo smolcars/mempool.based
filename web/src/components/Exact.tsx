@@ -31,16 +31,21 @@ export function Exact(props: {
   let close: (() => void) | undefined;
   onCleanup(() => close?.());
 
-  /** Above the figure, or below it near the top; never past either side of the screen. */
+  /**
+   * Above the figure, or below it where the room above is short; never past either side of the
+   * screen, and never over the sticky header (it once covered "Blocks" in Safari).
+   */
   const place = () => {
     if (!pop || !button) return;
     const b = button.getBoundingClientRect();
     const p = pop.getBoundingClientRect();
     const width = document.documentElement.clientWidth;
     const x = Math.max(EDGE, Math.min(b.left, width - p.width - EDGE));
+    const header = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
     const above = b.top - p.height - GAP;
+    const fits = above >= Math.max(EDGE, header + GAP);
     pop.style.setProperty("--x", `${Math.round(x)}px`);
-    pop.style.setProperty("--y", `${Math.round(above >= EDGE ? above : b.bottom + GAP)}px`);
+    pop.style.setProperty("--y", `${Math.round(fits ? above : b.bottom + GAP)}px`);
   };
   const show = () => {
     setOpen(true);
