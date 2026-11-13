@@ -3,10 +3,10 @@
 // popover: while a top-layer element shows, iOS Safari repaints the band behind its toolbar and the
 // page stops above it (WebKit bug 302272).
 //
-// A press outside a menu only closes it (`absorb`): the reader is dismissing a choice, as with a
-// native menu, and a tap that also followed the link beneath it took them to another page. An
-// exact amount lets the press through: it is a note on a figure, like a tooltip, and the reader is
-// already on to what they tapped.
+// A press outside only closes it (`absorb`): the reader is dismissing it, as with a native menu, and
+// a tap that also followed the link beneath it took them to another page. The one exception is a
+// press on another pop-up of the same kind (`through`): one tap moves an exact amount's note from
+// one figure to the next, as it did before, so figures read side by side.
 
 let closeOpen: (() => void) | undefined;
 
@@ -17,7 +17,7 @@ let closeOpen: (() => void) | undefined;
 export function openPop(
   onClose: () => void,
   inside: () => readonly (HTMLElement | undefined)[],
-  options: { scroll?: boolean; absorb?: boolean } = {},
+  options: { scroll?: boolean; absorb?: boolean; through?: string } = {},
 ): () => void {
   closeOpen?.();
   const press = (e: PointerEvent) => {
@@ -27,7 +27,14 @@ export function openPop(
       return;
     close();
     // A primary press only: a right-click ends in a menu of the browser's, never in a click.
-    if (options.absorb === true && e.button === 0) absorbClick();
+    if (options.absorb !== true || e.button !== 0) return;
+    if (
+      options.through !== undefined &&
+      e.target instanceof Element &&
+      e.target.closest(options.through)
+    )
+      return;
+    absorbClick();
   };
   const key = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
@@ -61,12 +68,15 @@ export function openPop(
 }
 
 /**
- * Swallows the click that ends the press under way, so it activates nothing. Only a pointer's
- * click (a keyboard's has `detail` 0), and only until the next press, a cancelled press (a
- * scroll), a key or the browser's own menu: a later, unrelated activation always goes through.
+ * Swallows the click that ends the press under way, so it activates nothing, and the press's
+ * release, which a chart opens a point on. Only a pointer's click (a keyboard's has `detail` 0),
+ * and only until that click, the next press, a cancelled press (a scroll), a key or the browser's
+ * own menu: a later, unrelated activation always goes through. It never holds an event back: it
+ * stops the one it is handed, or lets it pass, at once.
  */
 function absorbClick(): void {
   const ends = ["pointerdown", "pointercancel", "keydown", "contextmenu"] as const;
+  const release = (e: PointerEvent) => e.stopPropagation();
   const eat = (e: MouseEvent) => {
     if (e.detail === 0) return;
     e.preventDefault();
@@ -74,9 +84,11 @@ function absorbClick(): void {
     done();
   };
   const done = () => {
+    window.removeEventListener("pointerup", release, true);
     window.removeEventListener("click", eat, true);
     for (const end of ends) window.removeEventListener(end, done, true);
   };
+  window.addEventListener("pointerup", release, true);
   window.addEventListener("click", eat, true);
   // Added while this press is being dispatched: the window's capture phase is already past for it.
   for (const end of ends) window.addEventListener(end, done, true);

@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
+import { CopyButton } from "../../components/CopyButton";
 import { Exact } from "../../components/Exact";
 import type { Column } from "../../components/DataTable";
 import { Link } from "../../components/Link";
@@ -22,6 +23,7 @@ import {
   msatShort,
   NAME_IN_LIST,
   type NodeRef,
+  plainMsat,
   type RankedNode,
   searchProblem,
   type Status,
@@ -358,14 +360,14 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
 
 /**
  * A channel term in millisatoshis, in magnitude (`0.190 BTC`), never broken inside: the exact
- * figure is its title, and a tap or a key shows it in place (`18 958 366 000 msat`).
+ * figure is its title, and a tap or a key opens it (`18 958 366 000 msat`) with a copy button that
+ * copies it as plain digits, its unit in the button's label. `what` names the term in that label.
  */
-export function Msat(props: { msat: number }) {
+export function Msat(props: { msat: number; what: string }) {
   return (
     <Exact
       class="ln-msat num"
       title={msat(props.msat)}
-      decorative
       figure={
         <>
           {msatShort(props.msat)}
@@ -374,6 +376,7 @@ export function Msat(props: { msat: number }) {
       }
     >
       <span class="num">{msat(props.msat)}</span>
+      <CopyButton value={plainMsat(props.msat)} label={`Copy the exact ${props.what}, in msat`} />
     </Exact>
   );
 }

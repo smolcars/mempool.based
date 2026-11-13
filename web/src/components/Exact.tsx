@@ -10,8 +10,8 @@ const GAP = 4;
 /**
  * A figure shown short, its exact value a tap or a key away, in a pop-up fixed over the page: no
  * card or scroller clips it and opening it moves nothing. It sits above the figure, inside the
- * screen whichever column it opens from; one is open at a time, and a press elsewhere, Escape or
- * a scroll closes it (components/pop.ts).
+ * screen whichever column it opens from; one is open at a time, and a press elsewhere (which does
+ * nothing else, unless it opens another figure), Escape or a scroll closes it (components/pop.ts).
  */
 export function Exact(props: {
   /** The button's class: how the short figure looks. */
@@ -21,8 +21,6 @@ export function Exact(props: {
   figure: JSX.Element;
   /** The exact value, and a copy button if it has one. */
   children: JSX.Element;
-  /** The figure already says it to a screen reader: the pop-up is for the eyes only. */
-  decorative?: boolean;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
@@ -46,6 +44,8 @@ export function Exact(props: {
     const fits = above >= Math.max(EDGE, header + GAP);
     pop.style.setProperty("--x", `${Math.round(x)}px`);
     pop.style.setProperty("--y", `${Math.round(fits ? above : b.bottom + GAP)}px`);
+    // Its copy note goes on the side away from the figure (CopyButton.css).
+    pop.toggleAttribute("data-below", !fits);
   };
   const show = () => {
     setOpen(true);
@@ -58,7 +58,7 @@ export function Exact(props: {
         setOpen(false);
       },
       () => [button, pop],
-      { scroll: true },
+      { scroll: true, absorb: true, through: "[data-exact]" },
     );
   };
 
@@ -71,17 +71,12 @@ export function Exact(props: {
         title={props.title}
         aria-expanded={open() ? "true" : "false"}
         aria-controls={id}
+        data-exact=""
         onClick={() => (close ? close() : show())}
       >
         {props.figure}
       </button>
-      <span
-        ref={pop}
-        id={id}
-        class="exact"
-        hidden={!open()}
-        aria-hidden={props.decorative === true ? "true" : undefined}
-      >
+      <span ref={pop} id={id} class="exact" hidden={!open()}>
         {props.children}
       </span>
     </>

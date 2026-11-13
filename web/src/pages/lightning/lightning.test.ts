@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   btcAxis,
   cleanAlias,
+  msat,
   msatShort,
+  plainMsat,
   coverageSentence,
   cut,
   feeRows,
@@ -133,6 +135,22 @@ describe("msatShort", () => {
     expect(msatShort(958_366_000)).toBe("958\u202F366 sats");
     expect(msatShort(18_958_366_000)).toBe("0.190 BTC");
     expect(msatShort(2_100_000_000_000_000_000)).toBe("21\u202F000\u202F000 BTC");
+  });
+});
+
+describe("plainMsat", () => {
+  // What the copy button copies: the digits shown, ungrouped, past 2^53 too.
+  it("copies exactly the digits msat shows", () => {
+    for (const n of [
+      0,
+      1,
+      1_234_567_890,
+      Number("1234567890123456789"),
+      2_100_000_000_000_000_000,
+    ]) {
+      expect(plainMsat(n)).toMatch(/^\d+$/);
+      expect(plainMsat(n)).toBe(msat(n).replace(" msat", "").replaceAll("\u202F", ""));
+    }
   });
 });
 
