@@ -248,6 +248,8 @@ async fn main() {
                 println!("{v}");
                 if inputs {
                     v["depth"] = json!(depth_of(&before));
+                    // What the live recommender treats as an outage, for the replay to do alike.
+                    v["stale"] = json!(before.stale || before.tip.is_none());
                 }
                 write(v, &mut lines);
             }
@@ -380,11 +382,14 @@ fn tunings() -> Vec<(String, fees::Tuning)> {
 
 /// Replays recorded inputs: the arrivals into one inflow, each sample's depth through every
 /// tuning and its own smoothing, then scores them all with what was served. A sample where ours
-/// was not served is left as it was, for every tuning alike.
+/// was not served is left as it was, for every tuning alike. An outage of the projection resets
+/// the arrivals and smoothing as the live recommender does (recorded since `stale` was).
 fn replay(lines: impl Iterator<Item = Value>) {
     let tunings = tunings();
     let mut smoothers = vec![fees::Smoother::default(); tunings.len()];
     let mut inflow = Inflow::default();
+    // As `Recommender::update`: since when the projection was stale or had no tip.
+    let mut unobserved: Option<u64> = None;
     let mut out = Vec::new();
     let (mut same, mut apart, mut compared) = ([0usize; 3], [0f64; 3], 0usize);
     for mut v in lines {
@@ -401,7 +406,21 @@ fn replay(lines: impl Iterator<Item = Value>) {
         }
         if let Some(Value::Array(depth)) = v.as_object_mut().and_then(|o| o.remove("depth")) {
             let t = v["t"].as_u64().unwrap();
+            if v["stale"].as_bool() == Some(true) {
+                unobserved.get_or_insert(t);
+                smoothers.iter_mut().for_each(fees::Smoother::reset);
+                out.push(v);
+                continue;
+            }
+            if let Some(since) = unobserved.take()
+                && t.saturating_sub(since) >= fees::OUTAGE_SECS
+            {
+                inflow = Inflow::default();
+            }
             inflow.roll(t);
+            if !inflow.ready() {
+                smoothers.iter_mut().for_each(fees::Smoother::reset);
+            }
             if !v["ours"].is_null() && inflow.ready() {
                 let depth = Depth::new(
                     depth
@@ -486,6 +505,11 @@ fn trim(lines: &[Value], path: &str) {
     let mut samples: Vec<(u64, u64, Pairs)> = Vec::new();
     for v in lines {
         let t = v["t"].as_u64().unwrap_or(0);
+        // The fixture's test replays no outage of the projection.
+        assert!(
+            v["stale"].as_bool() != Some(true) || !(from..to).contains(&t),
+            "the projection was stale at {t}"
+        );
         if v.get("depth").is_none()
             || v["ours"].is_null()
             || !(from..to).contains(&t)
@@ -597,7 +621,9 @@ impl Tally {
         format!("{:.1}% of {total}", met as f64 * 100.0 / total as f64)
     }
 
-    /// The 95% interval of the met share, clustered on the block each sample waited for.
+    /// The 95% interval of the met share: the wider of one clustered on the block each sample
+    /// waited for, and Wilson's for as many outcomes as blocks, so a share all met (or all
+    /// missed) over a few blocks is never shown as certain.
     fn interval(&self) -> (f64, f64) {
         let (n, g) = (self.total as f64, self.groups.len() as f64);
         let p = self.met as f64 / n;
@@ -610,7 +636,13 @@ impl Tally {
             .map(|&(m, t)| (m as f64 - p * t as f64).powi(2))
             .sum();
         let half = 1.96 * (g / (g - 1.0) * ss).sqrt() / n;
-        ((p - half).max(0.0), (p + half).min(1.0))
+        let z2 = 1.96f64.powi(2);
+        let centre = (p + z2 / (2.0 * g)) / (1.0 + z2 / g);
+        let wilson = (p * (1.0 - p) / g + z2 / (4.0 * g * g)).sqrt() * 1.96 / (1.0 + z2 / g);
+        (
+            (p - half).min(centre - wilson).max(0.0),
+            (p + half).max(centre + wilson).min(1.0),
+        )
     }
 }
 
@@ -704,6 +736,10 @@ fn score(lines: &[Value], sources: &[&str]) {
                         continue;
                     };
                     let end = after[n - 1].t;
+                    // A fit on the samples before `TO` must not see the blocks after it.
+                    if end >= to {
+                        continue;
+                    }
                     if out.iter().any(|(from, to)| t < *to && end > *from) {
                         left_out += 1;
                         continue;
@@ -742,6 +778,12 @@ fn score(lines: &[Value], sources: &[&str]) {
                     }
                 }
                 if tally.total == 0 {
+                    if tally.unscored > 0 {
+                        println!(
+                            "{source:<12} {:<7} {:>5} {:>6} {:>15} {:>6} {:>8} {:>8} {:>8} {:>5}",
+                            level.name, 0, "-", "-", "-", "-", "-", "-", tally.unscored
+                        );
+                    }
                     continue;
                 }
                 tally.over.sort_by(f64::total_cmp);
