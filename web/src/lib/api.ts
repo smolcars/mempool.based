@@ -264,6 +264,16 @@ const abortReason = (signal: AbortSignal): Error => {
  * last error, or with the abort reason when `signal` aborts while waiting. Every fetch in this
  * file already runs inside it; only wrap a call that is safe to repeat.
  */
+// How many requests are waiting out a busy refusal right now, for pages that say so.
+const [retrying, setRetrying] = createSignal(0);
+/** Whether some request is waiting to ask again after the server said it was busy (503, 429). */
+export const busyRetrying = (): boolean => retrying() > 0;
+
+/** A refusal that only says "not now": the server is busy, or this client asked a lot at once. */
+export const isBusy = (error: unknown): boolean =>
+  error instanceof ApiError &&
+  (error.status === 429 || (error.status === 503 && retryDelay(error, 0, () => 0) !== undefined));
+
 export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -276,8 +286,13 @@ export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal)
         if (e instanceof ApiError) exhausted.add(e);
         throw e;
       }
-      // oxlint-disable-next-line no-await-in-loop -- the wait is the point
-      await pause(wait, signal);
+      setRetrying((n) => n + 1);
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- the wait is the point
+        await pause(wait, signal);
+      } finally {
+        setRetrying((n) => n - 1);
+      }
     }
   }
 }

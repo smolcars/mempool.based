@@ -124,6 +124,11 @@
   .address-history__head {
     align-items: flex-end;
   }
+  .address-busy {
+    margin-bottom: var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
   /* Room under the chosen tab's bar, which hangs below the tabs, so it never meets the table. */
   .address-tabs {
     display: flex;

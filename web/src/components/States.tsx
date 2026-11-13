@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
-import { ApiError } from "../lib/api";
+import { ApiError, isBusy } from "../lib/api";
 import "./Button.css";
 import "./States.css";
 
@@ -48,23 +48,44 @@ export function ErrorState(props: {
     (props.error instanceof ApiError
       ? props.error.message
       : "Something went wrong while showing this.");
+  // Busy is not broken: the server asked for a moment, so this is said calmly, with a retry.
   return (
-    <div class="state state--error" role="alert">
-      <p class="state__title">
-        <svg class="state__icon" viewBox="0 0 16 16" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.5" />
-          <path d="M8 4.5v4M8 11v.5" />
-        </svg>
-        {props.title}
-      </p>
-      <p class="state__text">{message()}</p>
-      <Show when={props.retry}>
-        {(retry) => (
-          <button class="btn" type="button" onClick={() => retry()()}>
-            Try again
-          </button>
-        )}
-      </Show>
-    </div>
+    <Show
+      when={!isBusy(props.error)}
+      fallback={
+        <div class="state state--busy" role="status">
+          <p class="state__title">The server is busy for a moment</p>
+          <p class="state__text">
+            It asked this page to wait, and the page kept asking for a while without an answer. Try
+            again in a few seconds.
+          </p>
+          <Show when={props.retry}>
+            {(retry) => (
+              <button class="btn" type="button" onClick={() => retry()()}>
+                Try again
+              </button>
+            )}
+          </Show>
+        </div>
+      }
+    >
+      <div class="state state--error" role="alert">
+        <p class="state__title">
+          <svg class="state__icon" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="6.5" />
+            <path d="M8 4.5v4M8 11v.5" />
+          </svg>
+          {props.title}
+        </p>
+        <p class="state__text">{message()}</p>
+        <Show when={props.retry}>
+          {(retry) => (
+            <button class="btn" type="button" onClick={() => retry()()}>
+              Try again
+            </button>
+          )}
+        </Show>
+      </div>
+    </Show>
   );
 }

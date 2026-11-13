@@ -97,8 +97,25 @@ export function BalanceChart(props: {
   const failure = () => (props.stats.state === "errored" ? refusal(props.stats.error) : undefined);
   const count = () => settled(props.stats)?.chain_stats.tx_count;
   const statsLoading = () => props.stats.state === "unresolved" || props.stats.state === "pending";
+  // Its pages are most of an address page's requests, against a per-client allowance: they wait
+  // until the chart is about to be seen.
+  const [near, setNear] = createSignal(typeof IntersectionObserver === "undefined");
+  const watchNear = (el: HTMLElement) => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px 0px" },
+    );
+    observer.observe(el);
+    onCleanup(() => observer.disconnect());
+  };
   createEffect(
-    () => props.after && (count() ?? 0) > 0,
+    () => props.after && near() && (count() ?? 0) > 0,
     (go) => {
       if (!go || started) return;
       started = true;
@@ -134,7 +151,7 @@ export function BalanceChart(props: {
         </p>
       </Match>
       <Match when={statsLoading() || (count() ?? 0) > 0}>
-        <section class="address-balance" aria-labelledby="address-balance-title">
+        <section class="address-balance" aria-labelledby="address-balance-title" ref={watchNear}>
           <div class="section__head">
             <h2 id="address-balance-title">Balance over time</h2>
             <div class="section__meta">{meta()}</div>

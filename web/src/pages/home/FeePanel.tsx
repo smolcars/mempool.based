@@ -46,11 +46,6 @@ export function FeePanel(props: { answer: () => FeeAnswer | null | undefined }) 
                       <>
                         <span class="num">{formatFeeRateUp(r())}</span>
                         <span class="unit"> sat/vB</span>
-                        <Show when={g.span === 4 && props.answer()?.source === "projected"}>
-                          <span class="home-fees__same">
-                            Every wait pays the same: the next block has room at this rate.
-                          </span>
-                        </Show>
                       </>
                     )}
                   </Show>
@@ -58,6 +53,18 @@ export function FeePanel(props: { answer: () => FeeAnswer | null | undefined }) 
               </div>
             )}
           </For>
+          {/* One answer for every wait takes one row; what it means takes the other, so the panel
+              keeps its height when answers merge or split. */}
+          <Show when={groups().length === 1 && groups()[0]?.rate !== undefined}>
+            <div class="home-fees__same">
+              <dt class="visually-hidden">Why one answer</dt>
+              <dd>
+                {props.answer()?.source === "projected"
+                  ? "Every wait pays the same: the next block has room at this rate."
+                  : "The node gives every wait the same estimate."}
+              </dd>
+            </div>
+          </Show>
         </dl>
         <p class="home-fees__note">
           {props.answer()?.source === "node"

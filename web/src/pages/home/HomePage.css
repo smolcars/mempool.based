@@ -617,33 +617,26 @@
   .home-fees__item--row {
     grid-column: span 2;
   }
-  /* One answer for every wait fills the panel's two rows: centred and larger, it reads as the
-     answer rather than as a well left empty. */
-  /* One answer for every wait: one row, not a tall tile for a single number. */
-  .home-fees__list:has(.home-fees__item--all) {
-    grid-template-rows: auto;
-  }
+  /* One answer for every wait: one row of the two, centred, not a tall tile for one number; what
+     it means is the second row. */
   .home-fees__item--all {
     grid-column: span 2;
+    flex-direction: row;
     justify-content: center;
     align-items: center;
-    gap: var(--space-3);
-    text-align: center;
-  }
-  .home-fees__item--all dt {
-    align-items: center;
+    gap: var(--space-5);
   }
   .home-fees__item--all .home-fees__rate {
     font-size: var(--text-2xl);
   }
   .home-fees__same {
-    display: block;
-    max-width: 22rem;
-    margin: var(--space-2) auto 0;
+    grid-column: span 2;
+    align-self: center;
+    justify-self: center;
+    max-width: 24rem;
     font-size: var(--text-sm);
-    font-weight: var(--weight-regular);
     color: var(--color-text-muted);
-    white-space: normal;
+    text-align: center;
   }
   .home-fees__item dt {
     display: flex;

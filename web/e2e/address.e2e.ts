@@ -198,3 +198,44 @@ test("a total reads in magnitude, on one line on a phone, and opens to the exact
   await exact.getByRole("button", { name: "Copy the exact balance" }).click();
   await expect(exact.locator(".copy__note")).toHaveText("Copied");
 });
+
+test.describe("an address page's requests", () => {
+  // The refusals below are the test's own, which the browser logs as failed loads.
+  test.use({ consoleErrorsAllowed: [/status of 429/] });
+
+  test("asks once for each part, and not again when the live status arrives", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path.startsWith("/regtest/api/address/")) asked.push(path);
+    });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    await expect(page.getByText("Live", { exact: true })).toBeVisible();
+    await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(3);
+    // The first status starts the watch; the page has just asked, so it does not ask again.
+    await page.waitForTimeout(1500);
+    const totals = asked.filter((p) => p === `/regtest/api/address/${chain.addresses.p2tr}`);
+    expect(totals).toHaveLength(1);
+  });
+
+  test("a refusal reads as busy, retried, and never as an error", async ({ page }) => {
+    let refused = 0;
+    await page.route(/\/regtest\/api\/address\/[^/]+$/, async (route) => {
+      if (refused < 2) {
+        refused++;
+        await route.fulfill({
+          status: 429,
+          headers: { "retry-after": "1" },
+          json: { error: "too many requests" },
+        });
+      } else await route.continue();
+    });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    await expect(
+      page.getByText("The server is busy for a moment, so this page is waiting"),
+    ).toBeVisible();
+    await expect(stat(page, "Balance")).toHaveText("1.49 BTC", { timeout: 15_000 });
+    await expect(page.getByText(/busy for a moment/)).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+});

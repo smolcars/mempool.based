@@ -18,9 +18,33 @@ type Reply = Handler | object | string | number;
 let calls: string[] = [];
 
 const disposers: (() => void)[] = [];
+/** Whether the balance chart is in view: a stand-in observer reports it, or holds it back. */
+let inView = true;
+const observers: { report: () => void }[] = [];
+class FakeObserver {
+  readonly #notify: (entries: { isIntersecting: boolean }[]) => void;
+  constructor(notify: (entries: { isIntersecting: boolean }[]) => void) {
+    this.#notify = notify;
+  }
+  observe() {
+    const report = () => {
+      if (!this.#stopped) this.#notify([{ isIntersecting: true }]);
+    };
+    if (inView) report();
+    else observers.push({ report });
+  }
+  disconnect() {
+    this.#stopped = true;
+  }
+  #stopped = false;
+}
+
 beforeEach(() => {
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("IntersectionObserver", FakeObserver);
+  inView = true;
+  observers.length = 0;
 });
 afterEach(() => {
   for (const d of disposers.splice(0)) d();
@@ -224,16 +248,15 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     expect(FakeSocket.last().url).toContain("/app/ws");
     const asked = () => calls.filter((c) => c.endsWith("/txs")).length;
-    // The history loaded before the node watched the address: one more look after the first status.
+    // The first status starts the watch and asks nothing: the page has just loaded.
     status("s1");
-    await until(() => expect(asked()).toBe(2));
-    expect(text(el.querySelector(".address-live") as Element)).toBe("Live");
+    await until(() => expect(text(el.querySelector(".address-live") as Element)).toBe("Live"));
     // The same status again is no change.
     status("s1");
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(asked()).toBe(2);
+    expect(asked()).toBe(1);
     page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
     status("s2");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2));
@@ -302,6 +325,10 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
     heard({ type: "refused", reason: "server_full" });
     await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
+    // Opening addresses too fast is this visitor's own limit, not the server being full.
+    heard({ type: "refused", reason: "follow_rate" });
+    await until(() => expect(text(el)).toContain("Too many addresses were opened at once"));
+    expect(text(el)).not.toContain("watching as many addresses as it can");
     heard({ state: "unavailable" });
     await until(() => expect(text(el)).toContain("lost touch with its node"));
     heard({ state: "refused", reason: "no_index" });
@@ -398,6 +425,7 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     const more = () => [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    status("s0");
     more()?.click();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
     more()?.click();
@@ -435,8 +463,9 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
     [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
-    // The first status, which the page answers with one more look: the same history, though the
+    // A change heard, which the page answers with one more look: the same history, though the
     // node lists it in another order.
+    status("s0");
     reorder = true;
     status("s1");
     await until(() => expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(2));
@@ -820,6 +849,19 @@ describe("balance chart", () => {
     await until(() => expect(summaries()).toHaveLength(1));
   });
 
+  it("asks for its history only when it is about to be seen", async () => {
+    inView = false;
+    serve({ [`/address/${ME}`]: stats(), [`/address/${ME}/txs`]: [] });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("Balance over time"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(summaries()).toStrictEqual([]);
+    for (const o of observers) o.report();
+    await until(() => expect(summaries()).toHaveLength(1));
+  });
+
   it("draws no chart, and asks for nothing, for an address with no history", async () => {
     serve({ [`/address/${ME}`]: stats(part(0, 0, 0)), [`/address/${ME}/txs`]: [] });
     const el = open(`/address/${ME}`);
@@ -871,8 +913,12 @@ describe("balance chart", () => {
       timeout: 2000,
     });
     expect(chart.getAttribute("aria-valuemax")).toBe("1");
+    // The first status asks nothing; a change asks for one summary page.
     status("s1");
-    await until(() => expect(summaries()).toHaveLength(2));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(summaries()).toHaveLength(1);
     rows = [sum(3, 25_000, 102), ...rows];
     status("s2");
     await until(() => expect(chart.getAttribute("aria-valuemax")).toBe("2"));

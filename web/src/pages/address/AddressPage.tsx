@@ -1,7 +1,7 @@
 import { useParams } from "@solidjs/router";
 import { createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import { HashFull } from "../../components/Hash";
-import { createApi, createRequest } from "../../lib/api";
+import { busyRetrying, createApi, createRequest } from "../../lib/api";
 import { fetchConfig } from "../../lib/config";
 import { type LiveStatus, useLiveStatus, useTopic } from "../../lib/live";
 import type { AddressStats, Transaction } from "../../lib/esplora";
@@ -164,10 +164,9 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       if (m.type !== "watching") return;
       const before = token;
       token = m.status;
-      // The page fetched before the node watched the address, so the first status is followed by
-      // one more fetch: nothing that arrived in between is missed (docs/WS.md).
-      if (before === undefined) refresh();
-      else if (before !== m.status) catchUp(fingerprint());
+      // The first status only starts the watch: the page asked for everything a moment ago, and
+      // asking again would spend the server's per-client allowance for addresses on nothing.
+      if (before !== undefined && before !== m.status) catchUp(fingerprint());
     },
     // After a reconnect the first message is compared with the last status heard.
     resync: () => undefined,
@@ -198,6 +197,11 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       </Match>
       <Match when={true}>
         <LiveLine watch={watch()} socket={socket()} />
+        <Show when={busyRetrying()}>
+          <p class="address-busy" role="status">
+            The server is busy for a moment, so this page is waiting to ask again.
+          </p>
+        </Show>
         <Totals stats={stats} retry={retryAll} />
         <BalanceChart
           address={props.address}
@@ -237,6 +241,10 @@ function LiveLine(props: { watch: AddressMessage | undefined; socket: LiveStatus
       return "The server has lost touch with its node. This page catches up by itself when it is back.";
     }
     if (w.reason === "no_index") return undefined; // The page already says the node has no index.
+    // This visitor opened addresses faster than the server starts following them (docs/WS.md).
+    if (w.reason === "follow_rate") {
+      return "Too many addresses were opened at once to follow this one too, so the page does not update by itself. Reload it in a moment to follow it.";
+    }
     return w.reason === "too_large"
       ? "This address has too much history for the node to watch, so the page does not update by itself. Reload it to see new transactions."
       : "The node is watching as many addresses as it can, so the page does not update by itself. Reload it to see new transactions.";
