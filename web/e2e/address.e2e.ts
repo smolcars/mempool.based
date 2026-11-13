@@ -239,3 +239,22 @@ test.describe("an address page's requests", () => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 });
+
+// An address that wraps once left a last line of two characters; its lines are balanced now.
+test("a wrapped address breaks into lines of even length", async ({ page }) => {
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    const text = page.locator("h1 + * .hash__text, .address-head .hash__text").first();
+    await expect(text).toBeVisible();
+    const widths = await text.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()].map((r) => r.width).filter((w) => w > 0);
+    });
+    if (widths.length < 2) continue;
+    const first = widths[0] ?? 0;
+    const last = widths.at(-1) ?? 0;
+    expect(last, `last line at ${width} px`).toBeGreaterThan(first / 3);
+  }
+});

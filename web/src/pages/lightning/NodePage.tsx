@@ -1,7 +1,7 @@
 // One Lightning node: its name (a claim), its key (its identity), what it announces and its
 // channels, paged.
 import { useParams } from "@solidjs/router";
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { HashFull } from "../../components/Hash";
@@ -37,6 +37,7 @@ import {
   NodeName,
   Stat,
   LightningNav,
+  rememberList,
 } from "./parts";
 
 export default function NodePage() {
@@ -104,6 +105,11 @@ function Body(props: { node: NodeDetail; network: Network }) {
   const title = () => (name() === null ? null : cut(name() ?? "", NAME_IN_TITLE));
   const [whole, setWhole] = createSignal(false);
   usePageTitle(() => `Lightning node ${title()?.text ?? props.node.id.slice(0, 20)}`);
+  // A channel opened from here leads back here, by the node's name, not to the list before it.
+  createEffect(
+    () => [props.node.id, title()?.text ?? "Unnamed node"] as const,
+    ([id, label]) => rememberList(paths.lightningNode(id), label),
+  );
   const c = () => props.node.channels;
   return (
     <>

@@ -49,9 +49,11 @@
   .hash__tail {
     flex: none;
   }
+  /* Broken at any character, the lines balanced: never a last line of two characters. */
   .hash--whole .hash__text {
     white-space: normal;
-    overflow-wrap: anywhere;
+    word-break: break-all;
+    text-wrap: balance;
   }
   .hash--full {
     align-items: flex-start;
