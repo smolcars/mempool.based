@@ -197,10 +197,16 @@ describe("AuditSection", () => {
     const el = mount(() => <AuditSection hash={HASH} audit={audit} />);
     el.querySelector<HTMLButtonElement>(".audit__details button")?.click();
     flush();
-    await until(() => expect(el.querySelectorAll(".audit-list tbody tr")).toHaveLength(1000));
+    // A page at a time, as the block's own list: never all 1,000 at once.
+    await until(() => expect(el.querySelectorAll(".audit-list tbody tr")).toHaveLength(25));
     const list = text(el.querySelector(".audit-list") as Element);
     expect(list).toContain("The server lists at most 1 000 transactions");
     expect(list).toContain("1 000 of 1 500 fresh transactions listed");
+    const more = el.querySelector<HTMLButtonElement>(".audit-list__more button");
+    expect(more?.textContent).toBe("Show 25 more");
+    more?.click();
+    flush();
+    expect(el.querySelectorAll(".audit-list tbody tr")).toHaveLength(50);
   });
 
   it("says so when the server has no list for the block", async () => {

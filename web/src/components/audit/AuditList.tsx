@@ -37,6 +37,9 @@ function before(seconds: number): string {
 }
 
 /** The transactions behind each category but `matched`, from `/app/block/:hash/audit`. */
+/** Rows shown at first, and added by each "Show more", as the block's own list does. */
+const PAGE = 25;
+
 export default function AuditList(props: { hash: string; audit: AuditTotals }) {
   const network = useNetwork();
   const [detail, detailCtl] = createRequest(
@@ -56,6 +59,12 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
   };
   const d = () => (detail.state === "ready" ? detail() : undefined);
   const rows = () => d()?.txs.filter((t) => t.kind === kind()) ?? [];
+  // A recent block can differ by thousands of transactions: a page at a time, not 9,000 px.
+  const [shown, setShown] = createSignal(PAGE);
+  const choose = (k: ListedKind) => {
+    setChosen(k);
+    setShown(PAGE);
+  };
   const seenAt = () => d()?.seen_at ?? 0;
   const columns = [
     {
@@ -121,7 +130,7 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
                       type="button"
                       class="btn audit-list__kind"
                       aria-pressed={kind() === k ? "true" : "false"}
-                      onClick={() => setChosen(k)}
+                      onClick={() => choose(k)}
                     >
                       <span class={`audit-list__swatch audit-kind--${k}`} aria-hidden="true" />
                       {categoryName(k)}{" "}
@@ -148,7 +157,7 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
               <DataTable
                 caption={`${categoryName(kind() ?? "missing")} transactions, highest fee rate first`}
                 columns={columns}
-                rows={rows()}
+                rows={rows().slice(0, shown())}
                 rowHref={(t) => paths.tx(t.txid)}
                 empty={
                   <p class="audit-list__cut">
@@ -156,6 +165,13 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
                   </p>
                 }
               />
+              <Show when={rows().length > shown()}>
+                <div class="audit-list__more">
+                  <button class="btn" type="button" onClick={() => setShown(shown() + PAGE)}>
+                    Show {Math.min(PAGE, rows().length - shown())} more
+                  </button>
+                </div>
+              </Show>
             </>
           )}
         </Show>
