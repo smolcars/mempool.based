@@ -81,7 +81,8 @@ test("block health draws the blocks the server watched arrive, follows every per
     const audited = (await (
       await page.request.get(`/regtest/api/v1/mining/blocks/predictions/${id}`)
     ).json()) as unknown[];
-    await expect(head).toHaveText(`Block health${audited.length} audited blocks in ${words}`, {
+    const blocks = audited.length === 1 ? "block" : "blocks";
+    await expect(head).toHaveText(`Block health${audited.length} audited ${blocks} in ${words}`, {
       timeout: 30_000,
     });
     await expect(chart).toHaveAttribute("aria-label", `Match rate of each audited block, ${words}`);
@@ -91,22 +92,33 @@ test("block health draws the blocks the server watched arrive, follows every per
   await chart.scrollIntoViewIfNeeded();
   const box = await chart.boundingBox();
   if (!box) throw new Error("no plot");
-  const end = { x: box.x + box.width - 16, y: box.y + box.height / 2 };
+  // Where the latest point is drawn: the readout's dot marks it.
+  const dot = await chart.locator("circle").boundingBox();
+  if (!dot) throw new Error("no point");
+  const end = { x: dot.x + dot.width / 2, y: box.y + box.height / 2 };
   const touch = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+  // The block the pointer reads there: blocks stamped in the same second share one place, the
+  // first of them under the pointer.
+  const read = async () =>
+    /Block (\d+)$/.exec((await chart.getAttribute("aria-valuetext")) ?? "")?.[1] ?? "";
+  let block: string;
   if (touch) {
     // The first tap reads the point and leaves the plot where it was; the second opens it.
     await page.touchscreen.tap(end.x, end.y);
-    await expect(chart).toHaveAttribute("aria-valuetext", new RegExp(`Block ${tip}$`));
+    await expect(chart).toHaveAttribute("aria-valuenow", /\d+/);
+    block = await read();
     expect((await chart.boundingBox())?.y).toBe(box.y);
     await expect(page).toHaveURL(/\/regtest\/mining\?period=all$/);
     await page.touchscreen.tap(end.x, end.y);
   } else {
     await page.mouse.move(end.x, end.y);
+    block = await read();
     await page.mouse.down();
     await page.mouse.up();
   }
-  await expect(page).toHaveURL(`/regtest/block/${tip}`);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText(String(tip));
+  expect(Number(block)).toBeGreaterThan(tip - 3);
+  await expect(page).toHaveURL(`/regtest/block/${block}`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(block);
   await page.goBack();
   // The keyboard: Enter opens the point the slider is on. The pointer leaves the plot first, or
   // the scroll that focus brings would move a point under it.
