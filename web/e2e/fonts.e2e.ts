@@ -152,6 +152,9 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
     // Cut sideways by a hidden box inside a scrolling one: scrolling cannot show it.
     const scroller = add(host, { ...at(80), width: "200px", overflowX: "auto" });
     add(scroller, { width: "30px", overflow: "hidden" }, "Cut inside a scroller");
+    // A hidden box wider than its scroller: scrolling shows the box's width, not the text past it.
+    const narrow = add(host, { ...at(110), width: "100px", overflowX: "auto" });
+    add(narrow, { width: "150px", overflow: "hidden" }, "Cut past a wider hidden box, too");
     // Only scrolled out of sight: scrolling shows it.
     add(host, { ...at(140), width: "60px", overflowX: "auto" }, "Scrolls along");
     const row = add(host, { ...at(200), width: "300px", whiteSpace: "normal" });
@@ -166,6 +169,7 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
   );
   expect(faults.join("\n")).toContain('"Cut below" is cut');
   expect(faults.join("\n")).toContain('"Cut inside a scroller" is cut');
+  expect(faults.join("\n")).toContain('"Cut past a wider hidden box, too" is cut');
   expect(faults.join("\n")).not.toContain("Scrolls along");
   expect(faults.join("\n")).toContain('the label "Two words" wraps');
 });
