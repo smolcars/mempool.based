@@ -121,3 +121,51 @@ for (const { path, stub } of PAGES) {
     expect(faults).toStrictEqual([]);
   });
 }
+
+// The check itself: each kind of fault it exists for, built on a page, is found; the same text
+// in a box that scrolls on that axis is not.
+test("the layout check finds text over text, text cut on any edge, and a wrapped label", async ({
+  page,
+}) => {
+  await page.goto("/regtest/no/such/page");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.evaluate(() => {
+    const main = document.querySelector("main");
+    const add = (parent: Element, css: Record<string, string>, text = "") => {
+      const el = document.createElement("div");
+      Object.assign(el.style, css);
+      el.textContent = text;
+      parent.append(el);
+      return el;
+    };
+    const host = add(main ?? document.body, { position: "relative", height: "400px" });
+    const at = (top: number): Record<string, string> => ({
+      position: "absolute",
+      top: `${top}px`,
+      left: "0",
+      font: "20px/24px sans-serif",
+      whiteSpace: "nowrap",
+    });
+    add(host, at(0), "Overlap one");
+    add(host, { ...at(0), left: "40px" }, "Overlap two");
+    add(host, { ...at(40), height: "10px", overflow: "hidden" }, "Cut below");
+    // Cut sideways by a hidden box inside a scrolling one: scrolling cannot show it.
+    const scroller = add(host, { ...at(80), width: "200px", overflowX: "auto" });
+    add(scroller, { width: "30px", overflow: "hidden" }, "Cut inside a scroller");
+    // Only scrolled out of sight: scrolling shows it.
+    add(host, { ...at(140), width: "60px", overflowX: "auto" }, "Scrolls along");
+    const row = add(host, { ...at(200), width: "300px", whiteSpace: "normal" });
+    const button = document.createElement("button");
+    button.style.width = "60px";
+    button.textContent = "Two words";
+    row.append(button);
+  });
+  const faults = await layoutFaults(page);
+  expect(faults.join("\n")).toMatch(
+    /"Overlap one".*runs into "Overlap two"|"Overlap two".*runs into "Overlap one"/,
+  );
+  expect(faults.join("\n")).toContain('"Cut below" is cut');
+  expect(faults.join("\n")).toContain('"Cut inside a scroller" is cut');
+  expect(faults.join("\n")).not.toContain("Scrolls along");
+  expect(faults.join("\n")).toContain('the label "Two words" wraps');
+});

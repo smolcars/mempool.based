@@ -24,35 +24,54 @@ export function layoutFaults(page: Page): Promise<string[]> {
       return t.length > 40 ? `${t.slice(0, 39)}…` : t;
     };
 
-    // The box an element's content is clipped to, and whether that box scrolls.
-    const clips = new Map<Element, { box: Box; scrolls: boolean } | null>();
-    const clipOf = (el: Element | null): { box: Box; scrolls: boolean } | null => {
+    // The box an element's content is clipped to, and for each edge whether scrolling can reveal
+    // what it cuts: only when the box that sets that edge scrolls on that axis.
+    interface Clip {
+      box: Box;
+      scrolls: Record<keyof Box, boolean>;
+    }
+    const clips = new Map<Element, Clip | null>();
+    const clipOf = (el: Element | null): Clip | null => {
       if (!el || el === document.documentElement) return null;
       const known = clips.get(el);
       if (known !== undefined) return known;
       const up = clipOf(el.parentElement);
       const s = getComputedStyle(el);
-      let own: { box: Box; scrolls: boolean } | null = null;
+      let clip = up;
       if (s.overflowX !== "visible" || s.overflowY !== "visible") {
         const r = el.getBoundingClientRect();
         const l = r.left + el.clientLeft;
         const t = r.top + el.clientTop;
-        own = {
+        const x = /auto|scroll/.test(s.overflowX);
+        const y = /auto|scroll/.test(s.overflowY);
+        const own: Clip = {
           box: { l, t, r: l + el.clientWidth, b: t + el.clientHeight },
-          scrolls: /auto|scroll/.test(s.overflowX + s.overflowY),
+          scrolls: { l: x, r: x, t: y, b: y },
         };
-      }
-      let clip = own ?? up;
-      if (own && up) {
-        clip = {
-          box: {
-            l: Math.max(own.box.l, up.box.l),
-            t: Math.max(own.box.t, up.box.t),
-            r: Math.min(own.box.r, up.box.r),
-            b: Math.min(own.box.b, up.box.b),
-          },
-          scrolls: own.scrolls || up.scrolls,
-        };
+        clip = own;
+        if (up) {
+          // Each edge from whichever box is tighter there; a tie scrolls only if both do.
+          const edge = (k: keyof Box, inner: (a: number, b: number) => boolean) => {
+            const o = own.box[k];
+            const u = up.box[k];
+            if (o === u) return { at: o, scrolls: own.scrolls[k] && up.scrolls[k] };
+            return inner(o, u)
+              ? { at: o, scrolls: own.scrolls[k] }
+              : { at: u, scrolls: up.scrolls[k] };
+          };
+          const larger = (a: number, b: number) => a > b;
+          const smaller = (a: number, b: number) => a < b;
+          const e = {
+            l: edge("l", larger),
+            t: edge("t", larger),
+            r: edge("r", smaller),
+            b: edge("b", smaller),
+          };
+          clip = {
+            box: { l: e.l.at, t: e.t.at, r: e.r.at, b: e.b.at },
+            scrolls: { l: e.l.scrolls, t: e.t.scrolls, r: e.r.scrolls, b: e.b.scrolls },
+          };
+        }
       }
       clips.set(el, clip);
       return clip;
@@ -103,8 +122,13 @@ export function layoutFaults(page: Page): Promise<string[]> {
           };
           // Wholly out of its box's sight: scrolled away or hidden by design.
           if (seen.r - seen.l < 2 || seen.b - seen.t < 2) continue;
-          const cut = seen.l > box.l + 1 || seen.r < box.r - 1;
-          if (cut && !clip.scrolls && !inTitle(el, node.textContent ?? "")) {
+          // Cut, on any edge, by a box that scrolling cannot move.
+          const cut =
+            (seen.l > box.l + 1 && !clip.scrolls.l) ||
+            (seen.r < box.r - 1 && !clip.scrolls.r) ||
+            (seen.t > box.t + 1 && !clip.scrolls.t) ||
+            (seen.b < box.b - 1 && !clip.scrolls.b);
+          if (cut && !inTitle(el, node.textContent ?? "")) {
             out.push(`"${said(node.textContent ?? "")}" is cut (${name(el)})`);
           }
           box = seen;

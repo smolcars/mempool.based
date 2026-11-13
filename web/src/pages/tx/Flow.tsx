@@ -86,7 +86,9 @@ export function Flow(props: {
   // Ribbon geometry from where the cards actually sit. One layout read per draw.
   // An exact amount wider than its card (a phone's, in a wide font) reads in magnitude there.
   const fitAmounts = () => {
-    for (const amount of flowEl?.querySelectorAll<HTMLElement>(".tx-flow__item .amount") ?? []) {
+    // Only amounts with a magnitude form to fall back on (`fit`); a total has none.
+    const fits = flowEl?.querySelectorAll<HTMLElement>(".tx-flow__item .amount[data-short]");
+    for (const amount of fits ?? []) {
       const exact = amount.querySelector(".amount__exact");
       const card = amount.closest(".tx-flow__item");
       if (!exact || !card) continue;
