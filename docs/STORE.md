@@ -204,7 +204,14 @@ For all of mainnet (975,000 blocks), extrapolated era by era:
 | Fee rates for all of history, listing route | 15.5 h | 134 GB | 31 h alone; with the totals interleaved, 21 h of node time and everything after about 42 h |
 | Fee rates for all of history, `getblock` | about 9.7 days | | why the default is a year |
 
-**Observed** on a full mainnet run started on 2026-11-12 at the default 50%: about 430 blocks a minute at its start, slower than the estimates above. If that pace held, every block's totals would take about a day and a half (975,000 blocks at 430 a minute is 38 h), not the 11 to 21 hours extrapolated. **This is the figure to plan with**; [`CONFIG.md`](CONFIG.md#block-table) and [`DEPLOY.md`](DEPLOY.md#the-first-start) point here rather than repeat it. Fee rates for the default year add 53 minutes of node time through the listing route, inside the time the totals take; through `getblock` they add 13.4 h of node time, about 27 h at 50%.
+**Measured** on a full mainnet run at the defaults, on one machine, against a node with the listing route on the same private network ([`DEPLOY.md`](DEPLOY.md#one-day-on-mainnet)). It started from an empty store at 09:12 UTC on 2026-11-12; every block's totals were in at 03:23 the next day, 18 h 11 min later, and the year of fee rates at 04:22, 19 h 10 min after the start. **This is the figure to plan with**; [`CONFIG.md`](CONFIG.md#block-table) and [`DEPLOY.md`](DEPLOY.md#the-first-start) point here rather than repeat it. What the elapsed time includes:
+
+- Twelve restarts for new builds, each a few seconds, and one run of 15 minutes with the backfill off. The table is the progress, so each restart lost only its pass's first reads.
+- The node was busy with the backfill for 9.4 h of it, the default 50% of the time it ran.
+- For the first eight hours the builds read fee rates through `getblock`: 41.7 GB for about 4,600 blocks, 9 MB a block. From 17:20 they used the listing route. The last run, 23:01 to the end, read 14.3 GB for 494,035 blocks' totals and 42,828 blocks' fee rates: the estimate above (1.2 GB and 17 GB) holds. In all, 59.7 GB.
+- The site was offline from about 23:11 to 03:40; the node link was not, and the backfill ran on.
+
+Signet took 3 h 13 min for its totals and 5 h 20 min for everything; testnet4 1 h 21 min and 2 h 17 min. Through `getblock` alone, the year of fee rates is still the estimate above, 13.4 h of node time, about 27 h at 50%: no full run measured it.
 
 **The defaults on a node with the listing route.** `BACKFILL_FEE_RATE_DEPTH` at a year and `BACKFILL_BUSY_PERCENT` at 50 now rate the year in under an hour of node time, inside the time the totals take anyway. A depth covering every block would cost 15.5 h of node time and 134 GB read, and finish everything in about 42 h at 50%, about what a year cost through `getblock`. Through `getblock` the same depth would still cost about 9.7 days. The defaults are unchanged; which to pick is the operator's, and a later change.
 
