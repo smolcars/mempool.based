@@ -271,6 +271,40 @@ describe("a node", () => {
     expect(text(el)).toContain("Open channels1 807");
   });
 
+  it("draws its channels and capacity since the record began, and how it prices them", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq());
+    replies[`/app/lightning/nodes/${ACINQ}/history`] = json({
+      from: 1_794_504_600,
+      points: [
+        { time: 1_794_528_000, channels: 1804, capacity: 27_651_420_454 },
+        { time: 1_794_593_410, channels: 1793, capacity: 28_497_516_531 },
+      ],
+    });
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Recorded since 12 Nov 2026, 17:30 UTC");
+    await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
+    expect(text(el)).toContain("It charges a median of 2 000–4 999 ppm to forward");
+    // The figures table is drawn only when opened: the channel list is the page's one list.
+    expect(el.querySelectorAll("tbody tr")).toHaveLength(25);
+  });
+
+  it("says when there is no past to draw yet, and when its history is refused", async () => {
+    replies[`/app/lightning/nodes/${ACINQ}`] = json(acinq());
+    replies[`/app/lightning/nodes/${ACINQ}/history`] = json({
+      from: null,
+      points: [{ time: 1_794_593_410, channels: 1793, capacity: 28_497_516_531 }],
+    });
+    const el = open(`/lightning/node/${ACINQ}`);
+    await shows(el, "Nothing to draw yet");
+    expect(el.querySelector("[role=slider]")).toBeNull();
+    // The node's own figures stay when its history fails.
+    replies[`/app/lightning/nodes/${ACINQ}/history`] = json({ error: "store is busy" }, 500);
+    clearApiCache();
+    const failed = open(`/lightning/node/${ACINQ}`);
+    await shows(failed, "Could not load its history");
+    expect(text(failed)).toContain("Open channels1 807");
+  });
+
   it("says when this server knows no such node, or the key is not one", async () => {
     const el = open(`/lightning/node/${"02".padEnd(66, "0")}`);
     await shows(el, "This server knows no such node");

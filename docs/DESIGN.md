@@ -482,7 +482,7 @@ Newest channels ══════════════════ │ Newes
 channel and ends, capacity, block  │ channel, kind and ends, capacity, block
 Largest nodes ════════════════════ │ Most connected nodes ══════════════
 Node page: name (text, cut), key grouped with copy, "the key is the identity";
-  figures; addresses and features as chips; channels, open | closed, 25 a page
+  figures; its past │ its fee rates (two bars a row: it charges, its peers charge); addresses and features as chips; channels, open | closed, 25 a page
 Channel page: id and state badge; funding; close (kind · how sure, why); its two ends' policies
 ```
 

@@ -28,6 +28,7 @@ import {
   type NodeDetail,
   STATE_WORDS,
 } from "./lightning";
+import { NodeFees, NodeHistory } from "./NodeCharts";
 import {
   ask,
   BlockLink,
@@ -167,6 +168,13 @@ function Body(props: { node: NodeDetail; network: Network }) {
           </Stat>
         </dl>
       </section>
+
+      {/* The totals' past beside how the node prices its channels: one row on a wide screen, so
+          the channels below stay near on a phone. */}
+      <div class="ln-pair">
+        <NodeHistory network={props.network} id={props.node.id} />
+        <NodeFees node={props.node} />
+      </div>
 
       <section aria-labelledby="ln-node-announced-title">
         <SectionHeader title="What it announces" id="ln-node-announced-title">

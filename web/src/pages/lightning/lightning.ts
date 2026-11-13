@@ -152,6 +152,24 @@ export interface NodeDetail {
     other: number;
   };
   open_channels: NodeChannels;
+  fees: { incoming: FeeBucket[]; outgoing: FeeBucket[] };
+}
+
+/**
+ * Channels whose fee rate one way falls in `bucket` (ppm, rounded down: exact under 10, then to
+ * tens, hundreds and thousands), or have no policy that way (`null`), and their capacity.
+ */
+export interface FeeBucket {
+  bucket: number | null;
+  count: number;
+  capacity: number;
+}
+
+/** A node's open channels and capacity at each UTC midnight since `from`, then now. */
+export interface NodeHistory {
+  /** When this server's record begins: its first statistics snapshot; null before it. */
+  from: number | null;
+  points: { time: number; channels: number; capacity: number }[];
 }
 
 export interface Policy {
@@ -300,7 +318,22 @@ export const isNodeDetail = (v: unknown): v is NodeDetail =>
   num(v["capacity"]) &&
   obj(v["channels"]) &&
   isNodeChannels(v["open_channels"]) &&
+  obj(v["fees"]) &&
+  list(v["fees"]["incoming"], isFeeBucket) &&
+  list(v["fees"]["outgoing"], isFeeBucket) &&
   isNodeRef(v);
+
+const isFeeBucket = (v: unknown): v is FeeBucket =>
+  obj(v) && nullable(v["bucket"], (b) => num(b) && b >= 0) && num(v["count"]) && num(v["capacity"]);
+
+export const isNodeHistory = (v: unknown): v is NodeHistory =>
+  obj(v) &&
+  nullable(v["from"], num) &&
+  list(
+    v["points"],
+    (p): p is NodeHistory["points"][number] =>
+      obj(p) && num(p["time"]) && num(p["channels"]) && num(p["capacity"]),
+  );
 
 const isPolicy = (v: unknown): v is Policy =>
   obj(v) &&
@@ -430,6 +463,15 @@ export const count = (n: number, one: string, many = `${one}s`): string =>
 /** Parts per million, as fee rates on Lightning are written. */
 export const ppm = (n: number): string => `${groupDigits(n)} ppm`;
 /** Millisatoshis: `1 000 msat`. */
+/** A capacity axis's ticks, in BTC: three significant digits below 100, never a power of ten. */
+export const btcAxis = (sats: number): string => {
+  const btc = sats / 1e8;
+  if (btc >= 100) return groupDigits(btc);
+  // Below 0.001 JavaScript may write a number as `5e-9`: to the satoshi instead.
+  if (btc < 0.001) return btc.toFixed(8).replace(/\.?0+$/, "");
+  return String(Number(btc.toPrecision(3)));
+};
+
 export const msat = (n: number): string => `${groupDigits(n)} msat`;
 
 /**
@@ -520,4 +562,105 @@ export function coverageSentence(s: Series, words: string): string | undefined {
   }
   if (s.complete) return undefined;
   return `This view holds ${count(s.sampled, "ten-minute snapshot")} of the ${groupDigits(s.slots)} in ${words}. The gaps are times this server was not recording.`;
+}
+
+// A node's fee rates.
+
+/**
+ * The fee histogram's rows, by lower bound in ppm: few enough to read on a phone whatever the
+ * node, each a union of the server's buckets, so a channel is never split between two.
+ */
+const FEE_ROWS = [0, 1, 10, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000] as const;
+
+/** One way's channels in a row of the histogram. */
+export interface FeeCell {
+  count: number;
+  capacity: number;
+}
+
+export interface FeeRow {
+  /** `0`, `1–9`, `10 000+`, or "No policy". */
+  label: string;
+  /** The row's lowest rate, ppm; null for channels with no policy that way. */
+  from: number | null;
+  outgoing: FeeCell;
+  incoming: FeeCell;
+}
+
+const rowOf = (bucket: number): number => FEE_ROWS.filter((from) => bucket >= from).length - 1;
+
+const rowLabel = (k: number): string => {
+  const from = FEE_ROWS[k] ?? 0;
+  const next = FEE_ROWS[k + 1];
+  if (next === undefined) return `${groupDigits(from)}+`;
+  return next - 1 === from ? groupDigits(from) : `${groupDigits(from)}–${groupDigits(next - 1)}`;
+};
+
+/**
+ * The node's fees as the histogram draws them, cheapest first: the rows from the cheapest that
+ * holds a channel either way to the dearest, those between kept empty so the scale stays even,
+ * then "No policy" when any channel has none.
+ */
+export function feeRows(fees: NodeDetail["fees"]): FeeRow[] {
+  const rows = [...FEE_ROWS.keys(), -1].map((k): FeeRow => ({
+    label: k < 0 ? "No policy" : rowLabel(k),
+    from: k < 0 ? null : (FEE_ROWS[k] ?? 0),
+    outgoing: { count: 0, capacity: 0 },
+    incoming: { count: 0, capacity: 0 },
+  }));
+  for (const way of ["outgoing", "incoming"] as const) {
+    for (const b of fees[way]) {
+      const row = rows.at(b.bucket === null ? -1 : rowOf(b.bucket));
+      if (row === undefined) continue;
+      row[way].count += b.count;
+      row[way].capacity += b.capacity;
+    }
+  }
+  const held = (r: FeeRow) => r.outgoing.count + r.incoming.count > 0;
+  const priced = rows.slice(0, -1);
+  const kept = priced.flatMap((r, i) => (held(r) ? [i] : []));
+  const none = rows.at(-1);
+  return [
+    ...priced.slice(kept[0] ?? 0, (kept.at(-1) ?? -1) + 1),
+    ...(none !== undefined && held(none) ? [none] : []),
+  ];
+}
+
+/** The row holding the median channel one way, among those with a policy; null with none. */
+export function medianRow(rows: FeeRow[], way: "outgoing" | "incoming"): FeeRow | null {
+  const priced = rows.filter((r) => r.from !== null);
+  const total = priced.reduce((n, r) => n + r[way].count, 0);
+  if (total === 0) return null;
+  let seen = 0;
+  for (const r of priced) {
+    seen += r[way].count;
+    if (seen * 2 >= total) return r;
+  }
+  return null;
+}
+
+/** What the node charges and is charged, in one sentence, from the histogram's rows. */
+export function feeSentence(rows: FeeRow[]): string {
+  // Each channel is in one row each way: the outgoing counts are the node's channels.
+  const one = rows.reduce((sum, x) => sum + x.outgoing.count, 0) === 1;
+  const say = (way: "outgoing" | "incoming") => {
+    const r = medianRow(rows, way);
+    const n = rows.reduce((sum, x) => sum + (x.from === null ? 0 : x[way].count), 0);
+    if (r === null) return null;
+    return `${n === 1 ? "" : "a median of "}${r.label} ppm`;
+  };
+  const out = say("outgoing");
+  const inc = say("incoming");
+  const charges =
+    out === null
+      ? `It has set no fee on its ${one ? "channel" : "channels"}`
+      : `It charges ${out} to forward`;
+  const charged = one
+    ? inc === null
+      ? "its peer has set none towards it"
+      : `its peer charges ${inc} towards it`
+    : inc === null
+      ? "its peers have set none towards it"
+      : `its peers charge ${inc} towards it`;
+  return `${charges}; ${charged}.`;
 }

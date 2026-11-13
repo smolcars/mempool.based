@@ -418,6 +418,104 @@
     margin-top: var(--space-7);
   }
 
+  /* A node's past: a shorter plot than the network's. */
+  .ln-chart--node {
+    min-height: calc(200px + 5.75rem);
+  }
+
+  /* A node's fee rates: a row per range of rates, the cheapest first, two bars in each on one
+     scale, what it charges over what its peers charge, each with its count. */
+  .ln-fees__answer {
+    max-width: 72ch;
+    margin: 0 0 var(--space-3);
+  }
+  .ln-fees {
+    margin: 0;
+    container-type: inline-size;
+  }
+  .ln-fees__key.ln-fees__bars {
+    border-left-color: transparent;
+    color: var(--color-text-muted);
+  }
+  .ln-fees__way {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .ln-fees__way::before {
+    content: "";
+    width: 12px;
+    height: 8px;
+    border-radius: var(--radius-s);
+    background: var(--way);
+  }
+  .ln-fees__way--out,
+  .ln-fees__bar--out {
+    --way: var(--series-1);
+  }
+  .ln-fees__way--in,
+  .ln-fees__bar--in {
+    --way: var(--series-2);
+  }
+  .ln-fees__plot {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-1) var(--space-3);
+    align-items: center;
+    font-size: var(--text-xs);
+  }
+  .ln-fees__unit {
+    align-self: end;
+    color: var(--color-text-muted);
+  }
+  .ln-fees__label {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .ln-fees__bars {
+    display: grid;
+    gap: 2px;
+    padding-left: var(--space-1);
+    border-left: 1px solid var(--color-line-strong);
+  }
+  /* An empty bar keeps its line, so out is always above in. */
+  .ln-fees__bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 1.2em;
+    line-height: 1.2;
+  }
+  /* Room kept for the longest count beside the longest bar. */
+  .ln-fees__fill {
+    flex: none;
+    width: calc(var(--w) * (100% - 4rem));
+    height: 8px;
+    border-radius: 0 var(--radius-s) var(--radius-s) 0;
+    background: var(--way);
+  }
+  .ln-fees__n {
+    white-space: nowrap;
+    color: var(--color-text-muted);
+  }
+  /* Where there is room, out and in side by side: half the height, the same scale. */
+  @container (min-width: 30rem) {
+    .ln-fees__bars {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: var(--space-3);
+      padding-left: 0;
+      border-left: 0;
+    }
+    /* Each column on its own baseline. */
+    .ln-fees__bar {
+      padding-left: var(--space-1);
+      border-left: 1px solid var(--color-line-strong);
+    }
+  }
+  .ln-fees .chart__caption {
+    margin-top: var(--space-3);
+  }
+
   @media (max-width: 1040px) {
     .ln-pair,
     .ln-sides {
@@ -428,6 +526,10 @@
     /* Five readings, a line each (Chart.css): the time, channels, capacity, nodes and fee rate. */
     .ln-chart {
       min-height: calc(240px + 5 * 1.5625rem + 3.5rem);
+    }
+    /* A node's: the time, channels and capacity. */
+    .ln-chart--node {
+      min-height: calc(200px + 3 * 1.5625rem + 3.5rem);
     }
     .ln {
       gap: var(--space-6);

@@ -170,6 +170,19 @@ export const acinq = (n: Partial<NodeDetail> = {}): NodeDetail => ({
     total: 1807,
     channels: Array.from({ length: 25 }, (_, i) => channelOfAcinq(i)),
   },
+  fees: {
+    incoming: [
+      { bucket: null, count: 78, capacity: 157_929_566 },
+      { bucket: 0, count: 60, capacity: 1_146_048_852 },
+      { bucket: 1, count: 581, capacity: 8_287_839_702 },
+      { bucket: 2000, count: 1088, capacity: 17_791_401_165 },
+    ],
+    outgoing: [
+      { bucket: null, count: 60, capacity: 91_707_732 },
+      { bucket: 400, count: 266, capacity: 6_377_292_455 },
+      { bucket: 2000, count: 1481, capacity: 20_914_219_098 },
+    ],
+  },
   ...n,
 });
 
