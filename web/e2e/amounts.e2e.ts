@@ -150,6 +150,8 @@ for (const width of [320, 390]) {
   test(`every exact amount opens whole and on screen at ${width} px`, async ({ page }) => {
     await lightning(page);
     await esplora(page);
+    // In the dark scheme, as when these checks followed the amounts' light and dark passes.
+    await page.emulateMedia({ colorScheme: "dark" });
     await page.setViewportSize({ width, height: 900 });
     // The pages that have them: a channel's terms and an address's totals (a node page has none).
     for (const path of PAGES.filter((p) => /channel|address/.test(p))) {
