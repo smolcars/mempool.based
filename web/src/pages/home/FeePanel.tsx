@@ -53,23 +53,15 @@ export function FeePanel(props: { answer: () => FeeAnswer | null | undefined }) 
               </div>
             )}
           </For>
-          {/* One answer for every wait takes one row; what it means takes the other, so the panel
-              keeps its height when answers merge or split. */}
-          <Show when={groups().length === 1 && groups()[0]?.rate !== undefined}>
-            <div class="home-fees__same">
-              <dt class="visually-hidden">Why one answer</dt>
-              <dd>
-                {props.answer()?.source === "projected"
-                  ? "Every wait pays the same: the next block has room at this rate."
-                  : "The node gives every wait the same estimate."}
-              </dd>
-            </div>
-          </Show>
         </dl>
+        {/* One line under the answers. One answer for every wait (signet's usual) says why, in place
+            of the margin the separate answers carry. */}
         <p class="home-fees__note">
           {props.answer()?.source === "node"
             ? "The node's own estimates: this server cannot make its own recommendation right now."
-            : "Pay this so later arrivals don't outbid you."}
+            : groups().length === 1 && groups()[0]?.rate !== undefined
+              ? "Every wait pays the same: the next block has room at this rate."
+              : "Pay this so later arrivals don't outbid you."}
         </p>
       </Show>
     </section>
