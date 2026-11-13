@@ -259,7 +259,7 @@
   }
   /* On a phone a point's time is two lines, the day and the time of day, at the size of the
      figures beside it, so a big node's capacity still fits 320 px. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .chart__table td:first-child {
       white-space: normal;
       font-size: var(--text-xs);
