@@ -34,7 +34,7 @@ function summary(miss: Miss, network: string): string {
  * why there is none. The logic (search/search.ts) loads when the field is first used.
  */
 /** A phone's resting header gives the search little room: its hint is one word there. */
-const PHONE = "(max-width: 640px)";
+const PHONE = "(max-width: 40em)";
 
 export function SearchField(props: SearchFieldProps) {
   const id = () => props.id ?? "search";

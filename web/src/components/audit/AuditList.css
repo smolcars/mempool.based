@@ -29,7 +29,7 @@
     justify-items: center;
     margin-top: var(--space-4);
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .audit-list .copy {
       display: none;
     }

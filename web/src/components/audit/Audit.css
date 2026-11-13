@@ -188,16 +188,17 @@
     width: 100%;
   }
 
-  @media (max-width: 1040px) {
+  @media (max-width: 65em) {
     .audit__top {
       grid-template-columns: minmax(0, 1fr);
     }
   }
   /* The kinds' meanings are in sight beside their counts, but for a phone's button (below). */
-  .audit__says {
+  /* Doubled: More.css can load after this file, and its summary is shown everywhere. */
+  .more__summary.audit__says {
     display: none;
   }
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .audit__kinds {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -206,7 +207,7 @@
     .audit__kinds:not([data-says]) .audit-kinds__says {
       display: none;
     }
-    .audit__says {
+    .more__summary.audit__says {
       display: inline-flex;
       padding: 0;
       border: 0;

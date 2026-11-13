@@ -66,3 +66,13 @@
     font-size: var(--text-md);
   }
 }
+
+@layer components {
+  /* Narrower than any phone held upright (a page zoomed in or set in a large text size): a page
+     subject's copy button goes under its groups when it no longer fits beside them. */
+  @media (max-width: 18.75em) {
+    .hash--full {
+      flex-wrap: wrap;
+    }
+  }
+}

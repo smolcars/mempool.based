@@ -551,6 +551,22 @@ Prose is set in the system font, which needs no download. The web font (Recursiv
    - **Read props in JSX or a memo.** A read at the top of a component body is not tracked and warns in development; wrap a deliberate one-time read in `untrack`.
    - **In tests, flush before you look.** After an event, a timer or a write the test made, call `flush()` before reading signals or the DOM. `FakeSocket` flushes after each message and close, as a browser's task boundary would.
 
+## Accessibility
+
+The bar is WCAG 2.2 AA. What a new page must do:
+
+- **One `h1`, headings in order, the title from `usePageTitle`.** Chain data stays text (rule 3 above), read aloud as text.
+- **Every control reachable by Tab in reading order, with the global focus ring.** No positive `tabindex`; never `outline: none` without another ring. Escape closes anything that opens over the page (`components/pop.ts` does it for you). The sticky header never covers focus: `Header.tsx` keeps `--header-h` current for the page's `scroll-padding-top`.
+- **A name for every control, table and drawing.** Icon-only buttons take `aria-label`; tables a caption (`DataTable` does it; a column whose rows name themselves takes `hidden` for a header read only aloud); a canvas or chart a text alternative carrying the same figures (`Chart`'s "Show the figures", the list beside `TxGrid`).
+- **Live updates said once, politely.** A polite region for a new block, a state change or a copy; never one that changes on every tick.
+- **Never colour alone,** and colours only from the tokens: `src/styles/contrast.test.ts` measures every text, mark and surface pair in both themes.
+- **Breakpoints in `em`,** so a large text size reaches the narrow layouts. At 18.75em and below, stack what sits two to a row.
+- **Motion from the duration tokens,** so reduced motion stops it.
+
+`e2e/a11y.e2e.ts` holds these on every page type: [axe-core](https://github.com/dequelabs/axe-core) (a pinned development dependency, injected by Playwright, never served) in light and dark, a keyboard walk down and back up the page (the skip link first, every control reached, a ring at every stop, none under the header; Option-Tab in WebKit, as in Safari), no movement under reduced motion, Escape on the pop-ups and the search's answer, and the shell and the transaction page at 320 px, at a phone's large text and at 200% text (the text sizes in Chromium only, the one engine a test can set them in). Add a new page type to its list. One axe rule is off, with its reason in the file.
+
+Checked by hand in November 2026 and not by a test: that no live region speaks on a mempool tick (eight seconds on every live page, mainnet); that the canvas drawings and charts have their text alternatives; the contrast of fades and loading states, which dim content on purpose while it is replaced. A screen reader has not been run; with VoiceOver, check first the home page's block strip and its new-block announcement, a transaction confirming, the search's answer, the exact-amount pop-up, and a chart's slider and figures.
+
 ## Checks
 
 Lint, format and type checks are strict, and CI fails on any finding. OXC is the only linter and formatter: never add Biome, ESLint or Prettier.

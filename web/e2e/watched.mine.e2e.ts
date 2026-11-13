@@ -19,6 +19,11 @@ test("a block the server watched arrive shows its audit, and its match rate in t
     audit.getByRole("table", { name: "The block we expected and the block mined" }),
   ).toBeVisible();
   await expect(audit.getByText("Not audited", { exact: false })).toHaveCount(0);
+  // The kinds' meanings are in sight on a wide screen: their button is a phone's only. It once
+  // showed on desktops too, in the browser's own grey, when the disclosure's styles loaded after.
+  await expect(audit.getByRole("button", { name: "What each kind means" })).toBeVisible({
+    visible: (page.viewportSize()?.width ?? 0) <= 640,
+  });
 
   await page.goto("/regtest/blocks");
   const table = page.getByRole("table", { name: "Recent blocks, newest first" });

@@ -200,7 +200,7 @@ Relative time ("13 min ago", "1 day 23 h ago", "9 days ago": days lead from a da
 - **Shadow:** `--shadow-panel`, a hairline in light and none in dark, under panels; `--shadow-pop` on floating things.
 - **Touch:** every control a thumb uses has a target of at least `--touch` (44 px). Small drawn buttons (copy, expand, theme) keep their size and get the target from an invisible margin on touch screens.
 - **Tiles:** `--tile-w` 8.25rem, `--tile-h` 9.5rem, `--tile-gap` 0.75rem. Phones override them on the strip element.
-- **Breakpoints:** 1040 px (single column, the header's two rows) and 640 px (phone).
+- **Breakpoints:** 65em (single column, the header's two rows) and 40em (phone): 1040 and 640 px at the default text size. They are in `em`, so a reader's larger text size moves the layout to the narrower form, as zoom does; below 18.75em (300 px, reached only by zoom or a large text size) the last two-column groups stack.
 
 ## Motion
 
@@ -309,7 +309,7 @@ Decided while building it, where the rest of this document left it open. The pag
 
 | Component | What it is |
 |---|---|
-| Header | Logo and wordmark, network switch, search, navigation (Blocks, Mempool, Mining, Lightning), theme toggle. Sticky. One row on wide screens. Between 640 and 1040 px (tablets, a desktop at 200% zoom) two rows: the brand, the search and the theme toggle, then the network switch and the sections. On a phone two rows of about 100 px in all: the mark, the network, the search (its hint one word, "Search") and the theme, then the four sections sharing the row evenly, every one in sight at 320 px. A focused search takes the whole first row, the mark, network and theme stepping aside, so it and its answer are the phone's width. The network and theme are 44 px targets around a smaller drawn pill and square |
+| Header | Logo and wordmark, network switch, search, navigation (Blocks, Mempool, Mining, Lightning), theme toggle. Sticky, except on a screen under 30em tall (a phone on its side, a page zoomed in or set in a large text size), where it scrolls away with the page. Focus and in-page links stop clear of it. One row on wide screens. Between 640 and 1040 px (tablets, a desktop at 200% zoom) two rows: the brand, the search and the theme toggle, then the network switch and the sections. On a phone two rows of about 100 px in all: the mark, the network, the search (its hint one word, "Search") and the theme, then the four sections sharing the row evenly, every one in sight at 320 px. A focused search takes the whole first row, the mark, network and theme stepping aside, so it and its answer are the phone's width. The network and theme are 44 px targets around a smaller drawn pill and square |
 | Network band | A slim band tinted with the network colour, a short hatched mark and the warning in words. Test networks only |
 | Logo | `design/logo.svg`: a tile with three strata, the top layer in the accent and offset, still settling. In the header it is inline SVG with the tile in `--color-network`. The wordmark is live text, so a new name is one string |
 | Block tile | Projected (dashed) or mined (solid). Height or label, median fee, fee range, total fees (in magnitude), its fee layers, transaction count and age. Mined tiles link to the block and show the pool below |

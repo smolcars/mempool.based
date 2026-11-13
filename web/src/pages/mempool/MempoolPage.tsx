@@ -254,7 +254,7 @@ function ChartSlot(props: { class: string; lines: number; children: JSX.Element 
 const BRIDGE_STEPS = 5;
 
 /** A phone's size chart is shorter, so it and its time axis are on the first screen in any font. */
-const PHONE = "(max-width: 640px)";
+const PHONE = "(max-width: 40em)";
 const SIZE_HEIGHT = 300;
 const SIZE_HEIGHT_PHONE = 240;
 

@@ -207,8 +207,9 @@ test("an exact amount closes on scrolling, and when another opens", async ({ pag
   });
   await expect(open).toHaveCount(0);
   // A figure just under the sticky header opens its note below it, never over the header. A short
-  // window, so the page scrolls far enough to put the figure there.
-  await page.setViewportSize({ width: 390, height: 360 });
+  // window, so the page scrolls far enough to put the figure there, but tall enough (30em) for the
+  // header to stick.
+  await page.setViewportSize({ width: 390, height: 520 });
   const first = controls.first();
   const gap = await first.evaluate((el) => {
     const header = () =>

@@ -22,6 +22,7 @@
   "devDependencies": {
     "@playwright/test": "1.64.1",
     "@solidjs/vite-plugin": "3.0.0-next.57",
+    "axe-core": "4.14.0",
     "happy-dom": "21.0.4",
     "oxfmt": "0.78.0",
     "oxlint": "1.93.0",

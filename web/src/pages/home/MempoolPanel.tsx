@@ -47,7 +47,7 @@ function deepText(deep: number): string {
 export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
   const m = () => props.feed.data();
   const rows = createMemo(() => depthRows(m()?.bands ?? sharesOf([])));
-  const wide = typeof matchMedia === "function" && matchMedia("(min-width: 641px)").matches;
+  const wide = typeof matchMedia === "function" && matchMedia("(min-width: 40.0625em)").matches;
 
   return (
     <section class="home-mempool" aria-labelledby="mempool-title">

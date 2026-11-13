@@ -238,7 +238,7 @@
     }
   }
   /* A finger's target on a phone. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .chart__figures > summary {
       display: inline-flex;
       align-items: center;
@@ -259,7 +259,7 @@
   }
   /* On a phone a point's time is two lines, the day and the time of day, at the size of the
      figures beside it, so a big node's capacity still fits 320 px. */
-  @media (max-width: 640px) {
+  @media (max-width: 40em) {
     .chart__table td:first-child {
       white-space: normal;
       font-size: var(--text-xs);
@@ -276,5 +276,14 @@
   }
   .chart__nowrap {
     white-space: nowrap;
+  }
+}
+
+@layer components {
+  /* Narrower than any phone held upright: a page zoomed in or set in a large text size. */
+  @media (max-width: 18.75em) {
+    .chart__value {
+      flex-wrap: wrap;
+    }
   }
 }
