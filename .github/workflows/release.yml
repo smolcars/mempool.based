@@ -6,9 +6,10 @@ name: Release
 # - A version tag (v1.2.3, equal to the version in Cargo.toml) publishes the image to
 #   ghcr.io/<owner>/<repo> as 1.2.3 and latest, with a signed provenance attestation, and creates
 #   the GitHub release.
-# - Anything else is a dry run that publishes nothing: every merge to master that touches what
-#   goes into the image, and a manual dispatch. It builds, checks and joins both architectures,
-#   so the release path cannot rot between releases.
+# - A merge to master that touches what goes into the image publishes it as sha-<commit> and
+#   master, with the same attestation. Never as latest or a version.
+# - A manual dispatch is a dry run that publishes nothing: it builds, checks and joins both
+#   architectures.
 # Never on pull requests, so it is outside the PR budget.
 on:
   push:
@@ -31,8 +32,10 @@ permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
-  # A newer master push supersedes a dry run; a release always finishes.
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  # Every run publishes or proves a commit, so none is cancelled, even pending: master's runs wait
+  # in one queue and run in the order they were pushed (docs/CI.md).
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   build:
@@ -169,7 +172,7 @@ jobs:
               echo "| $(jq -r --arg d "$d" '.manifests[] | select(.digest == $d) | .platform | "\(.os)/\(.architecture)"' index.json) | \`$d\` | $(awk -v s="$size" 'BEGIN { printf "%.1f", s / 1e6 }') MB |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
-          [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ] || echo "Dry run: nothing is published." >> "$GITHUB_STEP_SUMMARY"
+          [ "$GITHUB_EVENT_NAME" = push ] || echo "Dry run: nothing is published." >> "$GITHUB_STEP_SUMMARY"
       # The joined image, taken back out of the layout for this runner's platform, still runs.
       - name: Run the joined image
         run: |
@@ -191,10 +194,11 @@ jobs:
 
   publish:
     needs: join
-    # A push of a tag, never a manual run: a dispatch on a tag ref is a dry run too.
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    # One publisher at a time across every tag, so two releases cannot both move latest. Queued,
-    # because by default a third tag's publish would cancel the second's while it waits.
+    # A push of a tag or to master, never a manual run: a dispatch is a dry run on any ref.
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/master')
+    # One publisher at a time across every tag and master, so the read of what latest or master
+    # points at and the move cannot interleave. Queued, because by default a third run's publish
+    # would cancel the second's while it waits.
     concurrency:
       group: release-publish
       cancel-in-progress: false
@@ -202,6 +206,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      contents: read # compare master's commit with this one
       packages: write # push the image
       id-token: write # sign the provenance attestation
       attestations: write # record it
@@ -218,38 +223,69 @@ jobs:
         env:
           VERSION: ${{ needs.join.outputs.version }}
           TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           image=ghcr.io/${GITHUB_REPOSITORY,,}
           digest=$(cat layout/digest)
           docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$TOKEN"
-          # A version is pushed once: re-running an old release must not replace it or move latest.
-          # ghcr.io answers "manifest unknown" for a tag it lacks; any other failure stops here.
-          if out=$(skopeo inspect --raw "docker://$image:$VERSION" 2>&1); then
-            echo "::error::$image:$VERSION is already published"
+          # Reads a tag's index into m.json; fails when the tag is not there. ghcr.io answers
+          # "manifest unknown" for a tag it lacks, "name unknown" before the package exists; any other
+          # failure stops here.
+          fetch() {
+            skopeo inspect --raw "docker://$image:$1" > m.json 2> err.txt && return 0
+            grep -qE 'manifest unknown|name unknown' err.txt && return 1
+            echo "::error::Could not read $image:$1: $(cat err.txt)"
             exit 1
-          elif [[ $out != *"manifest unknown"* ]]; then
-            echo "::error::Could not tell whether $image:$VERSION is published: $out"
-            exit 1
-          fi
-          # latest only moves forward: a patch to an older line keeps it where it is. Before the
-          # first release the package does not exist: "name unknown".
-          if out=$(skopeo list-tags "docker://$image" 2>&1); then
-            published=$(jq -r '.Tags[]' <<< "$out")
-          elif [[ $out == *"name unknown"* ]]; then
-            published=
+          }
+          fetched() { echo "sha256:$(sha256sum < m.json | cut -d' ' -f1)"; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # A version is pushed once: re-running an old release must not replace it or move latest.
+            if fetch "$VERSION"; then
+              echo "::error::$image:$VERSION is already published"
+              exit 1
+            fi
+            # latest only moves forward: a patch to an older line keeps it where it is. Before the
+            # first release the package does not exist: "name unknown".
+            if out=$(skopeo list-tags "docker://$image" 2>&1); then
+              published=$(jq -r '.Tags[]' <<< "$out")
+            elif [[ $out == *"name unknown"* ]]; then
+              published=
+            else
+              echo "::error::Could not list the tags of $image: $out"
+              exit 1
+            fi
+            newest=$(printf '%s\n' $published "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+            tags=("$VERSION")
+            [ "$newest" != "$VERSION" ] || tags+=(latest)
           else
-            echo "::error::Could not list the tags of $image: $out"
-            exit 1
+            # A commit's image is pushed once. Re-running only this job pushes the same bytes again;
+            # a rebuild of a published commit is refused, so its tag never changes.
+            tags=("sha-$GITHUB_SHA")
+            if fetch "${tags[0]}" && [ "$(fetched)" != "$digest" ]; then
+              echo "::error::$image:${tags[0]} is already published as $(fetched)"
+              exit 1
+            fi
+            # master only moves forward: a run for an older commit, finished late or re-run after a
+            # newer one, leaves it where it is.
+            if ! fetch master; then
+              tags+=(master)
+            else
+              at=$(jq -r '.annotations["org.opencontainers.image.revision"]' m.json)
+              status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$at...$GITHUB_SHA" --jq .status)
+              case $status in
+                ahead | identical) tags+=(master) ;;
+                *) echo "master stays at $at: compared with it, this commit is $status." >> "$GITHUB_STEP_SUMMARY" ;;
+              esac
+            fi
           fi
-          newest=$(printf '%s\n' $published "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-          tags=("$VERSION")
-          [ "$newest" != "$VERSION" ] || tags+=(latest)
           for tag in "${tags[@]}"; do
             # --preserve-digests: the registry holds byte for byte the index the join checked.
             skopeo copy --all --preserve-digests "oci:layout:$VERSION" "docker://$image:$tag"
           done
-          [ "sha256:$(skopeo inspect --raw "docker://$image:$VERSION" | sha256sum | cut -d' ' -f1)" = "$digest" ]
+          fetch "${tags[0]}"
+          [ "$(fetched)" = "$digest" ]
+          echo "Published $image:${tags[*]} as \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -260,6 +296,7 @@ jobs:
 
   release:
     needs: [join, publish]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
