@@ -81,9 +81,9 @@ test("every version is a thumb's target of its own, and a near miss never opens 
       const name = (el: Element | null) =>
         el?.closest("a")?.getAttribute("href")?.slice(-6) ??
         (el?.classList.contains("table__rowlink") ? "the row" : "nothing");
-      for (const story of document.querySelectorAll<HTMLElement>("[data-story]")) {
-        const versions = [...story.querySelectorAll<HTMLAnchorElement>(".rbf-v__id a")];
-        const others = [...story.querySelectorAll<HTMLAnchorElement>(".rbf-story__others a")];
+      for (const one of document.querySelectorAll<HTMLElement>("[data-story]")) {
+        const versions = [...one.querySelectorAll<HTMLAnchorElement>(".rbf-v__id a")];
+        const others = [...one.querySelectorAll<HTMLAnchorElement>(".rbf-story__others a")];
         for (const a of [...versions, ...others]) {
           a.scrollIntoView({ block: "center" });
           const r = a.getBoundingClientRect();
@@ -110,11 +110,11 @@ test("every version is a thumb's target of its own, and a near miss never opens 
           if (up + down + 1 < 44) out.push(`${a.href.slice(-6)} is ${up + down + 1} px high`);
         }
         // Nowhere in the story does the row's own link answer: down the line through each version.
-        const box = story.getBoundingClientRect();
+        const box = one.getBoundingClientRect();
         for (const a of versions) {
           a.scrollIntoView({ block: "center" });
           const r = a.getBoundingClientRect();
-          const top = story.getBoundingClientRect().top;
+          const top = one.getBoundingClientRect().top;
           for (let dy = 0; dy <= box.height; dy += 2) {
             const el = document.elementFromPoint(r.left + r.width / 2, top + dy);
             if (el?.classList.contains("table__rowlink")) {

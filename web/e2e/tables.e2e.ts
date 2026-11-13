@@ -2,6 +2,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
 import { AUDIT } from "../src/components/audit/fakes";
+import { ACINQ, mainnet, ONE, recorded, serve } from "./lightning-answers";
 import { tablesFit, tapRow } from "./rows";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
@@ -277,5 +278,70 @@ test("tables that open on a tap fit their panel or show that they scroll, at 320
       await expect(page.locator(".chart__figures table").first()).toBeVisible();
       await tablesFit(page, `${path}'s figures at ${width} px`);
     }
+  }
+});
+
+// A chart's figures are its precise text alternative: on a phone they are read whole, with no
+// sideways scroll. A node's history once put its capacity past a 320 px phone's edge, and its fee
+// figures scrolled; the mining page's block health did too. Here each must fit outright.
+test("a chart's figures fit a phone whole: a node's history and fees, and the mining page's", async ({
+  page,
+}) => {
+  // The largest node's figures, with a change between its midnights: the widest a time and a
+  // capacity get.
+  const acinq = recorded("node-acinq-history") as { from: number; points: object[] };
+  const [midnight, now] = acinq.points;
+  await serve(page, {
+    ...mainnet(),
+    [`nodes/${ACINQ}/history`]: {
+      ...acinq,
+      points: [midnight, { time: 1_794_550_123, channels: 1805, capacity: 27_655_420_454 }, now],
+    },
+  });
+  /** Every visible figures table in `sections` is no wider than its box, every header inside. */
+  const whole = async (sections: string[], label: string) => {
+    let seen = 0;
+    for (const name of sections) {
+      const section = page.locator("section", {
+        has: page.getByRole("heading", { name, exact: true }),
+      });
+      for (const s of await section.locator(".chart__figures > summary").all()) {
+        if (await s.isVisible()) await s.click();
+      }
+      const tables = section.locator(".chart__table table");
+      for (const t of await tables.all()) {
+        seen += 1;
+        const fit = await t.evaluate((el) => {
+          const box = (el.closest(".chart__table") as HTMLElement).getBoundingClientRect();
+          return {
+            over: el.scrollWidth - (el.closest(".chart__table") as HTMLElement).clientWidth,
+            out: [...el.querySelectorAll("th, td")]
+              .filter((c) => c.getClientRects().length > 0)
+              .filter((c) => c.getBoundingClientRect().right > box.right + 0.5)
+              .map((c) => c.textContent),
+          };
+        });
+        expect(fit, `${label}: ${name}`).toStrictEqual({ over: 0, out: [] });
+      }
+    }
+    expect(seen, `${label}: figures to measure`).toBeGreaterThan(0);
+  };
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    for (const node of [ACINQ, ONE]) {
+      await page.goto(`/regtest/lightning/node/${node}`);
+      await expect(page.getByRole("slider")).toBeVisible();
+      for (const name of ["Over time", "Fee rates"]) {
+        await whole([name], `${node.slice(0, 8)} at ${width} px`);
+      }
+    }
+    await page.goto("/regtest/mining?period=all");
+    await expect(page.locator("main table a").first()).toBeVisible({ timeout: 30_000 });
+    // Regtest draws what it can of them: its hashrate means nothing, and its blocks are few.
+    await expect(page.locator(".chart__figures > summary").first()).toBeVisible();
+    await whole(
+      ["Hashrate and difficulty", "Blocks over time", "Block health"],
+      `/mining at ${width} px`,
+    );
   }
 });

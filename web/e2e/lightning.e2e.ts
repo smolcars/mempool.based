@@ -375,7 +375,7 @@ test("a node's past and fee rates sit side by side, and a phone reaches its chan
     await expect(fees.getByRole("table", { name }).locator("thead th:visible")).toHaveText([
       "Fee rate, ppm",
       "Channels",
-      "Capacity, BTC",
+      /Capacity, BTC$/,
     ]);
   }
   await tablesFit(page, "a node's fee figures at 320 px");
