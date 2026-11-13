@@ -73,6 +73,17 @@ export function formatBtc(sats: number): string {
 }
 
 /**
+ * BTC as a program reads it, for the clipboard: digits and a point, eight decimals, no grouping
+ * and no unit (`5954.38071385`). A wallet or a spreadsheet may refuse the page's grouping space.
+ */
+export function plainBtc(sats: number): string {
+  if (!Number.isSafeInteger(sats)) return MISSING;
+  const abs = Math.abs(sats);
+  const fraction = String(abs % SATS_PER_BTC).padStart(8, "0");
+  return `${sats < 0 ? "-" : ""}${Math.floor(abs / SATS_PER_BTC)}.${fraction}`;
+}
+
+/**
  * BTC to the precision a summary needs, magnitude first: whole bitcoins from 1 000 (`2 799`), two
  * decimals from 1 (`3.15`), three significant digits below (`0.0225`, `0.00149`). Rounded to
  * nearest; the exact amount belongs in a title or a detail page.
@@ -198,11 +209,31 @@ export function hashGroups(value: string): string[] {
   return value.match(/.{1,8}/g) ?? [];
 }
 
-/** Absolute UTC time from unix seconds: `2026-11-11 20:41:07 UTC`. */
-export function formatUtc(unixSeconds: number): string {
+export const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+/**
+ * A moment in UTC as every page writes one: `11 Nov 2026, 20:41:07 UTC`, or to the minute
+ * (`11 Nov 2026, 20:41 UTC`) where seconds would claim more than the figure knows.
+ */
+export function formatUtc(unixSeconds: number, seconds = true): string {
   const d = new Date(unixSeconds * 1000);
   if (!Number.isFinite(d.getTime())) return MISSING;
-  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+  const two = (n: number) => String(n).padStart(2, "0");
+  const time = `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}${seconds ? `:${two(d.getUTCSeconds())}` : ""}`;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}, ${time} UTC`;
 }
 
 /** ISO 8601 for a `<time datetime>` attribute. */

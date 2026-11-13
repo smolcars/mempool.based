@@ -215,7 +215,7 @@ describe("address page", () => {
       "4",
       "+0.00050000 BTC",
     ]);
-    const exact = [...el.querySelectorAll<HTMLElement>(".address-total__exact")];
+    const exact = [...el.querySelectorAll<HTMLElement>(".exact")];
     expect(exact.map((e) => [e.hidden, text(e.querySelector(".num") as Element)])).toStrictEqual([
       [true, "1.00000000"],
       [true, "1.50000000"],

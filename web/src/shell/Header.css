@@ -242,13 +242,21 @@
       clip-path: inset(50%);
       white-space: nowrap;
     }
-    /* Searching takes the whole first row; the brand, network and theme step aside meanwhile. */
-    .site-header__inner:has(.site-header__search:focus-within) {
+    /* Searching takes the whole first row; the brand, network and theme step aside meanwhile. A
+       panel saying what was not found keeps that row after the keyboard closes (iOS's Done takes
+       the focus), until a press outside or a new page closes it. */
+    .site-header__inner:is(
+      :has(.site-header__search:focus-within),
+      :has(.site-header__search .search__panel)
+    ) {
       grid-template-areas:
         "search search search search"
         "nav nav nav nav";
     }
-    .site-header__inner:has(.site-header__search:focus-within)
+    .site-header__inner:is(
+        :has(.site-header__search:focus-within),
+        :has(.site-header__search .search__panel)
+      )
       :is(.brand, .network, .theme-toggle) {
       display: none;
     }
@@ -272,6 +280,10 @@
     }
     .nav a {
       font-size: var(--text-xs);
+    }
+    /* The network has room on its row again: its arrow says it opens. */
+    .network__chevron {
+      display: block;
     }
   }
 }

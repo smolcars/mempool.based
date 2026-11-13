@@ -85,14 +85,16 @@
   }
 
   /* The network now: two figures, then the adjustment. */
+  /* Two figures stacked in a narrow column beside the adjustment, not side by side over empty
+     space; where the panel is one column they sit side by side again. */
   .mining-now__grid {
     display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
     gap: var(--space-6);
   }
   .mining-now__stats {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     gap: var(--space-4);
   }
@@ -449,6 +451,9 @@
     .mining-now__grid,
     .mining-pools {
       grid-template-columns: minmax(0, 1fr);
+    }
+    .mining-now__stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
   /* A day or a week: one bar, not a chart, so it goes above the table, the panel's width, rather

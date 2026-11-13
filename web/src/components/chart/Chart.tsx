@@ -89,6 +89,11 @@ export interface ChartLayer {
   pool?: number;
   /** A shorter name for the readout, where the key says the rest; `name` is read aloud. */
   short?: string;
+  /**
+   * Held by only some points (the lowest band before it was split): read out last, and only at a
+   * point that has it, its place kept so the plot never moves.
+   */
+  rare?: boolean;
 }
 
 /** A figure the readout and the table show at each point, without drawing it. */
@@ -347,6 +352,7 @@ export default function Chart(props: ChartProps) {
           ? "no data"
           : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}`,
       empty: false,
+      rare: false,
     })),
     ...series().map((s) => ({
       kind: `line-${s.tone ?? 1}`,
@@ -357,6 +363,7 @@ export default function Chart(props: ChartProps) {
       short: undefined,
       value: reading(s.values[i], s.format),
       empty: false,
+      rare: false,
     })),
     ...notes().map((s) => ({
       kind: "note",
@@ -367,6 +374,7 @@ export default function Chart(props: ChartProps) {
       short: undefined,
       value: reading(s.values[i], s.format),
       empty: false,
+      rare: false,
     })),
     ...layers().map((l, k) => ({
       kind: filled(l) ? "fee" : "layer",
@@ -377,11 +385,13 @@ export default function Chart(props: ChartProps) {
       short: l.short,
       value: reading(l.values[i], layerFormat),
       empty: l.values[i] === 0,
+      rare: l.rare === true,
     })),
   ];
   const valueText = () => {
     const i = index();
     return `${when(i)}: ${readings(i)
+      .filter((r) => !(r.rare && r.empty))
       .map((r) => `${r.name} ${r.value}`)
       .join(", ")}`;
   };
@@ -484,6 +494,7 @@ export default function Chart(props: ChartProps) {
                     "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
                     "chart__value--empty": r().empty,
                     "chart__value--band": r().band,
+                    "chart__value--rare": r().rare,
                   },
                 ]}
               >

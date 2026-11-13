@@ -51,7 +51,8 @@
   }
   .ln-stats > * {
     flex: 1 1 11rem;
-    min-width: fit-content;
+    /* A phrase under a figure (a node count's kinds) wraps; the figure itself never does. */
+    min-width: min-content;
   }
   .ln-stats--small {
     margin-top: var(--space-4);
@@ -76,8 +77,13 @@
   .ln-stat__value .amount {
     font-size: var(--text-lg);
   }
+  /* The figure whole; only the phrase under it wraps (the stat may be narrower than it). */
+  .ln-stat__value {
+    white-space: nowrap;
+  }
   .ln-stat__sub,
   .ln-stat__of {
+    white-space: normal;
     font-size: var(--text-sm);
     font-weight: var(--weight-regular);
     letter-spacing: 0;
@@ -563,20 +569,6 @@
     text-decoration-thickness: 1px;
     text-underline-offset: 0.2em;
   }
-  .ln-msat-wrap {
-    position: relative;
-  }
-  .ln-msat__exact {
-    position: absolute;
-    bottom: calc(100% + 4px);
-    left: 0;
-    z-index: 2;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-m);
-    background: var(--color-surface-raised);
-    box-shadow: var(--shadow-pop);
-    white-space: nowrap;
-  }
   .ln-range {
     display: flex;
     flex-wrap: wrap;
@@ -661,6 +653,13 @@
   }
   .ln-nav__back {
     margin-right: auto;
+  }
+  /* On a phone the way back has a line of its own above the section's links, so a long list's
+     name ("Nodes by open channels") never pushes "History" onto a line alone. */
+  @media (max-width: 640px) {
+    .ln-nav__back {
+      flex-basis: 100%;
+    }
   }
   /* Landed on from "History": clear of the sticky header. */
   .ln-history {

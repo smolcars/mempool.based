@@ -65,9 +65,8 @@ export function until(at: number, now: number): string {
   return `in ${Math.floor(h / 24)} days`;
 }
 
-/** The estimated moment in UTC, to the minute: `2026-11-13 14:14 UTC`. */
-export const retargetUtc = (ms: number): string =>
-  formatUtc(Math.floor(ms / 1000)).replace(/:\d\d UTC$/, " UTC");
+/** The estimated moment in UTC, to the minute: `13 Nov 2026, 14:14 UTC`. */
+export const retargetUtc = (ms: number): string => formatUtc(Math.floor(ms / 1000), false);
 
 /** Blocks mined in this period, from the reply: `1 795 of 2 016 blocks`. */
 export function periodText(d: DifficultyAdjustment): string {

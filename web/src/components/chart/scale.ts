@@ -1,5 +1,5 @@
 // Scales, ticks and value formats for the charts (docs/FRONTEND.md "Charts"). Pure.
-import { formatPowerOfTen, MISSING, NNBSP } from "../../lib/format";
+import { formatPowerOfTen, formatUtc, MISSING, MONTHS, NNBSP } from "../../lib/format";
 
 /** Maps a value in `domain` to a pixel in `range`, linearly or by its logarithm. */
 export interface Scale {
@@ -108,8 +108,6 @@ const TIME_STEPS: readonly { unit: "s" | "month" | "year"; n: number; approx: nu
   { unit: "year", n: 10, approx: 3652 * DAY },
 ];
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 const utc = (t: number) => new Date(t * 1000);
 const two = (n: number) => String(n).padStart(2, "0");
 
@@ -122,9 +120,7 @@ export function formatDay(t: number): string {
 
 /** A moment to the minute, UTC: `3 Nov 2026, 14:00 UTC`. */
 export function formatMoment(t: number): string {
-  if (!Number.isFinite(t)) return MISSING;
-  const d = utc(t);
-  return `${formatDay(t)}, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
+  return formatUtc(t, false);
 }
 
 /**

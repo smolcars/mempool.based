@@ -1,0 +1,83 @@
+// The page's small pop-ups (an exact amount, the network menu): one open at a time, closed by a
+// press outside, Escape, and, where asked, a scroll that carries its button away. Not the browser's
+// popover: while a top-layer element shows, iOS Safari repaints the band behind its toolbar and the
+// page stops above it (WebKit bug 302272).
+//
+// A press outside a menu only closes it (`absorb`): the reader is dismissing a choice, as with a
+// native menu, and a tap that also followed the link beneath it took them to another page. An
+// exact amount lets the press through: it is a note on a figure, like a tooltip, and the reader is
+// already on to what they tapped.
+
+let closeOpen: (() => void) | undefined;
+
+/**
+ * Notes a pop-up as open, closing the one open before it. `inside` is what a press may land on
+ * without closing it: its button first, which Escape returns focus to. Returns what closes it.
+ */
+export function openPop(
+  onClose: () => void,
+  inside: () => readonly (HTMLElement | undefined)[],
+  options: { scroll?: boolean; absorb?: boolean } = {},
+): () => void {
+  closeOpen?.();
+  const press = (e: PointerEvent) => {
+    if (
+      inside().some((el) => el !== undefined && e.target instanceof Node && el.contains(e.target))
+    )
+      return;
+    close();
+    // A primary press only: a right-click ends in a menu of the browser's, never in a click.
+    if (options.absorb === true && e.button === 0) absorbClick();
+  };
+  const key = (e: KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    close();
+    inside()[0]?.focus();
+  };
+  // A scroll or resize closes it once its button has moved: not a nudge, such as iOS Safari's
+  // toolbar settling as the pop-up opens.
+  const at = inside()[0]?.getBoundingClientRect();
+  const moved = () => {
+    const now = inside()[0]?.getBoundingClientRect();
+    if (at && now && Math.max(Math.abs(now.top - at.top), Math.abs(now.left - at.left)) > 16)
+      close();
+  };
+  const close = () => {
+    document.removeEventListener("pointerdown", press, true);
+    document.removeEventListener("keydown", key);
+    window.removeEventListener("scroll", moved, true);
+    window.removeEventListener("resize", moved);
+    if (closeOpen === close) closeOpen = undefined;
+    onClose();
+  };
+  document.addEventListener("pointerdown", press, true);
+  document.addEventListener("keydown", key);
+  if (options.scroll === true) {
+    window.addEventListener("scroll", moved, { capture: true, passive: true });
+    window.addEventListener("resize", moved, { passive: true });
+  }
+  closeOpen = close;
+  return close;
+}
+
+/**
+ * Swallows the click that ends the press under way, so it activates nothing. Only a pointer's
+ * click (a keyboard's has `detail` 0), and only until the next press, a cancelled press (a
+ * scroll), a key or the browser's own menu: a later, unrelated activation always goes through.
+ */
+function absorbClick(): void {
+  const ends = ["pointerdown", "pointercancel", "keydown", "contextmenu"] as const;
+  const eat = (e: MouseEvent) => {
+    if (e.detail === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    done();
+  };
+  const done = () => {
+    window.removeEventListener("click", eat, true);
+    for (const end of ends) window.removeEventListener(end, done, true);
+  };
+  window.addEventListener("click", eat, true);
+  // Added while this press is being dispatched: the window's capture phase is already past for it.
+  for (const end of ends) window.addEventListener(end, done, true);
+}

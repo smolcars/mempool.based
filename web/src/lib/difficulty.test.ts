@@ -55,7 +55,7 @@ describe("difficulty wording", () => {
     expect(until(now + 3 * 3_600_000, now)).toBe("in 3 h");
     expect(until(now + 4 * 86_400_000, now)).toBe("in 4 days");
     expect(until(now - 60_000, now)).toBe("any moment");
-    expect(retargetUtc(reply.estimatedRetargetDate)).toBe("2026-11-13 20:54 UTC");
+    expect(retargetUtc(reply.estimatedRetargetDate)).toBe("13 Nov 2026, 20:54 UTC");
   });
 
   it("checks the reply's shape", () => {

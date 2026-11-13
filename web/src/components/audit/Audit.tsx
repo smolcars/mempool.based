@@ -6,6 +6,7 @@ import { Loading as Waiting } from "../States";
 import { formatSize, groupDigits } from "../../lib/format";
 import { type AuditTotals, CATEGORIES, formatMatchRate, type Kind } from "./model";
 import "../Button.css";
+import "../More.css";
 import "./Audit.css";
 
 // The list of transactions loads only when the reader asks for it.
@@ -60,6 +61,8 @@ export function AuditSection(props: {
 function Body(props: { audit: AuditTotals; hash: string | undefined }) {
   const a = () => props.audit;
   const listed = () => [...EXPECTED_ONLY, ...MINED_ONLY].some((k) => a()[k].txs > 0);
+  // On a phone the kinds' meanings wait behind one button: their counts stay in sight.
+  const [says, setSays] = createSignal(false);
   const rows = () => [
     {
       label: "Transactions",
@@ -111,7 +114,7 @@ function Body(props: { audit: AuditTotals; hash: string | undefined }) {
         </div>
       </div>
       <Bars audit={a()} />
-      <div class="audit__kinds">
+      <div id="audit-kinds" class="audit__kinds" data-says={says() ? "" : undefined}>
         <Kinds audit={a()} kinds={["matched"]} />
         <div class="audit__side">
           <h3 class="audit__side-title">Expected, not mined</h3>
@@ -122,6 +125,15 @@ function Body(props: { audit: AuditTotals; hash: string | undefined }) {
           <Kinds audit={a()} kinds={MINED_ONLY} />
         </div>
       </div>
+      <button
+        type="button"
+        class="more__summary audit__says"
+        aria-expanded={says() ? "true" : "false"}
+        aria-controls="audit-kinds"
+        onClick={() => setSays(!says())}
+      >
+        {says() ? "Hide what each kind means" : "What each kind means"}
+      </button>
       <Show when={props.hash && listed()}>
         <Details hash={props.hash ?? ""} audit={a()} />
       </Show>
@@ -190,7 +202,9 @@ function Kinds(props: { audit: AuditTotals; kinds: readonly Kind[] }) {
               <span class="audit-kinds__name">{c.name}</span>
               <span class="audit-kinds__figures num">
                 <Show when={part().txs > 0} fallback="None">
-                  {txCount(part().txs)}, {formatSize(part().vsize)}
+                  {/* A phone may break the line between the count and the size, never inside one. */}
+                  <span class="audit-kinds__part">{txCount(part().txs)},</span>{" "}
+                  <span class="audit-kinds__part">{formatSize(part().vsize)}</span>
                 </Show>
               </span>
               <span class="audit-kinds__says">{c.says}</span>

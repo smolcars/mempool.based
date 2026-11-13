@@ -86,15 +86,6 @@
       text-decoration-color: var(--color-text-muted);
     }
   }
-  .address-total__exact:not([hidden]) {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-regular);
-    letter-spacing: normal;
-    color: var(--color-text-muted);
-  }
 
   /* Balance over time: the chart's whole height is held while its code and data load. */
   .address-balance {

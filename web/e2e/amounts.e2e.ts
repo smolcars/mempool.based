@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import type { Page, Route } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
-import { amountsIntact } from "./rows";
+import { amountsIntact, exactsInside } from "./rows";
 
 /** 21 million BTC to the satoshi, a 13-digit sat amount, the largest msat limit, fine rates. */
 const ALL_BTC = 2_099_999_997_690_000;
@@ -103,30 +103,41 @@ const PAGES = [
   "/regtest/mining/pool/unknown",
   // Its past adjustments, mainnet's: words, arrows and difficulties in one row.
   "/regtest/mining",
+  // Replacements: their fees and rates.
+  "/regtest/rbf",
 ];
 
-// Both schemes on each load: the figures' layout is the same, and each load costs a page.
-test("amounts at their longest stay whole at 320 and 390 px, in both schemes", async ({ page }) => {
-  await lightning(page);
-  await esplora(page);
-  await stubRetargets(page);
-  for (const width of [320, 390]) {
+/** Opens a page with every figure in, in the wide faces a Linux machine falls back to. */
+async function load(page: Page, path: string) {
+  await page.goto(path);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // Every figure in: nothing still loading.
+  await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  // CI's runner once broke a line a Mac's fonts kept whole.
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+    root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+  });
+}
+
+// A test to a width and to a kind of check: four that run side by side, not one long one that
+// held the browser job for 16 s on CI's runner.
+for (const width of [320, 390]) {
+  // Both schemes on each load: the figures' layout is the same, and each load costs a page.
+  test(`amounts at their longest stay whole at ${width} px, in both schemes`, async ({ page }) => {
+    await lightning(page);
+    await esplora(page);
+    await stubRetargets(page);
+    // On the same loads at 390 px: every copy control copies plain text of its kind (below).
+    const copies = width === 390;
+    if (copies) await recordCopies(page);
     await page.setViewportSize({ width, height: 900 });
     for (const path of PAGES) {
       await page.emulateMedia({ colorScheme: "light" });
-      await page.goto(path);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      // Every figure in: nothing still loading.
-      await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
-        timeout: 15_000,
-      });
-      // In the wide faces a Linux machine falls back to: CI's runner once broke a line a Mac's
-      // fonts kept whole.
-      await page.evaluate(() => {
-        const root = document.documentElement.style;
-        root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
-        root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
-      });
+      await load(page, path);
       for (const colorScheme of ["light", "dark"] as const) {
         await page.emulateMedia({ colorScheme });
         await page.evaluate(
@@ -137,6 +148,116 @@ test("amounts at their longest stay whole at 320 and 390 px, in both schemes", a
         );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
+      // The pages with copy controls; the mining pages and the replacements' ids have none.
+      if (copies && /\/(block|tx|address|channel|node)\//.test(path)) await copiesPlain(page, path);
     }
-  }
+  });
+
+  // Each exact amount opens whole and on screen, whatever column it is in, moving nothing.
+  test(`every exact amount opens whole and on screen at ${width} px`, async ({ page }) => {
+    await lightning(page);
+    await esplora(page);
+    // In the dark scheme, as when these checks followed the amounts' light and dark passes.
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.setViewportSize({ width, height: 900 });
+    // The pages that have them: a channel's terms and an address's totals (a node page has none).
+    for (const path of PAGES.filter((p) => /channel|address/.test(p))) {
+      await load(page, path);
+      await exactsInside(page, `${path} at ${width} px`);
+    }
+  });
+}
+
+// One exact amount open at a time, and a tap elsewhere or a scroll closes it (Safari never
+// focused the button, so closing on blur left them open, two at once).
+test("an exact amount closes on a tap elsewhere, on scrolling, and when another opens", async ({
+  page,
+}) => {
+  await lightning(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/lightning/channel/811984x2037x0");
+  const controls = page.locator("main button:has(+ .exact)");
+  await expect(controls.first()).toBeVisible();
+  const open = page.locator(".exact:not([hidden])");
+  await controls.nth(1).click();
+  await expect(open).toHaveCount(1);
+  await controls.nth(0).click();
+  await expect(open).toHaveCount(1);
+  await expect(controls.nth(0)).toHaveAttribute("aria-expanded", "true");
+  await expect(controls.nth(1)).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(open).toHaveCount(0);
+  await controls.nth(0).click();
+  await expect(open).toHaveCount(1);
+  // The scroll a finger makes fires the same event; WebKit's test driver does not wheel the page.
+  await page.evaluate(() => {
+    window.scrollBy(0, 120);
+  });
+  await expect(open).toHaveCount(0);
+  // A figure just under the sticky header opens its note below it, never over the header. A short
+  // window, so the page scrolls far enough to put the figure there.
+  await page.setViewportSize({ width: 390, height: 360 });
+  const first = controls.first();
+  const gap = await first.evaluate((el) => {
+    const header = () =>
+      document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+    window.scrollBy(0, el.getBoundingClientRect().top - header() - 4);
+    return el.getBoundingClientRect().top - header();
+  });
+  expect(gap, "the figure sits just under the header").toBeLessThan(12);
+  await first.click();
+  await expect(open).toHaveCount(1);
+  const [top, header] = await open.evaluate((el) => [
+    el.getBoundingClientRect().top,
+    document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0,
+  ]);
+  expect(top).toBeGreaterThanOrEqual(header ?? 0);
 });
+
+// A copied value is pasted into wallets, spreadsheets and calculators: it once carried the page's
+// grouping space ("5 954.38071385"). Every copy control copies plain text of its kind, checked
+// as the page hands it to the clipboard, the same in every engine.
+const COPIED: [RegExp, RegExp][] = [
+  [/transaction ID|block hash|merkle root/, /^[0-9a-f]{64}$/],
+  [/public key/, /^0[23][0-9a-f]{64}$/],
+  [/address$/, /^(?:bcrt1[02-9ac-hj-np-z]{8,87}|[1-9A-HJ-NP-Za-km-z]{25,35})$/],
+  [/in BTC$/, /^-?\d+\.\d{8}$/],
+  [/hex$|^Copy item \d+$/, /^(?:[0-9a-f]{2})+$/],
+];
+
+/** Records what the page hands the clipboard, in place of the clipboard itself. */
+async function recordCopies(page: Page) {
+  await page.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { copied });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          copied.push(text);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+}
+
+/** Clicks every copy control on the page, those in closed pop-ups too, in one call. */
+async function copiesPlain(page: Page, path: string) {
+  const pairs = await page.evaluate(() => {
+    const copied = (window as unknown as { copied: string[] }).copied;
+    return [...document.querySelectorAll<HTMLButtonElement>("main button.copy")].map((b) => {
+      const before = copied.length;
+      b.click();
+      // Its own copy, not the last button's: exactly one new entry.
+      return [b.title, copied.length - before, copied.at(-1) ?? ""] as const;
+    });
+  });
+  expect(pairs.length, `${path}: copy controls`).toBeGreaterThan(0);
+  for (const [label, added, text] of pairs) {
+    expect(added, `${path}: "${label}" copied once`).toBe(1);
+    const kind = COPIED.find(([name]) => name.test(label));
+    expect(kind, `${path}: "${label}" is a kind this test knows`).toBeDefined();
+    expect(text, `${path}: "${label}"`).toMatch(kind?.[1] ?? /^$/);
+  }
+}

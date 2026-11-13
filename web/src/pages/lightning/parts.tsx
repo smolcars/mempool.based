@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
+import { Exact } from "../../components/Exact";
 import type { Column } from "../../components/DataTable";
 import { Link } from "../../components/Link";
 import { Empty, ErrorState, Loading } from "../../components/States";
@@ -360,26 +361,19 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
  * figure is its title, and a tap or a key shows it in place (`18 958 366 000 msat`).
  */
 export function Msat(props: { msat: number }) {
-  const [exact, setExact] = createSignal(false);
   return (
-    <span class="ln-msat-wrap">
-      <button
-        type="button"
-        class="ln-msat num"
-        title={msat(props.msat)}
-        aria-expanded={exact() ? "true" : "false"}
-        onClick={() => setExact(!exact())}
-        onBlur={() => setExact(false)}
-      >
-        {msatShort(props.msat)}
-        <span class="visually-hidden">, exactly {msat(props.msat)}</span>
-      </button>
-      {/* Above the figure, over its neighbours: the exact msat is longer than a phone's column. */}
-      <Show when={exact()}>
-        <span class="ln-msat__exact num" aria-hidden="true">
-          {msat(props.msat)}
-        </span>
-      </Show>
-    </span>
+    <Exact
+      class="ln-msat num"
+      title={msat(props.msat)}
+      decorative
+      figure={
+        <>
+          {msatShort(props.msat)}
+          <span class="visually-hidden">, exactly {msat(props.msat)}</span>
+        </>
+      }
+    >
+      <span class="num">{msat(props.msat)}</span>
+    </Exact>
   );
 }

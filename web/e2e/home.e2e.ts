@@ -174,10 +174,10 @@ test("the fee panel follows the fees topic: an update, the node's fallback, then
   send?.(levels([3000, 1000, 500, 120], "node"));
   await expect(high).toHaveText("3.00 sat/vB");
   await expect(panel).toContainText("The node's own estimates");
-  // Merging equal answers, or splitting them again, never changes the panel's height.
+  // Merging equal answers, or splitting them again, never changes the panel's height; one answer
+  // for every wait is one row, the panel no taller than it.
   const four = await height();
   for (const rates of [
-    [100, 100, 100, 100],
     [3000, 100, 100, 100],
     [3000, 1000, 1000, 100],
     [3000, 3000, 100, 100],
@@ -186,6 +186,9 @@ test("the fee panel follows the fees topic: an update, the node's fallback, then
     await expect(panel.locator(".home-fees__item").first()).toBeVisible();
     await expect.poll(height).toBeCloseTo(four, 0);
   }
+  send?.(levels([100, 100, 100, 100], "projected"));
+  await expect(panel.locator(".home-fees__item")).toHaveCount(1);
+  await expect.poll(height).toBeLessThan(four * 0.6);
   send?.({ topic: "fees", type: "unavailable" });
   await expect(panel).toContainText("No recommendation right now");
   await expect(panel).not.toContainText("3.00");

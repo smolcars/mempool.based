@@ -436,6 +436,14 @@
     padding-top: var(--space-5);
     padding-bottom: var(--space-7);
   }
+  /* One answer for every wait: the fee panel as tall as its one tile and line, not the mempool
+     panel's share beside it; the difficulty panel sits under it at its own height. */
+  .home-grid:has(.home-fees__item--all) {
+    grid-template-rows: auto 1fr;
+  }
+  .home-grid:has(.home-fees__item--all) .home-difficulty {
+    align-self: start;
+  }
   .home-mempool,
   .home-fees,
   .home-recent {
@@ -625,26 +633,13 @@
   .home-fees__item--row {
     grid-column: span 2;
   }
-  /* One answer for every wait: one row of the two, centred, not a tall tile for one number; what
-     it means is the second row. */
+  /* One answer for every wait (signet's usual): one tile like the others across the row, and the
+     panel no taller than it. */
   .home-fees__item--all {
     grid-column: span 2;
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    gap: var(--space-5);
   }
-  .home-fees__item--all .home-fees__rate {
-    font-size: var(--text-2xl);
-  }
-  .home-fees__same {
-    grid-column: span 2;
-    align-self: center;
-    justify-self: center;
-    max-width: 24rem;
-    font-size: var(--text-sm);
-    color: var(--color-text-muted);
-    text-align: center;
+  .home-fees__list:has(.home-fees__item--all) {
+    grid-template-rows: minmax(6.75rem, auto);
   }
   .home-fees__item dt {
     display: flex;

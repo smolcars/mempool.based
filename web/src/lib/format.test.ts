@@ -18,6 +18,7 @@ import {
   isoTime,
   MISSING,
   NNBSP,
+  plainBtc,
   truncateMiddle,
   vsizeFromWeight,
 } from "./format";
@@ -270,7 +271,12 @@ describe("time", () => {
   const t = 1_794_429_667; // 2026-11-11 20:41:07 UTC
 
   it("formats absolute UTC", () => {
-    expect(formatUtc(t)).toBe("2026-11-11 20:41:07 UTC");
+    expect(formatUtc(t)).toBe("11 Nov 2026, 20:41:07 UTC");
+    // The clipboard's BTC: no grouping space, no unit, every decimal.
+    expect(plainBtc(595_438_071_385)).toBe("5954.38071385");
+    expect(plainBtc(-2_099_999_997_690_000)).toBe("-20999999.97690000");
+    expect(plainBtc(1)).toBe("0.00000001");
+    expect(formatUtc(t, false)).toBe("11 Nov 2026, 20:41 UTC");
     expect(isoTime(t)).toBe("2026-11-11T20:41:07.000Z");
     expect(formatUtc(Number.NaN)).toBe(MISSING);
     expect(isoTime(Number.NaN)).toBeUndefined();

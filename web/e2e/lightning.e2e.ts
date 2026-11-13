@@ -65,6 +65,25 @@ test("a transaction page on a network without Lightning asks only its status", a
   await expect(page.getByRole("heading", { name: "Lightning" })).toHaveCount(0);
 });
 
+// "← Nodes by open channels" once pushed "History" onto a line of its own on a phone.
+test("a node reached from a ranking keeps its section's links on one line on a phone", async ({
+  page,
+}) => {
+  // The ranking by channels in the recorded ranking's shape.
+  await serve(page, { ...mainnet(), "rankings/channels?limit=100": recorded("rankings-capacity") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/lightning/rankings?by=channels");
+  await page.getByRole("main").getByRole("link", { name: "ACINQ" }).first().click();
+  await expect(page.locator(".ln-nav__back")).toHaveText("← Nodes by open channels");
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const tops = await page
+      .locator(".ln-nav__item")
+      .evaluateAll((all) => all.map((a) => Math.round(a.getBoundingClientRect().top)));
+    expect(new Set(tops).size, `${width} px: ${tops.join(", ")}`).toBe(1);
+  }
+});
+
 test("the overview, a node and a channel, from mainnet's answers", async ({ page }) => {
   await serve(page, mainnet());
   await page.goto("/regtest/lightning");

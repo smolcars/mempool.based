@@ -61,6 +61,13 @@
     color: var(--color-text-muted);
     border-radius: var(--radius-s);
   }
+  /* A layer only some points have: last, and unseen where the point has none, its place kept. */
+  .chart__value--rare {
+    order: 1;
+  }
+  .chart__value--rare.chart__value--empty {
+    visibility: hidden;
+  }
   .chart__value--on {
     color: var(--color-text);
     box-shadow: 0 2px 0 var(--color-text);
