@@ -103,6 +103,8 @@ const PAGES = [
   "/regtest/mining/pool/unknown",
   // Its past adjustments, mainnet's: words, arrows and difficulties in one row.
   "/regtest/mining",
+  // Replacements: their fees and rates.
+  "/regtest/rbf",
 ];
 
 /** Opens a page with every figure in, in the wide faces a Linux machine falls back to. */
@@ -146,7 +148,8 @@ for (const width of [320, 390]) {
         );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
-      if (copies && !path.includes("/mining/")) await copiesPlain(page, path);
+      // The pages with copy controls; the mining pages and the replacements' ids have none.
+      if (copies && /\/(block|tx|address|channel|node)\//.test(path)) await copiesPlain(page, path);
     }
   });
 
