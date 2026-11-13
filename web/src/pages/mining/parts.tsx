@@ -6,7 +6,7 @@ import { formatSi, readoutLines } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import type { Coverage } from "../../lib/api";
-import { formatFeeRate, formatSize } from "../../lib/format";
+import { formatSize } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { NoHistoryError } from "./data";
 import { coverageNote, type Period } from "./mining";
@@ -135,6 +135,5 @@ export const btcShort = (sats: number): string =>
 export const btcFull = (sats: number): string => `${(sats / 1e8).toFixed(8)} BTC`;
 export const difficultyShort = (d: number): string => formatSi(d, "");
 export const difficultyFull = (d: number): string => formatSi(d, "", 5);
-export const feeRateText = (r: number): string => `${formatFeeRate(r)} sat/vB`;
 export const bytesText = (b: number): string => formatSize(b, "B");
 export const percent = (share: number): string => `${Math.round(share * 1000) / 10}%`;

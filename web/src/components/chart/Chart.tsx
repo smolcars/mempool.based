@@ -6,7 +6,7 @@ import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "
 import { FEE_KEY_BOUNDS } from "../../lib/format";
 import { onNetwork } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
-import { DataTable } from "../DataTable";
+import { type Column, DataTable } from "../DataTable";
 import { Link } from "../Link";
 import {
   areaPath,
@@ -76,6 +76,10 @@ export interface ChartBand {
   /** 1 is the outer, paler band, 2 the inner one. */
   tone?: 1 | 2;
   format: (v: number) => string;
+  /** As a series' `unit`: once after the range in the readout, in the figures' header. */
+  unit?: string;
+  /** A shorter name for the figures' header on a phone ("Middle 80%"). */
+  narrow?: string;
 }
 
 /**
@@ -383,9 +387,14 @@ export default function Chart(props: ChartProps) {
       value:
         typeof b.lo[i] !== "number" || typeof b.hi[i] !== "number"
           ? "no data"
-          : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}`,
-      unit: undefined,
+          : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}${b.unit === undefined ? "" : ` ${b.unit}`}`,
+      unit: b.unit,
+      narrow: b.narrow,
       bare: undefined,
+      range:
+        typeof b.lo[i] === "number" && typeof b.hi[i] === "number"
+          ? ([b.format(b.lo[i] ?? 0), b.format(b.hi[i] ?? 0)] as const)
+          : undefined,
       empty: false,
       rare: false,
     })),
@@ -400,7 +409,9 @@ export default function Chart(props: ChartProps) {
         reading(s.values[i], s.format) +
         (s.unit !== undefined && typeof s.values[i] === "number" ? ` ${s.unit}` : ""),
       unit: s.unit,
+      narrow: undefined,
       bare: reading(s.values[i], s.format),
+      range: undefined,
       empty: false,
       rare: false,
     })),
@@ -413,7 +424,9 @@ export default function Chart(props: ChartProps) {
       short: undefined,
       value: reading(s.values[i], s.format),
       unit: undefined,
+      narrow: undefined,
       bare: undefined,
+      range: undefined,
       empty: false,
       rare: false,
     })),
@@ -426,7 +439,9 @@ export default function Chart(props: ChartProps) {
       short: l.short,
       value: reading(l.values[i], layerFormat),
       unit: undefined,
+      narrow: undefined,
       bare: undefined,
+      range: undefined,
       empty: l.values[i] === 0,
       rare: l.rare === true,
     })),
@@ -517,15 +532,15 @@ export default function Chart(props: ChartProps) {
     return (
       <>
         <Show when={cut > 0} fallback={day}>
-          <span class="chart__when-part">{day.slice(0, cut)}</span>{" "}
-          <span class="chart__when-part">{day.slice(cut + 1)}</span>
+          <span class="chart__nowrap">{day.slice(0, cut)}</span>{" "}
+          <span class="chart__nowrap">{day.slice(cut + 1)}</span>
         </Show>
         <Show when={clock}>
           {(c) => (
             <>
               {/* The comma goes where the time of day takes its own line. */}
               <span class="chart__when-comma">,</span>{" "}
-              <span class="chart__when-part chart__when-clock">{c()}</span>
+              <span class="chart__nowrap chart__when-clock">{c()}</span>
             </>
           )}
         </Show>
@@ -541,14 +556,28 @@ export default function Chart(props: ChartProps) {
         </Show>
       ),
     },
-    ...readings(0).map((r, k) => ({
-      header: r.unit === undefined ? r.name : `${r.name}, ${r.unit}`,
-      numeric: true,
-      cell: (i: number) => {
-        const at = readings(i)[k];
-        return at?.bare ?? at?.value ?? "";
-      },
-    })),
+    ...readings(0).map((r, k) => {
+      const column: Column<number> = {
+        header: r.unit === undefined ? r.name : `${r.name}, ${r.unit}`,
+        numeric: true,
+        cell: (i: number) => {
+          const at = readings(i)[k];
+          // A range may break before its upper end on a phone, never inside a figure.
+          return at?.range ? (
+            <span class="chart__range">
+              <span class="chart__nowrap">{`${at.range[0]} to`}</span>{" "}
+              <span class="chart__nowrap">{at.range[1]}</span>
+            </span>
+          ) : (
+            (at?.bare ?? at?.value ?? "")
+          );
+        },
+      };
+      if (r.narrow !== undefined) {
+        column.short = r.unit === undefined ? r.narrow : `${r.narrow}, ${r.unit}`;
+      }
+      return column;
+    }),
   ];
 
   return (

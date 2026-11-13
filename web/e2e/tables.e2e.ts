@@ -298,6 +298,22 @@ test("a chart's figures fit a phone whole: a node's history and fees, and the mi
       points: [midnight, { time: 1_794_550_123, channels: 1805, capacity: 27_655_420_454 }, now],
     },
   });
+  // Mainnet-sized fee rates: regtest's blocks pay almost nothing.
+  await page.route(/\/regtest\/api\/v1\/mining\/blocks\/fee-rates\//, (route) =>
+    route.fulfill({
+      json: Array.from({ length: 20 }, (_, i) => ({
+        avgHeight: 975_000 + i * 10,
+        timestamp: 1_794_000_000 + i * 6000,
+        avgFee_0: 0.1,
+        avgFee_10: 12.25,
+        avgFee_25: 25.5,
+        avgFee_50: 101.5,
+        avgFee_75: 210.25,
+        avgFee_90: 1250.5,
+        avgFee_100: 4000,
+      })),
+    }),
+  );
   /** Every visible figures table in `sections` is no wider than its box, every header inside. */
   const whole = async (sections: string[], label: string) => {
     let seen = 0;
@@ -341,9 +357,24 @@ test("a chart's figures fit a phone whole: a node's history and fees, and the mi
     await expect(page.locator("main table a").first()).toBeVisible({ timeout: 30_000 });
     // Regtest draws what it can of them: its hashrate means nothing, and its blocks are few.
     await expect(page.locator(".chart__figures > summary").first()).toBeVisible();
-    await whole(
-      ["Hashrate and difficulty", "Blocks over time", "Block health"],
-      `/mining at ${width} px`,
-    );
+    // Every view of the block figures; fee rates as wide as mainnet's, two ranges and a median.
+    const blocks = page.locator("section", {
+      has: page.getByRole("heading", { name: "Blocks over time", exact: true }),
+    });
+    for (const view of ["Fees", "Rewards", "Fee rates", "Size"]) {
+      await blocks.getByRole("button", { name: view, exact: true }).click();
+      await expect(blocks.getByRole("button", { name: view, exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await expect(blocks.getByRole("slider")).toBeVisible({ timeout: 30_000 });
+      // The page's other figures once, beside the first view's (regtest may have none of them).
+      await whole(
+        view === "Fees"
+          ? ["Hashrate and difficulty", "Block health", "Blocks over time"]
+          : ["Blocks over time"],
+        `/mining's ${view} at ${width} px`,
+      );
+    }
   }
 });

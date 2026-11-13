@@ -270,8 +270,11 @@
     .chart__when-comma {
       display: none;
     }
+    .chart__range {
+      white-space: normal;
+    }
   }
-  .chart__when-part {
+  .chart__nowrap {
     white-space: nowrap;
   }
 }
