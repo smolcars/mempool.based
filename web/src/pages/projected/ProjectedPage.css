@@ -40,8 +40,10 @@
     color: var(--color-text-muted);
     text-decoration: none;
   }
-  .projected-pager a:hover {
-    color: var(--color-accent);
+  @media (hover: hover) {
+    .projected-pager a:hover {
+      color: var(--color-accent);
+    }
   }
   .projected-pager__next {
     margin-left: auto;

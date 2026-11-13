@@ -32,8 +32,10 @@
   .more[open] > .more__summary::before {
     transform: rotate(45deg);
   }
-  .more__summary:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .more__summary:hover {
+      color: var(--color-text);
+    }
   }
   .more__body {
     display: grid;

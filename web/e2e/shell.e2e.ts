@@ -171,3 +171,34 @@ test("the main nav marks the current section on every page under it, whatever th
   await expect(page).toHaveURL(/period=all$/);
   await expect.poll(marked).toStrictEqual(["Mining"]);
 });
+
+// Safari zoomed the page into the Lightning search (its text under 16 px) and stayed zoomed; and a
+// tapped control kept its hover look until something else was tapped.
+test("on a touch screen no field is small enough to zoom into, and a tap leaves no hover behind", async ({
+  browser,
+  baseURL,
+}) => {
+  const touch = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  const page = await touch.newPage();
+  for (const path of ["/regtest/", "/regtest/lightning", "/regtest/no/such/page"]) {
+    await page.goto(`${baseURL ?? ""}${path}`);
+    await expect(page.locator("input").first()).toBeAttached();
+    const sizes = await page
+      .locator("input")
+      .evaluateAll((all) => all.map((i) => Number.parseFloat(getComputedStyle(i).fontSize)));
+    for (const size of sizes) expect(size, path).toBeGreaterThanOrEqual(16);
+  }
+  // Hover styles are for pointers that hover: a button tapped keeps its resting look.
+  expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(false);
+  await page.goto(`${baseURL ?? ""}/regtest/mining`);
+  const button = page.locator("main .btn").first();
+  await expect(button).toBeVisible();
+  const rest = await button.evaluate((b) => getComputedStyle(b).backgroundColor);
+  await button.tap();
+  expect(await button.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe(rest);
+  await touch.close();
+});

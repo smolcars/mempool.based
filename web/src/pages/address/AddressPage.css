@@ -81,8 +81,10 @@
     text-decoration-thickness: 1px;
     text-underline-offset: 0.2em;
   }
-  .address-total:hover {
-    text-decoration-color: var(--color-text-muted);
+  @media (hover: hover) {
+    .address-total:hover {
+      text-decoration-color: var(--color-text-muted);
+    }
   }
   .address-total__exact:not([hidden]) {
     display: flex;
@@ -148,9 +150,13 @@
     cursor: pointer;
     transition: color var(--dur-quick) var(--ease-out);
   }
-  .address-tab:hover,
   .address-tab[aria-selected="true"] {
     color: var(--color-text);
+  }
+  @media (hover: hover) {
+    .address-tab:hover {
+      color: var(--color-text);
+    }
   }
   .address-tab::after {
     content: "";

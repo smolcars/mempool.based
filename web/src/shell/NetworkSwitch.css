@@ -81,9 +81,11 @@
     font-weight: var(--weight-medium);
     text-decoration: none;
   }
-  .network__option:hover {
-    color: inherit;
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .network__option:hover {
+      color: inherit;
+      background: var(--color-surface-sunken);
+    }
   }
   .network__option[aria-current="true"] {
     font-weight: var(--weight-bold);

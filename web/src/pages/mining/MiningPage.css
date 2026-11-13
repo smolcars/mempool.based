@@ -71,8 +71,10 @@
       background-color var(--dur-quick) var(--ease-out),
       color var(--dur-quick) var(--ease-out);
   }
-  .mining-periods__item:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .mining-periods__item:hover {
+      color: var(--color-text);
+    }
   }
   .mining-periods__item[aria-current="page"] {
     color: var(--color-text);
@@ -330,9 +332,11 @@
     color: inherit;
     transition: border-color var(--dur-quick) var(--ease-out);
   }
-  .mining-tile__body:hover {
-    color: inherit;
-    border-color: var(--color-text);
+  @media (hover: hover) {
+    .mining-tile__body:hover {
+      color: inherit;
+      border-color: var(--color-text);
+    }
   }
   .mining-tile__height {
     font-size: var(--text-lg);

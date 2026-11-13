@@ -65,8 +65,10 @@
     min-height: var(--touch);
     text-decoration: none;
   }
-  .brand:hover {
-    color: inherit;
+  @media (hover: hover) {
+    .brand:hover {
+      color: inherit;
+    }
   }
   .brand__word {
     font-size: var(--text-lg);
@@ -112,8 +114,10 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .nav a:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .nav a:hover {
+      color: var(--color-text);
+    }
   }
   /* The current section's bar is an element of its own, not an inset shadow, which iOS Safari
      was seen to leave unpainted after an in-page navigation (a period chosen, a pool opened). */
@@ -152,8 +156,10 @@
     border: 1px solid var(--color-line);
     border-radius: var(--radius-m);
   }
-  .icon-btn:hover::before {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .icon-btn:hover::before {
+      background: var(--color-surface-sunken);
+    }
   }
   .icon-btn svg {
     width: 20px;

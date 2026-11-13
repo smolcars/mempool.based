@@ -163,9 +163,11 @@
     border-color: var(--color-line);
     background: var(--color-surface);
   }
-  a.home-tile__body:hover {
-    color: inherit;
-    border-color: var(--color-text);
+  @media (hover: hover) {
+    a.home-tile__body:hover {
+      color: inherit;
+      border-color: var(--color-text);
+    }
   }
   .home-tile__title {
     font-size: var(--text-lg);

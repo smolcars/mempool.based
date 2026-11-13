@@ -400,11 +400,15 @@
     z-index: -1;
     border-radius: var(--radius-m);
   }
-  .tx-flow__open:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .tx-flow__open:hover {
+      color: var(--color-text);
+    }
   }
-  .tx-flow__open:hover::before {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .tx-flow__open:hover::before {
+      background: var(--color-surface-sunken);
+    }
   }
   .tx-flow__open[aria-expanded="true"] {
     color: var(--color-text);
@@ -435,8 +439,10 @@
     text-underline-offset: 0.2em;
     cursor: pointer;
   }
-  .tx-flow__more:hover {
-    color: var(--color-accent);
+  @media (hover: hover) {
+    .tx-flow__more:hover {
+      color: var(--color-accent);
+    }
   }
   /* Sized by its row, never by its own viewBox: without size containment the box it was last
      drawn at fed back into the row's height, so a page widened from a phone kept a tall empty

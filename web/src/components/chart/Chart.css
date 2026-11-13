@@ -193,8 +193,10 @@
     text-decoration: underline;
     text-underline-offset: 0.2em;
   }
-  .chart__figures > summary:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .chart__figures > summary:hover {
+      color: var(--color-text);
+    }
   }
   .chart__figures[open] > summary {
     margin-bottom: var(--space-3);

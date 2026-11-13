@@ -47,8 +47,10 @@
   .table tbody tr {
     transition: background-color var(--dur-quick) var(--ease-out);
   }
-  .table tbody tr:hover {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .table tbody tr:hover {
+      background: var(--color-surface-sunken);
+    }
   }
   /* A row that leads somewhere is one target: an empty link covers it, under the cells' own
      links and buttons, which keep their place on top. */

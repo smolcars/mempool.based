@@ -213,8 +213,10 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .ln-picker__item:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .ln-picker__item:hover {
+      color: var(--color-text);
+    }
   }
   .ln-picker__item[aria-current="page"],
   .ln-picker__item[aria-pressed="true"] {
@@ -546,8 +548,10 @@
     color: var(--color-text-muted);
     text-decoration: none;
   }
-  .ln-nav a:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .ln-nav a:hover {
+      color: var(--color-text);
+    }
   }
   .ln-nav__back {
     margin-right: auto;

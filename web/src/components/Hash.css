@@ -30,8 +30,10 @@
     background: linear-gradient(color-mix(in srgb, currentColor 40%, transparent) 0 0) 0 100% / 100%
       1px no-repeat;
   }
-  .hash--fit a.hash__text:hover {
-    background-image: linear-gradient(currentColor 0 0);
+  @media (hover: hover) {
+    .hash--fit a.hash__text:hover {
+      background-image: linear-gradient(currentColor 0 0);
+    }
   }
   .hash__head {
     min-width: 8ch;

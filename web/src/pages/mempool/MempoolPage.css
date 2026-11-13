@@ -52,8 +52,10 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .mempool-intervals__item:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .mempool-intervals__item:hover {
+      color: var(--color-text);
+    }
   }
   .mempool-intervals__item[aria-current="page"] {
     color: var(--color-text);

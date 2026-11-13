@@ -21,8 +21,10 @@
       min-height: var(--touch);
     }
   }
-  .btn:hover:not(:disabled) {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .btn:hover:not(:disabled) {
+      background: var(--color-surface-sunken);
+    }
   }
   .btn:active:not(:disabled) {
     transform: scale(0.97);
@@ -38,8 +40,10 @@
     border-color: var(--color-accent);
     color: var(--color-on-accent);
   }
-  .btn--accent:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-accent) 86%, var(--color-text));
+  @media (hover: hover) {
+    .btn--accent:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--color-accent) 86%, var(--color-text));
+    }
   }
   .btn[aria-pressed="true"] {
     background: var(--color-accent-soft);

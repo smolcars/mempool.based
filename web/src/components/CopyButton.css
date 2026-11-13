@@ -34,12 +34,16 @@
     z-index: -1;
     border-radius: var(--radius-m);
   }
-  .copy:hover {
-    color: var(--color-text);
-    background: none;
+  @media (hover: hover) {
+    .copy:hover {
+      color: var(--color-text);
+      background: none;
+    }
   }
-  .copy:hover::before {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .copy:hover::before {
+      background: var(--color-surface-sunken);
+    }
   }
   .copy[data-copied] {
     color: var(--color-positive);

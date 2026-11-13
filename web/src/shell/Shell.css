@@ -12,8 +12,10 @@
   .skip:focus {
     top: var(--space-3);
   }
-  .skip:hover {
-    color: var(--color-on-accent);
+  @media (hover: hover) {
+    .skip:hover {
+      color: var(--color-on-accent);
+    }
   }
 
   /* Test networks only: a slim band in the network's colour, with the warning in words and a short

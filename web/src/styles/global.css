@@ -99,9 +99,11 @@
     text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
     text-underline-offset: 0.2em;
   }
-  a:hover {
-    color: var(--color-accent);
-    text-decoration-color: currentColor;
+  @media (hover: hover) {
+    a:hover {
+      color: var(--color-accent);
+      text-decoration-color: currentColor;
+    }
   }
   :focus-visible {
     outline: 2px solid var(--color-focus);
@@ -162,5 +164,15 @@
     max-width: var(--page-max);
     margin-inline: auto;
     padding-inline: var(--gutter);
+  }
+}
+
+/* Outside every layer, so no component's smaller size wins: a touch browser zooms the page into a
+   field whose text is under 16 px, and iOS Safari stays zoomed after it. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
   }
 }

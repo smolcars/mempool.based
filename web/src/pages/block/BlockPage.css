@@ -30,8 +30,10 @@
     color: var(--color-text-muted);
     text-decoration: none;
   }
-  .block-pager a:hover {
-    color: var(--color-accent);
+  @media (hover: hover) {
+    .block-pager a:hover {
+      color: var(--color-accent);
+    }
   }
   .block-pager__next {
     margin-left: auto;
