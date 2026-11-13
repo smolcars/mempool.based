@@ -312,6 +312,26 @@ describe("LiveConnection", () => {
     expect(FakeSocket.all).toHaveLength(2);
   });
 
+  it("checks a socket kept through a hidden tab at once on the way back, and replaces a dead one", () => {
+    const c = connect();
+    c.add(echo, { message: () => {}, resync: () => {} });
+    const ws = FakeSocket.last();
+    ws.hello();
+    vi.advanceTimersByTime(20);
+    ws.sent.length = 0;
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    // Asked at once, not at the next ping 30 s on.
+    expect(ws.sent).toContainEqual({ op: "ping" });
+    // Nothing back: the phone let it die while the tab slept. It is dropped, and a new one opens.
+    vi.advanceTimersByTime(10_000);
+    expect(statusOf(c)).toBe("reconnecting");
+    vi.advanceTimersByTime(5000);
+    expect(FakeSocket.all.length).toBeGreaterThan(1);
+  });
+
   it("keeps a live socket open while the tab is hidden", () => {
     const c = connect();
     const got: unknown[] = [];

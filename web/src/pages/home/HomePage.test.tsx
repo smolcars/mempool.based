@@ -1127,6 +1127,43 @@ describe("the fee panel", () => {
     }
   });
 
+  it("keeps its figures through a tab hidden and back, and blames the node only on the server's word", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // While away the reader's own connection fails: no reply at all, which is not the node.
+      replies["/v1/fees/precise"] = () => new Promise<Response>(() => {}) as unknown as Response;
+      const { el, ws } = await open(true);
+      ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
+      expect(highest(el)).toBe("Highnext block3.00 sat/vB");
+      replies["/blocks"] = () => {
+        throw new TypeError("Load failed");
+      };
+      ws.drop(1006);
+      // The last answer stays while the page reconnects.
+      expect(highest(el)).toBe("Highnext block3.00 sat/vB");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(highest(el)).toBe("Highnext block3.00 sat/vB");
+      // Back: the socket greets again, and the page is live, the node not blamed for the failure.
+      const sockets = FakeSocket.all.length;
+      for (let i = 0; i < 120 && FakeSocket.all.length === sockets; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+      }
+      FakeSocket.last().hello();
+      expect(el.querySelector(".home-live")?.textContent).not.toContain("Node not answering");
+      // A tab woken by the phone: the socket looks live while a request gets no reply at all.
+      FakeSocket.last().receive({
+        topic: "blocks",
+        type: "resync",
+        tip: { height: 12, hash: fakeBlock(12).id },
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(requests.filter((r) => r === "/blocks").length).toBeGreaterThan(0);
+      expect(el.querySelector(".home-live")?.textContent).not.toContain("Node not answering");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes down an HTTP answer the next ask cannot confirm, while the server refuses", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

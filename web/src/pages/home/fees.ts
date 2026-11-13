@@ -105,8 +105,12 @@ export function createFees(
   const grace = setTimeout(() => setSilent(true), TOPIC_GRACE_MS);
   onCleanup(() => clearTimeout(grace));
 
+  // Where the answer on screen came from: the socket's last word stands until a reply replaces it;
+  // an HTTP answer the next ask cannot confirm in time is taken down (`doubt`).
+  let fromTopic = false;
   useTopic(feesTopic, {
     message: (m) => {
+      fromTopic = true;
       setHeard(true);
       setAnswer(m.type === "fees" ? m.answer : null);
     },
@@ -118,10 +122,11 @@ export function createFees(
   const down = () => status() === "reconnecting" || status() === "offline";
   createEffect(
     () => down() || (!heard() && silent()),
-    (polling, was) => {
+    (polling) => {
       if (!polling) return undefined;
-      // An answer heard before the socket dropped can be withdrawn without our hearing it.
-      if (was === false) setAnswer(undefined);
+      // The last answer heard stays while the page reconnects (a tab back from the background):
+      // the snapshot after reconnecting replaces it, and an ask that cannot confirm it in time
+      // takes it down (`doubt`).
       const controller = new AbortController();
       let asking = false;
       let doubt: ReturnType<typeof setTimeout> | undefined;
@@ -130,11 +135,16 @@ export function createFees(
         if (asking) return;
         asking = true;
         // Only a number is taken down: "no answer" stays until there is one.
-        doubt = setTimeout(() => setAnswer((now) => (now ? undefined : now)), FEES_CONFIRM_MS);
+        doubt = setTimeout(
+          () => setAnswer((now) => (now && !fromTopic ? undefined : now)),
+          FEES_CONFIRM_MS,
+        );
         const settle = (a: FeeAnswer | null) => {
           clearTimeout(doubt);
           asking = false;
-          if (!controller.signal.aborted) setAnswer(a);
+          if (controller.signal.aborted) return;
+          fromTopic = false;
+          setAnswer(a);
         };
         fetchStamped<unknown>(network, "/v1/fees/precise", { signal: controller.signal }).then(
           (r) => settle(fromPrecise(r) ?? null),
