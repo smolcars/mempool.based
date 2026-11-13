@@ -155,27 +155,36 @@ jobs:
   # The server and frontend built from the PR, against rbitcoin on regtest, in headless Chromium.
   # scripts/e2e.sh starts the node and the browser download first and builds meanwhile, so neither
   # is on the critical path. The browser is not cached: restoring it took longer than downloading.
+  # Each shard runs its share of the tests on a runner, node and server of its own (docs/CI.md).
   e2e:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      # Every shard finishes, so one failure does not hide another shard's.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_TERM_COLOR: always
-      JOB_LIMIT: 125
+      E2E_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+      # Each shard's limit, with room for the pages being added (docs/CI.md "Browser test shards").
+      JOB_LIMIT: 145
     steps:
       - run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      # Only the server binary's build, so this cache is smaller than the rust job's.
+      # Only the server binary's build, so this cache is smaller than the rust job's. Every shard
+      # has the same key; one saves it, since a second save of a key fails with a warning.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: cache
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' }}
+          save-if: ${{ github.ref == 'refs/heads/master' && matrix.shard == 1 }}
           # Its key leaves out Cargo.toml's [profile] sections: change this when one changes.
           key: secp256k1-optimised
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -191,7 +200,8 @@ jobs:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: ${{ runner.temp }}/e2e-junit.xml
       - name: Slowest tests
         if: always()
-        run: python3 -I .github/slowest.py "$RUNNER_TEMP/e2e-junit.xml" >> "$GITHUB_STEP_SUMMARY"
+        # e2e.sh writes a second report, e2e-junit-mines.xml, for the tests that mine.
+        run: python3 -I .github/slowest.py "$RUNNER_TEMP"/e2e-junit*.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Within the job's limit
         run: .github/job-limit.sh
         env:

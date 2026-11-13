@@ -29,7 +29,9 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 # The node builds its chain while the server and frontend compile.
-python3 "$regtest" scenario >"$run/manifest.json" 2>"$run/regtest.log" &
+# Each wait logs when it ended, so a CI log shows which one the run waited on.
+{ python3 "$regtest" scenario >"$run/manifest.json" 2>"$run/regtest.log" &&
+  echo "e2e: node ready at ${SECONDS}s" >&2; } &
 node_pid=$!
 
 cd "$web"
@@ -37,9 +39,10 @@ cd "$web"
 # E2E_ENGINE picks the browser (playwright.config.ts); Chromium needs only its headless shell.
 engine=${E2E_ENGINE:-chromium}
 if [ "$engine" = chromium ]; then
-  node_modules/.bin/playwright install --only-shell chromium &
+  { node_modules/.bin/playwright install --only-shell chromium &&
+    echo "e2e: browser ready at ${SECONDS}s" >&2; } &
 else
-  node_modules/.bin/playwright install "$engine" &
+  { node_modules/.bin/playwright install "$engine" && echo "e2e: browser ready at ${SECONDS}s" >&2; } &
 fi
 browser_pid=$!
 bun run build --outDir "$run/dist" --emptyOutDir --logLevel warn
@@ -52,7 +55,6 @@ case "$bin" in /*) ;; *) bin="$root/$bin" ;; esac
 "$(dirname "$bin")/examples/history_seed" "$run/data"
 
 wait "$node_pid" || { cat "$run/regtest.log" >&2; exit 1; }
-echo "e2e: node ready at ${SECONDS}s" >&2
 wait "$browser_pid"
 eval "$(python3 "$regtest" env | sed 's/^/export /')"
 
@@ -80,8 +82,22 @@ done
 
 echo "e2e: ready in ${SECONDS}s, server at http://$addr" >&2
 status=0
-E2E_BASE_URL="http://$addr" E2E_OUTPUT_DIR="$run/results" node_modules/.bin/playwright test "$@" ||
-  status=$?
+run_tests() { E2E_BASE_URL="http://$addr" node_modules/.bin/playwright test "$@" || status=$?; }
+if [ -n "${E2E_SHARD:-}" ]; then
+  # E2E_SHARD=i/n runs one CI shard (docs/CI.md). Playwright runs a dependency project whole in
+  # every shard, so each project is sharded in a run of its own: the tests that share the node,
+  # then, if they passed, the tests that mine, as playwright.config.ts orders them.
+  project=$engine
+  [ "${E2E_PHONE:-}" != 1 ] || project="$engine-phone"
+  E2E_OUTPUT_DIR="$run/results" run_tests --project="$project" --shard="$E2E_SHARD" "$@"
+  # A JUnit report of its own beside the first, which the second run would overwrite.
+  junit=${PLAYWRIGHT_JUNIT_OUTPUT_NAME:-}
+  [ -z "$junit" ] || export PLAYWRIGHT_JUNIT_OUTPUT_NAME="${junit%.xml}-mines.xml"
+  [ "$status" -ne 0 ] ||
+    E2E_OUTPUT_DIR="$run/results-mines" run_tests --project=mines --no-deps --shard="$E2E_SHARD" "$@"
+else
+  E2E_OUTPUT_DIR="$run/results" run_tests "$@"
+fi
 # Stopping the server flushes its log, which it writes from a queue.
 kill "$server" 2>/dev/null || true
 wait "$server" 2>/dev/null || true
