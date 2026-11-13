@@ -102,18 +102,18 @@ A file is named for a network, but nothing in a block row says which chain it ca
 **Writes wait for the node** (`Store::set_gate`). The gate starts `Waiting`. The server's RPC check, at startup and every 30 s ([`DEPLOY.md`](DEPLOY.md#health)), sets it:
 
 - The node answers for this network's chain: `Open`, after checking an unstamped file. Writes that waited commit.
-- The node answers for another chain: `Held`. New writes wait. When the gate opens again, every write that began while it was held, or waited through a hold, fails with `Error::Held`, because it carries what was read from the other chain; so does a write the writer reaches while it is held. The writers take their next data from the node as usual.
+- The node answers for another chain: `Held`. New writes wait. A hold moves the store's generation (`Store::generation`) when it begins and again when it ends, and a write commits only at the generation its data was read at: so when the gate opens again, every write that began before or during the hold fails with `Error::Held`, because it may carry what was read from the other chain; so does a write the writer reaches while it is held. A writer that keeps data in a queue of its own tags it with the generation when it reads it and writes it with `Store::write_from`: the replacement record drops batches made before or during a hold (`replacements_store_failed` with `held`), and the Lightning history drops the records pending or sent meanwhile (`lightning_history_failed` with `held`). The writers take their next data from the node as usual.
 - The node is unreachable, or refuses the password: nothing changes. At startup, writes keep waiting, and the server serves what it can meanwhile; after the chain was confirmed, writes go on, since the chain was right when last seen.
 
-What is not covered: data read in the up to 30 s between a node changing chain under the server and the next check is written. The block table replaces those rows as a reorg once the right chain is back; an audit, a mempool sample or a replacement from that window stays. The check reads the RPC endpoint's chain; Esplora and Electrum on another node than RPC are not checked.
+What is not covered: data read in the up to 30 s between a node changing chain under the server and the next check is written, as is a read still in flight when the check finds the node right again. The block table replaces those rows as a reorg once the right chain is back; an audit, a mempool sample or a replacement from that window stays. The check reads the RPC endpoint's chain; Esplora and Electrum on another node than RPC are not checked.
 
-**An unstamped file is checked against the node** at the first check that finds the right chain. The server reads two rows that lie at least 100 blocks below the node's tip, so a reorg cannot have moved them, the lowest and the highest, and asks the node for each (`getblockheader`: the same height, on the active chain):
+**An unstamped file is checked against the node** at the first check that finds the right chain. The server reads two rows that lie at least 100 blocks below both the node's tip and the file's own highest row, so that no reorg can have moved them, either on the node or in what the old server last followed, the lowest and the highest, and asks the node for each (`getblockheader`: the same height, on the active chain):
 
 | Result | Then |
 |---|---|
 | Both on the node's chain, or no block rows | The row is written and the gate opens |
 | Either is not | `store_wrong_chain` with its height; the gate is `Refused` for as long as the process runs. Reads go on, so pages still show what the file holds; the file is untouched |
-| No row that deep yet (a node far behind the file) | Writes wait; `store_chain_unverified` once, and each check tries again |
+| No row that deep: a node far behind the file, or a file whose rows span fewer than 100 blocks | Writes wait; `store_chain_unverified` once, and each check tries again. A node catching up ends it; a file that small never gets a row deep enough, so move it aside |
 
 Another chain's rows sit at one end of a file: another node's backfill writes from its tip down to the lowest row, and following its tip writes the highest. The two rows are a sample, not a proof: rows from another chain in the middle of a file filled by both are not found. Moving a refused file out of `DATA_DIR` and restarting starts an empty file, which the backfill fills again.
 

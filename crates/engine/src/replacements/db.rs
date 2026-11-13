@@ -41,8 +41,18 @@ fn int(v: u64) -> i64 {
 
 /// Stores `batches`, in order, in one transaction and keeps the newest `keep` rows.
 pub async fn write(store: &Store, batches: Vec<Batch>, keep: usize) -> Result<(), Error> {
+    write_from(store, store.generation(), batches, keep).await
+}
+
+/// [`write`] for batches read at `generation` ([`Store::write_from`]).
+pub async fn write_from(
+    store: &Store,
+    generation: u64,
+    batches: Vec<Batch>,
+    keep: usize,
+) -> Result<(), Error> {
     store
-        .write(move |sql| {
+        .write_from(generation, move |sql| {
             for b in &batches {
                 insert(sql, b)?;
             }

@@ -212,17 +212,21 @@ enum Older {
     Unsettled(u32),
 }
 
-/// Checks the lowest and the highest of an older file's rows that lie [`SETTLED`] blocks or more
-/// below the node's tip against the node. Rows are written newest first and replaced on a
-/// reorg, so rows from another chain show at one end: the lowest when another node's
-/// backfill ran, the highest when its tip was followed. `None` when the store or node failed.
+/// Checks the lowest and the highest of an older file's settled rows against the node: those
+/// [`SETTLED`] blocks or more below both the node's tip and the file's own highest row, which a
+/// reorg the old server never saw finish could have left stale. Rows are written newest first
+/// and replaced on a reorg, so rows from another chain show at one end: the lowest when another
+/// node's backfill ran, the highest when its tip was followed. `None` when the store or node
+/// failed.
 async fn older_rows(ctx: &NetworkContext, store: &Store, tip: u32) -> Option<Older> {
-    let floor = tip.saturating_sub(SETTLED);
     let (lowest, ends) = store
         .read(Read::Chain, move |sql| {
-            let lowest: Option<u32> = sql
-                .prepare("SELECT min(height) FROM blocks")?
-                .query_row([], |r| r.get(0))?;
+            let (lowest, highest): (Option<u32>, Option<u32>) = sql
+                .prepare("SELECT min(height), max(height) FROM blocks")?
+                .query_row([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            let Some(floor) = highest.and_then(|h| h.min(tip).checked_sub(SETTLED)) else {
+                return Ok((lowest, [None, None]));
+            };
             let end = |sql_text: &'static str| -> Result<Option<(u32, Vec<u8>)>, _> {
                 sql.prepare(sql_text)?
                     .query_row(params![floor], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -241,7 +245,7 @@ async fn older_rows(ctx: &NetworkContext, store: &Store, tip: u32) -> Option<Old
     let Some(lowest) = lowest else {
         return Some(Older::Same);
     };
-    if tip < SETTLED || ends.iter().all(Option::is_none) {
+    if ends.iter().all(Option::is_none) {
         return Some(Older::Unsettled(lowest));
     }
     for (height, hash) in ends.into_iter().flatten() {
@@ -534,6 +538,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[tokio::test]
+    async fn replacements_made_while_the_node_was_elsewhere_are_never_written() {
+        use engine::replacements::{Change, Facts, Link, Mined};
+        let n = Arc::new(Node::default());
+        let dir = temp("replacements");
+        let ctx = context(node(Arc::clone(&n), "regtest").await, &dir);
+        let s = store(&ctx);
+        let mut checks = Checks::default();
+        check(&ctx, &mut checks).await;
+        let (kept, _writer) = crate::replacements::writer(&ctx).unwrap();
+        let facts = Facts {
+            fee: 100,
+            vsize: 200,
+            weight: 797,
+            value: 5000,
+            time: 1_700_000_000,
+            rbf: true,
+        };
+        let link = |a: u8, b: u8| {
+            vec![Change::Link(Link {
+                txid: bitcoin::Txid::from_byte_array([a; 32]),
+                by: bitcoin::Txid::from_byte_array([b; 32]),
+                seen: 1,
+                tx: facts,
+                by_tx: Some(facts),
+                mined: Mined::No,
+            })]
+        };
+        let rows = || async {
+            s.read(Read::Replacements, |sql| {
+                Ok(sql
+                    .prepare("SELECT count(*) FROM replacements")?
+                    .query_row([], |r| r.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap()
+        };
+        // Repointed at mainnet: batches made meanwhile pile up behind the waiting writer.
+        *n.chain.lock().unwrap() = "main";
+        check(&ctx, &mut checks).await;
+        kept.send(link(1, 101));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        for i in 2..5 {
+            kept.send(link(i, i + 100));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        *n.chain.lock().unwrap() = "regtest";
+        check(&ctx, &mut checks).await;
+        // A batch made once the node is right again is written; none of the others ever is.
+        kept.send(link(9, 109));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rows().await == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the fresh batch was never written"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(rows().await, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file from before `chain`: block rows at these heights and hashes, and no chain row.
     async fn older_file(dir: &std::path::Path, rows: &[(u32, BlockHash)]) {
         let old = Store::open(dir, "regtest", engine::store::Options::default()).unwrap();
@@ -561,15 +628,17 @@ mod tests {
 
     #[tokio::test]
     async fn an_older_file_is_checked_against_the_node_before_it_is_written() {
-        // Rows at 10 and 300 the node has, and 450 too new to be settled: recorded and opened.
+        // Rows at 10 and 300 the node has, and 390, which it does not: a block a reorg replaced
+        // while the server was down, as the file's tip, far enough below the node's (500) to
+        // look settled. It is not settled in the file: recorded and opened.
         let n = Arc::new(Node::default());
         let port = node(Arc::clone(&n), "regtest").await;
         n.blocks
             .lock()
             .unwrap()
-            .extend([(hash(1).to_string(), 10), (hash(2).to_string(), 300)]);
+            .extend([(hash(1).to_string(), 10), (hash(2).to_string(), 280)]);
         let dir = temp("same");
-        older_file(&dir, &[(10, hash(1)), (300, hash(2)), (450, hash(3))]).await;
+        older_file(&dir, &[(10, hash(1)), (280, hash(2)), (390, hash(3))]).await;
         let ctx = context(port, &dir);
         let s = store(&ctx);
         assert!(s.unstamped());
@@ -580,7 +649,7 @@ mod tests {
 
         // The lowest row is another chain's (another node's backfill reached it): refused.
         let dir = temp("low");
-        older_file(&dir, &[(10, hash(9)), (300, hash(2))]).await;
+        older_file(&dir, &[(10, hash(9)), (280, hash(2)), (450, hash(3))]).await;
         let ctx = context(port, &dir);
         let s = store(&ctx);
         check(&ctx, &mut Checks::default()).await;
@@ -591,7 +660,7 @@ mod tests {
 
         // The highest settled row is (another node's tip was followed): refused.
         let dir = temp("high");
-        older_file(&dir, &[(10, hash(1)), (300, hash(8))]).await;
+        older_file(&dir, &[(10, hash(1)), (280, hash(8)), (450, hash(3))]).await;
         let ctx = context(port, &dir);
         check(&ctx, &mut Checks::default()).await;
         assert_eq!(store(&ctx).gate(), Gate::Refused);

@@ -1415,3 +1415,31 @@ async fn rows_from_before_the_chain_was_recorded_wait_for_a_check() {
             .unstamped()
     );
 }
+
+#[tokio::test]
+async fn data_read_during_a_hold_is_never_written_whenever_the_write_comes() {
+    let dir = TempDir::new();
+    let store = Store::open(&dir.0, "regtest", for_chain(1)).unwrap();
+    // Read while waiting at start: written once the gate opens.
+    let start = store.generation();
+    store.set_gate(Gate::Open);
+    assert_eq!(store.generation(), start);
+    store.write_from(start, |_| Ok(())).await.unwrap();
+    // Read during a hold and kept in a caller's own queue: a fresh write after it ends fails.
+    store.set_gate(Gate::Held);
+    let held = store.generation();
+    store.set_gate(Gate::Open);
+    assert!(matches!(
+        store.write_from(held, |_| Ok(())).await,
+        Err(Error::Held)
+    ));
+    assert!(matches!(
+        store.try_write_from(start, |_| Ok(())).await,
+        Err(Error::Held)
+    ));
+    // Read now: written.
+    store
+        .write_from(store.generation(), |_| Ok(()))
+        .await
+        .unwrap();
+}

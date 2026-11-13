@@ -459,3 +459,40 @@ fn list_limits_are_strict() {
         assert!(limit(&uri(bad)).is_err(), "{bad}");
     }
 }
+
+#[tokio::test]
+async fn records_sent_while_the_node_was_on_another_chain_are_never_stored() {
+    let t = temp();
+    let dir = t.dir.join("gated");
+    let store = Store::open(
+        &dir,
+        "regtest",
+        Options {
+            genesis: Some([1; 32]),
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    store.set_gate(engine::store::Gate::Open);
+    let (peer, rx) = Scripted::new(100, 100);
+    let l = lightning();
+    let wait = || tokio::time::sleep(Duration::from_millis(50));
+    tokio::join!(run(&peer, rx, &store, &l), async {
+        peer.send(&History::Opened(opened(A, 1)));
+        wait().await;
+        // Found on another chain: the consumer waits on its next write while more arrive.
+        store.set_gate(engine::store::Gate::Held);
+        peer.send(&History::Opened(opened(B, 1)));
+        wait().await;
+        peer.send(&History::Opened(opened(C, 1)));
+        wait().await;
+        store.set_gate(engine::store::Gate::Open);
+        wait().await;
+        peer.send(&History::Opened(opened(D, 1)));
+        wait().await;
+        peer.close();
+    });
+    let mut scids: Vec<u64> = rows(&store).await.iter().map(|c| c.open.scid).collect();
+    scids.sort_unstable();
+    assert_eq!(scids, [A, D]);
+}

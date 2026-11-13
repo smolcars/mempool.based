@@ -362,7 +362,7 @@ pub enum Gate {
 /// One network's SQLite file. Share it behind an `Arc`.
 pub struct Store {
     queue: mpsc::Sender<Job>,
-    /// The [`Gate`], and how many times it has been held or refused.
+    /// The [`Gate`], and its [`Store::generation`].
     gate: watch::Sender<(Gate, u64)>,
     /// Block rows from before the file recorded its chain: see [`Store::unstamped`].
     unstamped: AtomicBool,
@@ -583,7 +583,18 @@ impl Store {
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
     {
-        let f = self.pass(f).await?;
+        self.write_from(self.generation(), f).await
+    }
+
+    /// [`Store::write`] for data read at `generation` ([`Store::generation`]): it commits only if
+    /// the gate has not been held since. For a caller that keeps data waiting in a queue of its
+    /// own, which a hold could otherwise let through once the gate reopens.
+    pub async fn write_from<T, F>(&self, generation: u64, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let f = self.pass(generation, f).await?;
         self.enqueue(f).await
     }
 
@@ -598,10 +609,11 @@ impl Store {
     }
 
     /// Waits for the gate to open, then wraps `f` so that it fails if the gate has closed by the
-    /// time the writer runs it. A write that began waiting while the node was on another chain,
-    /// or that saw it found there while waiting, fails: it carries what was read meanwhile.
+    /// time the writer runs it. Data read at another generation fails: it was read while the
+    /// node was on another chain, or before a hold that a write cannot see past.
     async fn pass<T, F>(
         &self,
+        generation: u64,
         f: F,
     ) -> Result<impl FnOnce(&Sql) -> Result<T, Error> + Send + 'static, Error>
     where
@@ -609,16 +621,15 @@ impl Store {
         T: Send + 'static,
     {
         let mut gate = self.gate.subscribe();
-        let (began, closings) = *gate.borrow_and_update();
-        let (now, closed) = *gate
+        let now = *gate
             .wait_for(|(g, _)| matches!(g, Gate::Open | Gate::Refused))
             .await
             .map_err(|_| Error::Closed)?;
-        if now != Gate::Open || closed != closings || began == Gate::Held {
+        if now != (Gate::Open, generation) {
             return Err(Error::Held);
         }
         Ok(move |sql: &Sql| {
-            if *gate.borrow() != (Gate::Open, closings) {
+            if *gate.borrow() != (Gate::Open, generation) {
                 return Err(Error::Held);
             }
             f(sql)
@@ -630,14 +641,21 @@ impl Store {
         self.gate.borrow().0
     }
 
+    /// A number that moves when the gate is held or refused, and again when a hold ends, but not
+    /// when it first opens. Data read at one generation is written only at that generation
+    /// ([`Store::write_from`]), so nothing read while the node was on another chain is written.
+    pub fn generation(&self) -> u64 {
+        self.gate.borrow().1
+    }
+
     /// Opens, holds or refuses writes. [`Gate::Refused`] is final.
     pub fn set_gate(&self, to: Gate) {
-        self.gate.send_if_modified(|(g, closings)| {
+        self.gate.send_if_modified(|(g, generation)| {
             if *g == to || *g == Gate::Refused {
                 return false;
             }
-            if matches!(to, Gate::Held | Gate::Refused) {
-                *closings = closings.wrapping_add(1);
+            if matches!(to, Gate::Held | Gate::Refused) || *g == Gate::Held {
+                *generation = generation.wrapping_add(1);
             }
             *g = to;
             true
@@ -673,7 +691,16 @@ impl Store {
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (job, done) = job(self.pass(f).await?);
+        self.try_write_from(self.generation(), f).await
+    }
+
+    /// [`Store::try_write`] for data read at `generation`, as [`Store::write_from`].
+    pub async fn try_write_from<T, F>(&self, generation: u64, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (job, done) = job(self.pass(generation, f).await?);
         self.queue.try_send(job).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => Error::Full,
             mpsc::error::TrySendError::Closed(_) => Error::Closed,

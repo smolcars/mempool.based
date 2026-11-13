@@ -60,7 +60,8 @@ pub async fn route(
 #[derive(Clone)]
 pub struct Kept {
     pub store: Arc<Store>,
-    pub queue: mpsc::Sender<Batch>,
+    /// Each batch with the store's generation when it was made ([`Store::write_from`]).
+    pub queue: mpsc::Sender<(u64, Batch)>,
     /// Failures in a row, for the log's powers of two.
     failures: Arc<AtomicU64>,
     network: Network,
@@ -82,7 +83,11 @@ impl Kept {
             return;
         }
         let links = links(&batch);
-        if self.queue.try_send(batch).is_err() {
+        if self
+            .queue
+            .try_send((self.store.generation(), batch))
+            .is_err()
+        {
             self.failed("write", "queue_full", links);
         }
     }
@@ -130,6 +135,7 @@ fn links(batch: &[Change]) -> usize {
 fn store_error(e: &engine::store::Error) -> &'static str {
     match e {
         engine::store::Error::TimedOut => "timed_out",
+        engine::store::Error::Held => "held",
         _ => "store",
     }
 }
@@ -139,7 +145,7 @@ fn store_error(e: &engine::store::Error) -> &'static str {
 /// drops rows past `REPLACEMENTS_KEPT`, so the table never holds more than memory does.
 pub fn writer(ctx: &NetworkContext) -> Option<(Kept, tokio::task::JoinHandle<()>)> {
     let store = Arc::clone(&ctx.blocks.as_ref()?.store);
-    let (queue, mut rx) = mpsc::channel::<Batch>(QUEUE);
+    let (queue, mut rx) = mpsc::channel::<(u64, Batch)>(QUEUE);
     let kept = Kept {
         store,
         queue,
@@ -149,14 +155,27 @@ pub fn writer(ctx: &NetworkContext) -> Option<(Kept, tokio::task::JoinHandle<()>
     let keep = ctx.track.with_replacements(Replacements::cap);
     let k = kept.clone();
     let task = tokio::spawn(async move {
-        while let Some(batch) = rx.recv().await {
+        while let Some(first) = rx.recv().await {
             // Whatever queued meanwhile goes in the same transaction, in order.
-            let mut batches = vec![batch];
+            let mut batches = vec![first];
             while let Ok(more) = rx.try_recv() {
                 batches.push(more);
             }
+            // Batches made before the node was last found on another chain, or while it was,
+            // are never written.
+            let now = k.store.generation();
+            let (fresh, stale): (Vec<_>, Vec<_>) =
+                batches.into_iter().partition(|(g, _)| *g == now);
+            let stale: usize = stale.iter().map(|(_, b)| links(b)).sum();
+            if stale > 0 {
+                k.failed("write", "held", stale);
+            }
+            let batches: Vec<Batch> = fresh.into_iter().map(|(_, b)| b).collect();
+            if batches.is_empty() {
+                continue;
+            }
             let links = batches.iter().map(|b| links(b)).sum();
-            match engine::replacements::db::write(&k.store, batches, keep).await {
+            match engine::replacements::db::write_from(&k.store, now, batches, keep).await {
                 Ok(()) => k.failures.store(0, Ordering::Relaxed),
                 Err(e) => k.failed("write", store_error(&e), links),
             }
