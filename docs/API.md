@@ -775,7 +775,7 @@ What the Lightning pages read; one request for each page's main content. Real ma
 | `GET /rankings/:by` | `by` is `capacity`, `channels` or `age` (oldest first funding first); `{by, nodes: [{id, alias, capacity, channels, first_seen, last_update}]}`, `?limit=` up to 100 |
 | `GET /nodes/:key` | The node page: below |
 | `GET /nodes/:key/channels?status=&page=` | `{status, page, per_page, total, channels}`: open channels largest first, from the index; closed ones newest close first, from the store |
-| `GET /nodes/:key/history` | `{from, points: [{time, channels, capacity}]}`: the node's open channels and capacity at each UTC midnight since `from` (when our history starts: the first statistics snapshot; `null` before it), then now, oldest first |
+| `GET /nodes/:key/history` | `{from, points: [{time, channels, capacity}]}`: the node's open channels and capacity at each UTC midnight since `from` (when our history starts: the first statistics snapshot; `null` before it), at the block time of each of its channels' opens and closes after the first midnight, then now, oldest first. A chart steps at the changes rather than drawing a slope between midnights |
 | `GET /channels/:id` | The channel page: below. Open or closed |
 | `GET /tx/:txid` | `{opened, closed}`: the channels this transaction funded and closed, each as in the channel lists above. For the transaction page |
 
@@ -830,7 +830,7 @@ In the reference's shapes: field names, order and JSON types as recorded from me
 | `GET /nodes/rankings` | `{topByCapacity: [{publicKey, alias, capacity}], topByChannels: [{publicKey, alias, channels, city, country, iso_code, subdivision}]}`, 6 each |
 | `GET /nodes/rankings/liquidity`, `/connectivity`, `/age` | 100 nodes: `{publicKey, alias, capacity, channels, firstSeen, updatedAt, city, country, iso_code, subdivision}` (capacity after channels for the last two) |
 | `GET /nodes/:key` | `{public_key, alias, first_seen, updated_at, color, sockets, as_number, city_id, country_id, subdivision_id, longitude, latitude, iso_code, as_organization, city, country, subdivision, features, featuresBits, active_channel_count, capacity, opened_channel_count, closed_channel_count, custom_records}`. `capacity` is a string, as there |
-| `GET /nodes/:key/statistics` | `[{added, capacity, channels}]`, newest first: the points of `/app/lightning/nodes/:key/history` |
+| `GET /nodes/:key/statistics` | `[{added, capacity, channels}]`, newest first: the midnights and now of `/app/lightning/nodes/:key/history`, without the changes between |
 | `GET /nodes/:key/fees/histogram` | `{incoming: [{bucket, count, capacity}], outgoing: […]}`; `bucket` a string such as `"400.0"` or `null`, `capacity` a string |
 | `GET /channels?public_key=&status=&index=` | 10 channels from offset `index`: `[{status, closing_reason, closing_date, capacity, short_id, id, fee_rate, node: {alias, public_key, channels, capacity}}]`, open ones largest first, closed ones newest close first; `X-Total-Count` the node's total |
 | `GET /channels/:id` | `{id, short_id, capacity, transaction_id, transaction_vout, closing_transaction_id, closing_fee, closing_reason, closing_date, updated_at, created, status, funding_ratio, closed_by, node_left, node_right}`, each end `{alias, public_key, channels, capacity, base_fee_mtokens, cltv_delta, fee_rate, is_disabled, max_htlc_mtokens, min_htlc_mtokens, updated_at, longitude, latitude}` |

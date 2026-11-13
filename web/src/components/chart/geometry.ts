@@ -74,7 +74,8 @@ export function linePath(
 /**
  * The area between `hi` and `lo` (a constant baseline when `lo` is a number), broken at gaps:
  * filled areas under a line, and bands between percentiles. With `sliver`, a lone point is a
- * sliver that many px wide; without, it draws nothing, as the mining charts always have.
+ * sliver that many px wide; without, it draws nothing, as the mining charts always have. With
+ * `step`, each point holds until the next, as `linePath`'s step does.
  */
 /** Where a layer arrives at a point (`in`) and leaves it (`out`), when not at its own values. */
 export interface Join {
@@ -91,6 +92,7 @@ export function areaPath(
   gap: number,
   sliver = 0,
   joins?: ReadonlyMap<number, Join>,
+  step = false,
 ): string {
   const low = (i: number) => (typeof lo === "number" ? lo : lo[i]);
   let d = "";
@@ -114,6 +116,7 @@ export function areaPath(
       // A join: the run arrives at `in`, is the point's own values, and leaves at `out`, each
       // change on a vertical edge.
       const j = joins?.get(i);
+      if (step && i > a) top += `L${x} ${n(sy(hi[i - 1] ?? 0))}`;
       if (j?.in && i > a) top += `L${x} ${n(sy(j.in.hi))}`;
       top += `${i === a ? "M" : "L"}${x} ${n(sy(hi[i] ?? 0))}`;
       if (j?.out && i < b) top += `L${x} ${n(sy(j.out.hi))}`;
@@ -124,6 +127,7 @@ export function areaPath(
       if (j?.out && i < b) bottom += `L${x} ${n(sy(j.out.lo))}`;
       bottom += `L${x} ${n(sy(low(i) ?? 0))}`;
       if (j?.in && i > a) bottom += `L${x} ${n(sy(j.in.lo))}`;
+      if (step && i > a) bottom += `L${x} ${n(sy(low(i - 1) ?? 0))}`;
     }
     d += `${top}${bottom}Z`;
   }

@@ -276,21 +276,30 @@ function VersionItem(props: { tx: TreeTx; after: number | undefined; newest: boo
           </span>
         )}
       </Show>
-      <span
-        class={["rbf-v__mark", { "rbf-v__mark--none": rate() === null }]}
-        style={{ "--c": rate() === null ? "transparent" : feeColor(rate() ?? 0) }}
-        aria-hidden="true"
-      />
-      <span class="rbf-v__id">
-        <Hash value={props.tx.txid} href={paths.tx(props.tx.txid)} head={8} tail={4} copy={false} />
-      </span>
-      <span class="rbf-v__rate">
-        <Show when={rate()} keyed fallback={<span class="num">–</span>}>
-          {(r) => <FeeRate rate={r} unit={false} />}
-        </Show>
-        <Show when={props.tx.rbf === false}>
-          <span class="rbf-v__nosig">did not signal</span>
-        </Show>
+      {/* The version's own target: its link covers its mark, id and rate, a thumb high. */}
+      <span class="rbf-v__body">
+        <span
+          class={["rbf-v__mark", { "rbf-v__mark--none": rate() === null }]}
+          style={{ "--c": rate() === null ? "transparent" : feeColor(rate() ?? 0) }}
+          aria-hidden="true"
+        />
+        <span class="rbf-v__id">
+          <Hash
+            value={props.tx.txid}
+            href={paths.tx(props.tx.txid)}
+            head={8}
+            tail={4}
+            copy={false}
+          />
+        </span>
+        <span class="rbf-v__rate">
+          <Show when={rate()} keyed fallback={<span class="num">–</span>}>
+            {(r) => <FeeRate rate={r} unit={false} />}
+          </Show>
+          <Show when={props.tx.rbf === false}>
+            <span class="rbf-v__nosig">did not signal</span>
+          </Show>
+        </span>
       </span>
     </li>
   );

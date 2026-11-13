@@ -179,6 +179,22 @@ describe("gaps", () => {
       ),
     ).toBe("M0 5L1 6L1 0L0 0Z");
   });
+  it("fills under a step as the step is drawn: flat, then a vertical edge at the next point", () => {
+    // A node with one channel at midnight and two from an open: no slope between them.
+    expect(
+      areaPath(
+        [0, 1, 2],
+        [1, 2, 2],
+        0,
+        (x) => x,
+        (y) => y,
+        10,
+        0,
+        undefined,
+        true,
+      ),
+    ).toBe("M0 1L1 1L1 2L2 2L2 2L2 0L2 0L1 0L1 0L0 0Z");
+  });
   it("changes a layer on a vertical edge at a join, never across the minute before it", () => {
     // The layer arrives at 8 to 2 just before x 1, then is 6 to 2 at x 1: one vertical edge.
     const joins = new Map([[1, { in: { hi: 8, lo: 2 } }]]);

@@ -7,7 +7,7 @@ import { DifficultyAdjustment } from "../../components/Difficulty";
 import { Link } from "../../components/Link";
 import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
-import { groupDigits, MISSING } from "../../lib/format";
+import { formatFeeRate, groupDigits, MISSING } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { createMiningData, type MiningData } from "./data";
@@ -51,7 +51,6 @@ import {
   CoverageNote,
   difficultyFull,
   difficultyShort,
-  feeRateText,
   NothingStored,
   percent,
   Section,
@@ -668,20 +667,25 @@ function OverTime(props: { period: Period; network: Network }) {
                   "Fee rates paid in blocks",
                 )}
                 left={{ format: (v) => formatFeeAxis(v), log: true, fee: true }}
+                // The unit once, in the readout and the figures' headers: the figures fit a phone.
                 bands={[
                   {
                     name: "10th to 90th percentile",
+                    narrow: "Middle 80%",
                     tone: 1,
                     lo: a().map((p) => pos(p.avgFee_10)),
                     hi: a().map((p) => pos(p.avgFee_90)),
-                    format: feeRateText,
+                    format: formatFeeRate,
+                    unit: "sat/vB",
                   },
                   {
                     name: "25th to 75th percentile",
+                    narrow: "Middle 50%",
                     tone: 2,
                     lo: a().map((p) => pos(p.avgFee_25)),
                     hi: a().map((p) => pos(p.avgFee_75)),
-                    format: feeRateText,
+                    format: formatFeeRate,
+                    unit: "sat/vB",
                   },
                 ]}
                 series={[
@@ -689,7 +693,8 @@ function OverTime(props: { period: Period; network: Network }) {
                     name: "Median",
                     draw: "line",
                     values: a().map((p) => pos(p.avgFee_50)),
-                    format: feeRateText,
+                    format: formatFeeRate,
+                    unit: "sat/vB",
                   },
                 ]}
               />

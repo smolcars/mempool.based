@@ -1,43 +1,7 @@
-import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
+import { ACINQ, mainnet, ONE, recorded, serve } from "./lightning-answers";
 import { tablesFit, tapRow } from "./rows";
-
-// Regtest runs without Lightning, so the filled pages are drawn from answers a mainnet server
-// gave on 2026-11-12 (fixtures/lightning/app), served in place of this server's own.
-const recorded = (name: string): unknown =>
-  JSON.parse(
-    readFileSync(new URL(`../../fixtures/lightning/app/${name}.json`, import.meta.url), "utf8"),
-  );
-
-const ACINQ = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
-/** FUNK-BTCPay: one channel, 10 ppm out and 300 ppm in. */
-const ONE = "03874dc955fba789b08db50beb6839d41379071f4f4747ae8546329a14176e339a";
-
-/** Answers `/regtest/app/lightning/…` from `answers`, keyed by the path after it and its query. */
-async function serve(page: Page, answers: Record<string, unknown>) {
-  await page.route(/\/regtest\/app\/lightning\//, async (route) => {
-    const url = new URL(route.request().url());
-    const key = url.pathname.replace(/^\/regtest\/app\/lightning\//, "") + url.search;
-    const json = answers[key];
-    await (json === undefined
-      ? route.fulfill({ status: 500, json: { error: `no recorded answer for ${key}` } })
-      : route.fulfill({ json }));
-  });
-}
-
-const mainnet = () => ({
-  status: recorded("status"),
-  overview: recorded("overview"),
-  "statistics/1w": recorded("statistics-1w"),
-  [`nodes/${ACINQ}`]: recorded("node-acinq"),
-  [`nodes/${ACINQ}/history`]: recorded("node-acinq-history"),
-  [`nodes/${ONE}`]: recorded("node-one"),
-  [`nodes/${ONE}/history`]: recorded("node-one-history"),
-  "channels/811984x2037x0": recorded("channel-811984x2037x0"),
-  "search?q=acinq": recorded("search-acinq"),
-  "rankings/capacity?limit=100": recorded("rankings-capacity"),
-});
 
 test("the header leads to Lightning, which says it is switched off on regtest", async ({
   page,
@@ -403,11 +367,117 @@ test("a node's past and fee rates sit side by side, and a phone reaches its chan
   expect((await figures.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
   await figures.click();
   await page.setViewportSize({ width: 320, height: 844 });
-  await expect(fees.getByRole("table")).toBeVisible();
+  // The chart's own words head the figures, one table each way, and each says which column counts
+  // channels and which sums their capacity (the strict fit at 320 px is in tables.e2e.ts).
+  await expect(fees.getByRole("table", { name: "It charges" })).toBeVisible();
+  await expect(fees.getByRole("table", { name: "Its peers charge" })).toBeVisible();
+  for (const name of ["It charges", "Its peers charge"]) {
+    await expect(fees.getByRole("table", { name }).locator("thead th:visible")).toHaveText([
+      "Fee rate, ppm",
+      "Channels",
+      /Capacity, BTC$/,
+    ]);
+  }
   await tablesFit(page, "a node's fee figures at 320 px");
-  // Every column, the capacities included: the table scrolls rather than drop one.
-  await expect(fees.locator("thead th:visible")).toHaveCount(5);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});
+
+/** The points of a chart's path `d`, as drawn. */
+const points = (d: string) =>
+  [...d.matchAll(/([MLHV])([\d.-]+)(?: ([\d.-]+))?/g)].reduce<[number, number][]>((out, m) => {
+    const [x0, y0] = out.at(-1) ?? [0, 0];
+    const a = Number(m[2]);
+    const at: [number, number] =
+      m[1] === "H" ? [a, y0] : m[1] === "V" ? [x0, a] : [a, Number(m[3])];
+    out.push(at);
+    return out;
+  }, []);
+
+// Two looks at a small node were once joined by a slope, as if its second channel had grown all
+// day. Its record knows the open's block: the chart steps there, and draws nothing between.
+test("a node's past steps at the moment a channel opened, never a slope between two looks", async ({
+  page,
+}) => {
+  const midnight = 1_794_528_000;
+  const opened = 1_794_603_213;
+  const now = 1_794_607_020;
+  await serve(page, {
+    ...mainnet(),
+    [`nodes/${ONE}/history`]: {
+      from: 1_794_504_600,
+      points: [
+        { time: midnight, channels: 1, capacity: 80_000 },
+        { time: opened, channels: 2, capacity: 2_080_000 },
+        { time: now, channels: 2, capacity: 2_080_000 },
+      ],
+    },
+  });
+  for (const width of [1440, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/regtest/lightning/node/${ONE}`);
+    const past = panel(page, "Over time");
+    await expect(past.getByRole("slider")).toHaveAttribute("aria-valuetext", /Channels 2\b/);
+    const drawn = await past
+      .locator(".chart__line, .chart__area")
+      .evaluateAll((paths) => paths.map((p) => p.getAttribute("d") ?? "").filter(Boolean));
+    // Channels' line and area, capacity's line.
+    expect(drawn).toHaveLength(3);
+    for (const d of drawn) {
+      const at = points(d);
+      const slopes = at.filter(([x, y], i) => {
+        const [px, py] = at[i - 1] ?? [x, y];
+        return Math.abs(x - px) > 0.2 && Math.abs(y - py) > 0.2;
+      });
+      expect(slopes, `${width} px: ${d}`).toStrictEqual([]);
+    }
+    // The rise is at the open, not at the later look: before the plot's right edge.
+    const [line] = drawn;
+    const xs = points(line ?? "").map(([x]) => x);
+    const right = Math.max(...xs);
+    const rise = points(line ?? "").find(
+      ([x, y], i, all) => (all[i - 1]?.[0] ?? -1) === x && all[i - 1]?.[1] !== y,
+    );
+    expect(rise?.[0] ?? right, `${width} px: the step`).toBeLessThan(right - 2);
+    // The figures name the open's minute.
+    await past.getByText("Show the figures").click();
+    await expect(past.getByRole("table")).toContainText("13 Nov 2026, 20:53");
+  }
+});
+
+// The network's totals are samples every ten minutes: while there are few, each is marked, so a
+// line between two reads as two looks rather than a measurement of the time between.
+test("the overview marks its samples while they are few, and not once they are many", async ({
+  page,
+}) => {
+  const point = recorded("statistics-1w") as { points: Record<string, number>[] } & Record<
+    string,
+    unknown
+  >;
+  const one = point.points[0] ?? {};
+  const series = (n: number) => ({
+    ...point,
+    complete: true,
+    first: 1_794_508_200 - (n - 1) * 600,
+    from: 1_794_508_200 - (n - 1) * 600,
+    to: 1_794_508_219,
+    sampled: n,
+    slots: n,
+    points: Array.from({ length: n }, (_, i) => ({
+      ...one,
+      time: 1_794_508_200 - (n - 1 - i) * 600,
+      channels: (one["channels"] ?? 0) + i * 3,
+    })),
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const [n, marks] of [
+    [3, 6],
+    [400, 0],
+  ] as const) {
+    await serve(page, { ...mainnet(), "statistics/1w": series(n) });
+    await page.goto("/regtest/lightning");
+    await expect(page.getByRole("slider", { name: /Lightning channels/ })).toBeVisible();
+    await expect(page.locator(".ln-history .chart__mark")).toHaveCount(marks);
+  }
 });
 
 test.describe("a node's past and fees at the edges", () => {

@@ -810,7 +810,8 @@ async fn nodes_channels_search_and_rankings_answer_exactly_in_both_shapes() {
         );
     }
 
-    // A node's past: a point per UTC midnight from our first statistics row, then now.
+    // A node's past: a point per UTC midnight from our first statistics row, a point at each
+    // open or close between, then now.
     let h = get(
         &addr,
         &format!("/regtest/app/lightning/nodes/{one}/history"),
@@ -823,10 +824,20 @@ async fn nodes_channels_search_and_rankings_answer_exactly_in_both_shapes() {
         points[0],
         serde_json::json!({ "time": 1_790_121_600, "channels": 4, "capacity": 8_700_000 })
     );
+    // The close a day in, at its block's time, not at the midnight after it.
+    let at = |t: u64| points.iter().find(|p| p["time"] == t).cloned();
     assert_eq!(
-        points[2],
-        serde_json::json!({ "time": 1_790_294_400, "channels": 2, "capacity": 7_000_000 })
+        at(1_790_259_200),
+        Some(serde_json::json!({ "time": 1_790_259_200, "channels": 2, "capacity": 7_000_000 }))
     );
+    assert_eq!(
+        at(1_790_294_400),
+        Some(serde_json::json!({ "time": 1_790_294_400, "channels": 2, "capacity": 7_000_000 }))
+    );
+    let midnights = points
+        .iter()
+        .filter(|p| p["time"].as_u64().is_some_and(|t| t % graph::DAY == 0))
+        .count();
     let s = get(
         &addr,
         &format!("/regtest/api/v1/lightning/nodes/{one}/statistics"),
@@ -834,7 +845,8 @@ async fn nodes_channels_search_and_rankings_answer_exactly_in_both_shapes() {
     .await
     .json();
     let s = s.as_array().unwrap();
-    assert_eq!(s.len(), points.len());
+    // The reference's shape is daily: the midnights and now, without the changes between.
+    assert_eq!(s.len(), midnights + 1);
     assert_eq!(
         s.last().unwrap(),
         &serde_json::json!({ "added": 1_790_121_600, "capacity": 8_700_000, "channels": 4 })

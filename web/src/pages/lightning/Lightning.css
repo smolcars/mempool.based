@@ -521,6 +521,36 @@
   .ln-fees .chart__caption {
     margin-top: var(--space-3);
   }
+  /* The figures: one table each way, captioned with the chart's words and its key, side by side
+     where the bars are, one over the other on a phone. */
+  .ln-fees__figures {
+    display: grid;
+    gap: var(--space-5) var(--space-6);
+  }
+  @container (min-width: 30rem) {
+    .ln-fees__figures {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .ln-fees__table .table__caption {
+    color: var(--color-text);
+    font-weight: var(--weight-medium);
+  }
+  .ln-fees__table .table__caption::before {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 8px;
+    margin-right: var(--space-2);
+    border-radius: var(--radius-s);
+    background: var(--way);
+  }
+  .ln-fees__table--out {
+    --way: var(--series-1);
+  }
+  .ln-fees__table--in {
+    --way: var(--series-2);
+  }
 
   @media (max-width: 1040px) {
     .ln-pair,

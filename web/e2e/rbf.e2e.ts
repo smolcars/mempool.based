@@ -65,6 +65,86 @@ test("mainnet's stories read oldest first, fold when long, and fit every width",
   }
 });
 
+// An older version was once a 19 px link inside a row that opens the version that stands: a press
+// 10 px below it opened that other transaction. Every version is now a target of its own, at least
+// a thumb high (docs/DESIGN.md "Touch"), and inside a story the row's link answers nowhere.
+test.describe("a version's target", () => {
+  // The tap at the end opens a mainnet transaction, which regtest's node does not have.
+  test.use({ consoleErrorsAllowed: [/status of 404/] });
+  test("every version is a thumb's target of its own, and a near miss never opens another", async ({
+    page,
+  }) => {
+    await recorded(page);
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/regtest/rbf");
+      await expect(page.locator(".rbf-list tbody tr")).toHaveCount(RECORDED.all.length);
+      const faults = await page.evaluate(() => {
+        const out: string[] = [];
+        const name = (el: Element | null) =>
+          el?.closest("a")?.getAttribute("href")?.slice(-6) ??
+          (el?.classList.contains("table__rowlink") ? "the row" : "nothing");
+        for (const one of document.querySelectorAll<HTMLElement>("[data-story]")) {
+          const versions = [...one.querySelectorAll<HTMLAnchorElement>(".rbf-v__id a")];
+          const others = [...one.querySelectorAll<HTMLAnchorElement>(".rbf-story__others a")];
+          for (const a of [...versions, ...others]) {
+            a.scrollIntoView({ block: "center" });
+            const r = a.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height / 2;
+            const at = (dx: number, dy: number) => document.elementFromPoint(x + dx, y + dy);
+            const mine = (dx: number, dy: number) => at(dx, dy)?.closest("a") === a;
+            // A near miss, above, below and at either end, is still this one.
+            for (const [dx, dy] of [
+              [0, -10],
+              [0, 10],
+              [-r.width / 2 + 2, 0],
+              [r.width / 2 - 2, 0],
+            ] as const) {
+              if (!mine(dx, dy)) {
+                out.push(`${a.href.slice(-6)} at ${dx}, ${dy}: ${name(at(dx, dy))}`);
+              }
+            }
+            if (!versions.includes(a)) continue;
+            let up = 0;
+            while (up < 60 && mine(0, -(up + 1))) up++;
+            let down = 0;
+            while (down < 60 && mine(0, down + 1)) down++;
+            if (up + down + 1 < 44) out.push(`${a.href.slice(-6)} is ${up + down + 1} px high`);
+          }
+          // Nowhere in the story does the row's own link answer: down the line through each version.
+          const box = one.getBoundingClientRect();
+          for (const a of versions) {
+            a.scrollIntoView({ block: "center" });
+            const r = a.getBoundingClientRect();
+            const top = one.getBoundingClientRect().top;
+            for (let dy = 0; dy <= box.height; dy += 2) {
+              const el = document.elementFromPoint(r.left + r.width / 2, top + dy);
+              if (el?.classList.contains("table__rowlink")) {
+                out.push(`the row's link inside the story at ${Math.round(dy)} px`);
+                break;
+              }
+            }
+          }
+        }
+        return out;
+      });
+      expect(faults, `${width} px`).toStrictEqual([]);
+    }
+    // A tap 10 px below an older version opens that version, at the narrowest phone.
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/regtest/rbf");
+    const first = RECORDED.all[0]?.tx.txid ?? "";
+    const older = story(page, first).locator(".rbf-v__id a").first();
+    const href = await older.getAttribute("href");
+    await older.scrollIntoViewIfNeeded();
+    const box = await older.boundingBox();
+    if (!box) throw new Error("no older version");
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2 + 10);
+    await expect(page).toHaveURL(new URL(href ?? "", page.url()).href);
+  });
+});
+
 test("a story that arrives above the reader leaves what they read where it was", async ({
   page,
 }) => {

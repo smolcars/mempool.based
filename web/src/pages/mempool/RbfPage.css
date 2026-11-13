@@ -86,15 +86,22 @@
     }
   }
 
-  /* Room on the left for the ring around the newest version's mark, at the cell's edge. */
+  /* Room on the left for the ring around the newest version's mark, at the cell's edge. The story
+     sits over the row's link: a press inside it that misses every version opens nothing, never the
+     version that stands. It is as wide as its line, so the rest of the row still opens that one. */
   .rbf-story {
+    position: relative;
+    z-index: 1;
+    width: fit-content;
+    max-width: 100%;
     padding-left: 4px;
   }
+  /* Wrapped lines 24 px apart, so the targets above and below them meet and never overlap. */
   .rbf-story__line {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-2) 0;
+    gap: var(--space-5) 0;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -104,6 +111,24 @@
     align-items: center;
     gap: var(--space-2);
     padding-right: var(--space-1);
+  }
+  .rbf-v__body {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  /* Each version is a target of its own: its link's box covers its mark, id and rate, and reaches
+     12 px past them, at least 44 px high (docs/DESIGN.md "Touch"), to the middle of the time it
+     stood on either side, where the next version's target begins. */
+  .rbf-story a.hash__text {
+    position: static;
+  }
+  .rbf-v__id a.hash__text::after {
+    content: "";
+    position: absolute;
+    inset-block: min(-12px, calc(50% - 22px));
+    inset-inline: -4px 0;
   }
   /* How long the version before stood: a stretch of the line with its time over it. */
   .rbf-v__after {
@@ -172,6 +197,11 @@
     display: inline-flex;
     padding: 0 var(--space-2);
   }
+  /* The fold stays above the targets beside it. */
+  .rbf-story__button {
+    position: relative;
+    z-index: 1;
+  }
   .rbf-story__button {
     min-height: 28px;
     padding: 0 var(--space-2);
@@ -194,14 +224,24 @@
       min-height: var(--touch);
     }
   }
+  /* Its ids' targets reach 4 px past them, to meet the line above's 16 px away and each other's
+     8 px away. */
   .rbf-story__others {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-1) var(--space-3);
-    margin: var(--space-2) 0 0;
+    gap: var(--space-2) var(--space-3);
+    margin: var(--space-4) 0 0;
     font-size: var(--text-xs);
     color: var(--color-text-muted);
+  }
+  .rbf-story__others .hash {
+    position: relative;
+  }
+  .rbf-story__others a.hash__text::after {
+    content: "";
+    position: absolute;
+    inset: -4px 0;
   }
   .rbf-story__others .hash__text {
     color: var(--color-text-muted);
@@ -231,17 +271,27 @@
     .rbf-lead {
       min-height: calc(2em * var(--leading-body));
     }
+    /* The story and each version take the row's width: a press beside a version's line is that
+       version's. */
+    .rbf-story {
+      width: auto;
+    }
     .rbf-story__line {
       flex-direction: column;
-      align-items: flex-start;
+      align-items: stretch;
       gap: 0;
     }
     .rbf-v {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+    }
+    .rbf-v__body {
+      display: flex;
       flex-wrap: wrap;
       row-gap: 0;
     }
     .rbf-v__after {
-      flex-basis: 100%;
       flex-direction: row;
       gap: var(--space-2);
       min-width: 0;
@@ -260,19 +310,17 @@
       flex-direction: row;
       gap: var(--space-2);
     }
+    /* Room above and below for the targets of the versions on either side. */
     .rbf-story__fold {
-      padding: var(--space-1) 0;
+      padding: var(--space-3) 0;
     }
   }
   /* The narrowest phones: the rate goes under its id rather than wrap to the mark's side. */
   @media (max-width: 380px) {
-    .rbf-v {
+    .rbf-v__body {
       display: grid;
       grid-template-columns: auto 1fr;
       column-gap: var(--space-2);
-    }
-    .rbf-v__after {
-      grid-column: 1 / -1;
     }
     .rbf-v__rate {
       grid-column: 2;
