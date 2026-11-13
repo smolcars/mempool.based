@@ -383,8 +383,8 @@ Why each part is as it is:
 - **The bottom of a block sets the price, not its middle.** A new transaction gets into block `N` when everything that outbids it fits in `N` blocks: that is the depth term. Reading the median of a block instead would overpay by half a block's spread on every level.
 - **Ties count against us.** Transactions at exactly `r` are counted as ahead, because the node orders equal rates in an order nobody outside it can know ([Limits](#limits)). With thousands of chunks at one rate at a block boundary, as mainnet holds today, the answer is one step (0.001 sat/vB) above that rate, never the rate itself. A block exactly full of transactions at `r` likewise has no room at `r`.
 - **A block that is not full means the minimum is enough,** because the depth term is already under `N` blocks at the node's minimum; so is an empty or nearly empty mempool, where every level is the minimum. Only arrivals can lift it then.
-- **Arrivals.** Blocks come every ten minutes on average, and every transaction that arrives before then paying more than ours goes ahead of it. The method counts, per minute, the virtual size of transactions that entered the mempool at each rate over the last 30 minutes (from the tracker's change stream, at their own rate), and expects that rate to continue. It counts them up to the time by which the `N`-th block has come with 80% probability, block intervals being exponential: 16.1 minutes for `high`, 42.8 for `medium`, 79.1 for `low` and 25.7 hours for `no_rush`. 80% rather than the mean because the cost is lopsided: too low leaves a payment stuck, while too high costs, on today's mempool, a fraction of a sat/vB.
-- **One burst is not a trend.** The busiest of the 30 minutes is left out of the arrivals once there are five, so a single burst (a consolidation, an exchange's batch) is not extrapolated over the horizon. It is in the mempool already, where the depth term counts it.
+- **Arrivals.** Blocks come every ten minutes on average, and every transaction that arrives before then paying more than ours goes ahead of it. The method counts, per minute, the virtual size of transactions that entered the mempool at each rate over the last 30 minutes (from the tracker's change stream, at their own rate), and expects that rate to continue. It counts them up to the time by which the `N`-th block has come with 90% probability, block intervals being exponential (a quantile of the gamma distribution): 23.0 minutes for `high`, 53.2 for `medium`, 92.8 for `low` and 26.6 hours for `no_rush`. Not the mean, because the cost is lopsided: too low leaves a payment stuck, while too high costs a fraction of a sat/vB. Not 80%, as before: one horizon in five ran past it, and on mainnet that is most of what was missed ([the evidence](#against-the-blocks-that-followed)).
+- **One burst is not a trend.** The busiest of the 30 minutes is left out of the arrivals once there are five, so a single burst (a consolidation, an exchange's batch) is not extrapolated over the horizon. It is in the mempool already, where the depth term counts it. A second burst is counted: bursts that recur are a flow. Until the tuning of 2026-11-13 the busiest quarter was left out, which predicted 20 to 40% less than then arrived.
 - **Never an absurd rate.** One transaction paying 10,000 sat/vB adds its own size, at most 100 kvB, to the depth of every rate below it: it cannot fill a block. The answer is the minimum or one step above a rate some transaction pays, and only where more than the level's room pays that rate or more; it is never above one step over the highest rate seen. A test puts one in the mempool and one in the arrivals and shows nothing moves.
 - **Never below the node's minimum.** Every level is at least `mempoolminfee` and at least 0.1 sat/vB, rbitcoin's relay floor, and a faster level is never below a slower one. The construction already guarantees both; the result is still put in order, as a guard.
 - **Stable.** Recomputed every 2 s, each level is the highest of the last 60 seconds since the tip last moved: it rises at once and falls only after a minute, so it does not flicker with every arrival at a block's edge. The cost is freshness on the way down: after the mempool thins, a level can stay up to 60 seconds too high. A new block clears the history, because it changes the picture for real.
@@ -405,9 +405,19 @@ The node's estimates are rbitcoin's `/fee-estimates` (a ten-minute inclusion pro
 
 A recommendation is a claim about the future, so it is scored against what happened. `fee_watch` records, every 30 s, our answer, the node's `/fee-estimates` mapped as in the fallback, and (every ten minutes) the reference backend's `/v1/fees/precise`. For every block mined it takes the **clearing rate**: the 1st percentile by vsize of the effective rates our last projection before the block gave its transactions, so one prioritised or out-of-band transaction does not set it. A level met its horizon when it paid at least one step above the clearing rate of one of the next `N` blocks after the moment it was given; its overpay is how far above the cheapest such rate it was.
 
+What the scorer leaves out, and how it says how sure it is:
+
+- **Outages.** A gap between two recorded blocks longer than two hours (`MAX_GAP_SECS`; on a live chain about once in 450 years) means the recorder's node lost the network. Samples whose horizon reaches into that gap, or into the 30 minutes after it while the method's arrivals still hold the quiet and the mempool refills, are left out and counted.
+- **Blocks we never saw.** A block none of whose transactions our projection held has no clearing rate. A sample whose whole horizon is such blocks is counted apart (`unsc.`), not scored as a miss.
+- **One block decides many samples.** Every sample waiting for the same block shares its fate, so 2,000 samples over 100 blocks are nearer 100 outcomes than 2,000. Each met share has a 95% interval: the wider of one clustered on the block the samples waited for, and Wilson's for as many outcomes as blocks, so a share all met over four blocks is shown as 51–100%, not certain.
+- **Fast and slow horizons.** Each met share is also split by whether the `N`-th block came within `N` × 10 minutes of the sample.
+
 ```bash
 NET=MAINNET SECS=3900 OUT=fees.jsonl REFERENCE_URL=<reference>/v1 cargo run --release -p engine --example fee_watch
 RESCORE=fees.jsonl cargo run --release -p engine --example fee_watch   # score a recorded run again
+# INPUTS=1 also records what a replay needs (every arrival, each sample's depth), SAMPLE_SECS=10
+REPLAY=fees.jsonl cargo run --release -p engine --example fee_watch    # replay it at several tunings
+# SERVED=quarter@0.8 for a recording made before 2026-11-13: the tuning its answers came from
 ```
 
 **Run of 2026-11-12,** mainnet, read-only, 65 minutes, 58,000–62,000 transactions, 131 samples (108 with our own answer after the warm-up), blocks 975,530 to 975,533:
@@ -425,6 +435,90 @@ At the five moments the reference was asked, ours met the next block 4 times in 
 
 **How thin this is.** Four blocks came in 65 minutes, so the 108 samples are four outcomes, not 108: every sample waiting for the same block shares its fate. All of our misses are one block: 975,531 came 34 minutes after the one before (a gap that long happens about 3% of the time), and while it was awaited the market rose from about 1.1 to 2.0 sat/vB; the samples taken early in that wait were too low, those taken late were right. For the other three blocks every sample of ours met both horizons. Six blocks never followed a sample inside the run, so the hour and day levels are not scored at all, and the reference was asked only five times. The node's estimate met every horizon by paying two to four times what sufficed. A run of a day or more is the follow-up; `fee_watch` is built for it.
 
+**Run of 2026-11-12 to 13,** mainnet, read-only, 24 hours from 09:44 UTC, 2,881 samples (2,854 with our own answer), 121 blocks (975,537 to 975,658). From about 23:11 to 03:54 UTC the node lost its internet connection: its tip stayed at 975,611 for 4.8 hours, then 16 blocks came within a minute. The scorer leaves that span and the half hour after it out (623 to 730 samples, depending on the level). The 11 blocks without a clearing rate are all from that catch-up: our mempool, cut off from the network, held none of their transactions. None was empty.
+
+| Level | Source | Samples | Met the horizon | 95% interval | Mean overpay when met | Median overpay | Mean shortfall when missed | Met when the blocks came faster / slower than `N` × 10 min |
+|---|---|---|---|---|---|---|---|---|
+| next block | ours | 2,225 | 72.3% | 62.8–81.0% | 0.659 sat/vB | 0.679 | 0.799 | 99.1% / 28.6% |
+| | the node's estimate | 2,225 | 93.3% | 86.6–98.3% | 1.634 | 1.694 | 0.534 | 100% / 82.2% |
+| | the reference | 112 | 75.9% | 64.5–84.5% | 1.001 | 0.879 | 0.626 | 94.1% / 47.7% |
+| 3 blocks | ours | 2,164 | 71.2% | 60.3–82.1% | 0.442 | 0.314 | 0.678 | 97.0% / 42.0% |
+| | the node's estimate | 2,164 | 68.9% | 55.6–82.1% | 0.398 | 0.323 | 0.977 | 89.5% / 45.5% |
+| | the reference | 109 | 84.4% | 73.8–91.5% | 0.758 | 0.663 | 0.592 | 100% / 67.9% |
+| 6 blocks | ours | 2,063 | 64.7% | 52.0–77.4% | 0.243 | 0.008 | 0.709 | 87.8% / 40.3% |
+| | the node's estimate | 2,063 | 82.5% | 70.5–94.5% | 0.428 | 0.329 | 1.085 | 100% / 63.9% |
+| | the reference | 103 | 73.8% | 61.7–84.4% | 0.442 | 0.271 | 0.538 | 96.1% / 51.9% |
+
+At the moments the reference was asked, ours met the next block 75.0% of the time, 3 blocks 67.9% and 6 blocks 61.2%. Left in, the outage flatters every level (76.8%, 76.6%, 73.9%): through it ours sat one step above the mempool's floor, and the catch-up blocks cleared at that floor.
+
+**What the misses were.** Each missed sample was put to the first of these that explains it: a block of the horizon that had room but did not take our rate (a miner's floor); our rate tied with the clearing rate (short one step); the mempool already holding `N` blocks above our rate when we gave it (the depth term); the `N`-th block coming later than the time the method allowed for it; and otherwise arrivals, more of which came in time than were counted.
+
+| Level | Misses | Time allowed | Arrivals | Miner's floor | Ties | Depth |
+|---|---|---|---|---|---|---|
+| next block | 616 | 74% | 24% | 2% | 0% | 0% |
+| 3 blocks | 623 | 71% | 22% | 5% | 1% | 0% |
+| 6 blocks | 728 | 56% | 27% | 7% | 10% | 0% |
+
+- **The time allowed is most of it.** The method counted arrivals up to the time by which the `N`-th block comes with 80% probability, not the mean. So by design one horizon in five runs past it, and every level was tuned to the same 80%: that is why 3 and 6 blocks were no more reliable than one. In this recording more than one in five ran past (22% for one block, 27% for three and six) because blocks were slow: 10.8 minutes apart on average, a median gap of 7.9 minutes and a 90th percentile of 29.9, against 10.87 minutes over the difficulty period and 11.5 over the week before. A sample whose horizon ran past the allowance was met 8% (next block) to 24% of the time; one within it 91%, 89% and 80%.
+- **A block that clears at 3 sat/vB is a full block after a slow gap.** All 17 blocks that came more than 20 minutes after the one before cleared at 1 sat/vB or more, 12 of them at 2 or more; after gaps under five minutes the median clearing rate was 0.123. Those blocks were full (3.99 million weight units) and their pools took 0.12 sat/vB at other times. A steady stream at 1 to 3 sat/vB arrives at about a block every ten minutes, and the cheap end of the mempool is only reached when blocks outpace it.
+- **Arrivals are undercounted.** Within the time allowed, the 6-block level still missed one sample in five, mostly while demand rose (16:00 to 18:00 UTC) or a steady stream at one rate (0.125 sat/vB) kept refilling the boundary. The arrival term was the mean of the quieter three quarters of the last 30 minutes, not, as this page said, all but the busiest one.
+- **A miner's floor is real but small.** Four of the 100 blocks had room and took nothing under 1.000 sat/vB while transactions at 0.12 waited (Ocean twice, ViaBTC, BTC.com). A rate under 1 sat/vB cannot get into such a block, and nothing in the mempool shows which pool finds the next one ([Limits](#limits-1)).
+- **Depth and the 60-second hold never caused a miss.** The hold only raises a level.
+
+**The change.** Arrivals are counted up to the 90% quantile of the time to the `N`-th block instead of the 80% one, and only the busiest minute is left out of them, not the busiest quarter. Both terms were tested, and nothing else was changed, because the misses above point at them and nowhere else.
+
+**How it was tested.** The 24-hour recording holds our answers, not the mempool and arrivals they were computed from, so a changed method cannot be replayed on it. One more recording was made for that: three hours on mainnet, read-only, 2026-11-13 10:04 to 12:59 UTC (`INPUTS=1`, a sample every 10 s), 1,020 samples with our own answer, 13 blocks (975,661 to 975,673) that came slowly, 13.5 minutes apart on average with one gap of 40 minutes. `REPLAY` runs it through the method at 18 tunings: 6 confidences, from 80% to 99%, and leaving out a quarter of the minutes, one or none. The replay of the tuning that was served follows what was served to 0.015 sat/vB on average. The difference comes from smoothing over samples 10 s apart rather than ticks 2 s apart. The projection was never stale during the run. Recordings now mark when it is, and the replay then throws the arrivals away and restarts the warm-up, as the server does.
+
+- **Fit:** the first half (samples before 11:31:35 UTC whose whole horizon ended before it, 7 blocks), the 24-hour recording's waiting times, and the arrivals themselves. The rule, written down before the second half was scored: leave out one minute, and take the lowest confidence at which every level met at least 90% on the first half. That gave 90% (97.3%, 100% and 90.6%). At 80% and 85% the 6-block level met 63% and 64%.
+- **Report:** the second half, 6 blocks, never looked at while choosing.
+
+Leaving out a quarter of the minutes undercounted what then arrived. Over the three hours, the next 30 minutes brought 21 to 39% more than the mean of the quieter three quarters of the last 30 had predicted, depending on the rate. With the busiest minute left out it was 0 to 19% more, and with nothing left out between 5% less and 14% more. One minute keeps the guard against a single burst for a few points of bias.
+
+**After it,** on the second half of the three-hour recording (6 blocks; one block can decide half the samples, so the intervals are wide):
+
+| Level | Source | Samples | Met the horizon | 95% interval | Mean overpay when met | Mean shortfall when missed |
+|---|---|---|---|---|---|---|
+| next block | ours before | 475 | 54.1% | 14.0–94.2% | 0.660 sat/vB | 1.013 sat/vB |
+| | ours after | 475 | 67.4% | 28.2–100% | 1.018 | 0.841 |
+| | the node's estimate | 475 | 85.9% | 46.0–100% | 1.519 | 0.334 |
+| | the reference | 16 | 68.8% | 31.6–100% | 1.045 | 0.937 |
+| 3 blocks | ours before | 348 | 59.2% | 20.0–89.4% | 0.099 | 0.540 |
+| | ours after | 348 | 98.6% | 49.6–100% | 0.369 | 0.374 |
+| | the node's estimate | 348 | 25.9% | 0–83.1% | 0.260 | 0.217 |
+| | the reference | 12 | 75.0% | 30.1–97.1% | 0.778 | 0.259 |
+| 6 blocks | ours before | 16 | 0% | one outcome | | 0.035 |
+| | ours after | 16 | 100% | one outcome | 0.840 | |
+
+At the moments the reference was asked in that half, ours after met the next block 11 times in 16, as the reference did, and 3 blocks 12 in 12, where the reference met 9. Over the whole run, at those moments, ours after met 84.4%, 100% and 100% against the reference's 71.9%, 82.1% and 88.2%. The 6-block level had one outcome in that half, which is not evidence either way. The next block missed through the 40-minute gap before block 975,670: a gap that long comes about once in 55 blocks, and every sample in its first 17 minutes had more wait ahead of it than the 23 minutes allowed.
+
+Over the whole three hours, the fit half included (13 blocks):
+
+| Level | Ours before | Ours after | The node's estimate | The reference |
+|---|---|---|---|---|
+| next block | 68.5%, 0.617 sat/vB | 83.0% (56.0–100%), 1.110 | 93.1%, 1.535 | 71.9% of 32, 1.092 |
+| 3 blocks | 76.3%, 0.094 | 99.4% (73.2–100%), 0.578 | 55.3%, 0.178 | 82.1% of 28, 0.694 |
+| 6 blocks | 36.2%, 0.000 | 97.7% (64.5–100%), 0.437 | 100%, 0.118 | 88.2% of 17, 0.213 |
+
+On the 24-hour recording the new allowance would have covered 88.6% of the next-block horizons, 83.8% of the 3-block ones and 85.2% of the 6-block ones, against 77.7%, 73.1% and 72.9% for the old. That is the term that explained most misses. What share would then have been met cannot be known without a replay.
+
+**What the next block's reliability costs.** The same three hours, leaving out one minute, and the share of the 24-hour horizons each allowance covers:
+
+| Confidence | Met | Mean overpay when met | 24-hour horizons within the allowance |
+|---|---|---|---|
+| 80% | 75.3% | 0.711 sat/vB | 77.7% |
+| 85% | 78.2% | 0.911 | 82.7% |
+| **90% (chosen)** | **83.0%** | **1.110** | **88.6%** |
+| 95% | 86.7% | 1.390 | 96.2% |
+| 97.5% | 90.2% | 1.534 | 99.5% |
+| 99% | 96.1% | 1.783 | 100% |
+| the node's estimate | 93.1% | 1.535 | |
+
+At 90% the next block pays about what the reference pays (1.110 against 1.092 on this run, 1.001 over the 24 hours) and is met more often. Each step beyond that buys 3.5 to 6 points for 0.15 to 0.28 sat/vB more, and the node's estimate is the 93% point at 0.4 sat/vB more than the chosen one. The confidence is one number for every level, and the longer levels came out well above their target on this run. A next block with its own, higher confidence is the step to take if a longer run shows it under 85%. That needs no new recording: the recorder replays it.
+
+**Against the targets.** The aim was every level met at least 85% of the time, at least as often as the reference, for less overpay than the reference. On the three hours, 3 and 6 blocks were met more than 97% of the time. The 3-block level paid less than the reference (0.578 against 0.694). The 6-block level paid more on this run (0.437 against 0.213, from 17 reference samples), as much as the reference paid over the 24 hours (0.442). The next block met 83% overall and 67% on the report half, so its 85% is not shown. Its overpay matches the reference's, and at the moments the reference was asked it was met as often in the report half and more often over the whole run. The evidence is 13 blocks: enough to show the direction, not to pin a percentage.
+
+**Why the cost comes in jumps.** On these days the mempool held two populations: a sea of about 20 MvB at 0.12 sat/vB and below, and a stream at 1 to 3 sat/vB arriving at about a block every ten minutes, with almost nothing between. A level either sits one step above the sea or above the stream. Moving from one to the other costs about 0.9 sat/vB, so the 6-block level's overpay is near zero when it can stay at the sea and near a sat/vB when it cannot. The reference's answers between the two (0.2 to 0.5) are met when the stream is slow and missed when it is not.
+
 ### Against the node and the reference
 
 The same moments, the three sources side by side (sat/vB; next block / 3 blocks / 6 blocks / no rush / minimum):
@@ -441,6 +535,15 @@ The same moments, the three sources side by side (sat/vB; next block / 3 blocks 
 Ours and the reference's next-block numbers are close; below that they part. The mempool at the time held about three blocks above 0.125 sat/vB and then some 25 MvB of transactions at 0.12 sat/vB and below, so a transaction at 0.126 sat/vB is ahead of all of those and, unless more than three blocks' worth arrives above it, mined within six blocks: that is our `low`, where the reference said 0.4 to 1.6. `no_rush` is the minimum because the whole mempool plus a day of arrivals at the observed pace fits in 144 blocks; the reference's economy level read 0.2 (twice its minimum) at every moment. Neither longer level could be scored in this run.
 
 A recorded moment of this run (the projection's rates and sizes, 30 minutes of arrivals and the answer) is `fixtures/fees/mainnet.json`, replayed by a test.
+
+### Limits
+
+What the method cannot know, and what it assumes:
+
+- **A miner's floor.** Some pools at times take nothing under 1 sat/vB even when their block has room: 4 blocks in 100 on 2026-11-12 (Ocean twice, ViaBTC, BTC.com). Nothing in the mempool says which pool finds the next block, so a rate under 1 sat/vB can miss a block it would have fitted in. Over 3 or 6 blocks this seldom matters. For the next block it is part of what is missed.
+- **The pace of blocks.** The method takes blocks to come every ten minutes. Between retargets they do not: 10.87 minutes on average in the difficulty period of these recordings, 11.5 in the week before. The 90% allowance was chosen on data from that slow stretch, so it errs towards being met when blocks are faster. The server already measures the period's pace for `/difficulty-adjustment`; counting with it is a possible next step, not taken because a choice made on slow blocks already covers them.
+- **Bursts in the stream.** Arrivals are a 30-minute average less the busiest minute. A rise in demand is followed within half an hour, not foreseen: the misses of 16:00 to 18:00 UTC on 2026-11-12 were such a rise.
+- **The evidence is a day and three hours:** 100 blocks scored from the first, 13 from the second. The rule that chose the tuning is written above, so a longer recording can be replayed against it.
 
 ## When a block is found
 
