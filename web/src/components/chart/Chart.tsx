@@ -449,6 +449,10 @@ export default function Chart(props: ChartProps) {
               </li>
             )}
           </For>
+          {/* A narrow chart names one fee band at a time: its line is held for it, saying how. */}
+          <Show when={layers().some((l) => l.fee !== undefined)}>
+            <li class="chart__value chart__hint">Tap a layer to name it</li>
+          </Show>
         </ul>
       </div>
       <div

@@ -4,6 +4,10 @@
   .chart {
     container-type: inline-size;
   }
+  /* Doubled classes here as above: the hint is a .chart__value too. */
+  .chart__value.chart__hint {
+    display: none;
+  }
   @container (max-width: 480px) {
     /* Doubled class: it must beat the plain .chart__value rule below. */
     .chart__value.chart__value--empty {
@@ -11,6 +15,24 @@
     }
     /* Fee bands one at a time: the one under the finger. All of them are in the figures table. */
     .chart__value.chart__value--band:not(.chart__value--on) {
+      display: none;
+    }
+    /* The band under the finger, or the hint in its place, has a line of its own that is always
+       there, so a tap never pushes the plot down. */
+    .chart__value--band,
+    .chart__hint {
+      flex-basis: 100%;
+    }
+    /* Alone on its line it needs no underline to say which layer it names; across the whole line
+       one would read as a rule. */
+    .chart__value--band.chart__value--on {
+      box-shadow: none;
+    }
+    .chart__value.chart__hint {
+      display: inline-flex;
+    }
+    .chart__values:has(.chart__value--band.chart__value--on:not(.chart__value--empty))
+      .chart__hint {
       display: none;
     }
   }

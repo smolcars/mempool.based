@@ -357,11 +357,21 @@ test("a band under the pointer, a finger or the keys keeps its colour, and a tap
   const phoneChart = phone.getByRole("slider", { name: /The mempool's size by fee rate/ });
   await expect(phoneChart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
   const onPhoneBand = await pointOnABand(phone);
+  // The band's line is held, saying a tap names one, so the tap moves nothing down.
+  const hint = phone.locator(".mempool-chart--size .chart__hint");
+  await expect(hint).toBeVisible();
+  const plotTop = () =>
+    phoneChart.evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY));
+  const top = await plotTop();
   await phone.touchscreen.tap(onPhoneBand.x, onPhoneBand.y);
   await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(1);
+  await expect(hint).toBeHidden();
+  expect(await plotTop()).toBe(top);
   for (const l of (await plotLayers(phone)).layers) expect(l.fill).not.toBe(during.accent);
   await phone.getByRole("heading", { level: 1 }).tap();
   await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(0);
+  await expect(hint).toBeVisible();
+  expect(await plotTop()).toBe(top);
   await touch.close();
 });
 
