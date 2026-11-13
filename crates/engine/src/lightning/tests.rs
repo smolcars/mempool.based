@@ -847,20 +847,16 @@ fn mainnet_graph() -> (Vec<GraphNode>, Vec<GraphChannel>) {
     (nodes, channels)
 }
 
-#[test]
-fn an_index_of_mainnet_s_size_builds_and_answers_quickly() {
-    let (nodes, channels) = mainnet_graph();
-    let started = std::time::Instant::now();
-    let i = Index::build(nodes, channels, &Past::default());
-    let build = started.elapsed();
-    assert_eq!(i.len(), (13_600, 36_000));
+/// Every query on an index of mainnet's size, checked for its answer. The time each takes is
+/// `an_index_of_mainnet_s_size_answers_within_its_budget`, outside the normal suite.
+fn mainnet_index_queries(i: &Index) -> Vec<Duration> {
     let hub = i.ranking(Rank::Channels).next().unwrap().id;
     let time = |f: &dyn Fn()| {
         let t = std::time::Instant::now();
         f();
         t.elapsed()
     };
-    let worst = [
+    vec![
         time(&|| assert_eq!(i.node(&hub).unwrap().open(), 720)),
         time(&|| assert!(i.channel(600_000 << 40).is_some())),
         time(&|| assert_eq!(i.channels_of(i.node(&hub).unwrap()).take(25).count(), 25)),
@@ -870,10 +866,27 @@ fn an_index_of_mainnet_s_size_builds_and_answers_quickly() {
         time(&|| assert_eq!(i.search("02", 10).len(), 10)),
         time(&|| assert_eq!(i.ranking(Rank::Capacity).count(), RANKED)),
     ]
-    .into_iter()
-    .max()
-    .unwrap();
-    // Debug build on a loaded CI runner; release is about ten times faster (docs/API.md).
+}
+
+#[test]
+fn an_index_of_mainnet_s_size_builds_and_answers() {
+    let (nodes, channels) = mainnet_graph();
+    let i = Index::build(nodes, channels, &Past::default());
+    assert_eq!(i.len(), (13_600, 36_000));
+    mainnet_index_queries(&i);
+}
+
+/// The time budget, measured where nothing else shares the machine. Run with
+/// `cargo test -p engine -- --ignored an_index_of_mainnet_s_size_answers_within_its_budget`.
+#[test]
+#[ignore = "a time budget: a busy machine fails it for no fault of the code"]
+fn an_index_of_mainnet_s_size_answers_within_its_budget() {
+    let (nodes, channels) = mainnet_graph();
+    let started = std::time::Instant::now();
+    let i = Index::build(nodes, channels, &Past::default());
+    let build = started.elapsed();
+    let worst = mainnet_index_queries(&i).into_iter().max().unwrap();
+    // Debug build; release is about ten times faster (docs/API.md).
     assert!(build < Duration::from_secs(3), "{build:?}");
     assert!(worst < Duration::from_millis(50), "{worst:?}");
 }

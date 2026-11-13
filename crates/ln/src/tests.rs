@@ -1203,7 +1203,8 @@ struct FakeNode {
     tip: AtomicU32,
     down: AtomicBool,
     /// When each batch request arrived and how many outputs it asked for.
-    batches: Mutex<Vec<(std::time::Instant, usize)>>,
+    /// When each batch reached the node, on tokio's clock, so a paused test reads exact gaps.
+    batches: Mutex<Vec<(tokio::time::Instant, usize)>>,
     tip_reads: AtomicUsize,
     /// The best chain from height 0, for the close-watcher. Positions not in `outputs` are read
     /// from it.
@@ -1266,7 +1267,7 @@ impl FakeChain {
         Busy(n)
     }
 
-    fn batches(&self) -> Vec<(std::time::Instant, usize)> {
+    fn batches(&self) -> Vec<(tokio::time::Instant, usize)> {
         self.0.batches.lock().unwrap().clone()
     }
 
@@ -1373,7 +1374,7 @@ impl crate::Chain for FakeChain {
         n.batches
             .lock()
             .unwrap()
-            .push((std::time::Instant::now(), positions.as_slice().len()));
+            .push((tokio::time::Instant::now(), positions.as_slice().len()));
         let map = n.outputs.lock().unwrap().clone();
         let tip = n.tip.load(Ordering::Relaxed);
         if n.stale_once.swap(false, Ordering::Relaxed) {
@@ -1708,7 +1709,8 @@ async fn early_announcements_are_rechecked_from_the_tip_alone() {
     assert!(node.0.tip_reads.load(Ordering::Relaxed) >= 1);
 }
 
-#[tokio::test]
+// On a paused clock the gate's spacing is exact: a busy machine cannot stretch or squeeze it.
+#[tokio::test(start_paused = true)]
 async fn a_burst_becomes_a_few_batches_within_the_rate_limit() {
     let node = FakeChain::at(10_000);
     let interval = Duration::from_millis(300);
@@ -1733,11 +1735,9 @@ async fn a_burst_becomes_a_few_batches_within_the_rate_limit() {
     assert_eq!(sizes.iter().sum::<usize>(), 1000);
     assert!(sizes.iter().all(|n| *n <= chain::LOOKUP_BATCH));
     assert!(batches.len() <= 12, "{sizes:?}");
-    // The fake stamps each request a little after the gate lets it start, by an amount that
-    // varies under load: allow for that.
     for w in batches.windows(2) {
         assert!(
-            w[1].0 - w[0].0 >= interval - Duration::from_millis(10),
+            w[1].0 - w[0].0 >= interval,
             "requests closer than the limit"
         );
     }
@@ -1803,7 +1803,7 @@ async fn the_node_down_then_back_loses_nothing() {
     assert_eq!(g.lookup.snapshot().failures, 0);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn invented_channels_cannot_grow_memory_the_cache_or_node_load() {
     let node = FakeChain::at(100_000);
     let interval = Duration::from_millis(50);

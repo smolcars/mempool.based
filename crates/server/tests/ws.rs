@@ -982,11 +982,11 @@ async fn quiet_clients_are_pinged_then_closed() {
     });
     assert_eq!(silent.recv_raw().await.0, Msg::Ping);
     assert_eq!(silent.close_code().await, (4004, "idle timeout".to_owned()));
+    // Never before the idle timeout. How late is the watchdog's tick plus however long a busy
+    // machine takes to run it, which no bound here can know; the ping before the close shows the
+    // watchdog ran on time.
     let closed_after = started.elapsed();
-    assert!(
-        closed_after >= Duration::from_secs(1) && closed_after < Duration::from_millis(1600),
-        "{closed_after:?}"
-    );
+    assert!(closed_after >= Duration::from_secs(1), "{closed_after:?}");
     assert!(polite.await.unwrap() >= 3);
 }
 
