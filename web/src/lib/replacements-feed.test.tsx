@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("createReplacements", () => {
-  it("waits out the reply's cache after any feed's ask, so a new feed never reads an old list", async () => {
+  it("spaces its asks after any feed's ask, so a burst of changes costs one", async () => {
     mount(() => <Probe />, "/regtest/");
     FakeSocket.last().hello();
     version(1);
@@ -84,7 +84,7 @@ describe("createReplacements", () => {
     await vi.waitFor(() => expect(asks).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(3000);
     delay = 0;
-    // The record changes just after the slow answer came: its cache window is still open.
+    // The record changes just after the slow answer came: its gap is still running.
     await vi.advanceTimersByTimeAsync(200);
     version(2);
     await vi.advanceTimersByTimeAsync(1000);

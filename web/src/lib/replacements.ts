@@ -158,10 +158,9 @@ export const replacementsTopic: Topic<ReplacementsMessage> = {
 };
 
 /**
- * When each list was last asked for or answered, by any feed on the page. The reply is
- * `max-age=1`: an ask sooner after another's answer, a feed's own or another's (the home panel's
- * before the reader opened `/rbf`), would be read from the browser's cache, the list from before
- * the change.
+ * When each list was last asked for or answered, by any feed on the page, so a burst of changes
+ * costs one ask per gap. Every ask skips the browser's cache, which can hold the list from before
+ * the change (docs/FRONTEND.md "Following live data").
  */
 const asked = new Map<string, number>();
 
@@ -181,8 +180,8 @@ export interface Replacements {
 
 /**
  * The newest stories, kept current: asked for when the `replacements` topic says the record
- * changed (no sooner than `gapMs` after the list was last asked for by any feed, which must
- * outlast the reply's one-second `max-age`: see `asked`), every `POLL_MS` while the
+ * changed (no sooner than `gapMs` after the list was last asked for by any feed: see `asked`),
+ * every `POLL_MS` while the
  * live channel is down, and on `refresh` (call it when `fullRbf` changes). `around` runs just
  * before each change is applied and returns what to do just after (the page keeps the reader's
  * place with it).
@@ -257,7 +256,7 @@ export function createReplacements(
           setOff(true);
         } else setError(e);
       } finally {
-        // The browser's cache window opens when the answer comes, which a retry can delay.
+        // The gap counts from the answer too, which a retry can delay.
         asked.set(key, Date.now());
         if (controller === c) {
           controller = undefined;
