@@ -373,7 +373,9 @@ function StoryCell(props: { story: Story }) {
  */
 function keepPlace(list: HTMLElement | undefined): (() => void) | undefined {
   if (!list) return undefined;
-  const top = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+  // The header's bottom edge while it sticks; the screen's top once it has scrolled away.
+  const header = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 0;
+  const top = Math.max(0, header);
   const items = [...list.querySelectorAll<HTMLElement>("[data-story]")];
   const first = items[0];
   if (!first || first.getBoundingClientRect().top >= top) return undefined;

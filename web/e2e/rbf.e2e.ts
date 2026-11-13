@@ -145,37 +145,40 @@ test.describe("a version's target", () => {
   });
 });
 
-test("a story that arrives above the reader leaves what they read where it was", async ({
-  page,
-}) => {
-  let list = RECORDED.all;
-  await recorded(page, () => ({ json: list }));
-  let socket: WebSocketRoute | undefined;
-  await page.routeWebSocket(/\/regtest\/app\/ws$/, (ws) => {
-    ws.connectToServer();
-    socket = ws;
-  });
-  await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto("/regtest/rbf");
-  const rows = page.locator(".rbf-list tbody tr");
-  await expect(rows).toHaveCount(RECORDED.all.length);
+// A screen under 30em tall has no sticky header: the screen's top is the edge there.
+for (const height of [800, 400]) {
+  test(`a story that arrives above the reader leaves what they read where it was, ${height} px tall`, async ({
+    page,
+  }) => {
+    let list = RECORDED.all;
+    await recorded(page, () => ({ json: list }));
+    let socket: WebSocketRoute | undefined;
+    await page.routeWebSocket(/\/regtest\/app\/ws$/, (ws) => {
+      ws.connectToServer();
+      socket = ws;
+    });
+    await page.setViewportSize({ width: 390, height });
+    await page.goto("/regtest/rbf");
+    const rows = page.locator(".rbf-list tbody tr");
+    await expect(rows).toHaveCount(RECORDED.all.length);
 
-  // The reader is down the list, reading its seventh story.
-  const reading = story(page, RECORDED.all[6]?.tx.txid ?? "");
-  await reading.evaluate((el) => {
-    window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 300);
-  });
-  const before = await reading.evaluate((el) => el.getBoundingClientRect().top);
+    // The reader is down the list, reading its seventh story.
+    const reading = story(page, RECORDED.all[6]?.tx.txid ?? "");
+    await reading.evaluate((el) => {
+      window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 200);
+    });
+    const before = await reading.evaluate((el) => el.getBoundingClientRect().top);
 
-  // A new replacement: the topic says the record changed, and the list has a new story on top.
-  const fresh = "ab".repeat(32);
-  const top = RECORDED.all[0] as Record<string, unknown> & { tx: Record<string, unknown> };
-  list = [{ ...top, tx: { ...top.tx, txid: fresh } }, ...RECORDED.all.slice(0, -1)];
-  socket?.send(JSON.stringify({ topic: "replacements", type: "replacements", version: 1e9 }));
-  await expect(rows.first().locator(`[data-story="${fresh}"]`)).toBeAttached();
-  const after = await reading.evaluate((el) => el.getBoundingClientRect().top);
-  expect(Math.abs(after - before), "the story being read did not move").toBeLessThan(1);
-});
+    // A new replacement: the topic says the record changed, and the list has a new story on top.
+    const fresh = "ab".repeat(32);
+    const top = RECORDED.all[0] as Record<string, unknown> & { tx: Record<string, unknown> };
+    list = [{ ...top, tx: { ...top.tx, txid: fresh } }, ...RECORDED.all.slice(0, -1)];
+    socket?.send(JSON.stringify({ topic: "replacements", type: "replacements", version: 1e9 }));
+    await expect(rows.first().locator(`[data-story="${fresh}"]`)).toBeAttached();
+    const after = await reading.evaluate((el) => el.getBoundingClientRect().top);
+    expect(Math.abs(after - before), "the story being read did not move").toBeLessThan(1);
+  });
+}
 
 test.describe("nothing to show, and a refusal", () => {
   test.use({ consoleErrorsAllowed: [/status of 500/] });

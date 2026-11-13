@@ -376,9 +376,10 @@ const overflow = (page: Page) =>
  * WCAG's reflow at 320 px, and a large text size: a phone's at 320 px and 200% on a desktop. A
  * browser's text size is its default font size, which Chromium alone lets a test set.
  */
-for (const [name, path] of [
-  ["the shell", "/regtest/blocks"],
-  ["a dense page", `/regtest/tx/${chain.txs.script_types}`],
+// The blocks list and the transaction page, as the page types above wait for them.
+for (const [name, type] of [
+  ["the shell", PAGES[1]],
+  ["a dense page", PAGES[3]],
 ] as const) {
   test(`${name} reflows at 320 px and at a large text size, nothing cut or overlapping`, async ({
     page,
@@ -402,7 +403,7 @@ for (const [name, path] of [
           fontSizes: { standard: size.text, fixed: Math.round((size.text * 13) / 16) },
         });
       }
-      await open(page, { name, path, ready: (p) => p.getByRole("heading", { level: 1 }) });
+      await open(page, type as PageType);
       expect(await overflow(page), label).toEqual({ scroll: 0, out: [] });
       const links = await page
         .getByRole("navigation", { name: "Main" })
