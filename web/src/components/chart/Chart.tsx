@@ -65,12 +65,14 @@ export interface ChartBand {
 
 /**
  * Where the layers change how they divide the same total at one moment (a change of bookkeeping,
- * not of the data): at `index`, the run arrives at `before` (one value per layer) and changes to
- * the point's own values on a vertical edge, so the top of the stack never moves.
+ * not of the data): at `index`, the run arrives at `before` and leaves at `after` (one value per
+ * layer, each the point's own values when absent), changing on vertical edges, so the top of the
+ * stack never moves. Only the drawing changes: the readout and the figures keep the point's own.
  */
 export interface ChartJoin {
   index: number;
-  before: readonly number[];
+  before?: readonly number[];
+  after?: readonly number[];
 }
 
 /** One stacked layer on the left axis, the first at the bottom: shares (0–1) or amounts. */
@@ -221,25 +223,23 @@ export default function Chart(props: ChartProps) {
       layers().map((l) => l.values),
       xs.length,
     );
-    // Each join's `before` stacked as the layers are, for each layer's path.
-    const joinStacks = (props.joins ?? []).map((j) => {
+    // Each join's values stacked as the layers are, for each layer's path.
+    const stacked = (values: readonly number[] | undefined) => {
+      if (!values) return undefined;
       let floor = 0;
-      return {
-        index: j.index,
-        layers: layers().map((_, k) => {
-          const lo = floor;
-          floor += j.before[k] ?? 0;
-          return { hi: floor, lo };
-        }),
-      };
-    });
+      return layers().map((_, k) => {
+        const lo = floor;
+        floor += values[k] ?? 0;
+        return { hi: floor, lo };
+      });
+    };
+    const joinStacks = (props.joins ?? []).map((j) => ({
+      index: j.index,
+      in: stacked(j.before),
+      out: stacked(j.after),
+    }));
     const joinsOf = (k: number) =>
-      new Map(
-        joinStacks.flatMap((j) => {
-          const at = j.layers[k];
-          return at ? [[j.index, at] as const] : [];
-        }),
-      );
+      new Map(joinStacks.map((j) => [j.index, { in: j.in?.[k], out: j.out?.[k] }] as const));
     const on = (side: "left" | "right") =>
       series()
         .filter((s) => (s.axis ?? "left") === side)

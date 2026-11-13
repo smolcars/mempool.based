@@ -172,11 +172,27 @@ describe("gaps", () => {
   });
   it("changes a layer on a vertical edge at a join, never across the minute before it", () => {
     // The layer arrives at 8 to 2 just before x 1, then is 6 to 2 at x 1: one vertical edge.
-    const joins = new Map([[1, { hi: 8, lo: 2 }]]);
+    const joins = new Map([[1, { in: { hi: 8, lo: 2 } }]]);
     expect(
       areaPath(
         [0, 1, 2],
         [8, 6, 6],
+        [2, 2, 2],
+        (x) => x,
+        (y) => y,
+        10,
+        0,
+        joins,
+      ),
+    ).toBe("M0 8L1 8L1 6L2 6L2 2L1 2L1 2L0 2Z");
+  });
+  it("leaves a point on a vertical edge at a join that changes after it", () => {
+    // The layer is 8 to 2 at x 1, then leaves it at 6 to 2: the edge is at x 1, not across.
+    const joins = new Map([[1, { out: { hi: 6, lo: 2 } }]]);
+    expect(
+      areaPath(
+        [0, 1, 2],
+        [8, 8, 6],
         [2, 2, 2],
         (x) => x,
         (y) => y,

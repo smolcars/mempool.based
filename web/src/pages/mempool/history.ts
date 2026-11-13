@@ -182,15 +182,13 @@ export function seriesOf(h: History) {
   // Where the bookkeeping changes, the chart joins on a vertical edge at one point, the total
   // unchanged across it: unsplit to split arrives at the split point as one layer; split to
   // unsplit (a later row summed with one from before) leaves the last split point as one layer.
-  const joins: { index: number; before: number[] }[] = [];
+  // Only the drawing joins: each point's figures stay as recorded.
+  const joins: { index: number; before?: number[]; after?: number[] }[] = [];
   for (let i = 1; i < wide.length; i++) {
     const before = wide[i - 1]?.unsplit === true;
     const now = wide[i]?.unsplit === true;
     if (before && !now) joins.push({ index: i, before: merged(wide[i]?.bands ?? []) });
-    if (!before && now) {
-      joins.push({ index: i - 1, before: cols[i - 1] ?? [] });
-      cols[i - 1] = merged(wide[i - 1]?.bands ?? []);
-    }
+    if (!before && now) joins.push({ index: i - 1, after: merged(wide[i - 1]?.bands ?? []) });
   }
   const any = wide.some((w) => w.unsplit);
   return {

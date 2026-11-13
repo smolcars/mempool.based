@@ -76,6 +76,12 @@ export function linePath(
  * filled areas under a line, and bands between percentiles. With `sliver`, a lone point is a
  * sliver that many px wide; without, it draws nothing, as the mining charts always have.
  */
+/** Where a layer arrives at a point (`in`) and leaves it (`out`), when not at its own values. */
+export interface Join {
+  in?: { hi: number; lo: number } | undefined;
+  out?: { hi: number; lo: number } | undefined;
+}
+
 export function areaPath(
   xs: readonly number[],
   hi: readonly Value[],
@@ -84,7 +90,7 @@ export function areaPath(
   sy: Px,
   gap: number,
   sliver = 0,
-  joins?: ReadonlyMap<number, { hi: number; lo: number }>,
+  joins?: ReadonlyMap<number, Join>,
 ): string {
   const low = (i: number) => (typeof lo === "number" ? lo : lo[i]);
   let d = "";
@@ -105,16 +111,19 @@ export function areaPath(
     let bottom = "";
     for (let i = a; i <= b; i++) {
       const x = n(sx(xs[i] ?? 0));
-      // A join: the run arrives at this point's `joins` values, then changes on a vertical edge.
-      const j = i > a ? joins?.get(i) : undefined;
-      if (j) top += `L${x} ${n(sy(j.hi))}`;
+      // A join: the run arrives at `in`, is the point's own values, and leaves at `out`, each
+      // change on a vertical edge.
+      const j = joins?.get(i);
+      if (j?.in && i > a) top += `L${x} ${n(sy(j.in.hi))}`;
       top += `${i === a ? "M" : "L"}${x} ${n(sy(hi[i] ?? 0))}`;
+      if (j?.out && i < b) top += `L${x} ${n(sy(j.out.hi))}`;
     }
     for (let i = b; i >= a; i--) {
       const x = n(sx(xs[i] ?? 0));
+      const j = joins?.get(i);
+      if (j?.out && i < b) bottom += `L${x} ${n(sy(j.out.lo))}`;
       bottom += `L${x} ${n(sy(low(i) ?? 0))}`;
-      const j = i > a ? joins?.get(i) : undefined;
-      if (j) bottom += `L${x} ${n(sy(j.lo))}`;
+      if (j?.in && i > a) bottom += `L${x} ${n(sy(j.in.lo))}`;
     }
     d += `${top}${bottom}Z`;
   }

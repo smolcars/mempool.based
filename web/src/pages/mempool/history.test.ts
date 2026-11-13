@@ -115,10 +115,13 @@ describe("series", () => {
       ],
     });
     const s = seriesOf(h);
-    expect(s.unsplit).toStrictEqual([900, 900]);
-    expect(s.bands[0]).toStrictEqual([0, 0]);
+    // The split point keeps its recorded bands for the readout and the figures; only the
+    // drawing leaves it as one layer.
+    expect(s.unsplit).toStrictEqual([0, 900]);
+    expect(s.bands[0]).toStrictEqual([300, 0]);
+    expect(s.bands[1]).toStrictEqual([600, 0]);
     expect(s.joins).toStrictEqual([
-      { index: 0, before: [0, 300, 600, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
+      { index: 0, after: [900, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
     ]);
     // Every point's layers still add up to its total.
     for (let i = 0; i < 2; i++) {
