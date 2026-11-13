@@ -204,13 +204,17 @@ pub struct PoolHealth {
 }
 
 /// Each pool's audited best-chain blocks at heights `from..=to` and their mean match rate, for
-/// pools with at least one. One grouped read over the audits, joined to the block table as the
-/// pages are, so a block that left the best chain counts for nobody.
+/// pools with at least one. One grouped read over the audits in range, joined to the block table
+/// as the pages are, so a block that left the best chain counts for nobody.
 pub async fn pool_health(store: &Store, from: u32, to: u32) -> Result<Vec<PoolHealth>, Error> {
     store
         .read(Read::Audit, move |sql| {
             let mut stmt = sql.prepare(
-                "SELECT b.pool, count(*), avg(a.match_rate) FROM audits a JOIN blocks b                  ON b.height = a.height AND b.hash = a.hash WHERE a.height BETWEEN ?1 AND ?2                  GROUP BY b.pool ORDER BY b.pool",
+                // Driven from the audits: from the block table, it read every row in the range
+                // (0.16 s for all of mainnet's) to find a hundred audited ones.
+                "SELECT b.pool, count(*), avg(a.match_rate) FROM audits a CROSS JOIN blocks b \
+                 ON b.height = a.height AND b.hash = a.hash WHERE a.height BETWEEN ?1 AND ?2 \
+                 GROUP BY b.pool ORDER BY b.pool",
             )?;
             let rows = stmt.query_map(params![from, to], |r| {
                 Ok(PoolHealth {

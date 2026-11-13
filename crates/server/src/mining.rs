@@ -31,7 +31,7 @@ use engine::blocks::{self, Bucket, Period, Row, Span, WEEK};
 use engine::mining::pools::{self, Pool, UNKNOWN};
 use engine::mining::{Interval, hashrate};
 use engine::store::{self, Store};
-use logging::events::{MiningFailed, MiningRefreshed, PoolsReattributed};
+use logging::events::{BlockTotalsFilled, MiningFailed, MiningRefreshed, PoolsReattributed};
 use serde::Serialize;
 use tokio::sync::watch;
 
@@ -76,6 +76,20 @@ pub struct Mining {
 struct Table {
     version: u64,
     span: Span,
+}
+
+/// The answers one computation gives: every pool's statistics and weekly shares together, and
+/// an interval's five block series together.
+fn family(key: Key) -> Key {
+    match key {
+        Key::Pool(_) | Key::PoolHashrate(_) => Key::Pool(0),
+        Key::Fees(i)
+        | Key::Rewards(i)
+        | Key::SizesWeights(i)
+        | Key::FeeRates(i)
+        | Key::FeeRatesPrecise(i) => Key::Fees(i),
+        k => k,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1080,88 +1094,95 @@ async fn compute_unchecked(
                 answer(table, &body, Some(coverage(store, span, &r).await?)),
             )]
         }
-        Key::Fees(i) | Key::Rewards(i) | Key::SizesWeights(i) => {
-            let r = since(store, span, i.start(now)).await?;
-            let buckets = series(store, &r, i).await?;
-            let c = Some(coverage(store, span, &r).await?);
-            let mid = |b: &Bucket| (mid_height(b), mid_time(b));
-            let avg = |sum: u64, b: &Bucket| sum.checked_div(u64::from(b.blocks)).unwrap_or(0);
-            match key {
-                Key::Fees(_) => {
-                    let body: Vec<_> = buckets
-                        .iter()
-                        .map(|b| FeePoint {
-                            avg_height: mid(b).0,
-                            timestamp: mid(b).1,
-                            avg_fees: avg(b.fees, b),
-                        })
-                        .collect();
-                    vec![(key, answer(table, &body, c))]
-                }
-                Key::Rewards(_) => {
-                    let body: Vec<_> = buckets
-                        .iter()
-                        .map(|b| RewardPoint {
-                            avg_height: mid(b).0,
-                            timestamp: mid(b).1,
-                            avg_rewards: avg(b.reward, b),
-                        })
-                        .collect();
-                    vec![(key, answer(table, &body, c))]
-                }
-                _ => {
-                    let body = SizesWeights {
-                        sizes: buckets
-                            .iter()
-                            .map(|b| SizePoint {
-                                avg_height: mid(b).0,
-                                timestamp: mid(b).1,
-                                avg_size: avg(b.size, b),
-                            })
-                            .collect(),
-                        weights: buckets
-                            .iter()
-                            .map(|b| WeightPoint {
-                                avg_height: mid(b).0,
-                                timestamp: mid(b).1,
-                                avg_weight: avg(b.weight, b),
-                            })
-                            .collect(),
-                    };
-                    vec![(key, answer(table, &body, c))]
-                }
-            }
-        }
-        Key::FeeRates(i) | Key::FeeRatesPrecise(i) => {
-            let r = since(store, span, i.start(now)).await?;
-            let buckets = series(store, &r, i).await?;
-            // A point only where every block in it has fee rates: never an average of some.
-            let rated: Vec<_> = buckets
-                .iter()
-                .filter(|b| b.rated == b.blocks)
-                .filter_map(|b| Some((b, b.fee_rate?)))
-                .collect();
-            let all = buckets.iter().all(|b| b.rated == b.blocks);
-            let coverage = Coverage {
-                from: rated.first().map(|(b, _)| (b.first_height, b.first_time)),
-                complete: r.complete && all && !buckets.is_empty(),
-            };
-            if matches!(key, Key::FeeRatesPrecise(_)) {
-                let body: Vec<_> = rated
-                    .iter()
-                    .map(|(b, f)| rate_point(b, *f, |x| round(x, 3)))
-                    .collect();
-                vec![(key, answer(table, &body, Some(coverage)))]
-            } else {
-                let body: Vec<_> = rated
-                    .iter()
-                    // Whole sat/vB, as the reference: rbitcoin's sub-sat rates round to 0.
-                    .map(|(b, f)| rate_point(b, *f, |x| whole(x) as u64))
-                    .collect();
-                vec![(key, answer(table, &body, Some(coverage)))]
-            }
-        }
+        Key::Fees(i)
+        | Key::Rewards(i)
+        | Key::SizesWeights(i)
+        | Key::FeeRates(i)
+        | Key::FeeRatesPrecise(i) => block_series(store, table, i, now).await?,
     })
+}
+
+/// The five block series of an interval, from one read of its buckets: asking for one computes
+/// them all, as a pool's statistics come with every pool's.
+async fn block_series(
+    store: &Store,
+    table: Table,
+    i: Interval,
+    now: u64,
+) -> Result<Vec<(Key, Answer)>, store::Error> {
+    let span = table.span;
+    let r = since(store, span, i.start(now)).await?;
+    let buckets = series(store, &r, i).await?;
+    let c = Some(coverage(store, span, &r).await?);
+    let mid = |b: &Bucket| (mid_height(b), mid_time(b));
+    let avg = |sum: u64, b: &Bucket| sum.checked_div(u64::from(b.blocks)).unwrap_or(0);
+    let fees: Vec<_> = buckets
+        .iter()
+        .map(|b| FeePoint {
+            avg_height: mid(b).0,
+            timestamp: mid(b).1,
+            avg_fees: avg(b.fees, b),
+        })
+        .collect();
+    let rewards: Vec<_> = buckets
+        .iter()
+        .map(|b| RewardPoint {
+            avg_height: mid(b).0,
+            timestamp: mid(b).1,
+            avg_rewards: avg(b.reward, b),
+        })
+        .collect();
+    let sizes = SizesWeights {
+        sizes: buckets
+            .iter()
+            .map(|b| SizePoint {
+                avg_height: mid(b).0,
+                timestamp: mid(b).1,
+                avg_size: avg(b.size, b),
+            })
+            .collect(),
+        weights: buckets
+            .iter()
+            .map(|b| WeightPoint {
+                avg_height: mid(b).0,
+                timestamp: mid(b).1,
+                avg_weight: avg(b.weight, b),
+            })
+            .collect(),
+    };
+    // A fee-rate point only where every block in it has fee rates: never an average of some.
+    let rated: Vec<_> = buckets
+        .iter()
+        .filter(|b| b.rated == b.blocks)
+        .filter_map(|b| Some((b, b.fee_rate?)))
+        .collect();
+    let all = buckets.iter().all(|b| b.rated == b.blocks);
+    let rates_coverage = Some(Coverage {
+        from: rated.first().map(|(b, _)| (b.first_height, b.first_time)),
+        complete: r.complete && all && !buckets.is_empty(),
+    });
+    let precise: Vec<_> = rated
+        .iter()
+        .map(|(b, f)| rate_point(b, *f, |x| round(x, 3)))
+        .collect();
+    let whole_rates: Vec<_> = rated
+        .iter()
+        // Whole sat/vB, as the reference: rbitcoin's sub-sat rates round to 0.
+        .map(|(b, f)| rate_point(b, *f, |x| whole(x) as u64))
+        .collect();
+    Ok(vec![
+        (Key::Fees(i), answer(table, &fees, c)),
+        (Key::Rewards(i), answer(table, &rewards, c)),
+        (Key::SizesWeights(i), answer(table, &sizes, c)),
+        (
+            Key::FeeRates(i),
+            answer(table, &whole_rates, rates_coverage),
+        ),
+        (
+            Key::FeeRatesPrecise(i),
+            answer(table, &precise, rates_coverage),
+        ),
+    ])
 }
 
 fn rate_point<T>(b: &Bucket, f: blocks::Rates, conv: impl Fn(f64) -> T) -> RatePoint<T> {
@@ -1372,6 +1393,7 @@ async fn pool_family(
 /// the network's tasks stop.
 pub async fn run(ctx: Arc<NetworkContext>) {
     let Some(table) = &ctx.blocks else { return };
+    tokio::spawn(fill(Arc::clone(&ctx)));
     let network = ctx.config.network;
     let store = &table.store;
     let mut failures = 0u32;
@@ -1442,6 +1464,34 @@ pub async fn run(ctx: Arc<NetworkContext>) {
     }
 }
 
+/// Totals the rows stored before the block table kept running totals, once; the reads scan until
+/// it is done ([`blocks::fill_totals`]).
+async fn fill(ctx: Arc<NetworkContext>) {
+    let Some(table) = &ctx.blocks else { return };
+    let network = ctx.config.network;
+    let mut failures = 0u32;
+    loop {
+        match blocks::fill_totals(&table.store).await {
+            Ok(done) => {
+                if let Some(d) = done {
+                    logging::emit(&BlockTotalsFilled {
+                        network: network.name(),
+                        heights: d.heights,
+                        writes: d.writes,
+                        duration_ms: d.elapsed.as_secs_f64() * 1000.0,
+                    });
+                }
+                return;
+            }
+            Err(e) => {
+                failures += 1;
+                failed(network, "totals", &e, failures);
+                tokio::time::sleep(backoff(failures)).await;
+            }
+        }
+    }
+}
+
 fn backoff(failures: u32) -> Duration {
     Duration::from_secs(1)
         .saturating_mul(1 << failures.saturating_sub(1).min(9))
@@ -1473,14 +1523,12 @@ async fn refresh(
         .keys()
         .copied()
         .collect();
-    let mut pools_done = false;
+    let mut families = std::collections::HashSet::new();
     let mut answers = 0;
     for key in keys {
-        if matches!(key, Key::Pool(_) | Key::PoolHashrate(_)) {
-            if pools_done {
-                continue;
-            }
-            pools_done = true;
+        // One computation answers its whole family.
+        if !families.insert(family(key)) {
+            continue;
         }
         let _one = m.compute.lock().await;
         if m.get(key).is_some_and(|a| a.version == table.version) {

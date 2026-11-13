@@ -7,7 +7,7 @@ use super::Coinbase;
 use super::db::{get, int, read_hash};
 use crate::difficulty::INTERVAL;
 use crate::mining::pools::Pools;
-use crate::store::{Error, OptionalExtension, Read, Store, params};
+use crate::store::{Error, OptionalExtension, Read, Sql, Store, params};
 
 /// Heights read per statement while walking the table.
 const CHUNK: u32 = 10_000;
@@ -24,11 +24,13 @@ pub struct Span {
     pub from_time: u64,
 }
 
-/// `None` while the table is empty. Walks down from the top row to the first missing height, so
-/// it reads every stored row once in the worst case: about 0.1 s on a full mainnet table.
+/// `None` while the table is empty. Skips down the running totals' 1,008-height buckets that
+/// hold every height, then walks the rows of the first one that does not to its missing height.
+/// Before the totals are filled it walks every row: about 0.1 s on a full mainnet table.
 pub async fn span(store: &Store) -> Result<Option<Span>, Error> {
     store
         .read(Read::Mining, |sql| {
+            sql.prepare("BEGIN")?.execute([])?;
             let top = sql
                 .prepare("SELECT height, hash, time FROM blocks ORDER BY height DESC LIMIT 1")?
                 .query_row([], |r| {
@@ -38,11 +40,19 @@ pub async fn span(store: &Store) -> Result<Option<Span>, Error> {
             let Some((tip, tip_hash, tip_time)) = top else {
                 return Ok(None);
             };
+            let (mut from, mut from_time) = (tip, tip_time);
+            if let Some(full) = super::totals::full_from(sql, tip)?
+                && full < tip
+            {
+                from = full;
+                from_time = sql
+                    .prepare("SELECT time FROM blocks WHERE height = ?1")?
+                    .query_row(params![full], |r| get(r, 0))?;
+            }
             let mut walk = sql.prepare(
                 "SELECT height, time FROM blocks WHERE height BETWEEN ?1 AND ?2 \
                  ORDER BY height DESC",
             )?;
-            let (mut from, mut from_time) = (tip, tip_time);
             'chunks: loop {
                 let lo = from.saturating_sub(CHUNK);
                 let mut rows = walk.query(params![lo, from])?;
@@ -80,7 +90,7 @@ pub async fn top(store: &Store) -> Result<Option<(u32, BlockHash)>, Error> {
         .await
 }
 
-/// Rows in the table, and how many of them have fee rates.
+/// Rows in the table, and how many of them have fee rates: a sum of the totals' buckets.
 pub async fn row_counts(store: &Store) -> Result<(u64, u64), Error> {
     store.read(Read::BlockCounts, super::db::counts).await
 }
@@ -96,25 +106,37 @@ pub struct PoolCount {
     pub reward: u64,
 }
 
-/// Every pool with a block in `from..=to`, most blocks first, then by id.
+/// Every pool with a block in `from..=to`, most blocks first, then by id. Over a long range the
+/// whole 1,008-height buckets come from the running totals and only the ends are read row by row.
 pub async fn pool_counts(store: &Store, from: u32, to: u32) -> Result<Vec<PoolCount>, Error> {
     store
         .read(Read::Mining, move |sql| {
-            let mut stmt = sql.prepare(
-                "SELECT pool, count(*) AS n, sum(tx_count = 1), sum(reward) FROM blocks \
-                 WHERE height BETWEEN ?1 AND ?2 GROUP BY pool ORDER BY n DESC, pool",
-            )?;
-            let rows = stmt.query_map(params![from, to], |r| {
-                Ok(PoolCount {
-                    pool: get(r, 0)?,
-                    blocks: get(r, 1)?,
-                    empty: get(r, 2)?,
-                    reward: get(r, 3)?,
-                })
-            })?;
-            Ok(rows.collect::<Result<_, _>>()?)
+            if super::totals::worth(from, to) {
+                sql.prepare("BEGIN")?.execute([])?;
+                if let Some(c) = super::totals::pool_counts(sql, from, to)? {
+                    return Ok(c);
+                }
+            }
+            pool_counts_scan(sql, from, to)
         })
         .await
+}
+
+/// [`pool_counts`] by reading every row in the range.
+pub(super) fn pool_counts_scan(sql: &Sql, from: u32, to: u32) -> Result<Vec<PoolCount>, Error> {
+    let mut stmt = sql.prepare(
+        "SELECT pool, count(*) AS n, sum(tx_count = 1), sum(reward) FROM blocks \
+         WHERE height BETWEEN ?1 AND ?2 GROUP BY pool ORDER BY n DESC, pool",
+    )?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        Ok(PoolCount {
+            pool: get(r, 0)?,
+            blocks: get(r, 1)?,
+            empty: get(r, 2)?,
+            reward: get(r, 3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Seconds from the Unix epoch, a Thursday, to the first Monday: weeks here start on Monday.
@@ -122,21 +144,37 @@ pub const WEEK_OFFSET: u64 = 4 * 86_400;
 pub const WEEK: u64 = 7 * 86_400;
 
 /// Blocks per pool per week (starting Monday 00:00 UTC) in `from..=to`: `(week start, pool,
-/// blocks)`, oldest week first.
+/// blocks)`, oldest week first. Over a long range the weeks whose every block lies in it come from
+/// the running totals.
 pub async fn pool_weeks(store: &Store, from: u32, to: u32) -> Result<Vec<(u64, u16, u32)>, Error> {
     store
         .read(Read::Mining, move |sql| {
-            let mut stmt = sql.prepare(
-                "SELECT (time - ?3) / ?4 AS w, pool, count(*) FROM blocks \
-                 WHERE height BETWEEN ?1 AND ?2 GROUP BY w, pool ORDER BY w, pool",
-            )?;
-            let rows = stmt.query_map(params![from, to, int(WEEK_OFFSET), int(WEEK)], |r| {
-                let w: u64 = get(r, 0)?;
-                Ok((w * WEEK + WEEK_OFFSET, get(r, 1)?, get(r, 2)?))
-            })?;
-            Ok(rows.collect::<Result<_, _>>()?)
+            if super::totals::worth(from, to) {
+                sql.prepare("BEGIN")?.execute([])?;
+                if let Some(w) = super::totals::pool_weeks(sql, from, to)? {
+                    return Ok(w);
+                }
+            }
+            pool_weeks_scan(sql, from, to)
         })
         .await
+}
+
+/// [`pool_weeks`] by reading every row in the range.
+pub(super) fn pool_weeks_scan(
+    sql: &Sql,
+    from: u32,
+    to: u32,
+) -> Result<Vec<(u64, u16, u32)>, Error> {
+    let mut stmt = sql.prepare(
+        "SELECT (time - ?3) / ?4 AS w, pool, count(*) FROM blocks \
+         WHERE height BETWEEN ?1 AND ?2 GROUP BY w, pool ORDER BY w, pool",
+    )?;
+    let rows = stmt.query_map(params![from, to, int(WEEK_OFFSET), int(WEEK)], |r| {
+        let w: u64 = get(r, 0)?;
+        Ok((w * WEEK + WEEK_OFFSET, get(r, 1)?, get(r, 2)?))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// One difficulty retarget.
@@ -241,20 +279,35 @@ pub async fn at_or_before(
         .await
 }
 
-/// The lowest height at `floor` or above stamped at or after `time`.
+/// The lowest height at `floor` or above stamped at or after `time`. With the totals, reads one
+/// day of the `time` index and the days after it, not every row stamped since.
 pub async fn first_since(store: &Store, floor: u32, time: u64) -> Result<Option<u32>, Error> {
     store
         .read(Read::Mining, move |sql| {
-            let h: Option<i64> = sql
-                // Walk the `time` index from `time`, not every row from the floor up.
-                .prepare(
-                    "SELECT min(height) FROM blocks INDEXED BY blocks_time \
-                     WHERE time >= ?1 AND height >= ?2",
-                )?
-                .query_row(params![int(time), floor], |r| r.get(0))?;
-            Ok(h.and_then(|h| u32::try_from(h).ok()))
+            sql.prepare("BEGIN")?.execute([])?;
+            if let Some(h) = super::totals::first_since(sql, floor, time)? {
+                return Ok(h);
+            }
+            first_since_scan(sql, floor, int(time), i64::MAX)
         })
         .await
+}
+
+/// The lowest height at `floor` or above stamped in `from..=to`.
+pub(super) fn first_since_scan(
+    sql: &Sql,
+    floor: u32,
+    from: i64,
+    to: i64,
+) -> Result<Option<u32>, Error> {
+    let h: Option<i64> = sql
+        // Walk the `time` index over the period, not every row from the floor up.
+        .prepare(
+            "SELECT min(height) FROM blocks INDEXED BY blocks_time \
+             WHERE time BETWEEN ?1 AND ?2 AND height >= ?3",
+        )?
+        .query_row(params![from, to, floor], |r| r.get(0))?;
+    Ok(h.and_then(|h| u32::try_from(h).ok()))
 }
 
 /// What [`reattribute`] did.

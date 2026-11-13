@@ -51,7 +51,7 @@ pub struct Options {
 /// Something worth reporting. Passed to [`Options::observer`].
 #[derive(Debug)]
 pub enum Event<'a> {
-    /// Every [`TICK`] while working, and when a pass completes. `counted` is false when the row
+    /// Every [`TICK`] while steps write, and when a pass completes. `counted` is false when the row
     /// count failed or timed out: `rows` and `rated` are then the last counted, not now's.
     Progress {
         progress: &'a Progress,
@@ -102,6 +102,8 @@ pub async fn backfill<S: Source>(
     let mut failures = 0u32;
     let mut checked = Instant::now();
     let mut reported = Instant::now();
+    // No step has written since the last report.
+    let mut idle = false;
     let start_bytes = source.bytes();
 
     loop {
@@ -185,8 +187,10 @@ pub async fn backfill<S: Source>(
         let done = (totals.is_none(), rates.is_none());
         let finished = done != (p.totals_done, p.rates_done) && done.0 && done.1;
         (p.totals_done, p.rates_done) = done;
-        if finished || reported.elapsed() >= TICK {
-            reported = Instant::now();
+        idle &= !worked;
+        // Once everything is done the table changes only by follow's writes: nothing to report.
+        if finished || (!idle && reported.elapsed() >= TICK) {
+            (reported, idle) = (Instant::now(), true);
             let counted = store.read(Read::BlockCounts, db::counts).await;
             if let Ok((rows, rated)) = counted {
                 (p.rows, p.rated) = (rows, rated);
@@ -224,10 +228,23 @@ pub(super) async fn totals_step<S: Source>(
     let seen = reorgs.seen();
     let mut hi = cursor;
     let missing = loop {
-        let lo = hi.saturating_sub(SCAN - 1);
-        let present = store
-            .read(Read::Backfill, move |sql| db::present(sql, lo, hi))
+        // Heights whose 1,008-height buckets hold every row are skipped without reading them.
+        let found = store
+            .read(Read::Backfill, move |sql| {
+                sql.prepare("BEGIN")?.execute([])?;
+                let top = match super::totals::below_full(sql, hi)? {
+                    Some(None) => return Ok(None),
+                    Some(Some(top)) => top,
+                    None => hi,
+                };
+                let lo = top.saturating_sub(SCAN - 1);
+                Ok(Some((top, lo, db::present(sql, lo, top)?)))
+            })
             .await?;
+        let Some((top, lo, present)) = found else {
+            return Ok((None, 0));
+        };
+        hi = top;
         let present: std::collections::HashSet<u32> = present.into_iter().collect();
         // One run of consecutive heights, so the row checked below it is the only one under it.
         let mut missing: Vec<u32> = Vec::new();
