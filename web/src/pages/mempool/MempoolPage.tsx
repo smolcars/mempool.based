@@ -36,6 +36,7 @@ import {
   seriesOf,
   sizeSummary,
 } from "./history";
+import { RecentReplacements } from "./RecentReplacements";
 import "./MempoolPage.css";
 
 /** The chart loads only on pages that draw one. */
@@ -131,6 +132,7 @@ function MempoolHistory(props: { network: Network }) {
           )}
         </Show>
       </Show>
+      <RecentReplacements network={props.network} />
     </div>
   );
 }

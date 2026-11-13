@@ -74,4 +74,6 @@ export const paths = {
   /** The mempool's history, for an interval such as `1w` when given. */
   mempool: (interval?: string) =>
     interval === undefined ? "/mempool" : `/mempool?interval=${encodeURIComponent(interval)}`,
+  /** Recent replacements, newest first; only those that replaced without signalling when asked. */
+  rbf: (fullRbf = false) => (fullRbf ? "/rbf?view=full-rbf" : "/rbf"),
 };

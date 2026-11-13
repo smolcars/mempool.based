@@ -488,6 +488,17 @@ impl Tracking {
         }
     }
 
+    /// Tells the `replacements` topic the record's version, so a page listing replacements asks
+    /// for them again when it changes.
+    fn say_record(&self, st: &mut State) {
+        let msg = json!({
+            "topic": "replacements",
+            "type": "replacements",
+            "version": st.replacements.version(),
+        });
+        self.publish(st, Topic::Replacements, &msg);
+    }
+
     fn publish(&self, st: &mut State, topic: Topic, msg: &Value) {
         let frame = Frame::text(msg.to_string().as_bytes());
         st.stats.messages += 1;
@@ -603,6 +614,9 @@ impl Tracking {
                 moved = true;
             }
         }
+        if st.replacements.version() != version {
+            self.say_record(&mut st);
+        }
         (moved, st.replacements.take_changes())
     }
 
@@ -617,6 +631,9 @@ impl Tracking {
         let version = st.replacements.version();
         st.replacements.answers(epoch, answers);
         let changed = st.replacements.version() != version;
+        if changed {
+            self.say_record(&mut st);
+        }
         (changed, st.replacements.take_changes())
     }
 
@@ -1062,6 +1079,8 @@ pub(crate) async fn follow_txs<L: Lookup + Clone + 'static>(
         if let Some(k) = restore.take() {
             k.restore(&track).await;
         }
+        // The topic's state for new subscribers, before anything changes it.
+        track.say_record(&mut lock(&track.state));
         // Its lock is held through a pack: take it on a blocking thread.
         let p = projector.clone();
         let Ok((_, mut projections)) = tokio::task::spawn_blocking(move || p.subscribe()).await

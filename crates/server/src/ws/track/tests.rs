@@ -2087,3 +2087,31 @@ async fn a_reorg_deeper_than_the_window_with_the_node_unreachable_reads_unknown(
         Value::Null
     );
 }
+
+#[tokio::test]
+async fn the_replacements_topic_says_each_change_of_the_record() {
+    let mock = Mock::new();
+    mock.send(&[coin(1)], 1, 500, 200);
+    let s = Server::start(&mock, |_| {});
+    s.settle().await;
+    let mut c = Client::new(64);
+    s.ctx.hub.subscribe(Topic::Replacements, &c.conn);
+    // A subscriber is told the record as it stands, at once.
+    let version = |v: &Value| v["version"].as_u64().unwrap_or(u64::MAX);
+    let first = version(&c.wait("replacements", |v| v["type"] == "replacements").await);
+
+    // A replacement changes it.
+    let a2 = mock.send(&[coin(1)], 1, 900, 200);
+    s.settle().await;
+    let replaced = version(&c.wait("replacements", |v| version(v) > first).await);
+
+    // So does the replacement's confirmation: the tree is now mined.
+    mock.mine(&[a2]);
+    let mined = version(&c.wait("replacements", |v| version(v) > replaced).await);
+
+    // An ordinary delta does not.
+    mock.send(&[coin(7)], 1, 500, 200);
+    s.settle().await;
+    c.drain();
+    assert_eq!(version(&c.last["replacements"]), mined);
+}

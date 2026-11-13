@@ -1,0 +1,28 @@
+/* Whether a replacement's newest version was mined: an icon and a word. */
+@layer pages {
+  .rbf-status__word {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-weight: var(--weight-bold);
+  }
+  .rbf-status__word--mined {
+    color: var(--color-positive);
+  }
+  .rbf-status__word--waiting {
+    color: var(--color-caution);
+  }
+  .rbf-status__word--unknown {
+    color: var(--color-text-muted);
+  }
+  .rbf-status__icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+}

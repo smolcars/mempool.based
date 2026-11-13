@@ -1,0 +1,116 @@
+// The replacements page drawn from mainnet's answers (fixtures/api-v1/replacements.json), served in
+// place of this server's own: regtest makes no stories this long or this tangled. Stories made on
+// the run's own node are in rbf.mine.e2e.ts.
+import { readFileSync } from "node:fs";
+import type { Page, WebSocketRoute } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { amountsIntact, tablesFit } from "./rows";
+
+const RECORDED = JSON.parse(
+  readFileSync(new URL("../../fixtures/api-v1/replacements.json", import.meta.url), "utf8"),
+) as { all: { tx: { txid: string } }[]; fullRbf: { tx: { txid: string } }[] };
+
+/** Serves the recorded lists, or what `answer` says now. */
+async function recorded(page: Page, answer?: () => { status?: number; json: unknown }) {
+  await page.route(/\/regtest\/api\/v1\/(fullrbf\/)?replacements$/, (route) =>
+    route.fulfill(
+      answer?.() ?? {
+        json: route.request().url().includes("fullrbf") ? RECORDED.fullRbf : RECORDED.all,
+      },
+    ),
+  );
+}
+
+const story = (page: Page, txid: string) => page.locator(`[data-story="${txid}"]`);
+
+test("mainnet's stories read oldest first, fold when long, and fit every width", async ({
+  page,
+}) => {
+  await recorded(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/regtest/rbf");
+  const table = page.getByRole("table", { name: "Replacements, newest first" });
+  await expect(table.locator("tbody tr")).toHaveCount(RECORDED.all.length);
+  await expect(page.getByText(`${RECORDED.all.length} replacements, the newest`)).toBeVisible();
+  // Each story ends with its newest version, the one its row opens.
+  const first = RECORDED.all[0]?.tx.txid ?? "";
+  await expect(story(page, first).locator("li").last()).toContainText(first.slice(0, 8));
+  await expect(table.locator(".table__rowlink").first()).toHaveAttribute(
+    "href",
+    `/regtest/tx/${first}`,
+  );
+  // A story eight versions long shows its first and last two until asked for the rest.
+  const fold = page.getByRole("button", { name: "5 more versions" }).first();
+  const id = await page.locator("[data-story]", { has: fold }).first().getAttribute("data-story");
+  const line = story(page, id ?? "").locator(".rbf-v");
+  await expect(line).toHaveCount(3);
+  await fold.click();
+  await expect(line).toHaveCount(8);
+
+  // Full RBF only: what replaced a transaction that did not signal, some of it mined, some of it
+  // taking dozens of transactions with it.
+  await page.getByRole("link", { name: "Full RBF only" }).click();
+  await expect(page).toHaveURL(/\/regtest\/rbf\?view=full-rbf$/);
+  const full = page.getByRole("table", {
+    name: "Replacements of a transaction that did not signal, newest first",
+  });
+  await expect(full.locator("tbody tr")).toHaveCount(RECORDED.fullRbf.length);
+  await expect(full.getByText("Mined", { exact: true }).first()).toBeVisible();
+  await expect(full.getByRole("button", { name: /^\d+ more$/ }).first()).toBeVisible();
+
+  for (const width of [720, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await tablesFit(page, `/rbf at ${width} px`);
+    await amountsIntact(page, `/rbf at ${width} px`);
+  }
+});
+
+test("a story that arrives above the reader leaves what they read where it was", async ({
+  page,
+}) => {
+  let list = RECORDED.all;
+  await recorded(page, () => ({ json: list }));
+  let socket: WebSocketRoute | undefined;
+  await page.routeWebSocket(/\/regtest\/app\/ws$/, (ws) => {
+    ws.connectToServer();
+    socket = ws;
+  });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/regtest/rbf");
+  const rows = page.locator(".rbf-list tbody tr");
+  await expect(rows).toHaveCount(RECORDED.all.length);
+
+  // The reader is down the list, reading its seventh story.
+  const reading = story(page, RECORDED.all[6]?.tx.txid ?? "");
+  await reading.evaluate((el) => {
+    window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 300);
+  });
+  const before = await reading.evaluate((el) => el.getBoundingClientRect().top);
+
+  // A new replacement: the topic says the record changed, and the list has a new story on top.
+  const fresh = "ab".repeat(32);
+  const top = RECORDED.all[0] as Record<string, unknown> & { tx: Record<string, unknown> };
+  list = [{ ...top, tx: { ...top.tx, txid: fresh } }, ...RECORDED.all.slice(0, -1)];
+  socket?.send(JSON.stringify({ topic: "replacements", type: "replacements", version: 1e9 }));
+  await expect(rows.first().locator(`[data-story="${fresh}"]`)).toBeAttached();
+  const after = await reading.evaluate((el) => el.getBoundingClientRect().top);
+  expect(Math.abs(after - before), "the story being read did not move").toBeLessThan(1);
+});
+
+test.describe("nothing to show, and a refusal", () => {
+  test.use({ consoleErrorsAllowed: [/status of 500/] });
+
+  test("say so, and recover with Try again", async ({ page }) => {
+    let answer: { status?: number; json: unknown } = { json: [] };
+    await recorded(page, () => answer);
+    await page.goto("/regtest/rbf");
+    await expect(page.getByText("No replacements yet")).toBeVisible();
+
+    answer = { status: 500, json: { error: "upstream unavailable" } };
+    await page.reload();
+    await expect(page.getByText("Could not load the replacements")).toBeVisible();
+    answer = { json: RECORDED.all };
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.locator(".rbf-list tbody tr")).toHaveCount(RECORDED.all.length);
+  });
+});

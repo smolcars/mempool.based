@@ -114,6 +114,9 @@ pub enum Topic {
     Address(node::electrum::ScriptHash),
     /// Fee recommendations.
     Fees,
+    /// The replacement record's version: a page listing replacements asks for them again when
+    /// it changes.
+    Replacements,
     /// The mempool.space-shaped `/api/v1/ws` (`v1.rs`): its `blocks` and `block` messages.
     V1Blocks,
     /// `/api/v1/ws`: the `stats` messages (mempool info, fees, difficulty adjustment).
@@ -150,6 +153,7 @@ impl Topic {
             "projected" => Some(Self::Projected),
             "transactions" => Some(Self::Transactions),
             "fees" => Some(Self::Fees),
+            "replacements" => Some(Self::Replacements),
             _ => PROJECTED_TXS
                 .iter()
                 .position(|n| *n == s)
@@ -169,6 +173,7 @@ impl Topic {
             Self::Projected => "projected",
             Self::Transactions => "transactions",
             Self::Fees => "fees",
+            Self::Replacements => "replacements",
             Self::V1Blocks => "v1:blocks",
             Self::V1Stats => "v1:stats",
             Self::V1MempoolBlocks => "v1:mempool-blocks",

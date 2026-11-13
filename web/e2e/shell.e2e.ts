@@ -140,6 +140,7 @@ test.describe("the main nav", () => {
       ["/regtest/mempool", "Mempool"],
       ["/regtest/mempool?interval=2h", "Mempool"],
       ["/regtest/mempool?interval=all", "Mempool"],
+      ["/regtest/rbf", "Mempool"],
       ["/regtest/mining", "Mining"],
       ["/regtest/mining?period=24h", "Mining"],
       ["/regtest/mining?period=all", "Mining"],

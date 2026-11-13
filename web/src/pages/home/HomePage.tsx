@@ -12,6 +12,7 @@ import { MempoolPanel } from "./MempoolPanel";
 import { RecentTxs } from "./RecentTxs";
 import { createSummaries } from "./summaries";
 import { DifficultyPanel } from "./DifficultyPanel";
+import { RecentReplacements } from "../mempool/RecentReplacements";
 import "./HomePage.css";
 
 /** A failure that means the node, not the request, is the problem. */
@@ -68,6 +69,7 @@ function Home(props: { network: Network }) {
         <MempoolPanel feed={live.mempool} />
         <RecentTxs feed={live.recent} />
         <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
+        <RecentReplacements network={props.network} class="home-rbf" />
       </div>
     </div>
   );
