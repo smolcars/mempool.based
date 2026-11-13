@@ -102,8 +102,8 @@ struct PeerRange {
     /// The batch requested, and when. It ends at its end marker or [`BATCH_TIMEOUT`], not when
     /// everything arrived: a late end marker would end the next one.
     in_flight: Option<(Vec<u64>, Instant)>,
-    /// End markers still due for batches that timed out. Markers come in order, so the next ones
-    /// are theirs and end nothing.
+    /// End markers still due for batches that timed out. A marker says nothing of its batch, so
+    /// the next ones are counted as theirs and end nothing.
     late_ends: u32,
     /// Per ended batch, its ids still being checked (the peer answers for them until they
     /// settle), and whether the batch was already counted as withheld.
