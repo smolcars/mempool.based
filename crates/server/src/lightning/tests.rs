@@ -549,36 +549,51 @@ async fn a_record_sent_as_the_hold_ends_is_never_stored() {
     let l = lightning();
     let wait = || tokio::time::sleep(Duration::from_millis(50));
     let mut p = Pending::default();
-    tokio::join!(
-        consume(&src, &mut rx, &mut p, &store, &l, "regtest"),
-        async {
-            peer.send(&History::Opened(opened(A, 1)));
-            wait().await;
-            // The writer is busy, so the next write passes the gate and queues; the node is found
-            // on another chain before the writer reaches it, which rejects it while still held.
-            let (go, stop) = std::sync::mpsc::channel::<()>();
-            let busy = tokio::spawn({
-                let s = Arc::clone(&store);
-                async move {
-                    s.write(move |_| {
-                        stop.recv().ok();
-                        Ok(())
-                    })
-                    .await
+    // Each step waits for the one before; one that never comes fails the test, not hangs it.
+    let scenario = async {
+        tokio::join!(
+            consume(&src, &mut rx, &mut p, &store, &l, "regtest"),
+            async {
+                peer.send(&History::Opened(opened(A, 1)));
+                while rows(&store).await.is_empty() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-            });
-            wait().await;
-            peer.send(&History::Opened(opened(B, 1)));
-            wait().await;
-            store.set_gate(engine::store::Gate::Held);
-            go.send(()).unwrap();
-            busy.await.unwrap().unwrap();
-            wait().await;
-            peer.send(&History::Opened(opened(D, 1)));
-            wait().await;
-            peer.close();
-        }
-    );
+                // The writer is busy, so the next write passes the gate and queues; the node is
+                // found on another chain before the writer reaches it, which rejects it while
+                // still held.
+                let (go, stop) = std::sync::mpsc::channel::<()>();
+                let (running, started) = std::sync::mpsc::channel::<()>();
+                let busy = tokio::spawn({
+                    let s = Arc::clone(&store);
+                    async move {
+                        s.write(move |_| {
+                            running.send(()).ok();
+                            stop.recv().ok();
+                            Ok(())
+                        })
+                        .await
+                    }
+                });
+                while started.try_recv().is_err() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                peer.send(&History::Opened(opened(B, 1)));
+                while store.queue_depth() == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                store.set_gate(engine::store::Gate::Held);
+                go.send(()).unwrap();
+                busy.await.unwrap().unwrap();
+                wait().await;
+                peer.send(&History::Opened(opened(D, 1)));
+                wait().await;
+                peer.close();
+            }
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), scenario)
+        .await
+        .expect("a step of the scenario never came");
     let mut scids: Vec<u64> = rows(&store).await.iter().map(|c| c.open.scid).collect();
     scids.sort_unstable();
     assert_eq!(scids, [A, D]);
