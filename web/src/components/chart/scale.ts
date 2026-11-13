@@ -128,6 +128,24 @@ export function formatMoment(t: number): string {
 }
 
 /**
+ * The lines a narrow chart's readout takes, one reading to a line: the time, each band, series,
+ * note and layer, and one line for all the fee bands, which it names one at a time.
+ */
+export function readoutLines(p: {
+  bands?: readonly unknown[] | undefined;
+  series?: readonly unknown[] | undefined;
+  notes?: readonly unknown[] | undefined;
+  layers?: readonly { fee?: number | undefined }[] | undefined;
+}): number {
+  const layers = p.layers ?? [];
+  const plain = layers.filter((l) => l.fee === undefined).length;
+  const fee = layers.length > plain ? 1 : 0;
+  return (
+    1 + (p.bands?.length ?? 0) + (p.series?.length ?? 0) + (p.notes?.length ?? 0) + plain + fee
+  );
+}
+
+/**
  * The two ends of a time axis too narrow for ticks (a phone): the first and last moment, each
  * saying as much as the span needs. Under two days the hours lead, the first with its day:
  * `12 Nov 11:14` and `20:35`; longer, the days: `9 Nov` and `12 Nov`, with the years when they differ, or `Nov 2020` and `Nov 2026` where

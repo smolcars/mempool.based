@@ -20,6 +20,7 @@ import {
   scale,
   timeTicks,
   endLabels,
+  readoutLines,
 } from "./scale";
 
 const DAY = 86_400;
@@ -70,6 +71,14 @@ describe("value ticks", () => {
   it("uses powers of ten over many decades, with 2 and 5 over few", () => {
     expect(logAxis(3e6, 9e20).ticks).toHaveLength(14);
     expect(logAxis(0.1, 30).ticks).toStrictEqual([0.1, 0.2, 0.5, 1, 2, 5, 10, 20]);
+  });
+});
+
+describe("a narrow readout", () => {
+  it("takes a line for the time, each reading and all the fee bands together", () => {
+    expect(readoutLines({ series: [1], notes: [1, 2], layers: [{ fee: 1 }, { fee: 2 }] })).toBe(5);
+    expect(readoutLines({ series: [1], layers: [{}, {}] })).toBe(4);
+    expect(readoutLines({})).toBe(1);
   });
 });
 

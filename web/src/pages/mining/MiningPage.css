@@ -144,9 +144,21 @@
     );
   }
 
-  /* A chart's whole height is held while its code and data load. */
+  /* A chart's whole height is held while its code and data load: the plot, the readout and the
+     caption. On a phone each reading has a line of 1.5625rem (a gap included), and "Show the
+     figures" is a 44 px target; a slot that does not know its chart's lines holds three. */
+  .mining-chart,
+  .mining-slot {
+    --readout: 5.75rem;
+  }
+  @media (max-width: 640px) {
+    .mining-chart,
+    .mining-slot {
+      --readout: calc(var(--lines, 3) * 1.5625rem + 3.5rem);
+    }
+  }
   .mining-chart {
-    min-height: calc(var(--h) + 5.75rem);
+    min-height: calc(var(--h) + var(--readout));
   }
   .mining-slot {
     min-height: var(--reserve);

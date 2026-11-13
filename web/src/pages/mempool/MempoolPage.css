@@ -133,9 +133,13 @@
     .mempool-intervals__item {
       min-height: var(--touch);
     }
-    /* The readout is four short lines on a phone: the bands wait for a finger on the chart. */
+    /* A line to each reading on a phone (Chart.css), 1.5625rem with its gap, and a 44 px
+       "Show the figures". */
     .mempool-chart--size {
-      min-height: calc(240px + 9rem);
+      min-height: calc(240px + var(--lines) * 1.5625rem + 3.5rem);
+    }
+    .mempool-chart--flow {
+      min-height: calc(200px + var(--lines) * 1.5625rem + 3.5rem);
     }
     /* One line of coverage in any font: the sentence says from when, which is where the hatch
        ends, so the key to the hatch steps aside. */

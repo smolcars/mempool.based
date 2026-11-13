@@ -1,32 +1,25 @@
 @layer components {
-  /* A narrow chart (a phone) reads out only the layers that hold anything at the point; the
+  /* A narrow chart (a phone) gives each reading a line of its own, so the readout has as many
+     lines at every point and a tap never moves the plot, however wide its figures. Of a fee chart's
+     bands it reads out only the one under the finger, its line held by a hint until then; the
      figures table under it has every one. */
   .chart {
     container-type: inline-size;
   }
-  /* Doubled classes here as above: the hint is a .chart__value too. */
+  /* Doubled classes here as below: the hint is a .chart__value too. */
   .chart__value.chart__hint {
     display: none;
   }
   @container (max-width: 480px) {
-    /* Doubled class: it must beat the plain .chart__value rule below. */
-    .chart__value.chart__value--empty {
-      display: none;
-    }
-    /* Fee bands one at a time: the one under the finger. All of them are in the figures table. */
-    .chart__value.chart__value--band:not(.chart__value--on) {
-      display: none;
-    }
-    /* The band under the finger, or the hint in its place, has a line of its own that is always
-       there, so a tap never pushes the plot down. */
-    .chart__value--band,
-    .chart__hint {
+    .chart__values {
       flex-basis: 100%;
+      flex-direction: column;
+      align-items: flex-start;
     }
-    /* Alone on its line it needs no underline to say which layer it names; across the whole line
-       one would read as a rule. */
-    .chart__value--band.chart__value--on {
-      box-shadow: none;
+    /* Doubled class: it must beat the plain .chart__value rule below. */
+    .chart__value.chart__value--band:not(.chart__value--on),
+    .chart__value.chart__value--band.chart__value--empty {
+      display: none;
     }
     .chart__value.chart__hint {
       display: inline-flex;

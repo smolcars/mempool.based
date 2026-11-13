@@ -425,6 +425,10 @@
     }
   }
   @media (max-width: 640px) {
+    /* Five readings, a line each (Chart.css): the time, channels, capacity, nodes and fee rate. */
+    .ln-chart {
+      min-height: calc(240px + 5 * 1.5625rem + 3.5rem);
+    }
     .ln {
       gap: var(--space-6);
     }

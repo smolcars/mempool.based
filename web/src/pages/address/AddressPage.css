@@ -104,13 +104,11 @@
   .address-balance__slot {
     min-height: calc(200px + 5.75rem);
   }
-  /* On a phone the readout takes three lines: the time, the balance and block, the change. */
+  /* On a phone each reading has a line (Chart.css): the time, the balance, the block and the
+     change, 1.5625rem each with its gap, then a 44 px "Show the figures". */
   @media (max-width: 640px) {
-    .address-balance .chart__readout {
-      min-height: 4.25rem;
-    }
     .address-balance__slot {
-      min-height: calc(200px + 7.25rem);
+      min-height: calc(200px + 4 * 1.5625rem + 3.5rem);
     }
   }
   .address-balance-none {

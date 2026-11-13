@@ -140,16 +140,70 @@ test("a phone sees the whole size chart, time axis and all, on its first screen"
   }
 });
 
-test("a phone's chart reads out only the layers that hold anything", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/regtest/mempool?interval=2h");
+test("a phone's chart reads out only the fee bands that hold anything, and keeps its other lines", async ({
+  browser,
+  baseURL,
+}) => {
+  const touch = await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  const page = await touch.newPage();
+  await page.goto(`${baseURL ?? ""}/regtest/mempool?interval=2h`);
   const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
   await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
-  // The seeded minutes sit in one or two fee bands, so most of the ten are empty.
-  const empty = page.locator(".chart__value--empty");
+  // The seeded minutes sit in one or two fee bands, so most of the twelve are empty.
+  const empty = page.locator(".chart__value--band.chart__value--empty");
   expect(await empty.count()).toBeGreaterThan(0);
   for (const value of await empty.all()) await expect(value).toBeHidden();
   await expect(page.locator(".chart__value:not(.chart__value--empty)").first()).toBeVisible();
+  // The flow's layers keep their lines at a minute where one is zero: a tap anywhere along it
+  // never moves the plot (a line once came and went, pushing it 25 px). Blocks mine in some
+  // minutes and not others here, as on mainnet.
+  const to = Math.floor(Date.now() / 60_000) * 60;
+  const points = Array.from({ length: 116 }, (_, i) => ({
+    time: to - (115 - i) * 60,
+    bands: [
+      26_000_000, 120_000, 40_000, 200_000, 90_000, 150_000, 30_000, 180_000, 140_000, 10_000,
+    ],
+    vsize: 26_960_000,
+    count: 45_000,
+    fees: 4_000_000,
+    min_fee_rate: 100,
+    samples: 1,
+    in_count: 10,
+    in_vsize: 12_345_678,
+    out_count: 9,
+    out_vsize: i % 10 === 0 ? 98_765_432 : 1_234_567,
+    mined_count: i % 10 === 0 ? 3000 : 0,
+    mined_vsize: i % 10 === 0 ? 87_654_321 : 0,
+  }));
+  const from = points[0]?.time ?? to;
+  await page.route(/\/app\/mempool\/history\/2h$/, (r) =>
+    r.fulfill({
+      json: {
+        complete: true,
+        first: from,
+        from,
+        to: to + 59,
+        interval: "2h",
+        minutes: 116,
+        sampled: 116,
+        step: 60,
+        points,
+      },
+    }),
+  );
+  await page.reload();
+  const flow = page.getByRole("slider", { name: /What entered and left the mempool/ });
+  await expect(flow).toHaveAttribute("aria-valuetext", /UTC/);
+  await flow.scrollIntoViewIfNeeded();
+  const top = () => flow.evaluate((el) => Math.round(el.getBoundingClientRect().top + scrollY));
+  const at = await top();
+  const box = await flow.boundingBox();
+  if (!box) throw new Error("no flow plot");
+  for (let k = 0; k < 116; k += 3) {
+    await page.touchscreen.tap(box.x + (box.width * (k + 0.5)) / 116, box.y + box.height * 0.5);
+    expect(await top(), `tap at minute ${k}`).toBe(at);
+  }
+  await touch.close();
 });
 
 // Where the lowest band was split, the stacked layers once fell away from the total at the join:

@@ -235,9 +235,9 @@ function NothingRecorded(props: { h: History }) {
   );
 }
 
-function ChartSlot(props: { class: string; children: JSX.Element }) {
+function ChartSlot(props: { class: string; lines: number; children: JSX.Element }) {
   return (
-    <div class={`mempool-chart ${props.class}`}>
+    <div class={`mempool-chart ${props.class}`} style={{ "--lines": props.lines }}>
       <Pending>{props.children}</Pending>
     </div>
   );
@@ -312,7 +312,8 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
         <SectionHeader title="Waiting, by fee rate" id="mempool-size-title">
           {per() === 1 ? "One point a minute" : `Each point the mean of ${stepWords(props.h.step)}`}
         </SectionHeader>
-        <ChartSlot class="mempool-chart--size">
+        {/* The time, the total, the notes and the fee band's line. */}
+        <ChartSlot class="mempool-chart--size" lines={3 + notes().length}>
           <Chart
             label={`The mempool's size by fee rate, ${props.interval.words}`}
             x={s().x}
@@ -357,7 +358,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
         <Show when={flowSentence(props.h, props.interval.words)}>
           {(text) => <p class="mempool-flow">{text()}</p>}
         </Show>
-        <ChartSlot class="mempool-chart--flow">
+        <ChartSlot class="mempool-chart--flow" lines={4}>
           <Chart
             label={`What entered and left the mempool, ${props.interval.words}`}
             x={s().x}
