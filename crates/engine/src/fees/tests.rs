@@ -474,10 +474,11 @@ const MET_AT_LEAST: [f64; 3] = [0.0, 0.0, 0.0];
 fn replayed_on_recorded_mainnet_each_level_is_met_often_enough() {
     let f: serde_json::Value =
         serde_json::from_str(include_str!("../../../../fixtures/fees/replay.json")).unwrap();
+    // `rate, vsize, rate, vsize …`
     let pairs = |v: &serde_json::Value| -> Vec<(u32, u64)> {
         v.as_array()
             .unwrap()
-            .iter()
+            .chunks(2)
             .map(|p| (p[0].as_u64().unwrap() as u32, p[1].as_u64().unwrap()))
             .collect()
     };

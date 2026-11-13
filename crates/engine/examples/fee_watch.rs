@@ -542,9 +542,17 @@ fn trim(lines: &[Value], path: &str) {
         .collect();
     blocks.sort_unstable();
     blocks.truncate(blocks.partition_point(|b| b.0 <= last) + 6);
-    let minutes: Vec<Vec<(u64, u64)>> = minutes
+    // Pairs flattened, `rate, vsize, rate, vsize …`: a quarter smaller.
+    let flat = |pairs: &mut dyn Iterator<Item = (u64, u64)>| -> Vec<u64> {
+        pairs.flat_map(|(r, v)| [r, v]).collect()
+    };
+    let minutes: Vec<Vec<u64>> = minutes
         .into_iter()
-        .map(|m| m.into_iter().collect())
+        .map(|m| flat(&mut m.into_iter()))
+        .collect();
+    let samples: Vec<(u64, u64, Vec<u64>)> = samples
+        .into_iter()
+        .map(|(t, floor, depth)| (t, floor, flat(&mut depth.into_iter())))
         .collect();
     let v = json!({ "start": start, "minutes": minutes, "samples": samples, "blocks": blocks });
     std::fs::write(path, format!("{v}\n")).unwrap();
