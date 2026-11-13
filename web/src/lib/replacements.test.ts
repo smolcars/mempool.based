@@ -89,3 +89,11 @@ describe("formatStood and the topic", () => {
     expect(replacementsTopic.parse({ type: "replacements" })).toBeUndefined();
   });
 });
+
+describe("readTree at the server's bound", () => {
+  it("reads a line of 100 versions, the most a tree holds", () => {
+    let tree: unknown = node(tx(1, 1, 1));
+    for (let n = 2; n <= 100; n++) tree = node(tx(n, n, n), [tree], 1);
+    expect(storyOf(must(readTree(tree))).versions).toHaveLength(100);
+  });
+});

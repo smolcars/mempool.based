@@ -69,9 +69,12 @@ function readTx(v: unknown): TreeTx | undefined {
   return { txid, fee, vsize, rate, time, rbf };
 }
 
-/** A tree as sent, or undefined for a shape this page cannot draw. Bounded: the server caps a tree. */
+/** Deepest tree read: the server's trees hold at most 100 transactions (`MAX_TREE`). */
+const MAX_DEPTH = 128;
+
+/** A tree as sent, or undefined for a shape this page cannot draw. */
 export function readTree(v: unknown, depth = 0): Tree | undefined {
-  if (typeof v !== "object" || v === null || depth > 64) return undefined;
+  if (typeof v !== "object" || v === null || depth > MAX_DEPTH) return undefined;
   const t = v as Record<string, unknown>;
   const tx = readTx(t["tx"]);
   const { time, interval, fullRbf, replaces, mined } = t;
@@ -154,6 +157,13 @@ export const replacementsTopic: Topic<ReplacementsMessage> = {
   },
 };
 
+/**
+ * When each list was last asked for, by any feed on the page. The reply is `max-age=1`: an ask
+ * sooner after another, a feed's own or another's (the home panel's before the reader opened
+ * `/rbf`), would be answered from the browser's cache with the list from before the change.
+ */
+const asked = new Map<string, number>();
+
 /** Waits this long for the topic before asking over HTTP anyway. */
 export const TOPIC_WAIT_MS = 3000;
 /** How often to ask while the live channel is down. */
@@ -170,8 +180,8 @@ export interface Replacements {
 
 /**
  * The newest stories, kept current: asked for when the `replacements` topic says the record
- * changed (at most once per `gapMs`, which must outlast the reply's one-second `max-age`, or the
- * browser's cache would answer with the list from before the change), every `POLL_MS` while the
+ * changed (no sooner than `gapMs` after the list was last asked for by any feed, which must
+ * outlast the reply's one-second `max-age`: see `asked`), every `POLL_MS` while the
  * live channel is down, and on `refresh` (call it when `fullRbf` changes). `around` runs just
  * before each change is applied and returns what to do just after (the page keeps the reader's
  * place with it).
@@ -188,7 +198,6 @@ export function createReplacements(
   let heard: number | undefined;
   let controller: AbortController | undefined;
   let again = false;
-  let last = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let kept = new Map<string, [string, Story]>();
   let shownFull: boolean | undefined;
@@ -204,6 +213,7 @@ export function createReplacements(
     });
     kept = next;
     shownFull = full;
+    setOff(false);
     const after = options.around?.();
     setStories(list);
     setError(undefined);
@@ -217,18 +227,19 @@ export function createReplacements(
       return;
     }
     clearTimeout(timer);
-    const wait = last + options.gapMs - Date.now();
+    const full = fullRbf();
+    const path = full ? "/v1/fullrbf/replacements" : "/v1/replacements";
+    const key = `${network}${path}`;
+    const wait = (asked.get(key) ?? 0) + options.gapMs - Date.now();
     if (wait > 0) {
       timer = setTimeout(load, wait);
       return;
     }
-    last = Date.now();
-    const full = fullRbf();
+    asked.set(key, Date.now());
     const c = new AbortController();
     controller = c;
     void (async () => {
       try {
-        const path = full ? "/v1/fullrbf/replacements" : "/v1/replacements";
         const answer = await fetchApi<unknown>(network, path, { signal: c.signal });
         if (!Array.isArray(answer)) {
           throw new ApiError(0, "The server sent a list this page cannot read.");
@@ -256,12 +267,11 @@ export function createReplacements(
     })();
   };
 
-  /** Starts over at once: the filter changed or the reader asked. */
+  /** Starts over: the filter changed or the reader asked. */
   const refresh = () => {
     controller?.abort();
     controller = undefined;
     again = false;
-    last = 0;
     load();
   };
 
@@ -271,6 +281,8 @@ export function createReplacements(
         setOff(true);
         return;
       }
+      // A record to read: the engine is on (again, after a restart that turned it on).
+      setOff(false);
       if (m.version === heard) return;
       heard = m.version;
       load();
