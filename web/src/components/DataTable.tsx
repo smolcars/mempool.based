@@ -72,7 +72,17 @@ export function DataTable<T>(props: DataTableProps<T>) {
     };
     // Absent where there is no layout (tests): the phone's CSS still drops the optional columns.
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(refit);
+    // Next frame, not inside the observer: resizing what it watches from its own callback is a
+    // loop the browser reports (WebKit as an uncaught error). One refit however many notices.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        refit();
+      });
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
     observer.observe(scroller);
     // The table too: its content can widen it while the panel stays as it was.
     if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);

@@ -15,12 +15,23 @@ export function scrollCue(el: HTMLElement): void {
     else el.removeAttribute("tabindex");
   };
   el.addEventListener("scroll", mark, { passive: true });
+  // Next frame, not inside the observer: the fade can change what it watches in WebKit, which
+  // reports that as an uncaught resize loop. One mark however many notices.
+  let frame = 0;
+  const later = () => {
+    if (frame !== 0) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      mark();
+    });
+  };
   // Absent where there is no layout (tests): there is nothing to measure there.
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(mark);
+  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(later);
   observer?.observe(el);
   if (el.firstElementChild) observer?.observe(el.firstElementChild);
   onCleanup(() => {
     observer?.disconnect();
+    cancelAnimationFrame(frame);
     el.removeEventListener("scroll", mark);
   });
 }

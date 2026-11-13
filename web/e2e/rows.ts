@@ -32,6 +32,13 @@ export async function tapRow(page: Page, table: Locator, label: string) {
  * takes the keyboard. No header is cut, mid-word or otherwise.
  */
 export async function tablesFit(page: Page, label: string) {
+  // A table fits and marks its edge a frame after it changes: give it a moment to settle.
+  await expect(async () => {
+    await tablesFitNow(page, label);
+  }).toPass({ timeout: 3000 });
+}
+
+async function tablesFitNow(page: Page, label: string) {
   const tables = await page.locator(".table-scroll").evaluateAll((all) =>
     all
       .filter((s) => s.getClientRects().length > 0)
