@@ -198,11 +198,31 @@ export function hashGroups(value: string): string[] {
   return value.match(/.{1,8}/g) ?? [];
 }
 
-/** Absolute UTC time from unix seconds: `2026-11-11 20:41:07 UTC`. */
-export function formatUtc(unixSeconds: number): string {
+export const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+/**
+ * A moment in UTC as every page writes one: `11 Nov 2026, 20:41:07 UTC`, or to the minute
+ * (`11 Nov 2026, 20:41 UTC`) where seconds would claim more than the figure knows.
+ */
+export function formatUtc(unixSeconds: number, seconds = true): string {
   const d = new Date(unixSeconds * 1000);
   if (!Number.isFinite(d.getTime())) return MISSING;
-  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+  const two = (n: number) => String(n).padStart(2, "0");
+  const time = `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}${seconds ? `:${two(d.getUTCSeconds())}` : ""}`;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""} ${d.getUTCFullYear()}, ${time} UTC`;
 }
 
 /** ISO 8601 for a `<time datetime>` attribute. */

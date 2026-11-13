@@ -187,7 +187,7 @@ An output is **Spent** (or **Being spent**, while the spending transaction is un
 
 ### Time
 
-Relative time ("13 min ago", "1 day 23 h ago", "9 days ago": days lead from a day on) in lists, with the absolute UTC time in the `title`. Detail pages show absolute UTC first (`2026-11-11 20:41:07 UTC`) and relative time below. Under 10 seconds is "just now". Block tiles drop "ago" to fit ("13 min").
+Relative time ("13 min ago", "1 day 23 h ago", "9 days ago": days lead from a day on) in lists, with the absolute UTC time in the `title`. Detail pages show absolute UTC first (`11 Nov 2026, 20:41:07 UTC`, the form chart read-outs use, there to the minute) and relative time below. Under 10 seconds is "just now". Block tiles drop "ago" to fit ("13 min").
 
 ## Space, shape and layout
 

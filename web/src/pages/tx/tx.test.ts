@@ -49,7 +49,7 @@ describe("lock time", () => {
     });
     expect(lockTimeMeaning(499_999_999, [vin(0)]).value).toBe(`Block 499${NNBSP}999${NNBSP}999`);
     expect(lockTimeMeaning(1_794_453_849, [vin(0xfffffffe)])).toStrictEqual({
-      value: "2026-11-12 03:24:09 UTC",
+      value: "12 Nov 2026, 03:24:09 UTC",
       detail: "Could not be mined before this time, by the chain's median time.",
     });
   });
