@@ -102,6 +102,9 @@ struct PeerRange {
     /// The batch requested, and when. It ends at its end marker or [`BATCH_TIMEOUT`], not when
     /// everything arrived: a late end marker would end the next one.
     in_flight: Option<(Vec<u64>, Instant)>,
+    /// End markers still due for batches that timed out. A marker says nothing of its batch, so
+    /// the next ones are counted as theirs and end nothing.
+    late_ends: u32,
     /// Per ended batch, its ids still being checked (the peer answers for them until they
     /// settle), and whether the batch was already counted as withheld.
     checking: Vec<(Vec<u64>, bool)>,
@@ -350,6 +353,23 @@ impl Gossip {
         if self.graph().read_only().channels().len() < self.max_channels {
             self.at_ceiling.store(false, Ordering::Relaxed);
         }
+    }
+
+    /// Ages every batch in flight past [`BATCH_TIMEOUT`], so the next tick ends it.
+    #[cfg(test)]
+    pub(crate) fn expire_batches(&self) {
+        if let Ok(mut r) = self.range.lock() {
+            for (_, sent) in r.peers.values_mut().filter_map(|p| p.in_flight.as_mut()) {
+                *sent = Instant::now().checked_sub(BATCH_TIMEOUT).unwrap_or(*sent);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn withheld_of(&self, peer: &PublicKey) -> u32 {
+        self.range
+            .lock()
+            .map_or(0, |r| r.peers.get(peer).map_or(0, |p| p.withheld))
     }
 
     #[cfg(test)]
@@ -769,6 +789,7 @@ impl Gossip {
                 .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
                 && let Some((batch, _)) = p.in_flight.take()
             {
+                p.late_ends += 1;
                 batches.push((batch, false));
             }
             for (ids, counted) in batches {
@@ -1183,11 +1204,14 @@ impl RoutingMessageHandler for Gossip {
         let Ok(mut r) = self.range.lock() else {
             return Ok(());
         };
-        if let Some((ids, _)) = r
-            .peers
-            .get_mut(&their_node_id)
-            .and_then(|p| p.in_flight.take())
-        {
+        let ended = r.peers.get_mut(&their_node_id).and_then(|p| {
+            if p.late_ends > 0 {
+                p.late_ends -= 1;
+                return None;
+            }
+            p.in_flight.take()
+        });
+        if let Some((ids, _)) = ended {
             self.judge(&mut r, their_node_id, ids, false);
         }
         self.next_batches(&mut r);
