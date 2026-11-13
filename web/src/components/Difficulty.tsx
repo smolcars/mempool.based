@@ -66,7 +66,11 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
   /** The tip the shown answer is as of. */
   let answeredAt: string | undefined;
 
+  /** Asked once already: later asks follow a new tip, which a cached answer would predate. */
+  let asked = false;
   const load = () => {
+    const fresh = asked;
+    asked = true;
     controller?.abort();
     clearTimeout(behind);
     const c = new AbortController();
@@ -76,7 +80,7 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
       () =>
         fetchStamped<unknown>(props.network, "/v1/difficulty-adjustment", {
           signal: c.signal,
-          fresh: true,
+          fresh,
         }),
       c.signal,
     ).then(

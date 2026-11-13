@@ -430,7 +430,8 @@ export function createApi<T>(
 ): ApiRequest<T>;
 /**
  * With `stamped: true` the value comes with the chain tip it is as of, to compare across requests.
- * With `fresh: true` every answer comes from the server, as {@link Ask} says.
+ * With `fresh: true` every answer comes from the server, as {@link Ask} says; without it, only an
+ * ask again for the same path does (`refetch`, which a live event or a reader prompts).
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,
@@ -438,6 +439,7 @@ export function createApi<T>(
 ): ApiRequest<T | Stamped<T>> {
   const location = useLocation();
   const network = createMemo(() => networkFromPath(location.pathname));
+  let last: string | undefined;
   return createRequest(
     () => {
       const p = path();
@@ -447,11 +449,12 @@ export function createApi<T>(
     (url, signal): T | Stamped<T> | Promise<T | Stamped<T>> => {
       const unwrap = (r: Stamped<T>) => (options.stamped === true ? r : r.value);
       if (cache.has(url)) return unwrap({ value: cache.get(url) as T, tip: undefined });
+      const fresh = options.fresh === true || url === last;
+      last = url;
       // Stays loading while a busy refusal waits to be retried.
-      return withRetry(
-        () => request<T>(url, options.as ?? "json", signal, options.fresh === true),
-        signal,
-      ).then(unwrap);
+      return withRetry(() => request<T>(url, options.as ?? "json", signal, fresh), signal).then(
+        unwrap,
+      );
     },
   );
 }

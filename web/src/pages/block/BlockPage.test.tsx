@@ -56,17 +56,21 @@ interface Reply {
   body: unknown;
   headers?: Record<string, string>;
 }
-let replies: Record<string, Reply | ((n: number) => Reply)> = {};
+let replies: Record<string, Reply | ((n: number) => Reply | Promise<Reply>)> = {};
 const calls: string[] = [];
+/** How each call in `calls` treated the browser's HTTP cache. */
+const caching: (RequestCache | undefined)[] = [];
 
 function serve(table: typeof replies) {
   replies = table;
   calls.length = 0;
-  vi.stubGlobal("fetch", async (input: string) => {
+  caching.length = 0;
+  vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
     const path = input.replace(/^(\/(signet|testnet4|regtest))?\/api/, "");
     calls.push(path);
+    caching.push(init?.cache);
     const r = replies[path];
-    const reply = typeof r === "function" ? r(calls.filter((c) => c === path).length) : r;
+    const reply = typeof r === "function" ? await r(calls.filter((c) => c === path).length) : r;
     if (!reply) return Response.json({ error: "not found" }, { status: 404 });
     const status = reply.status ?? 200;
     // Block JSON is immutable, as the server marks it, so the client keeps it in memory.
@@ -525,6 +529,52 @@ describe("BlockPage", () => {
     ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
     await until(() => expect(pager()).toContain("Next: 975 412"));
     expect(asked()).toBe(2);
+    // The first ask may come from the browser's cache; the one the block prompted may not.
+    expect(caching.filter((_, i) => calls[i] === `/block/${HASH}/status`)).toStrictEqual([
+      undefined,
+      "no-cache",
+    ]);
+  });
+
+  it("asks again when the next block was announced while its status was on its way", async () => {
+    let answer: (r: Reply) => void = () => undefined;
+    serve({
+      ...normal(),
+      // The node answered before the next block; the answer arrives after its announcement.
+      [`/block/${HASH}/status`]: (n) =>
+        n === 1
+          ? new Promise<Reply>((resolve) => {
+              answer = resolve;
+            })
+          : status(),
+    });
+    const el = open(`/block/${HASH}`);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    answer(status({ next_best: null }));
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 412"),
+    );
+  });
+
+  it("asks nothing more for an older block, whatever the topic says", async () => {
+    serve(normal());
+    const el = open(`/block/${HASH}`);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 412"),
+    );
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: "ef".repeat(32) } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(calls.filter((c) => c === `/block/${HASH}/status`)).toHaveLength(1);
   });
 
   it("marks a block that is not on the best chain", async () => {

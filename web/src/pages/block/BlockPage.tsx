@@ -11,6 +11,7 @@ import {
   onSettled,
   Show,
   Switch,
+  untrack,
 } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
@@ -229,12 +230,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const at = (suffix: string) => () => props.hash && `/block/${props.hash}${suffix}`;
   const [block, blockCtl] = createApi<Block>(at(""));
   // Stamped: confirmations and "the newest block" both come from this one reply's tip, so they can
-  // never disagree the way a separate tip request could when a block lands between the two. Fresh:
-  // the newest block asks again when the next is found (NextListener).
-  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), {
-    stamped: true,
-    fresh: true,
-  });
+  // never disagree the way a separate tip request could when a block lands between the two. The
+  // newest block asks again when the next is found (NextListener).
+  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
   // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
   const [summary, summaryCtl] = createRequest(
@@ -717,8 +715,14 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
           </div>
         </div>
 
-        <Show when={props.hash && s() && !stale() && !s()?.next_best && props.hash} keyed>
-          {(h) => <NextListener hash={h} onNext={() => statusCtl.refetch()} />}
+        <Show when={props.hash && !(s() && (stale() || s()?.next_best)) && props.hash} keyed>
+          {(h) => (
+            <NextListener
+              hash={h}
+              newest={() => s() !== undefined && !stale() && !s()?.next_best}
+              onNext={() => statusCtl.refetch()}
+            />
+          )}
         </Show>
         <Show when={props.hash && sum() === undefined}>
           <SummaryListener
@@ -816,17 +820,29 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
 }
 
 /**
- * Hears the `blocks` topic while the page shows the newest block, and calls `onNext` when the tip
- * is another block: the next one was found, before the page followed or after. Its first message
- * is the tip as it stands, so a block found between the page's answer and the subscription counts.
+ * Hears the `blocks` topic from the page's first answer on, for as long as the block may be the
+ * newest, and calls `onNext` when its status says it is the newest and another tip has been heard:
+ * the next block was found, before the status answered or after. It listens from the start
+ * because a topic another part of the page already follows sends a new listener nothing at first.
  */
-function NextListener(props: { hash: string; onNext: () => void }) {
+function NextListener(props: { hash: string; newest: () => boolean; onNext: () => void }) {
+  // Another tip heard before the status said this block is the newest: that status may predate it.
+  let heard = false;
+  const next = () => {
+    if (untrack(props.newest)) props.onNext();
+    else heard = true;
+  };
   useTopic(blocksTopic, {
     message: (m) => {
       if (m.type === "summary" || (m.type === "block" && m.block.id === props.hash)) return;
-      props.onNext();
+      next();
     },
-    resync: () => props.onNext(),
+    resync: next,
+  });
+  createEffect(props.newest, (newest) => {
+    if (!newest || !heard) return;
+    heard = false;
+    props.onNext();
   });
   return null;
 }
