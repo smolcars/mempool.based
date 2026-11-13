@@ -187,10 +187,15 @@ export function History(props: {
   const opened = createMemo((was?: boolean) => was === true || view() === "unspent");
   const statsKnown = () => props.stats.state !== "unresolved" && props.stats.state !== "pending";
   const wantUtxos = () => opened() && statsKnown() && statsFailure() !== "too-large";
-  const [utxos, { refetch: refetchUtxos }] = createApi<Utxo[]>(() => wantUtxos() && `${path}/utxo`);
+  const [utxos, { refetch: refetchUtxos }] = createApi<Utxo[]>(
+    () => wantUtxos() && `${path}/utxo`,
+    {
+      fresh: true,
+    },
+  );
   const [tip, { refetch: refetchTip }] = createApi<string>(
     () => wantUtxos() && "/blocks/tip/height",
-    { as: "text" },
+    { as: "text", fresh: true },
   );
   // A request still in flight is asked again, so its answer is as new as the change.
   const asked = (state: string) =>

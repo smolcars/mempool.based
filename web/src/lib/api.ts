@@ -135,7 +135,12 @@ const ACCEPT: Record<ReplyKind, string> = {
  */
 const notBefore = new Map<string, number>();
 
-async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
+async function request<T>(
+  url: string,
+  kind: ReplyKind,
+  signal?: AbortSignal,
+  fresh = false,
+): Promise<Stamped<T>> {
   const until = notBefore.get(url) ?? 0;
   if (until > Date.now()) await pause(until - Date.now(), signal);
   notBefore.delete(url);
@@ -144,6 +149,8 @@ async function request<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
     res = await fetch(url, {
       headers: { accept: ACCEPT[kind] },
       ...(signal ? { signal } : {}),
+      // An answer the browser kept (up to `max-age=1`) can predate the change the page was told of.
+      ...(fresh ? { cache: "no-cache" as const } : {}),
     });
   } catch (e) {
     if (signal?.aborted) throw e;
@@ -405,16 +412,20 @@ export function createRequest<S, T>(
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,
-  options: { as?: ReplyKind; stamped: true },
+  options: { as?: ReplyKind; stamped: true; fresh?: boolean },
 ): ApiRequest<Stamped<T>>;
 export function createApi<T>(
   path: () => string | false | null | undefined,
-  options?: { as?: ReplyKind },
+  options?: { as?: ReplyKind; fresh?: boolean },
 ): ApiRequest<T>;
-/** With `stamped: true` the value comes with the chain tip it is as of, to compare across requests. */
+/**
+ * With `stamped: true` the value comes with the chain tip it is as of, to compare across requests.
+ * With `fresh: true` every answer comes from the server, never from the browser's HTTP cache: for
+ * a page that asks because a live message said something changed.
+ */
 export function createApi<T>(
   path: () => string | false | null | undefined,
-  options: { as?: ReplyKind; stamped?: boolean } = {},
+  options: { as?: ReplyKind; stamped?: boolean; fresh?: boolean } = {},
 ): ApiRequest<T | Stamped<T>> {
   const location = useLocation();
   const network = createMemo(() => networkFromPath(location.pathname));
@@ -428,7 +439,10 @@ export function createApi<T>(
       const unwrap = (r: Stamped<T>) => (options.stamped === true ? r : r.value);
       if (cache.has(url)) return unwrap({ value: cache.get(url) as T, tip: undefined });
       // Stays loading while a busy refusal waits to be retried.
-      return withRetry(() => request<T>(url, options.as ?? "json", signal), signal).then(unwrap);
+      return withRetry(
+        () => request<T>(url, options.as ?? "json", signal, options.fresh === true),
+        signal,
+      ).then(unwrap);
     },
   );
 }
