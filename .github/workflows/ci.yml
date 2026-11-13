@@ -81,7 +81,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_TERM_COLOR: always
       # The job's limit in seconds, a little above its time on the day it was set (docs/CI.md).
-      JOB_LIMIT: 120
+      JOB_LIMIT: 135
       NEXTEST_VERSION: 0.9.149
       NEXTEST_SHA256: 32d1d8c0567b7a80bee2bad8bb09125c846da96bc009b2de11ec08557290c770
     steps:
@@ -164,7 +164,7 @@ jobs:
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_TERM_COLOR: always
-      JOB_LIMIT: 120
+      JOB_LIMIT: 125
     steps:
       - run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

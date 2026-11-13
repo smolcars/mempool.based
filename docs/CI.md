@@ -10,9 +10,9 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 
 | Job | Limit | Warm, 2026-11-13 |
 |---|---|---|
-| `rust` | 120 s | 92 s |
-| `e2e` | 120 s | 94 to 101 s |
-| `web` | 60 s | 31 to 38 s |
+| `rust` | 135 s | 92 to 121 s |
+| `e2e` | 125 s | 80 to 101 s |
+| `web` | 60 s | 30 to 39 s |
 
 The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
 
@@ -126,13 +126,13 @@ When a PR changes the workflow, its description states the cold and warm wall-cl
 
 | | Before (three PRs that day) | After |
 |---|---|---|
-| Whole run | 180 to 208 s | RUNS |
-| `rust` | 148 to 191 s | 92 s |
-| `e2e` | 101 to 113 s | 94 to 101 s |
-| `web` | 30 to 39 s | 31 to 38 s |
-| `image` | 15 to 20 s | 16 to 19 s |
+| Whole run | 180 to 208 s | 106, 138 and 126 s (three runs in a row of one commit) |
+| `rust` | 148 to 191 s | 94 to 121 s |
+| `e2e` | 101 to 113 s | 80 to 101 s |
+| `web` | 30 to 39 s | 30 to 39 s |
+| `image` | 15 to 20 s | 14 to 18 s |
 
-Before, in `rust`, setup took 18 s (checkout, `rustup toolchain install` 8 s, the cache 4 to 8 s), clippy 9 to 12 s, building the tests 41 s, and running them 113 s: `cargo test` ran 28 binaries one after another, the Lightning one alone 37 s, the server's unit tests 16 s, the engine's 15 s, the WebSocket tests 11 s. Signature checks by secp256k1 compiled at `-O0` were a large part: optimising it alone took the tests' summed time from 295 s to 260 s on a laptop. After: setup 18 s, clippy 9 s, building the tests 26 s (examples no longer built), the tests 36 s with nextest, doc tests 1 s. The tests together take about 290 s; most of it is waiting on sockets and timers, which eight at a time overlap. The longest single tests, about 10 s each, are a random test of the mempool topics and two hostile-peer tests of the Lightning peer.
+Before, in `rust`, setup took 18 s (checkout, `rustup toolchain install` 8 s, the cache 4 to 8 s), clippy 9 to 12 s, building the tests 41 s, and running them 113 s: `cargo test` ran 28 binaries one after another, the Lightning one alone 37 s, the server's unit tests 16 s, the engine's 15 s, the WebSocket tests 11 s. Signature checks by secp256k1 compiled at `-O0` were a large part: optimising it alone took the tests' summed time from 295 s to 260 s on a laptop. After: setup 18 s, clippy 9 to 13 s, building the tests 26 s (examples no longer built), the tests 36 to 50 s with nextest, doc tests 1 s. The tests together take about 290 s; most of it is waiting on sockets and timers, which eight at a time overlap. The longest single tests, about 10 s each, are a random test of the mempool topics and two hostile-peer tests of the Lightning peer.
 
 In `e2e`, setup takes 16 to 24 s, the build and the regtest node are both ready at 24 to 25 s, then the 103 browser tests took 59 s on two workers before and 43 to 47 s on four after: about 33 s for the tests that share the node, then 12 s for the ones that mine, one at a time.
 
