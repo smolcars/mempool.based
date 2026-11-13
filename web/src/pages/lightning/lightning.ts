@@ -474,9 +474,12 @@ export const btcAxis = (sats: number): string => {
 
 export const msat = (n: number): string => `${groupDigits(n)} msat`;
 
-/** Millisatoshis as a program reads them: digits only, no grouping or unit. Exact past 2^53. */
+/**
+ * Millisatoshis as a program reads them: digits only, no grouping or unit. The same decimal digits
+ * `msat` shows, past 2^53 too (a BigInt there gave the binary value's digits, not the shown ones).
+ */
 export const plainMsat = (n: number): string =>
-  Number.isFinite(n) ? BigInt(Math.round(n)).toString() : MISSING;
+  Number.isFinite(n) ? Math.round(n).toString() : MISSING;
 
 /**
  * Millisatoshis in magnitude, as a reader compares limits: msat under a sat (`900 msat`), sats
