@@ -16,7 +16,7 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 | Projected block `/mempool-block/:index` | One projected block's fee range, size, and its transactions drawn | Engine | served | M2 | ref | At `/block/next` and `/block/next/:n`. With the mempool engine off it says so |
 | Block `/block/:hash` or `/block/:height` | Header, pool, reward, fee range, transactions drawn, paged list, expected-versus-mined view | Esplora; RPC `getblock`; store for audit | served | M1 | ref | `/block/:id`. The audit shows for blocks this server watched arrive |
 | Blocks `/blocks` | Paged block list with fees, size, health | Esplora; store | served | M1 | ref | Median fee rate, total fees, size, weight and match rate |
-| Blocks list: pool column | Who mined each block in the list | Store | planned | M3 | — | Not built. The mining page's recent blocks and every block page name the pool |
+| Blocks list: pool column | Who mined each block in the list | Store | served | M3 | — | `/blocks`, the Miner column, linked to the pool's page |
 | Transaction `/tx/:txid` | Inputs and outputs, flow diagram, fee and fee rate, status, ETA, live confirmation, RBF history, CPFP, Lightning channel links | Esplora; engine; Lightning store | served | M1 | — | Every part named, ETA as a projected block and a time. Did not finish rendering headlessly on the reference. With the mempool engine off it checks every 10 s instead of live, and shows no position, CPFP or replacements |
 | Address `/address/:address` | Balance, totals, paged history, live updates | Esplora; Electrum push | served | M1 | ref | Large addresses hit the node's 503 cap on totals; the page shows history anyway and says why totals are missing |
 | Address: balance chart | Balance over time | Esplora `/txs/summary` | served | M1 | — | The confirmed balance after each block, as a step line, from at most the newest 200 transactions: a longer history says so and is anchored to the true balance. An address too large for the node to total gets a sentence instead ([`FRONTEND.md`](../FRONTEND.md#the-address-balance-chart)) |
@@ -37,7 +37,7 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 | Page | Shows | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
 | Mining dashboard `/mining` | Reward stats, pool share, hashrate, difficulty, recent blocks, the next and the previous adjustment | Store | served | M3 | ref | `/mining` |
-| Mining dashboard: past adjustments | A table of recent retargets | Store | planned | M3 | — | Not built. Served as `GET /api/v1/mining/difficulty-adjustments` |
+| Mining dashboard: past adjustments | A table of recent retargets | Store | served | M3 | — | On `/mining`: the latest ten, newest first, under the next expected change, and all of them a press away |
 | Pool `/mining/pool/:slug` | One pool's share, hashrate chart, blocks | Store | served | M3 | — | Did not finish rendering headlessly on the reference; its API took 58 s for it |
 | Pool ranking (`/graphs/mining/pools`) | Pools by blocks over a period | Store | served | M3 | ref | On `/mining`, with its period |
 
@@ -55,7 +55,7 @@ mempool.space puts these under `/graphs`. Ours are hand-drawn SVG (W10) on `/min
 | Block rewards | Average reward per block over time | Store | served | M3 | ref | On `/mining` |
 | Block fee rates | Fee-rate percentiles per block over time | Store | served | M3 | ref | On `/mining`, sub-sat percentiles |
 | Block sizes and weights | Size and weight over time | Store | served | M3 | ref | On `/mining` |
-| Block health | Audit match rate per block over time | Store (audits) | planned | M3 | ref | Not built. Served as `GET /api/v1/mining/blocks/predictions/:interval`; `/blocks` lists each block's match rate |
+| Block health | Audit match rate per block over time | Store (audits) | served | M3 | ref | On `/mining`, with its period: only blocks this server watched arrive, so it says from when and draws the rest as gaps; a point opens its block |
 | Lightning graphs | Nodes, channels and capacity over time | Lightning store | served | M4 | — | On `/lightning`: channels and capacity drawn, nodes in the readout |
 | Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Lightning store | planned | M4 | — | Not built; the split shows in the current totals only. The stored snapshots have it |
 

@@ -427,6 +427,11 @@ Rewards ════════════════════════
 Paid to miners   New coins   Fees   Per block
 Blocks over time ══════════════════════════════════════════════════════════
 [Fees | Rewards | Fee rates | Size]  one chart at a time
+Block health ══════════════════════════════════════ 158 audited blocks in the last week
+18% audited, from 12 Nov, 11:21 UTC.   [area: match rate per block, 0–100%; gaps]
+Difficulty adjustments ═══════════════════════════════════════════ Every 2 016 blocks
+Next, expected ↓ Down 8.41% at block 975 744, in 8 h
+block  when  ↑ Up 5.54%  difficulty                       [Show all 483 adjustments]
 Recent blocks ═════════════════════════════════════════════════ All blocks
 the same mined tiles as the strip, in a wrapping grid
 ```
@@ -441,6 +446,8 @@ Decided while building it, where the layout above left it open:
 - **Coverage is drawn, not hidden.** Where the server has not stored the start of the period yet, the chart keeps the whole period's width and hatches the part with no data ("No data stored"), and a note above says "Data from 22 Sep 2026 onward". The same hatch is the note's swatch. A period with nothing stored says so and offers all of history.
 - **One readout, no tooltip.** Above each plot a line at a fixed height shows the point under the pointer (the latest otherwise): its time and every figure with its key. It never covers the data, works the same for touch and keys, and never moves the page. On a phone a stacked fee chart reads out its totals only, and the one band under the finger on a line held for it, which says "Tap a layer to name it" until then; every band is in the figures table.
 - **The second level is a switch,** not more charts: fees, rewards, fee rates and size share one chart slot under "Blocks over time", so the page stays one screen of figures and one of charts.
+- **Block health is what was watched.** Only blocks this server saw arrive have an audit, so the chart counts them in its caption, says what share of the period's blocks they are and since when, hatches the time before the first and breaks wherever a block has none. The area stands on an axis from zero, so a bad block is a notch down from the top and an ordinary period a full band; past 1,000 blocks a point is the lowest of its run, so a bad block is never averaged away. A point opens its block: a click, a second tap, or Enter.
+- **Past adjustments are a list, not a period's.** The latest ten, newest first, each opening the block that began its period, with all of them a press away, under the next one's expected change; ups and downs read as an arrow and a word, never a colour. They sit after the block charts, so the page still opens on the network now.
 - **Unknown is a pool.** It is ranked like any other, its page exists, and its row says it is the blocks no tag or address on the list names.
 - **Test networks say what their figures mean.** Signet's blocks come from a few signers the list does not name; testnet4's minimum-difficulty rule makes its hashrate swing; regtest has no pools, a meaningless hashrate and no retargets. A note under the title says so, and figures that mean nothing there say "Not meaningful on regtest".
 - **A pool's page** has its name as the title (dataset text), its site as a plain link only when it is `http` or `https`, its blocks and shares, its weekly share and hashrate, and its blocks 25 at a time.

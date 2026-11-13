@@ -38,10 +38,10 @@ One table per group, each on its own page:
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
 | mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 52 | 5 | 2 | 14 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 21 | 1 | 4 | 22 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 28 | 16 | 5 | 6 | 31 |
-| **Total** | | **232** | **145** | **24** | **11** | **52** | **194** |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 31 | 13 | 5 | 6 | 31 |
+| **Total** | | **232** | **148** | **21** | **11** | **52** | **194** |
 
-Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), and the Lightning node's fee histogram and history when they were (task G3): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
+Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), the Lightning node's fee histogram and history when they were (task G3), and the three mining rows of the pages when they were (task G2): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -65,9 +65,6 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 
 | Item | What it is | Needs | Size | Recommendation |
 |---|---|---|---|---|
-| Blocks list: pool column | Who mined each block, in `/blocks` | Nothing: `/api/v1/blocks` has the pool | An hour | Build |
-| Mining dashboard: past adjustments | A table of recent retargets on `/mining` | Nothing: `/api/v1/mining/difficulty-adjustments` | An hour | Build |
-| Block health graph | Match rate per block over time | Nothing: `/api/v1/mining/blocks/predictions/:interval` | A few hours | Build |
 | RBF `/rbf`, and the home page's recent replacements | Recent replacement trees, with a full-RBF filter, and the newest few on the home page | Nothing: `/api/v1/replacements` and `/fullrbf/replacements` | A day | Build |
 | Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Nothing: the stored snapshots and `/api/v1/lightning/statistics/:interval` have them | A few hours | Build later |
 | Units | BTC or sats | Nothing: one setting read by the amount component | A day | Build later |

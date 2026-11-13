@@ -113,6 +113,13 @@
   .mining-stat__value .amount {
     font-size: var(--text-lg);
   }
+  /* The smallest phones: regtest's difficulty, a power of ten, ran out of its half of 320 px in
+     the wide faces Linux falls back to. */
+  @media (max-width: 380px) {
+    .mining-stat__value {
+      font-size: var(--text-lg);
+    }
+  }
   .mining-stat__sub {
     font-size: var(--text-sm);
     font-weight: var(--weight-regular);

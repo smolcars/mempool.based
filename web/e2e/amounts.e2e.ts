@@ -2,7 +2,7 @@
 // never run into a neighbour. Real pages, their answers given the largest values they can hold.
 import { readFileSync } from "node:fs";
 import type { Page, Route } from "@playwright/test";
-import { chain, expect, test } from "./fixtures";
+import { chain, expect, stubRetargets, test } from "./fixtures";
 import { amountsIntact } from "./rows";
 
 /** 21 million BTC to the satoshi, a 13-digit sat amount, the largest msat limit, fine rates. */
@@ -101,12 +101,15 @@ const PAGES = [
   `/regtest/address/${chain.addresses.p2tr}`,
   `/regtest/block/${chain.blocks[106]}`,
   "/regtest/mining/pool/unknown",
+  // Its past adjustments, mainnet's: words, arrows and difficulties in one row.
+  "/regtest/mining",
 ];
 
 // Both schemes on each load: the figures' layout is the same, and each load costs a page.
 test("amounts at their longest stay whole at 320 and 390 px, in both schemes", async ({ page }) => {
   await lightning(page);
   await esplora(page);
+  await stubRetargets(page);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 900 });
     for (const path of PAGES) {
