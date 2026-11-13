@@ -33,7 +33,7 @@ permissions: {}
 concurrency:
   group: release-${{ github.ref }}
   # Every run publishes or proves a commit, so none is cancelled, even pending: master's runs wait
-  # in one queue and run in the order they were pushed (docs/CI.md).
+  # in one queue and run in the order they joined it (docs/CI.md).
   cancel-in-progress: false
   queue: max
 

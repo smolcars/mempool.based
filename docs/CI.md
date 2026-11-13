@@ -88,7 +88,7 @@ A failure here means a page broke in an engine Chromium hides, or a test assumed
 | A pushed tag `vX.Y.Z` | The same, then publish the image as `X.Y.Z` and `latest`, and create the release |
 | A manual dispatch, on any ref, a tag's included | A dry run: build, check and join. Publishes nothing |
 
-Runs are never cancelled: each ref's runs wait in one queue (`queue: max`) and run in the order they were pushed, so every merge's image is published.
+Runs are never cancelled: each ref's runs wait in one queue (`queue: max`) and run in the order they joined it, which is usually but not always the order they were pushed, so every merge's image is published.
 
 | Job | Permissions | Does |
 |---|---|---|
@@ -103,7 +103,7 @@ Measured on 2026-11-12, a run with no cache: `build` 1 min 47 s on amd64 and 2 m
 
 **The package must be public,** since operators pull it without logging in. A package first published by a workflow can start private, and no token the workflow holds can change that: an organisation owner sets it once in the package's settings on GitHub (Danger Zone, Change visibility).
 
-**What accumulates:** one `sha-<commit>` tag per merge that touches the image, with its attestation beside it: about 30 a day while the site is being built (108 from 2026-11-11 to 2026-11-13), so several hundred a month. Nothing deletes them. Public packages on ghcr.io cost nothing to store, the layers they share are stored once, and deleting a package version cannot be undone, so a clean-up is not worth the risk of removing an image someone pinned. Revisit it if the package's version list becomes hard to use.
+**What accumulates:** one `sha-<commit>` tag per merge that touches the image, with its attestation beside it: about 30 a day while the site is being built (108 from 2026-11-11 to 2026-11-13), so several hundred a month. Nothing deletes them. Public packages on ghcr.io cost nothing to store, the layers they share are stored once, and a deleted version breaks every deployment pinned to its digest, while GitHub restores one only within 30 days. So a clean-up is not worth the risk of removing an image someone pinned. Revisit it if the package's version list becomes hard to use.
 
 **To release:** set `version` in the root `Cargo.toml` to the new version in a PR, merge it, then tag that commit `vX.Y.Z` on `master` and push the tag. A pushed tag cannot be taken back quietly: the release is public at once.
 
