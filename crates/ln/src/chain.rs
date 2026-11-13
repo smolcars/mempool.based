@@ -367,12 +367,9 @@ impl Lookup {
     }
 
     /// Called just before LDK handles an announcement: the script its bitcoin keys require, and
-    /// whether it is a stored channel (`Replay`), which bounds its own share of the queue. Called
-    /// with `None` just after: answers whether LDK looked the output up, which it does only once
-    /// the announcement's signatures held.
-    pub(crate) fn expect(&self, scid: u64, script: Option<ScriptBuf>, stored: bool) -> bool {
-        let next = script.map(|s| (scid, s, stored));
-        std::mem::replace(&mut self.lock().expect, next).is_none()
+    /// whether it is a stored channel (`Replay`), which bounds its own share of the queue.
+    pub(crate) fn expect(&self, scid: u64, script: Option<ScriptBuf>, stored: bool) {
+        self.lock().expect = script.map(|s| (scid, s, stored));
     }
 
     /// The output an announcement just answered from the cache was found at, if it was.

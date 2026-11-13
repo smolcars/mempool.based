@@ -99,10 +99,17 @@ struct PeerRange {
     listed: HashMap<u64, bool>,
     /// Channel ids this peer has and we lack, not yet requested.
     wanted: VecDeque<u64>,
-    /// The batch requested: the ids it has not delivered yet, and when it was sent.
-    in_flight: Option<(HashSet<u64>, Instant)>,
-    /// Batches it ended, or let time out, still owing channels.
+    /// The batch requested.
+    in_flight: Option<Batch>,
+    /// Batches that ended with channels it listed still missing from the graph.
     withheld: u32,
+}
+
+struct Batch {
+    ids: Vec<u64>,
+    sent: Instant,
+    /// Its end marker came.
+    ended: bool,
 }
 
 impl PeerRange {
@@ -112,17 +119,16 @@ impl PeerRange {
 }
 
 impl RangeSync {
-    /// Ends a peer's batch. Whatever it still owed is offered to another peer ([`Self::reoffer`]).
-    /// Returns whether it owed anything.
-    fn finish_batch(&mut self, peer: &PublicKey) -> bool {
-        let Some((owed, _)) = self.peers.get_mut(peer).and_then(|p| p.in_flight.take()) else {
-            return false;
-        };
-        let withheld = !owed.is_empty();
-        for scid in owed {
-            self.reoffer(peer, scid);
+    /// Lets go of ids asked of or wanted from `from`, each with whether it is still missing from
+    /// the graph: those are offered to another peer ([`Self::reoffer`]), the rest are done.
+    fn release(&mut self, from: &PublicKey, ids: Vec<(u64, bool)>) {
+        for (scid, missing) in ids {
+            if missing {
+                self.reoffer(from, scid);
+            } else {
+                self.queued.remove(&scid);
+            }
         }
-        withheld
     }
 
     /// Asks for a channel `from` did not deliver of another connected peer that listed it and was
@@ -506,19 +512,17 @@ impl Gossip {
     /// Puts a channel announcement through LDK, which asks [`Lookup`] for its funding output. The
     /// ceiling counts the channels in the graph and those waiting to enter it.
     ///
-    /// A `stored` channel (from the graph file) already holds its place under the ceiling. Also
-    /// answers whether the sender did send the channel: its signatures held, or it is already
-    /// known or being checked (LDK refuses those before checking signatures).
+    /// A `stored` channel (from the graph file) already holds its place under the ceiling.
     fn check_announcement(
         &self,
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
         stored: bool,
-    ) -> (Result<bool, LightningError>, bool) {
+    ) -> Result<bool, LightningError> {
         let c = &msg.contents;
         if c.chain_hash != self.chain {
             self.lookup.count(|r| r.wrong_chain += 1);
-            return (Err(ignore("channel announced for another chain")), false);
+            return Err(ignore("channel announced for another chain"));
         }
         let scid = c.short_channel_id;
         let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
@@ -534,7 +538,7 @@ impl Gossip {
             if !self.at_ceiling.swap(true, Ordering::Relaxed) {
                 let _ = self.events.send(Event::CeilingReached { channels: len });
             }
-            return (Err(ignore("graph at its ceiling")), false);
+            return Err(ignore("graph at its ceiling"));
         }
         // The two-of-two the funding output must pay; LDK's own check compares the same script.
         let script = c
@@ -543,11 +547,9 @@ impl Gossip {
             .ok()
             .zip(c.bitcoin_key_2.as_pubkey().ok())
             .map(|(a, b)| make_funding_redeemscript(&a, &b).to_p2wsh());
-        let keys = script.is_some();
         self.lookup.expect(scid, script, stored);
         let r = self.sync.handle_channel_announcement(their_node_id, msg);
-        let looked_up = self.lookup.expect(scid, None, false) && keys;
-        let signed = known || looked_up || self.lookup.holds(scid);
+        self.lookup.expect(scid, None, false);
         // Answered from the cache: LDK added it at once.
         let found = self.lookup.take_found(scid);
         if r.is_ok() && !known && found.is_some() {
@@ -561,7 +563,7 @@ impl Gossip {
             self.changed(Change::Node(c.node_id_1));
             self.changed(Change::Node(c.node_id_2));
         }
-        (r, signed)
+        r
     }
 
     /// Keeps a channel update for a stored channel not yet checked, if it is newer.
@@ -608,13 +610,14 @@ impl Gossip {
     }
 
     /// Keeps a node announcement for a stored node not yet in the graph, if it is newer. It is
-    /// applied unsigned later, so its signature is checked here.
+    /// applied unsigned later, so its signature is checked here; a bad one is refused here, so
+    /// LDK does not check it a second time.
     /// `trimmed` is an oversized announcement already checked and cut down.
     fn hold_node(
         &self,
         msg: &NodeAnnouncement,
         trimmed: Option<&UnsignedNodeAnnouncement>,
-    ) -> bool {
+    ) -> Result<bool, LightningError> {
         let stored = |r: &Replay| r.nodes.contains_key(&msg.contents.node_id);
         if !self.replay.lock().is_ok_and(|r| stored(&r))
             || self
@@ -622,20 +625,22 @@ impl Gossip {
                 .read_only()
                 .node(&msg.contents.node_id)
                 .is_some()
-            || (trimmed.is_none() && verify_node_announcement(msg, &self.secp).is_err())
         {
-            return false;
+            return Ok(false);
+        }
+        if trimmed.is_none() {
+            verify_node_announcement(msg, &self.secp)?;
         }
         let contents = trimmed.unwrap_or(&msg.contents);
         let Ok(mut r) = self.replay.lock() else {
-            return false;
+            return Ok(false);
         };
         match r.nodes.get_mut(&msg.contents.node_id) {
             Some(s) if s.timestamp < contents.timestamp => *s = contents.clone(),
             Some(_) => {}
-            None => return false,
+            None => return Ok(false),
         }
-        true
+        Ok(true)
     }
 
     /// Charges a peer for the signature checks a message of its costs.
@@ -751,41 +756,45 @@ impl Gossip {
                 p.listing = None;
             }
         }
-        // Not when everything arrived: the end marker would then end the next batch (BOLT 7 asks
-        // for one query at a time anyway).
-        let late: Vec<PublicKey> = r
-            .peers
-            .iter()
-            .filter(|(_, p)| {
-                p.in_flight
-                    .as_ref()
-                    .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for peer in late {
-            self.end_batch(&mut r, &peer);
-        }
+        self.settle(&mut r);
         self.next_batches(&mut r);
     }
 
-    /// A peer's batch ended, by its end marker or by timing out.
-    fn end_batch(&self, r: &mut RangeSync, peer: &PublicKey) {
-        if r.finish_batch(peer) {
-            self.counters.withheld.fetch_add(1, Ordering::Relaxed);
-            if let Some(p) = r.peers.get_mut(peer) {
-                p.withheld += 1;
+    /// Ends each batch whose end marker came once none of its channels waits for a lookup, or
+    /// [`BATCH_TIMEOUT`] after it was asked whatever came (a peer cannot hold it longer by
+    /// sending channels that wait as early). Channels then neither in the graph nor being
+    /// checked, refused or never sent, are withheld. Not before the end marker even when all
+    /// arrived: a late marker would end the next batch (BOLT 7 asks for one query at a time).
+    fn settle(&self, r: &mut RangeSync) {
+        let graph = self.graph().read_only();
+        let mut done = Vec::new();
+        for (peer, p) in &r.peers {
+            let Some(b) = &p.in_flight else { continue };
+            if b.sent.elapsed() >= BATCH_TIMEOUT
+                || (b.ended && !b.ids.iter().any(|id| self.lookup.holds(*id)))
+            {
+                let ids: Vec<(u64, bool)> = b
+                    .ids
+                    .iter()
+                    .map(|id| {
+                        let missing = graph.channel(*id).is_none() && !self.lookup.holds(*id);
+                        (*id, missing)
+                    })
+                    .collect();
+                done.push((*peer, ids));
             }
         }
-    }
-
-    /// A channel announcement a peer sent: one fewer it owes.
-    fn delivered(&self, peer: &PublicKey, scid: u64) {
-        if let Ok(mut r) = self.range.lock()
-            && let Some((owed, _)) = r.peers.get_mut(peer).and_then(|p| p.in_flight.as_mut())
-            && owed.remove(&scid)
-        {
-            r.queued.remove(&scid);
+        drop(graph);
+        for (peer, ids) in done {
+            let withheld = ids.iter().any(|(_, missing)| *missing);
+            if let Some(p) = r.peers.get_mut(&peer) {
+                p.in_flight = None;
+                if withheld {
+                    p.withheld += 1;
+                    self.counters.withheld.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            r.release(&peer, ids);
         }
     }
 
@@ -804,7 +813,7 @@ impl Gossip {
     /// lost its turn hands each channel another peer listed to that peer instead.
     fn next_batch(&self, r: &mut RangeSync, peer: PublicKey) {
         let graph = self.graph().read_only();
-        let mut batch = HashSet::new();
+        let mut batch = Vec::new();
         loop {
             let Some(p) = r.peers.get_mut(&peer) else {
                 return;
@@ -828,7 +837,7 @@ impl Gossip {
                     p.listed.insert(scid, false);
                 }
             } else {
-                batch.insert(scid);
+                batch.push(scid);
             }
         }
         drop(graph);
@@ -838,14 +847,17 @@ impl Gossip {
         if batch.is_empty() {
             return;
         }
-        let mut ids: Vec<u64> = batch.iter().copied().collect();
-        ids.sort_unstable();
-        p.in_flight = Some((batch, Instant::now()));
+        batch.sort_unstable();
+        p.in_flight = Some(Batch {
+            ids: batch.clone(),
+            sent: Instant::now(),
+            ended: false,
+        });
         self.send(MessageSendEvent::SendShortIdsQuery {
             node_id: peer,
             msg: QueryShortChannelIds {
                 chain_hash: self.chain,
-                short_channel_ids: ids,
+                short_channel_ids: batch,
             },
         });
     }
@@ -907,10 +919,15 @@ impl BaseMessageHandler for Gossip {
         if let Ok(mut r) = self.range.lock()
             && let Some(p) = r.peers.remove(&their_node_id)
         {
-            let owed = p.in_flight.map(|(owed, _)| owed).unwrap_or_default();
-            for scid in owed.into_iter().chain(p.wanted) {
-                r.reoffer(&their_node_id, scid);
-            }
+            let graph = self.graph().read_only();
+            let asked = p.in_flight.map(|b| b.ids).unwrap_or_default();
+            let ids = asked
+                .into_iter()
+                .map(|id| (id, graph.channel(id).is_none()))
+                .chain(p.wanted.into_iter().map(|id| (id, true)))
+                .collect();
+            drop(graph);
+            r.release(&their_node_id, ids);
             self.next_batches(&mut r);
         }
     }
@@ -990,9 +1007,13 @@ impl RoutingMessageHandler for Gossip {
         } else {
             None
         };
-        if self.hold_node(msg, trimmed.as_ref()) {
-            self.counters.held.fetch_add(1, Ordering::Relaxed);
-            return Err(ignore("held until its stored channels are checked"));
+        match self.hold_node(msg, trimmed.as_ref()) {
+            Ok(true) => {
+                self.counters.held.fetch_add(1, Ordering::Relaxed);
+                return Err(ignore("held until its stored channels are checked"));
+            }
+            Ok(false) => {}
+            Err(e) => return self.tally(Err(e)),
         }
         let r = match &trimmed {
             Some(contents) => {
@@ -1024,13 +1045,7 @@ impl RoutingMessageHandler for Gossip {
             &self.counters.channel_announcements,
             msg.serialized_length(),
         )?;
-        let (r, signed) = self.check_announcement(their_node_id, msg, false);
-        // A forged one for a channel it owes does not count as sent.
-        if let Some(peer) = their_node_id
-            && signed
-        {
-            self.delivered(&peer, msg.contents.short_channel_id);
-        }
+        let r = self.check_announcement(their_node_id, msg, false);
         self.tally(r)
     }
 
@@ -1148,10 +1163,15 @@ impl RoutingMessageHandler for Gossip {
         let Ok(mut r) = self.range.lock() else {
             return Ok(());
         };
-        if r.peers.contains_key(&their_node_id) {
-            self.end_batch(&mut r, &their_node_id);
-            self.next_batches(&mut r);
+        if let Some(b) = r
+            .peers
+            .get_mut(&their_node_id)
+            .and_then(|p| p.in_flight.as_mut())
+        {
+            b.ended = true;
         }
+        self.settle(&mut r);
+        self.next_batches(&mut r);
         Ok(())
     }
 

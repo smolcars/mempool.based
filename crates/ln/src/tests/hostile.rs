@@ -883,18 +883,33 @@ async fn synced_despite(invent: bool, list: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn channels_a_peer_lists_and_ends_without_are_asked_of_another() {
-    withheld_then_asked_elsewhere(true).await;
+    withheld_then_asked_elsewhere(Withhold::End).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn channels_a_peer_lists_and_never_answers_are_asked_of_another() {
-    withheld_then_asked_elsewhere(false).await;
+    withheld_then_asked_elsewhere(Withhold::Silent).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_answers_with_false_announcements_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::FalseScript).await;
+}
+
+enum Withhold {
+    /// The end marker, without the channels.
+    End,
+    /// Nothing, until the batch times out.
+    Silent,
+    /// For each channel an announcement signed with keys of its own, which the funding output
+    /// does not pay, then the end marker.
+    FalseScript,
 }
 
 /// A hostile peer and an honest one list the same real channels. The hostile one lists first, so
-/// it is asked for them, and withholds them: it sends the end marker without them (`end`), or
-/// nothing until the batch times out. The honest peer is then asked, and every channel arrives.
-async fn withheld_then_asked_elsewhere(end: bool) {
+/// it is asked for them, and withholds them ([`Withhold`]). The honest peer is then asked, and
+/// every channel arrives.
+async fn withheld_then_asked_elsewhere(how: Withhold) {
     let dir = TempDir::new();
     let h = Hostile::start().await;
     let honest = Hostile::start().await;
@@ -921,8 +936,16 @@ async fn withheld_then_asked_elsewhere(end: bool) {
         peer.gossip().range_pending() == ids.len()
     })
     .await;
-    if end {
-        h.send([end_marker()]);
+    match how {
+        Withhold::End => h.send([end_marker()]),
+        Withhold::Silent => {}
+        Withhold::FalseScript => {
+            h.send(
+                ids.iter()
+                    .map(|id| raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))),
+            );
+            h.send([end_marker()]);
+        }
     }
     let started = std::time::Instant::now();
     wait_for("every withheld channel", || {
