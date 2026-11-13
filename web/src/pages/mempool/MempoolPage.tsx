@@ -5,6 +5,7 @@ import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "soli
 import type { JSX } from "@solidjs/web";
 import { formatMoment, formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
+import { scrollCue } from "../../components/scrollCue";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { ApiError, createRequest, fetchApp } from "../../lib/api";
@@ -129,9 +130,20 @@ function MempoolHistory(props: { network: Network }) {
  * marked current: a period's name always means its whole width, never a narrower view.
  */
 function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
+  let list: HTMLUListElement | undefined;
+  // The chosen period in sight on a phone's one row, even when it is far along it.
+  onSettled(() => {
+    const current = list?.querySelector<HTMLElement>("[aria-current]");
+    if (list && current) list.scrollLeft = current.offsetLeft - list.clientWidth / 2;
+  });
   return (
     <nav class="mempool-intervals" aria-label="Period">
-      <ul>
+      <ul
+        ref={(el) => {
+          list = el;
+          scrollCue(el);
+        }}
+      >
         <Show when={props.fitted}>
           <li class="mempool-intervals__recorded">
             <Link class="mempool-intervals__item" href={paths.mempool()} aria-current="page">
@@ -247,7 +259,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
   ];
   return (
     <>
-      <Show when={coverageSentence(props.h, props.interval.words)}>
+      <Show when={coverageSentence(props.h)}>
         {(text) => (
           <p class="mempool-coverage">
             <Show when={hatchFrom() !== undefined}>

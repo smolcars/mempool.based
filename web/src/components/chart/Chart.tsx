@@ -277,6 +277,7 @@ export default function Chart(props: ChartProps) {
   const readings = (i: number) => [
     ...bands().map((b) => ({
       kind: `band-${b.tone ?? 1}`,
+      band: false,
       style: undefined,
       layer: -1,
       name: b.name,
@@ -289,6 +290,7 @@ export default function Chart(props: ChartProps) {
     })),
     ...series().map((s) => ({
       kind: `line-${s.tone ?? 1}`,
+      band: false,
       style: undefined,
       layer: -1,
       name: s.name,
@@ -298,6 +300,7 @@ export default function Chart(props: ChartProps) {
     })),
     ...notes().map((s) => ({
       kind: "note",
+      band: false,
       style: undefined,
       layer: -1,
       name: s.name,
@@ -307,6 +310,7 @@ export default function Chart(props: ChartProps) {
     })),
     ...layers().map((l, k) => ({
       kind: filled(l) ? "fee" : "layer",
+      band: l.fee !== undefined,
       style: layerStyle(l, k),
       layer: k,
       name: l.name,
@@ -390,6 +394,7 @@ export default function Chart(props: ChartProps) {
                   {
                     "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
                     "chart__value--empty": r().empty,
+                    "chart__value--band": r().band,
                   },
                 ]}
               >

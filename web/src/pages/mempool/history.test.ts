@@ -37,22 +37,18 @@ describe("checking a reply", () => {
 
 describe("coverage", () => {
   it("says nothing when every minute is there, or when there is nothing to qualify", () => {
-    expect(coverageSentence(history(), "the last 2 hours")).toBeUndefined();
-    expect(
-      coverageSentence(history({ complete: false, points: [] }), "the last 2 hours"),
-    ).toBeUndefined();
+    expect(coverageSentence(history())).toBeUndefined();
+    expect(coverageSentence(history({ complete: false, points: [] }))).toBeUndefined();
   });
   it("says since when, and how much, when recording began inside the period", () => {
     const h = history({ first: T0 + 6060, complete: false, sampled: 18, minutes: 119 });
-    expect(coverageSentence(h, "the last 2 hours")).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 15:41 UTC, so this view holds 18 minutes of the 119 minutes in the last 2 hours (15%).",
-    );
+    expect(coverageSentence(h)).toBe("Recorded from 12 Nov 2026, 15:41 UTC: 15% of the period.");
     expect(dataFrom(h)).toBe(T0 + 6060);
   });
   it("names gaps as gaps when recording began before the period", () => {
     const h = history({ first: T0 - 3600, complete: false, sampled: 1, minutes: 1440 });
-    expect(coverageSentence(h, "the last 24 hours")).toBe(
-      "This view holds 1 minute of the 1\u202F440 minutes in the last 24 hours (under 1%). The gaps are times this server was not recording.",
+    expect(coverageSentence(h)).toBe(
+      "Under 1% of the period recorded: the gaps are when this server was off.",
     );
     expect(dataFrom(h)).toBeUndefined();
   });
@@ -77,18 +73,16 @@ describe("coverage", () => {
       points: [point(midnight)],
     };
     expect(dataFrom(history({ ...all, complete: true }))).toBeUndefined();
-    expect(coverageSentence(history({ ...all, complete: true }), "all of history")).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, every minute of it.",
+    expect(coverageSentence(history({ ...all, complete: true }))).toBe(
+      "Recorded every minute since 12 Nov 2026, 14:00 UTC.",
     );
-    expect(
-      coverageSentence(history({ ...all, complete: false, sampled: 30, minutes: 40 }), "x"),
-    ).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, and holds 30 minutes of the 40 minutes since then (75%).",
+    expect(coverageSentence(history({ ...all, complete: false, sampled: 30, minutes: 40 }))).toBe(
+      "Recorded since 12 Nov 2026, 14:00 UTC: 75% of the minutes.",
     );
   });
   it("never rounds a share up to whole", () => {
     const h = history({ first: T0 - 60, complete: false, sampled: 1439, minutes: 1440 });
-    expect(coverageSentence(h, "x")).toContain("(99%)");
+    expect(coverageSentence(h)).toContain("99%");
   });
 });
 

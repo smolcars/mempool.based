@@ -52,7 +52,7 @@ test("the page shows the minutes the server stored, with the gap where none was"
   await page.goto("/regtest/mempool?interval=2h");
   const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
   await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
-  await expect(page.getByText(/This server has recorded the mempool since/)).toBeVisible();
+  await expect(page.getByText(/^Recorded from .*: (under )?\d+% of the period\.$/)).toBeVisible();
   const figures = page.getByRole("region", { name: /The mempool's size by fee rate.*, figures/ });
   await chart.locator("xpath=ancestor::figure").getByText("Show the figures").click();
   // The table renders after the click: wait for it before reading it once.
@@ -65,6 +65,46 @@ test("the page shows the minutes the server stored, with the gap where none was"
   // records live while the test runs is newer than all of them.
   const counts = await figures.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
   expect(counts.slice(-STORED.length)).toEqual(STORED);
+});
+
+// The plot once started 650 to 700 px down a phone, its time axis off the first screen.
+test("a phone sees the whole size chart, time axis and all, on its first screen", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/regtest/mempool", "/regtest/mempool?interval=24h"]) {
+    await page.goto(path);
+    const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
+    await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+    // The plot and every label on it, the dates under it included, end above the fold.
+    const bottom = await chart.evaluate((el) =>
+      Math.max(
+        ...[el, ...el.querySelectorAll("svg, svg text")].map(
+          (e) => e.getBoundingClientRect().bottom,
+        ),
+      ),
+    );
+    expect(bottom, path).toBeLessThanOrEqual(844);
+    // Above it, one row of periods and one line of coverage.
+    const periods = page.getByRole("navigation", { name: "Period" }).locator("ul");
+    const rows = await periods.evaluate(
+      (ul) =>
+        new Set([...ul.children].map((li) => Math.round(li.getBoundingClientRect().top))).size,
+    );
+    expect(rows, path).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    // The readout holds the time, total, transactions and lowest rate; no fee band until a finger
+    // is on the chart.
+    const readout = page.locator(".chart__readout").first();
+    await expect(readout.getByText("Total")).toBeVisible();
+    await expect(readout.getByText("Transactions")).toBeVisible();
+    await expect(readout.getByText("Lowest accepted")).toBeVisible();
+    for (const band of await readout.locator(".chart__value--band").all()) {
+      await expect(band).toBeHidden();
+    }
+  }
 });
 
 test("a phone's chart reads out only the layers that hold anything", async ({ page }) => {

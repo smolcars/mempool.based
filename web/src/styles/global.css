@@ -128,6 +128,22 @@
   .muted {
     color: var(--color-text-muted);
   }
+  /* A sideways scroller's edge that hides more fades out (components/scrollCue.ts). */
+  [data-more-end] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+  [data-more-start] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+  }
+  [data-more-start][data-more-end] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 2.5rem,
+      #000 calc(100% - 2.5rem),
+      transparent
+    );
+  }
   .visually-hidden {
     position: absolute;
     width: 1px;

@@ -116,21 +116,24 @@
       flex-direction: column;
       align-items: stretch;
     }
-    /* Eleven intervals do not fit a phone's width: two even rows. */
+    /* One row on a phone, so the chart is on the first screen: it scrolls, its far edge fading. */
+    /* Its row's full length must not widen the page: it scrolls within the width it is given. */
+    .mempool-intervals {
+      contain: inline-size;
+    }
     .mempool-intervals ul {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      /* Holds the links' visually hidden words, which would otherwise widen the page. */
+      position: relative;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
     }
     .mempool-intervals__item {
-      width: 100%;
-      min-width: 0;
+      min-height: var(--touch);
     }
-    /* "Recorded" is a word, not a figure: it takes two cells. */
-    .mempool-intervals__recorded {
-      grid-column: span 2;
-    }
+    /* The readout is four short lines on a phone: the bands wait for a finger on the chart. */
     .mempool-chart--size {
-      min-height: calc(300px + 16rem);
+      min-height: calc(300px + 9rem);
     }
   }
 }

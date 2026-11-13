@@ -108,9 +108,6 @@ export function isHistory(v: unknown): v is History {
   );
 }
 
-/** A whole number of minutes in words: `1 minute`, `1 439 minutes`. */
-const minutes = (n: number) => `${groupDigits(n)} ${n === 1 ? "minute" : "minutes"}`;
-
 /** A share of the period, never rounded up to whole: `15%`, `under 1%`, `99%`. */
 function share(part: number, whole: number): string {
   if (whole <= 0) return "0%";
@@ -120,25 +117,25 @@ function share(part: number, whole: number): string {
 }
 
 /**
- * How much of the period the answer holds, in a sentence; undefined when every minute is there.
+ * How much of the period the answer holds, in one short line; undefined when every minute is there.
  * Say since when when recording began inside the period, or always for all of history (which owes
- * only the minutes since then), so a short history is not mistaken for a quiet mempool.
+ * only the minutes since then), so a short history is not mistaken for a quiet mempool. One line
+ * on a phone, so the chart below it is on the first screen.
  */
-export function coverageSentence(h: History, words: string): string | undefined {
+export function coverageSentence(h: History): string | undefined {
   if (h.points.length === 0) return undefined;
   const pct = share(h.sampled, h.minutes);
   if (h.first !== null && h.interval === "all") {
-    const since = `This server has recorded the mempool since ${formatMoment(h.first)}`;
+    const since = formatMoment(h.first);
     return h.complete
-      ? `${since}, every minute of it.`
-      : `${since}, and holds ${minutes(h.sampled)} of the ${minutes(h.minutes)} since then (${pct}).`;
+      ? `Recorded every minute since ${since}.`
+      : `Recorded since ${since}: ${pct} of the minutes.`;
   }
   if (h.complete) return undefined;
-  const held = `${minutes(h.sampled)} of the ${minutes(h.minutes)} in ${words} (${pct})`;
   if (h.first !== null && h.first > h.from) {
-    return `This server has recorded the mempool since ${formatMoment(h.first)}, so this view holds ${held}.`;
+    return `Recorded from ${formatMoment(h.first)}: ${pct} of the period.`;
   }
-  return `This view holds ${held}. The gaps are times this server was not recording.`;
+  return `${pct.charAt(0).toUpperCase()}${pct.slice(1)} of the period recorded: the gaps are when this server was off.`;
 }
 
 /**

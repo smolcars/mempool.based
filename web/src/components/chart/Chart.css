@@ -9,6 +9,10 @@
     .chart__value.chart__value--empty {
       display: none;
     }
+    /* Fee bands one at a time: the one under the finger. All of them are in the figures table. */
+    .chart__value.chart__value--band:not(.chart__value--on) {
+      display: none;
+    }
   }
   .chart {
     min-width: 0;
