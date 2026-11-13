@@ -102,9 +102,10 @@ struct PeerRange {
     /// The batch requested, and when. It ends at its end marker or [`BATCH_TIMEOUT`], not when
     /// everything arrived: a late end marker would end the next one.
     in_flight: Option<(Vec<u64>, Instant)>,
-    /// Ids of ended batches still being checked: it answers for them until they settle.
-    checking: Vec<u64>,
-    /// Batches, or later checks, that left channels it listed neither in the graph nor checked.
+    /// Per ended batch, its ids still being checked (the peer answers for them until they
+    /// settle), and whether the batch was already counted as withheld.
+    checking: Vec<(Vec<u64>, bool)>,
+    /// Batches that left channels it listed neither in the graph nor being checked.
     withheld: u32,
 }
 
@@ -757,16 +758,16 @@ impl Gossip {
             let Some(p) = r.peers.get_mut(&peer) else {
                 continue;
             };
-            let mut ids = std::mem::take(&mut p.checking);
+            let mut batches = std::mem::take(&mut p.checking);
             if p.in_flight
                 .as_ref()
                 .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
                 && let Some((batch, _)) = p.in_flight.take()
             {
-                ids.extend(batch);
+                batches.push((batch, false));
             }
-            if !ids.is_empty() {
-                self.judge(&mut r, peer, ids);
+            for (ids, counted) in batches {
+                self.judge(&mut r, peer, ids, counted);
             }
         }
         self.next_batches(&mut r);
@@ -776,8 +777,9 @@ impl Gossip {
     /// those in the graph are done; those neither in it nor being checked (never sent, or sent and
     /// refused) are withheld and offered to another peer; the rest stay with the peer in
     /// `checking`, judged again each tick until their lookups settle. So the peer has its next
-    /// turn at once, and a channel refused after the batch ended is still asked elsewhere.
-    fn judge(&self, r: &mut RangeSync, peer: PublicKey, ids: Vec<u64>) {
+    /// turn at once, and a channel refused after the batch ended is still asked elsewhere. A batch
+    /// counts as withheld once (`counted`: it already did).
+    fn judge(&self, r: &mut RangeSync, peer: PublicKey, ids: Vec<u64>, counted: bool) {
         let graph = self.graph().read_only();
         // `None`: still being checked.
         let verdicts: Vec<(u64, Option<bool>)> = ids
@@ -800,9 +802,11 @@ impl Gossip {
                 None => wait.push(id),
             }
         }
-        let withheld = release.iter().any(|(_, missing)| *missing);
+        let withheld = !counted && release.iter().any(|(_, missing)| *missing);
         if let Some(p) = r.peers.get_mut(&peer) {
-            p.checking.extend(wait);
+            if !wait.is_empty() {
+                p.checking.push((wait, counted || withheld));
+            }
             if withheld {
                 p.withheld += 1;
                 self.counters.withheld.fetch_add(1, Ordering::Relaxed);
@@ -932,7 +936,7 @@ impl BaseMessageHandler for Gossip {
             let asked = p.in_flight.map(|(ids, _)| ids).unwrap_or_default();
             let ids = asked
                 .into_iter()
-                .chain(p.checking)
+                .chain(p.checking.into_iter().flat_map(|(ids, _)| ids))
                 .map(|id| (id, graph.channel(id).is_none()))
                 .chain(p.wanted.into_iter().map(|id| (id, true)))
                 .collect();
@@ -1179,7 +1183,7 @@ impl RoutingMessageHandler for Gossip {
             .get_mut(&their_node_id)
             .and_then(|p| p.in_flight.take())
         {
-            self.judge(&mut r, their_node_id, ids);
+            self.judge(&mut r, their_node_id, ids, false);
         }
         self.next_batches(&mut r);
         Ok(())

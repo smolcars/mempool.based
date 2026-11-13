@@ -909,8 +909,9 @@ enum Withhold {
     /// For each channel an announcement signed with keys of its own, which the funding output
     /// does not pay, then the end marker.
     FalseScript,
-    /// The same, as its answer to the query, while the node does not answer: they are still
-    /// being checked when the batch ends, and refused only after.
+    /// The same, as its answer to the query, but for one channel nothing, while the node does
+    /// not answer: they are still being checked when the batch ends, and refused only after. The
+    /// batch is counted once, not again when they are refused.
     FalseScriptLate,
 }
 
@@ -932,6 +933,7 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
     if late {
         let false_ones = ids
             .iter()
+            .skip(1)
             .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))]))
             .collect();
         *h.script.answers.lock().unwrap() = Some(false_ones);
@@ -966,12 +968,13 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
         }
         Withhold::FalseScriptLate => {
             wait_for("its answers held", || {
-                peer.gossip().lookup.waiting() == ids.len()
+                peer.gossip().lookup.waiting() >= ids.len() - 1
             })
             .await;
-            // Past a tick after its batch ended: they are still the hostile peer's.
+            // Past a tick after its batch ended: the one it left out was asked of the honest
+            // peer at once, the rest are still the hostile peer's.
             tokio::time::sleep(Duration::from_millis(1500)).await;
-            assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 0);
+            assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 1);
             assert_eq!(peer.gossip().range_pending(), ids.len());
             node.0.down.store(false, Ordering::Relaxed);
         }
@@ -982,7 +985,8 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
     })
     .await;
     println!("withheld channels arrived {:?} after", started.elapsed());
-    assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 1);
+    let asked = if late { 2 } else { 1 };
+    assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), asked);
     assert_eq!(h.script.scid_queries.load(Ordering::Relaxed), 1);
     assert_eq!(totals(&peer).withheld, 1);
     wait_for("both still up", || {
