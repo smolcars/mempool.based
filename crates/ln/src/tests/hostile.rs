@@ -286,9 +286,8 @@ struct Proxy {
     stall: AtomicBool,
     /// Pass what the hostile peer sends one byte per this many milliseconds (0: at full speed).
     trickle_ms: AtomicU64,
-    /// Connections our peer opened to it, and when each was accepted.
+    /// Connections our peer opened to it.
     accepted: AtomicUsize,
-    accepted_at: Mutex<Vec<std::time::Instant>>,
 }
 
 struct Hostile {
@@ -347,10 +346,6 @@ impl Hostile {
         tokio::spawn(async move {
             while let Ok((ours, _)) = outer.accept().await {
                 p.accepted.fetch_add(1, Ordering::Relaxed);
-                p.accepted_at
-                    .lock()
-                    .unwrap()
-                    .push(std::time::Instant::now());
                 let Ok(theirs) = TcpStream::connect(inner_addr).await else {
                     continue;
                 };
@@ -793,9 +788,10 @@ async fn a_slow_peer_is_dropped_before_its_handshake_and_dialled_again() {
 
 /// A peer that drops every connection right after the handshake is dialled again after
 /// `backoff_min`, then twice as long after each further failure: a few times, not hundreds.
-/// Checked as lower bounds on the gaps between its dials, which a slower machine only widens. The
-/// 700 ms minimum puts the later delays past the supervisor's 1 s tick, so a delay that did not
-/// double would fail.
+/// Checked as lower bounds on the gaps between our peer's own dials (when it decided to dial, not
+/// when the far side accepted, which a busy machine can bunch up); a slower machine only widens
+/// them. The 700 ms minimum puts the later delays past the supervisor's 1 s tick, so a delay that
+/// did not double would fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_that_drops_every_connection_is_dialled_with_a_doubling_delay() {
     let dir = TempDir::new();
@@ -809,11 +805,8 @@ async fn a_peer_that_drops_every_connection_is_dialled_with_a_doubling_delay() {
     config.backoff_min = Duration::from_millis(700);
     let peer = Peer::start(config.clone(), node.clone()).unwrap().0;
     let dials = 4;
-    wait_for("its dials", || {
-        h.proxy.accepted_at.lock().unwrap().len() >= dials
-    })
-    .await;
-    let at = h.proxy.accepted_at.lock().unwrap().clone();
+    wait_for("its dials", || peer.dials_of(h.addr.node_id).len() >= dials).await;
+    let at = peer.dials_of(h.addr.node_id);
     // After the k-th refused connection: 700 ms, 1.4 s, 2.8 s.
     for (k, gap) in (1u32..).zip(at.windows(2).map(|w| w[1] - w[0])) {
         let least = config.backoff_min * 2u32.pow(k - 1);
