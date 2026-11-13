@@ -417,6 +417,7 @@ NET=MAINNET SECS=3900 OUT=fees.jsonl REFERENCE_URL=<reference>/v1 cargo run --re
 RESCORE=fees.jsonl cargo run --release -p engine --example fee_watch   # score a recorded run again
 # INPUTS=1 also records what a replay needs (every arrival, each sample's depth), SAMPLE_SECS=10
 REPLAY=fees.jsonl cargo run --release -p engine --example fee_watch    # replay it at several tunings
+# SERVED=quarter@0.8 for a recording made before 2026-11-13: the tuning its answers came from
 ```
 
 **Run of 2026-11-12,** mainnet, read-only, 65 minutes, 58,000–62,000 transactions, 131 samples (108 with our own answer after the warm-up), blocks 975,530 to 975,533:

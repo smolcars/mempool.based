@@ -17,7 +17,8 @@
 //!   samples scored.
 //! - `REPLAY=fees.jsonl` replays a run recorded with `INPUTS=1` through the method at several
 //!   tunings and scores each beside what was served, with the same `FROM` and `TO`;
-//!   `REPLAY_OUT=path` writes the replayed samples, without their depth. With `TRIM=path` it
+//!   `REPLAY_OUT=path` writes the replayed samples, without their depth; `SERVED` names the
+//!   tuning the recording was served with (`one@0.9`, or `quarter@0.8` before 2026-11-13). With `TRIM=path` it
 //!   writes the regression fixture instead (`fixtures/fees/README.md`).
 #![allow(
     clippy::unwrap_used,
@@ -386,6 +387,12 @@ fn tunings() -> Vec<(String, fees::Tuning)> {
 /// the arrivals and smoothing as the live recommender does (recorded since `stale` was).
 fn replay(lines: impl Iterator<Item = Value>) {
     let tunings = tunings();
+    // The tuning the recording was served with: `one@0.9` since 2026-11-13, `quarter@0.8` before.
+    let served = std::env::var("SERVED").unwrap_or_else(|_| "one@0.9".into());
+    assert!(
+        tunings.iter().any(|(n, _)| *n == served),
+        "no tuning {served}"
+    );
     let mut smoothers = vec![fees::Smoother::default(); tunings.len()];
     let mut inflow = Inflow::default();
     // As `Recommender::update`: since when the projection was stale or had no tip.
@@ -436,10 +443,10 @@ fn replay(lines: impl Iterator<Item = Value>) {
                     let raw = fees::recommend_tuned(&depth, &inflow, floor, tuning);
                     v[name.as_str()] = json!(five(smoother.push(t, tip, raw)));
                 }
-                // How closely the replay of the served tuning follows what was served.
+                // How closely the replay of the tuning served then follows what was served.
                 compared += 1;
                 for i in 0..3 {
-                    let (a, b) = (v["quarter@0.8"][i].as_f64(), v["ours"][i].as_f64());
+                    let (a, b) = (v[served.as_str()][i].as_f64(), v["ours"][i].as_f64());
                     same[i] += usize::from(a == b);
                     apart[i] += (a.unwrap() - b.unwrap()).abs() / 1000.0;
                 }
@@ -450,7 +457,7 @@ fn replay(lines: impl Iterator<Item = Value>) {
     // The live answer was smoothed over a tick every 2 s, the replay over these samples only.
     for (i, level) in LEVELS.iter().take(3).enumerate() {
         println!(
-            "replayed served tuning against served, {}: equal at {:.1}% of {compared} samples, {:.3} sat/vB apart on average",
+            "replayed {served} against what was served, {}: equal at {:.1}% of {compared} samples, {:.3} sat/vB apart on average",
             level.name,
             same[i] as f64 * 100.0 / compared as f64,
             apart[i] / compared as f64,
