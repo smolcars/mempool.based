@@ -11,7 +11,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | Job | Limit | Warm, 2026-11-13 |
 |---|---|---|
 | `rust` | 135 s | 92 to 121 s |
-| `e2e`, each of its three shards | 145 s | 62 to 86 s |
+| `e2e`, each of its three shards | 145 s | 62 to 93 s |
 | `web` | 60 s | 30 to 39 s |
 
 The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
@@ -144,11 +144,11 @@ In `e2e`, setup takes 16 to 24 s, the build and the regtest node are both ready 
 
 | | One job | Two shards | Three shards |
 |---|---|---|---|
-| `e2e` | 111 and 142 s (two runs of another PR) | 79 and 74, 97 and 77, 95 and 94 s | 71, 62 and 86; 71, 75 and 85 s |
-| Whole run | | 111, 116 and 135 s | 129 and 123 s |
+| `e2e` | 111 and 142 s (two runs of another PR) | 79 and 74, 97 and 77, 95 and 94 s | 71, 62 and 86; 71, 75 and 85; 70, 75 and 93 s |
+| Whole run | | 111, 116 and 135 s | 129, 123 and 124 s |
 
-Each shard pays the job's fixed cost again, so sharding divides only the tests' time. Setup takes 14 to 16 s (`rustup toolchain install` 8 to 10 s, the cache 2 to 3 s, bun 2 s). Then `e2e.sh` logs each wait: the browser is ready at 4 to 8 s, the node at 11 to 25 s and the build at 20 to 27 s, so the build is the last to finish, by 1 to 15 s. Playwright then starts twice, about 1.5 s each. That makes about 40 s before the first test and 45 s in all. The tests that share the node take 20 to 42 s on a shard and the tests that mine 2.5 to 9.5 s: the shard holding `tables.e2e.ts`, the slowest file, runs longest.
+Each shard pays the job's fixed cost again, so sharding divides only the tests' time. Setup takes 14 to 16 s (`rustup toolchain install` 8 to 10 s, the cache 2 to 3 s, bun 2 s). Then `e2e.sh` logs each wait: the browser is ready at 4 to 8 s, the node at 11 to 25 s and the build at 20 to 28 s, so the build is the last to finish, by 1 to 15 s. Playwright then starts twice, about 1.5 s each. That makes about 40 s before the first test and 45 s in all. The tests that share the node take 20 to 42 s on a shard and the tests that mine 2.5 to 9.5 s: the shard holding `tables.e2e.ts`, the slowest file, runs longest.
 
-Two shards would leave too little room. Their slowest was 97 s, and a limit with 40 % to spare (about 160 s), plus `changes` and `ci-ok`, takes the whole three minutes. Three shards' slowest was 86 s, and 145 s keeps it near 60 % of its limit while the pages in progress add their tests. A fourth would save about 10 s more for another runner's 45 s. Little of the fixed cost is cheap to cut: `rustup` also installs `rustfmt` and `clippy`, which `e2e` does not use, for a second or two; the build already starts from the cache; and sharing one build across shards would chain jobs (rule 3).
+Two shards would leave too little room. Their slowest was 97 s, and a limit with 40 % to spare (about 160 s), plus `changes` and `ci-ok`, takes the whole three minutes. Three shards' slowest was 93 s, 64 % of a 145 s limit, which leaves room for the pages in progress to add their tests; a higher limit would leave the whole run too little of its three minutes. A fourth would save about 10 s more for another runner's 45 s. Little of the fixed cost is cheap to cut: `rustup` also installs `rustfmt` and `clippy`, which `e2e` does not use, for a second or two; the build already starts from the cache; and sharing one build across shards would chain jobs (rule 3).
 
 **Cold** (no cache: a new lockfile, toolchain or `rust-cache` key), `rust` took 165 s and `e2e` 107 to 150 s, so a run that rebuilds its dependencies can pass three minutes. The limits are not enforced on it; the next `master` push saves the cache.
