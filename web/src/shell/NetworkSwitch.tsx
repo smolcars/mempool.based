@@ -1,5 +1,6 @@
 import { useLocation } from "@solidjs/router";
-import { type Accessor, For, Show } from "solid-js";
+import { type Accessor, createSignal, For, onCleanup, Show } from "solid-js";
+import { openPop } from "../components/pop";
 import { NETWORK_NAMES, type Network, onNetwork, stripNetwork } from "../lib/network";
 import { useNetwork } from "../lib/page";
 import "./NetworkSwitch.css";
@@ -11,7 +12,25 @@ import "./NetworkSwitch.css";
 export function NetworkSwitch(props: { networks: Accessor<readonly Network[] | undefined> }) {
   const network = useNetwork();
   const location = useLocation();
+  let button: HTMLButtonElement | undefined;
   let menu: HTMLDivElement | undefined;
+  const [open, setOpen] = createSignal(false);
+  let close: (() => void) | undefined;
+  onCleanup(() => close?.());
+  const toggle = () => {
+    if (close) {
+      close();
+      return;
+    }
+    setOpen(true);
+    close = openPop(
+      () => {
+        close = undefined;
+        setOpen(false);
+      },
+      () => [button, menu],
+    );
+  };
   // While the list is loading, offer the current network only, in the button's final shape.
   const listed = () => props.networks() ?? [network()];
   const switchable = () => props.networks() === undefined || listed().length > 1;
@@ -30,9 +49,12 @@ export function NetworkSwitch(props: { networks: Accessor<readonly Network[] | u
         }
       >
         <button
+          ref={button}
           class="network__button"
           type="button"
-          popovertarget="network-menu"
+          aria-expanded={open() ? "true" : "false"}
+          aria-controls="network-menu"
+          onClick={toggle}
           aria-label={`Network: ${NETWORK_NAMES[network()]}. Change network`}
         >
           <span class="network__dot" aria-hidden="true" />
@@ -41,7 +63,7 @@ export function NetworkSwitch(props: { networks: Accessor<readonly Network[] | u
             <path d="M1 1l4 4 4-4" />
           </svg>
         </button>
-        <div id="network-menu" class="network__menu" popover ref={menu}>
+        <div id="network-menu" class="network__menu" hidden={!open()} ref={menu}>
           <ul>
             <For each={listed()}>
               {(n) => (
@@ -51,7 +73,7 @@ export function NetworkSwitch(props: { networks: Accessor<readonly Network[] | u
                     href={hrefOn(n)}
                     data-network={n}
                     aria-current={n === network() ? "true" : undefined}
-                    onClick={() => menu?.hidePopover()}
+                    onClick={() => close?.()}
                   >
                     <span class="network__dot" aria-hidden="true" />
                     {NETWORK_NAMES[n]}

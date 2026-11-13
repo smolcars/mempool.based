@@ -1,12 +1,12 @@
 @layer components {
   .network {
+    position: relative;
     display: inline-flex;
   }
   /* A 44 px tall button; the pill a reader sees is drawn inside it, 34 px tall. */
   .network__button {
     position: relative;
     isolation: isolate;
-    anchor-name: --network-switch;
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
@@ -56,14 +56,13 @@
     transform: rotate(180deg);
   }
 
-  /* Without anchor positioning the menu opens centred, like a small dialog. */
-  /* Absolute, not the popover's own fixed box: iOS Safari treated a fixed layer as a bar and left a
-     plain band behind its toolbar while the menu was open. It still sits by its button. */
+  /* Under its button, in the page: not the browser's popover, whose top layer made iOS Safari stop
+     the page above its toolbar while the menu was open (components/pop.ts). */
   .network__menu {
     position: absolute;
-    position-anchor: --network-switch;
-    position-area: bottom span-right;
-    position-try-fallbacks: flip-inline;
+    top: 100%;
+    left: 0;
+    z-index: var(--z-tooltip);
     margin: var(--space-1) 0 0;
     min-width: 11rem;
     padding: var(--space-1);

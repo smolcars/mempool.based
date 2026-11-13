@@ -151,9 +151,9 @@ test("an exact amount closes on a tap elsewhere, on scrolling, and when another 
   await lightning(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/regtest/lightning/channel/811984x2037x0");
-  const controls = page.locator("main button[popovertarget]");
+  const controls = page.locator("main button:has(+ .exact)");
   await expect(controls.first()).toBeVisible();
-  const open = page.locator(".exact:popover-open");
+  const open = page.locator(".exact:not([hidden])");
   await controls.nth(1).click();
   await expect(open).toHaveCount(1);
   await controls.nth(0).click();

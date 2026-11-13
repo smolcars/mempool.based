@@ -377,6 +377,7 @@ Import from `components/`. All of them render chain data as text only.
 
 | Component | Use |
 |---|---|
+| `Exact class title? figure decorative?` | A short figure whose exact value (its children) a tap or key opens in a pop-up fixed over the page, placed above the figure inside the screen. One pop-up is open at a time and a press outside, Escape or a scroll closes it (`components/pop.ts`, which the network menu uses too). Not the browser's popover: while a top-layer element shows, iOS Safari stops the page above its toolbar (WebKit bug 302272). `decorative` hides the pop-up from screen readers when the figure already says the exact value |
 | `Amount sats unit? signed? short? approx?` | BTC with eight decimals, trailing zeros dimmed (same weight), sats in the title. `signed` adds `+` to incoming amounts; the sign, not a colour, carries the direction. `short` prints a summary's magnitude (`formatBtcShort`), the exact amount in the title; `approx` adds `~`. `unit={false}` hides the unit from sight only, for a table that names it in its header: screen readers still read it |
 | `Sats sats unit?` | Grouped sats. `unit` as for `Amount` |
 | `FeeRate rate unit? approx? up? swatch?` | A fee rate. `approx` adds `~`. `up` prints a recommendation rounded up. `swatch` puts its band's colour beside it: only where it is the key to a drawing (the map's tooltip), as fee colour belongs to the drawings. `unit` as for `Amount` |

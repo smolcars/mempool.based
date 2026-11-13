@@ -1,0 +1,39 @@
+import { flush } from "solid-js";
+import { describe, expect, it } from "vitest";
+import { mount } from "../components/test-utils";
+import { NetworkSwitch } from "./NetworkSwitch";
+
+describe("NetworkSwitch", () => {
+  // In the page, not the browser's top layer: iOS Safari stopped the page above its toolbar while
+  // a popover showed. It still closes on a press outside, on Escape and on a choice.
+  it("opens its menu in the page and closes it on a press outside, Escape or a choice", () => {
+    const el = mount(() => <NetworkSwitch networks={() => ["mainnet", "signet"]} />, "/blocks");
+    const button = el.querySelector<HTMLButtonElement>(".network__button");
+    const menu = el.querySelector<HTMLElement>(".network__menu");
+    if (!button || !menu) throw new Error("no menu");
+    expect(menu.hasAttribute("popover")).toBe(false);
+    const open = () => {
+      button.click();
+      flush();
+      expect(menu.hidden).toBe(false);
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+    };
+    open();
+    expect(menu.querySelector('a[data-network="signet"]')?.getAttribute("href")).toBe(
+      "/signet/blocks",
+    );
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    flush();
+    expect(menu.hidden).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    open();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    flush();
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(button);
+    open();
+    menu.querySelector<HTMLAnchorElement>('a[data-network="signet"]')?.click();
+    flush();
+    expect(menu.hidden).toBe(true);
+  });
+});

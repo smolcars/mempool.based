@@ -273,5 +273,9 @@
     .nav a {
       font-size: var(--text-xs);
     }
+    /* The network has room on its row again: its arrow says it opens. */
+    .network__chevron {
+      display: block;
+    }
   }
 }

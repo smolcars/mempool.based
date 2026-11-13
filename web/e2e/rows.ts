@@ -108,7 +108,7 @@ export async function amountsIntact(page: Page, label: string) {
  * its text not cut, nothing else on the page moved by it, and Escape closing it.
  */
 export async function exactsInside(page: Page, label: string) {
-  const controls = page.locator("main button[popovertarget]");
+  const controls = page.locator("main button:has(+ .exact)");
   const where = () =>
     page.evaluate(() =>
       [...document.querySelectorAll<HTMLElement>("main :is(dt, dd, td, th, button, h1, h2)")]
@@ -123,7 +123,7 @@ export async function exactsInside(page: Page, label: string) {
     await control.scrollIntoViewIfNeeded();
     const before = await where();
     await control.click();
-    const pop = page.locator(".exact[data-placed]");
+    const pop = page.locator(".exact:not([hidden])");
     await expect(pop, `${label}: control ${i} opens`).toHaveCount(1);
     const fault = await pop.evaluate((el) => {
       const r = el.getBoundingClientRect();
@@ -140,6 +140,6 @@ export async function exactsInside(page: Page, label: string) {
       `${label}: opening "${await control.textContent()}" moved the page`,
     ).toEqual(before);
     await page.keyboard.press("Escape");
-    await expect(page.locator(".exact:popover-open")).toHaveCount(0);
+    await expect(page.locator(".exact:not([hidden])")).toHaveCount(0);
   }
 }
