@@ -25,8 +25,9 @@ export function layoutFaults(page: Page): Promise<string[]> {
     };
 
     // What of an element's content is in sight (`box`), and the bounds past which scrolling can
-    // never bring it into sight (`hard`): a box that scrolls on an axis makes every position on
-    // that axis reachable, and a box that hides overflow inside it narrows that again.
+    // never bring it into sight (`hard`). A box that hides overflow narrows `hard` to itself; a
+    // box that scrolls sets it, on that axis, to the part of its window still reachable, widened
+    // by how far it can scroll each way.
     interface Clip {
       box: Box;
       hard: Box;
@@ -39,9 +40,11 @@ export function layoutFaults(page: Page): Promise<string[]> {
       if (known !== undefined) return known;
       const up = clipOf(el.parentElement);
       const s = getComputedStyle(el);
+      // Each axis on its own: `overflow-y: clip` keeps `overflow-x: visible`.
+      const cx = s.overflowX !== "visible";
+      const cy = s.overflowY !== "visible";
       let clip = up;
-      // Overflow is visible on both axes or on neither (CSS makes the other one auto).
-      if (s.overflowX !== "visible") {
+      if (cx || cy) {
         const r = el.getBoundingClientRect();
         const l = r.left + el.clientLeft;
         const t = r.top + el.clientTop;
@@ -50,16 +53,22 @@ export function layoutFaults(page: Page): Promise<string[]> {
         const y = /auto|scroll/.test(s.overflowY);
         clip = {
           box: {
-            l: Math.max(own.l, up.box.l),
-            t: Math.max(own.t, up.box.t),
-            r: Math.min(own.r, up.box.r),
-            b: Math.min(own.b, up.box.b),
+            l: cx ? Math.max(own.l, up.box.l) : up.box.l,
+            t: cy ? Math.max(own.t, up.box.t) : up.box.t,
+            r: cx ? Math.min(own.r, up.box.r) : up.box.r,
+            b: cy ? Math.min(own.b, up.box.b) : up.box.b,
           },
           hard: {
-            l: x ? -Infinity : Math.max(own.l, up.hard.l),
-            r: x ? Infinity : Math.min(own.r, up.hard.r),
-            t: y ? -Infinity : Math.max(own.t, up.hard.t),
-            b: y ? Infinity : Math.min(own.b, up.hard.b),
+            l: cx ? Math.max(own.l, up.hard.l) - (x ? el.scrollLeft : 0) : up.hard.l,
+            r: cx
+              ? Math.min(own.r, up.hard.r) +
+                (x ? el.scrollWidth - el.clientWidth - el.scrollLeft : 0)
+              : up.hard.r,
+            t: cy ? Math.max(own.t, up.hard.t) - (y ? el.scrollTop : 0) : up.hard.t,
+            b: cy
+              ? Math.min(own.b, up.hard.b) +
+                (y ? el.scrollHeight - el.clientHeight - el.scrollTop : 0)
+              : up.hard.b,
           },
         };
       }

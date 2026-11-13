@@ -155,6 +155,12 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
     // A hidden box wider than its scroller: scrolling shows the box's width, not the text past it.
     const narrow = add(host, { ...at(110), width: "100px", overflowX: "auto" });
     add(narrow, { width: "150px", overflow: "hidden" }, "Cut past a wider hidden box, too");
+    // A scroller wider than the hidden box around it: its last 100 px never come into sight.
+    const narrowWindow = add(host, { ...at(250), width: "100px", overflow: "hidden" });
+    const wide = add(narrowWindow, { width: "200px", overflowX: "auto" });
+    add(wide, { whiteSpace: "nowrap" }, "Past a narrower window, its far end");
+    // Clipped below only: `overflow-y: clip` beside a visible x.
+    add(host, { ...at(290), height: "10px", overflowY: "clip" }, "Clipped on one axis");
     // Only scrolled out of sight: scrolling shows it.
     add(host, { ...at(140), width: "60px", overflowX: "auto" }, "Scrolls along");
     const row = add(host, { ...at(200), width: "300px", whiteSpace: "normal" });
@@ -170,6 +176,8 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
   expect(faults.join("\n")).toContain('"Cut below" is cut');
   expect(faults.join("\n")).toContain('"Cut inside a scroller" is cut');
   expect(faults.join("\n")).toContain('"Cut past a wider hidden box, too" is cut');
+  expect(faults.join("\n")).toContain('"Past a narrower window, its far end" is cut');
+  expect(faults.join("\n")).toContain('"Clipped on one axis" is cut');
   expect(faults.join("\n")).not.toContain("Scrolls along");
   expect(faults.join("\n")).toContain('the label "Two words" wraps');
 });
