@@ -63,6 +63,16 @@ export interface ChartBand {
   format: (v: number) => string;
 }
 
+/**
+ * Where the layers change how they divide the same total at one moment (a change of bookkeeping,
+ * not of the data): at `index`, the run arrives at `before` (one value per layer) and changes to
+ * the point's own values on a vertical edge, so the top of the stack never moves.
+ */
+export interface ChartJoin {
+  index: number;
+  before: readonly number[];
+}
+
 /** One stacked layer on the left axis, the first at the bottom: shares (0–1) or amounts. */
 export interface ChartLayer {
   name: string;
@@ -108,6 +118,8 @@ export interface ChartProps {
    * fixed step: wider is a gap. Three times the median step when not given.
    */
   gap?: number | undefined;
+  /** Vertical joins between the layers' bookkeepings ({@link ChartJoin}). */
+  joins?: readonly ChartJoin[] | undefined;
   /** How a point's time reads: a day by default. */
   time?: (t: number) => string;
   /** Replaces the summary written from the series. */
@@ -197,6 +209,25 @@ export default function Chart(props: ChartProps) {
       layers().map((l) => l.values),
       xs.length,
     );
+    // Each join's `before` stacked as the layers are, for each layer's path.
+    const joinStacks = (props.joins ?? []).map((j) => {
+      let floor = 0;
+      return {
+        index: j.index,
+        layers: layers().map((_, k) => {
+          const lo = floor;
+          floor += j.before[k] ?? 0;
+          return { hi: floor, lo };
+        }),
+      };
+    });
+    const joinsOf = (k: number) =>
+      new Map(
+        joinStacks.flatMap((j) => {
+          const at = j.layers[k];
+          return at ? [[j.index, at] as const] : [];
+        }),
+      );
     const on = (side: "left" | "right") =>
       series()
         .filter((s) => (s.axis ?? "left") === side)
@@ -233,7 +264,7 @@ export default function Chart(props: ChartProps) {
         covered !== undefined && covered > domain[0]
           ? { x: left, w: Math.min(right, sx(covered)) - left }
           : undefined,
-      layers: stack.map((s) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver)),
+      layers: stack.map((s, k) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver, joinsOf(k))),
       stack,
       bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap, sliver)),
       // An area only over an axis from zero: filled down to a cut axis, it would overstate a change.

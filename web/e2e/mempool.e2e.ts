@@ -147,3 +147,137 @@ test("a phone's chart reads out only the layers that hold anything", async ({ pa
   for (const value of await empty.all()) await expect(value).toBeHidden();
   await expect(page.locator(".chart__value:not(.chart__value--empty)").first()).toBeVisible();
 });
+
+// Where the lowest band was split, the stacked layers once fell away from the total at the join:
+// each layer slid across the minute between bookkeepings. The stack must always meet the line.
+test.describe("the join between ten and twelve bands", () => {
+  const SPANS = {
+    "2h": [60, 116],
+    "24h": [600, 140],
+    "1w": [3600, 160],
+    all: [86_400, 40],
+  } as const;
+  const rest = [123_806, 40_000, 200_000, 90_000, 150_000, 30_000, 180_000, 140_000, 10_000];
+  /** A history whose points have ten bands, then twelve (or the reverse), each summing to vsize. */
+  function mixed(interval: keyof typeof SPANS, unsplitFirst: boolean) {
+    const [step, n] = SPANS[interval];
+    const to = Math.floor(Date.now() / 1000 / step) * step;
+    const from = to - (n - 1) * step;
+    const points = Array.from({ length: n }, (_, i) => {
+      const split = unsplitFirst ? i >= n - 12 : i < 12;
+      const low = 26_100_000 + i * 2000;
+      const bands = split
+        ? [7_402_366, low - 7_402_366 - 123_806, 123_806, ...rest]
+        : [low, ...rest];
+      const vsize = bands.reduce((s, b) => s + b, 0);
+      return {
+        time: from + i * step,
+        bands,
+        vsize,
+        count: 45_000,
+        fees: 4_000_000,
+        min_fee_rate: 100,
+        samples: step / 60,
+        in_count: 10,
+        in_vsize: 1000,
+        out_count: 9,
+        out_vsize: 900,
+        mined_count: 0,
+        mined_vsize: 0,
+      };
+    });
+    const minutes = (n * step) / 60;
+    return {
+      complete: true,
+      first: from,
+      from,
+      to: to + step - 1,
+      interval,
+      minutes,
+      sampled: minutes,
+      step,
+      points,
+    };
+  }
+
+  for (const width of [390, 1440]) {
+    test(`at ${width} px the filled layers meet the total at every x, across the join both ways`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      for (const unsplitFirst of [true, false]) {
+        for (const interval of ["2h", "24h", "1w", "all"] as const) {
+          await page.unrouteAll();
+          await page.route(new RegExp(`/regtest/app/mempool/history/${interval}$`), (route) =>
+            route.fulfill({ json: mixed(interval, unsplitFirst) }),
+          );
+          await page.goto(`/regtest/mempool?interval=${interval}`);
+          const svg = page.locator(".mempool-chart--size svg").first();
+          await expect(svg.locator("path.chart__layer").first()).toBeAttached();
+          const [worst, slant] = await svg.evaluate((el) => {
+            const layers = [...el.querySelectorAll<SVGPathElement>("path.chart__layer")];
+            const line = el.querySelector<SVGPathElement>("path.chart__line");
+            if (!line) return [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
+            // The layer of minutes from before the split, drawn first: at the bottom.
+            const unsplit = layers[0];
+            // getBBox gives x, y, width and height only (an SVGRect has no right or bottom).
+            const boxes = layers.map((l) => l.getBBox());
+            const left = Math.min(...boxes.map((r) => r.x));
+            const top0 = Math.min(...boxes.map((r) => r.y));
+            const box = {
+              x: left,
+              y: top0,
+              right: Math.max(...boxes.map((r) => r.x + r.width)),
+              bottom: Math.max(...boxes.map((r) => r.y + r.height)),
+            };
+            const filled = (x: number, y: number) =>
+              layers.some((l) => l.isPointInFill(new DOMPoint(x, y)));
+            let most = 0;
+            // Where the unsplit layer is drawn, its top sits as far below the total as anywhere
+            // (the bands above 0.2): a wedge sloping to the floor at the join would not.
+            const below: number[] = [];
+            // Every user unit across the plot, the join included, a little in from either end.
+            for (let x = box.x + 1; x < box.right - 1; x += 1) {
+              // The fill runs from the floor up, unbroken: its top by halving.
+              let top = box.y - 1;
+              let bottom = box.bottom - 0.5;
+              if (!filled(x, bottom)) continue;
+              for (let k = 0; k < 24; k++) {
+                const mid = (top + bottom) / 2;
+                if (filled(x, mid)) bottom = mid;
+                else top = mid;
+              }
+              const hits: number[] = [];
+              // The line, looked for near the fill's top: a step ends the stack on it or misses.
+              for (let y = bottom - 8; y < bottom + 8; y += 0.25) {
+                if (line.isPointInStroke(new DOMPoint(x, y))) hits.push(y);
+              }
+              // No line near the stack's top: the two have come apart by more than the window.
+              if (hits.length === 0) {
+                most = Number.POSITIVE_INFINITY;
+                continue;
+              }
+              const centre = hits.reduce((s, y) => s + y, 0) / hits.length;
+              most = Math.max(most, Math.abs(bottom - centre));
+              if (unsplit?.isPointInFill(new DOMPoint(x, box.bottom - 0.5))) {
+                let up = box.y - 1;
+                let down = box.bottom - 0.5;
+                for (let k = 0; k < 24; k++) {
+                  const mid = (up + down) / 2;
+                  if (unsplit.isPointInFill(new DOMPoint(x, mid))) down = mid;
+                  else up = mid;
+                }
+                below.push(down - bottom);
+              }
+            }
+            const spread = below.length > 0 ? Math.max(...below) - Math.min(...below) : 0;
+            return [most, spread];
+          });
+          const label = `${interval}, ${unsplitFirst ? "ten then twelve" : "twelve then ten"}`;
+          expect(worst, `${label}: stack against the total`).toBeLessThan(2);
+          expect(slant, `${label}: the unsplit layer up to its join`).toBeLessThan(2);
+        }
+      }
+    });
+  }
+});

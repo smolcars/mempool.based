@@ -89,6 +89,44 @@ describe("coverage", () => {
 });
 
 describe("series", () => {
+  const ten = (u: number) => [u, 50, 0, 0, 0, 0, 0, 0, 0, 0];
+  const twelve = (a: number, b: number) => [a, b, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0];
+  it("joins minutes from before the split to the three finer bands at one point", () => {
+    const h = history({
+      points: [
+        point(T0, { bands: ten(900), vsize: 950 }),
+        point(T0 + 60, { bands: twelve(300, 600), vsize: 950 }),
+      ],
+    });
+    const s = seriesOf(h);
+    expect(s.unsplit).toStrictEqual([900, 0]);
+    expect(s.bands[0]).toStrictEqual([0, 300]);
+    expect(s.bands[1]).toStrictEqual([0, 600]);
+    // Just before the split point the same total, all under 0.2 as one layer: a vertical edge.
+    expect(s.joins).toStrictEqual([
+      { index: 1, before: [900, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
+    ]);
+  });
+  it("joins the other way too, leaving the last split point as one layer", () => {
+    const h = history({
+      points: [
+        point(T0, { bands: twelve(300, 600), vsize: 950 }),
+        point(T0 + 60, { bands: ten(900), vsize: 950 }),
+      ],
+    });
+    const s = seriesOf(h);
+    expect(s.unsplit).toStrictEqual([900, 900]);
+    expect(s.bands[0]).toStrictEqual([0, 0]);
+    expect(s.joins).toStrictEqual([
+      { index: 0, before: [0, 300, 600, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
+    ]);
+    // Every point's layers still add up to its total.
+    for (let i = 0; i < 2; i++) {
+      const sum = (s.unsplit?.[i] ?? 0) + s.bands.reduce((t, b) => t + (b[i] ?? 0), 0);
+      expect(sum).toBe(950);
+    }
+  });
+
   it("has one entry per point and no zero where a step is missing", () => {
     const h = history({ points: [point(T0), point(T0 + 60), point(T0 + 300)] });
     const s = seriesOf(h);

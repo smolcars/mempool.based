@@ -84,6 +84,7 @@ export function areaPath(
   sy: Px,
   gap: number,
   sliver = 0,
+  joins?: ReadonlyMap<number, { hi: number; lo: number }>,
 ): string {
   const low = (i: number) => (typeof lo === "number" ? lo : lo[i]);
   let d = "";
@@ -103,9 +104,18 @@ export function areaPath(
     let top = "";
     let bottom = "";
     for (let i = a; i <= b; i++) {
-      top += `${i === a ? "M" : "L"}${n(sx(xs[i] ?? 0))} ${n(sy(hi[i] ?? 0))}`;
+      const x = n(sx(xs[i] ?? 0));
+      // A join: the run arrives at this point's `joins` values, then changes on a vertical edge.
+      const j = i > a ? joins?.get(i) : undefined;
+      if (j) top += `L${x} ${n(sy(j.hi))}`;
+      top += `${i === a ? "M" : "L"}${x} ${n(sy(hi[i] ?? 0))}`;
     }
-    for (let i = b; i >= a; i--) bottom += `L${n(sx(xs[i] ?? 0))} ${n(sy(low(i) ?? 0))}`;
+    for (let i = b; i >= a; i--) {
+      const x = n(sx(xs[i] ?? 0));
+      bottom += `L${x} ${n(sy(low(i) ?? 0))}`;
+      const j = i > a ? joins?.get(i) : undefined;
+      if (j) bottom += `L${x} ${n(sy(j.lo))}`;
+    }
     d += `${top}${bottom}Z`;
   }
   return d;

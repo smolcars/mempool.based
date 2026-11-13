@@ -297,6 +297,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             domain={domain()}
             dataFrom={hatchFrom()}
             gap={bridged()}
+            joins={s().joins}
             height={narrow() ? SIZE_HEIGHT_PHONE : SIZE_HEIGHT}
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
             series={[{ name: "Total", values: s().vsize, draw: "line", format: formatSize }]}

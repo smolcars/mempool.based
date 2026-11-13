@@ -167,21 +167,42 @@ export function seriesOf(h: History) {
   const ps = h.points;
   const perSecond = (vb: number) => vb / 60;
   const wide = ps.map((p) => widenBands(p.bands));
-  // A point stored before the lowest band was split keeps all under 0.2 whole: its own series, so
-  // the chart can say so where it joins the three finer bands.
-  const unsplit = wide.some((w) => w.unsplit)
-    ? wide.map((w) => (w.unsplit ? (w.bands[0] ?? 0) : 0))
-    : undefined;
+  // A point stored before the lowest band was split keeps all under 0.2 whole, in a layer of its
+  // own below the twelve: one column per point, that layer first, then the twelve bands.
+  const merged = (b: readonly number[]) => [
+    (b[0] ?? 0) + (b[1] ?? 0) + (b[2] ?? 0),
+    0,
+    0,
+    0,
+    ...b.slice(3),
+  ];
+  const cols = wide.map((w) =>
+    w.unsplit ? [w.bands[0] ?? 0, 0, ...w.bands.slice(1)] : [0, ...w.bands],
+  );
+  // Where the bookkeeping changes, the chart joins on a vertical edge at one point, the total
+  // unchanged across it: unsplit to split arrives at the split point as one layer; split to
+  // unsplit (a later row summed with one from before) leaves the last split point as one layer.
+  const joins: { index: number; before: number[] }[] = [];
+  for (let i = 1; i < wide.length; i++) {
+    const before = wide[i - 1]?.unsplit === true;
+    const now = wide[i]?.unsplit === true;
+    if (before && !now) joins.push({ index: i, before: merged(wide[i]?.bands ?? []) });
+    if (!before && now) {
+      joins.push({ index: i - 1, before: cols[i - 1] ?? [] });
+      cols[i - 1] = merged(wide[i - 1]?.bands ?? []);
+    }
+  }
+  const any = wide.some((w) => w.unsplit);
   return {
     x: ps.map((p) => p.time),
     vsize: ps.map((p) => p.vsize),
     count: ps.map((p) => p.count),
     floor: ps.map((p) => p.min_fee_rate / 1000),
     samples: ps.map((p) => p.samples),
-    bands: Array.from({ length: FEE_BANDS }, (_, k) =>
-      wide.map((w) => (k === 0 && w.unsplit ? 0 : (w.bands[k] ?? 0))),
-    ),
-    unsplit,
+    bands: Array.from({ length: FEE_BANDS }, (_, k) => cols.map((c) => c[k + 1] ?? 0)),
+    unsplit: any ? cols.map((c) => c[0] ?? 0) : undefined,
+    // In the layers' order, the unsplit layer first: only when there is one.
+    joins: any ? joins : [],
     entered: ps.map((p) => perSecond(p.in_vsize)),
     mined: ps.map((p) => perSecond(p.mined_vsize)),
     otherwise: ps.map((p) => perSecond(Math.max(0, p.out_vsize - p.mined_vsize))),
