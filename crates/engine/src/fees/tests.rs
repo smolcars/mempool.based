@@ -127,7 +127,7 @@ fn a_sudden_burst_counts_where_it_is_and_is_not_extrapolated() {
     assert_eq!(levels(r), [50_001, 50_001, 2_001, 100]);
     // The burst's minute is among the busiest quarter, so it is left out of the arrivals.
     let i = inflow(&minutes);
-    assert!((i.per_minute_at_or_above(2_000) - 10_000.0).abs() < 1e-9);
+    assert!((i.per_minute_at_or_above(2_000, &TUNING) - 10_000.0).abs() < 1e-9);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn bursts_on_a_quiet_network_are_not_taken_for_a_trend() {
     minutes[2] = vec![(10_000, 720_000), (5_000, 720_000), (2_000, 720_000)];
     minutes[6] = vec![(3_000, 900_000)];
     let i = inflow(&minutes);
-    assert_eq!(i.per_minute_at_or_above(100), 0.0);
+    assert_eq!(i.per_minute_at_or_above(100, &TUNING), 0.0);
     let r = recommend(&depth(&[(2_000, B), (3_000, B / 4)]), &i, 100);
     assert_eq!(levels(r), [2_001, 100, 100, 100]);
 }
@@ -193,18 +193,18 @@ fn inflow_counts_whole_minutes_and_quiet_ones_as_zero() {
     // Three minutes later: the busy one and two quiet ones.
     i.roll(1_000 + 180);
     assert_eq!(i.minutes(), 3);
-    assert!((i.per_minute_at_or_above(1) - 400.0 / 3.0).abs() < 1e-9);
+    assert!((i.per_minute_at_or_above(1, &TUNING) - 400.0 / 3.0).abs() < 1e-9);
     i.roll(1_000 + 300);
     assert!(i.ready());
     // Never more than the window, however long the silence.
     i.roll(1_000_000);
     assert_eq!(i.minutes(), INFLOW_MINUTES);
-    assert_eq!(i.per_minute_at_or_above(1), 0.0);
+    assert_eq!(i.per_minute_at_or_above(1, &TUNING), 0.0);
     // A gap drops the minute in progress.
     i.record(1_000_010, 2_000, 999);
     i.gap(1_000_020);
     i.roll(1_000_080);
-    assert_eq!(i.per_minute_at_or_above(1), 0.0);
+    assert_eq!(i.per_minute_at_or_above(1, &TUNING), 0.0);
 }
 
 fn tip(n: u8) -> Option<ChainTip> {
@@ -396,9 +396,10 @@ fn random_mempools_are_ordered_floored_bounded_and_exactly_at_the_boundary() {
                 "case {case}: {rate} outside [{min}, {top}]"
             );
             let room = u64::from(level.blocks) * B;
+            let minutes = secs(level) / 60.0;
             let fits = |x: u32| {
                 d.at_or_above(x) as f64
-                    + arrivals.per_minute_at_or_above(x) * level.arrival_secs as f64 / 60.0
+                    + arrivals.per_minute_at_or_above(x, &TUNING) * minutes
                     < room as f64
             };
             // Monotonic lifting can only raise a slower level's answer to a faster one's, which
@@ -419,9 +420,14 @@ fn random_mempools_are_ordered_floored_bounded_and_exactly_at_the_boundary() {
     }
 }
 
+fn secs(level: Level) -> f64 {
+    arrival_secs(level.blocks, TUNING.confidence) as f64
+}
+
 /// One level alone, by brute force over the candidate rates.
 fn recommend_one(d: &Depth, i: &Inflow, floor: u32, level: Level) -> u32 {
     let room = u64::from(level.blocks) * B;
+    let minutes = secs(level) / 60.0;
     let mut candidates: Vec<u32> = d.rates.iter().map(|r| r.saturating_add(1)).collect();
     for m in &i.closed {
         candidates.extend(m.rates.iter().map(|r| r.saturating_add(1)));
@@ -432,8 +438,18 @@ fn recommend_one(d: &Depth, i: &Inflow, floor: u32, level: Level) -> u32 {
     candidates
         .into_iter()
         .find(|&x| {
-            d.at_or_above(x) as f64 + i.per_minute_at_or_above(x) * level.arrival_secs as f64 / 60.0
+            d.at_or_above(x) as f64 + i.per_minute_at_or_above(x, &TUNING) * minutes
                 < room as f64
         })
         .unwrap_or(floor)
+}
+
+#[test]
+fn the_time_allowed_is_the_gamma_quantile_of_block_times() {
+    // The constants the method used at 80% were these, rounded rather than rounded up.
+    let at_80: Vec<u64> = LEVELS.iter().map(|l| arrival_secs(l.blocks, 0.8)).collect();
+    assert_eq!(at_80, [966, 2_568, 4_744, 92_395]);
+    // One block: -600 ln(1 - q).
+    assert_eq!(arrival_secs(1, 0.95), 1_798);
+    assert!(arrival_secs(6, 0.9) > arrival_secs(6, 0.8));
 }

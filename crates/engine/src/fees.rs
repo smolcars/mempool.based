@@ -27,10 +27,6 @@ pub struct Level {
     pub blocks: u32,
     /// The horizon at one block per ten minutes.
     pub minutes: u32,
-    /// Arrivals counted against it: the time by which the `blocks`-th block has come with 80%
-    /// probability, block intervals being exponential with a 600 s mean (the 0.8 quantile of a
-    /// gamma distribution of shape `blocks`).
-    arrival_secs: u64,
 }
 
 /// Fastest first. The reference's `fastestFee`, `halfHourFee`, `hourFee` and `economyFee`.
@@ -39,27 +35,69 @@ pub const LEVELS: [Level; 4] = [
         name: "high",
         blocks: 1,
         minutes: 10,
-        arrival_secs: 966,
     },
     Level {
         name: "medium",
         blocks: 3,
         minutes: 30,
-        arrival_secs: 2_567,
     },
     Level {
         name: "low",
         blocks: 6,
         minutes: 60,
-        arrival_secs: 4_744,
     },
     Level {
         name: "no_rush",
         blocks: 144,
         minutes: 1_440,
-        arrival_secs: 92_394,
     },
 ];
+
+/// The method's two judgements, chosen from recordings on mainnet (`docs/MEMPOOL.md`, "Against
+/// the blocks that followed"). A parameter so the recorder can replay other choices through the
+/// same code.
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    /// Arrivals are counted up to the time by which a level's `N`-th block has come with this
+    /// probability ([`arrival_secs`]).
+    pub confidence: f64,
+    /// How many of the busiest minutes are left out of the arrivals, given how many were watched.
+    pub busiest_left_out: fn(usize) -> usize,
+}
+
+/// The tuning served.
+pub const TUNING: Tuning = Tuning {
+    confidence: 0.8,
+    busiest_left_out: |n| if n >= 5 { (n / 4).max(1) } else { 0 },
+};
+
+/// Seconds by which the `blocks`-th block has come with probability `confidence`, block
+/// intervals being exponential with a 600 s mean: a quantile of the gamma (Erlang) distribution
+/// of shape `blocks`, to the whole second.
+pub fn arrival_secs(blocks: u32, confidence: f64) -> u64 {
+    // P(the N-th block by t) = 1 - sum over k < N of e^-x x^k / k!, with x = t / 600 s.
+    let by = |t: u64| {
+        let x = t as f64 / 600.0;
+        let mut term = (-x).exp();
+        let mut sum = term;
+        for k in 1..blocks {
+            term *= x / f64::from(k);
+            sum += term;
+        }
+        1.0 - sum
+    };
+    // Ten times the mean is past any confidence the method uses.
+    let (mut lo, mut hi) = (0u64, 6_000 * u64::from(blocks.max(1)));
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if by(mid) >= confidence {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
 
 /// One answer: a rate per level of [`LEVELS`], fastest first, and the node's minimum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -212,17 +250,15 @@ impl Inflow {
         self.closed.len()
     }
 
-    /// Mean vsize a minute arriving at `rate` or more. The busiest quarter of the minutes (at
-    /// least one, once there are five) is left out, so bursts are not extrapolated over the
-    /// horizon: they are in the mempool already, and [`Depth`] counts them there.
-    pub fn per_minute_at_or_above(&self, rate: u32) -> f64 {
+    /// Mean vsize a minute arriving at `rate` or more. The busiest minutes are left out as
+    /// `tuning` says, so a burst is not extrapolated over the horizon: it is in the mempool
+    /// already, and [`Depth`] counts it there.
+    pub fn per_minute_at_or_above(&self, rate: u32, tuning: &Tuning) -> f64 {
         let mut v: Vec<u64> = self.closed.iter().map(|m| m.at_or_above(rate)).collect();
+        v.sort_unstable();
+        v.truncate(v.len().saturating_sub((tuning.busiest_left_out)(v.len())));
         if v.is_empty() {
             return 0.0;
-        }
-        if v.len() >= 5 {
-            v.sort_unstable();
-            v.truncate(v.len() - (v.len() / 4).max(1));
         }
         v.iter().sum::<u64>() as f64 / v.len() as f64
     }
@@ -236,10 +272,16 @@ impl Inflow {
 /// accepted rate `floor` (sat per 1,000 vB).
 ///
 /// For each level of `N` blocks: the lowest rate `r` at which what pays `r` or more now, plus
-/// what is expected to arrive paying `r` or more before the `N`-th block (at 80% confidence on
-/// block times), leaves room in `N` blocks. Both terms only shrink as `r` grows, so the search is a
-/// bisection, and a level never asks more than one step above the highest rate anyone pays.
+/// what is expected to arrive paying `r` or more before the `N`-th block (at [`TUNING`]'s
+/// confidence on block times), leaves room in `N` blocks. Both terms only shrink as `r` grows,
+/// so the search is a bisection, and a level never asks more than one step above the highest
+/// rate anyone pays.
 pub fn recommend(depth: &Depth, inflow: &Inflow, floor: u32) -> Rates {
+    recommend_tuned(depth, inflow, floor, &TUNING)
+}
+
+/// [`recommend`] with another tuning, for the recorder's replay.
+pub fn recommend_tuned(depth: &Depth, inflow: &Inflow, floor: u32, tuning: &Tuning) -> Rates {
     let floor = floor.max(RELAY_FLOOR);
     let top = depth.max_rate().max(inflow.max_rate()).saturating_add(1);
     let mut rates = Rates {
@@ -248,8 +290,9 @@ pub fn recommend(depth: &Depth, inflow: &Inflow, floor: u32) -> Rates {
     };
     for (out, level) in rates.levels.iter_mut().zip(LEVELS) {
         let room = u64::from(level.blocks) * BLOCK_VSIZE;
+        let minutes = arrival_secs(level.blocks, tuning.confidence) as f64 / 60.0;
         let fits = |r: u32| {
-            let expected = inflow.per_minute_at_or_above(r) * level.arrival_secs as f64 / 60.0;
+            let expected = inflow.per_minute_at_or_above(r, tuning) * minutes;
             // Strictly less: a block exactly full of transactions at `r` has no room for one more.
             (depth.at_or_above(r) as f64 + expected) < room as f64
         };

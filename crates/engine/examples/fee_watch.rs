@@ -12,7 +12,12 @@
 //! - `INPUTS=1` also records what a replay needs: every arrival (`{"arrived": t, "txs": [[rate,
 //!   vsize], ...]}`, `{"gap": t}` when some were missed) and each sample's whole depth
 //!   (`"depth": [[rate, vsize], ...]`). About 25 MB an hour at `SAMPLE_SECS=10`.
-//! - `RESCORE=fees.jsonl` scores a recorded run again without a node.
+//! - `RESCORE=fees.jsonl` scores a recorded run again without a node; `MAX_GAP_SECS` (7200)
+//!   is the longest gap between blocks taken as real, `FROM` and `TO` (Unix seconds) limit the
+//!   samples scored.
+//! - `REPLAY=fees.jsonl` replays a run recorded with `INPUTS=1` through the method at several
+//!   tunings and scores each beside what was served, with the same `FROM` and `TO`;
+//!   `REPLAY_OUT=path` writes the replayed samples, without their depth.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -27,6 +32,7 @@ use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use engine::fees::{self, Depth, Inflow, LEVELS, Recommender};
 use engine::mempool::{Config as TrackerConfig, NodeSource, Tracker};
 use engine::projected::{Config, Projection, Projector};
@@ -96,6 +102,11 @@ fn clearing(rates: &mut [(u32, u64)]) -> Option<u32> {
 
 #[tokio::main]
 async fn main() {
+    if let Ok(path) = std::env::var("REPLAY") {
+        let text = std::fs::read_to_string(path).unwrap();
+        replay(text.lines().map(|l| serde_json::from_str(l).unwrap()));
+        return;
+    }
     if let Ok(path) = std::env::var("RESCORE") {
         let text = std::fs::read_to_string(path).unwrap();
         score(
@@ -339,6 +350,92 @@ fn record_fixture(path: &str, p: &Projection, floor: u32, arrivals: &VecDeque<(u
     std::fs::write(path, v.to_string()).unwrap();
 }
 
+/// The tunings a replay compares: the confidence on block times, and the busiest minutes left
+/// out of the arrivals (a quarter, one, none).
+fn tunings() -> Vec<(String, fees::Tuning)> {
+    let left_out: [(&str, fn(usize) -> usize); 3] = [
+        ("quarter", |n| if n >= 5 { (n / 4).max(1) } else { 0 }),
+        ("one", |n| usize::from(n >= 5)),
+        ("none", |_| 0),
+    ];
+    let mut out = Vec::new();
+    for (name, f) in left_out {
+        for confidence in [0.8, 0.85, 0.9, 0.95, 0.975, 0.99] {
+            out.push((
+                format!("{name}@{confidence}"),
+                fees::Tuning {
+                    confidence,
+                    busiest_left_out: f,
+                },
+            ));
+        }
+    }
+    out
+}
+
+/// Replays recorded inputs: the arrivals into one inflow, each sample's depth through every
+/// tuning and its own smoothing, then scores them all with what was served. A sample where ours
+/// was not served is left as it was, for every tuning alike.
+fn replay(lines: impl Iterator<Item = Value>) {
+    let tunings = tunings();
+    let mut smoothers = vec![fees::Smoother::default(); tunings.len()];
+    let mut inflow = Inflow::default();
+    let mut out = Vec::new();
+    let (mut same, mut compared) = ([0usize; 3], 0usize);
+    for mut v in lines {
+        if let Some(t) = v["arrived"].as_u64() {
+            for tx in v["txs"].as_array().unwrap() {
+                let (rate, vsize) = (tx[0].as_u64().unwrap(), tx[1].as_u64().unwrap());
+                inflow.record(t, rate as u32, vsize as u32);
+            }
+            continue;
+        }
+        if let Some(t) = v["gap"].as_u64() {
+            inflow.gap(t);
+            continue;
+        }
+        if let Some(Value::Array(depth)) = v.as_object_mut().and_then(|o| o.remove("depth")) {
+            let t = v["t"].as_u64().unwrap();
+            inflow.roll(t);
+            if !v["ours"].is_null() && inflow.ready() {
+                let depth = Depth::new(
+                    depth
+                        .iter()
+                        .map(|p| (p[0].as_u64().unwrap() as u32, p[1].as_u64().unwrap())),
+                );
+                let floor = v["floor"].as_u64().unwrap() as u32;
+                let tip = v["tip"].as_u64().map(|h| node::esplora::ChainTip {
+                    hash: bitcoin::BlockHash::all_zeros(),
+                    height: h as u32,
+                });
+                for ((name, tuning), smoother) in tunings.iter().zip(&mut smoothers) {
+                    let raw = fees::recommend_tuned(&depth, &inflow, floor, tuning);
+                    v[name.as_str()] = json!(five(smoother.push(t, tip, raw)));
+                }
+                // How closely the replay of the served tuning follows what was served.
+                compared += 1;
+                for (i, n) in same.iter_mut().enumerate() {
+                    *n += usize::from(v["quarter@0.8"][i] == v["ours"][i]);
+                }
+            }
+        }
+        out.push(v);
+    }
+    println!(
+        "replayed the served tuning equals what was served at {compared} samples: high {:.1}%, medium {:.1}%, low {:.1}%",
+        same[0] as f64 * 100.0 / compared as f64,
+        same[1] as f64 * 100.0 / compared as f64,
+        same[2] as f64 * 100.0 / compared as f64,
+    );
+    if let Ok(path) = std::env::var("REPLAY_OUT") {
+        let text: String = out.iter().map(|v| format!("{v}\n")).collect();
+        std::fs::write(path, text).unwrap();
+    }
+    let mut sources = vec!["ours", "node", "reference"];
+    sources.extend(tunings.iter().map(|(n, _)| n.as_str()));
+    score(&out, &sources);
+}
+
 /// A recorded block: when we saw it, and the rate that sufficed to get in, if any.
 struct Block {
     t: u64,
@@ -417,9 +514,11 @@ fn score(lines: &[Value], sources: &[&str]) {
         })
         .collect();
     blocks.sort_by_key(|b| b.t);
+    let (from, to) = (env_secs("FROM", 0), env_secs("TO", u64::MAX));
     let samples: Vec<&Value> = lines
         .iter()
         .filter(|v| v.get("bottoms").is_some() && !v["ours"].is_null())
+        .filter(|v| (from..to).contains(&v["t"].as_u64().unwrap()))
         .collect();
     let out = outages(&blocks, env_secs("MAX_GAP_SECS", 7200));
     println!(
