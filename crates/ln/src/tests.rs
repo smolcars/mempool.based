@@ -1086,13 +1086,14 @@ fn open_channel(to: PublicKey) -> MessageSendEvent {
 const HANG: Duration = Duration::from_secs(25);
 
 async fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
-    for _ in 0..HANG.as_millis() / 20 {
-        if ok() {
-            return;
-        }
+    let hang = tokio::time::Instant::now() + HANG;
+    while !ok() {
+        assert!(
+            tokio::time::Instant::now() < hang,
+            "timed out waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("timed out waiting for {what}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

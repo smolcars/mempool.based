@@ -281,6 +281,9 @@ pub(crate) struct Gossip {
     /// When a channel new to the graph last arrived; the sync-settled signal reads it.
     pub(crate) last_new_channel: Mutex<Instant>,
     range: Mutex<RangeSync>,
+    /// Batches end only at their end marker: for a test that must not race the timeout.
+    #[cfg(test)]
+    pub(crate) no_batch_timeout: AtomicBool,
     checks_per_sec: u32,
     /// Per peer that has connected (configured peers only, so bounded): when the signature checks
     /// its gossip cost are paid off at `checks_per_sec`. It is read only while that is at most
@@ -329,6 +332,8 @@ impl Gossip {
             at_ceiling: AtomicBool::new(false),
             last_new_channel: Mutex::new(Instant::now()),
             range: Mutex::new(RangeSync::default()),
+            #[cfg(test)]
+            no_batch_timeout: AtomicBool::new(false),
             checks_per_sec: config.checks_per_sec.max(1),
             paid_off: Mutex::new(HashMap::new()),
             admission: Mutex::new(()),
@@ -353,6 +358,14 @@ impl Gossip {
         if self.graph().read_only().channels().len() < self.max_channels {
             self.at_ceiling.store(false, Ordering::Relaxed);
         }
+    }
+
+    fn batch_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if self.no_batch_timeout.load(Ordering::Relaxed) {
+            return Duration::MAX;
+        }
+        BATCH_TIMEOUT
     }
 
     /// Ages every batch in flight past [`BATCH_TIMEOUT`], so the next tick ends it.
@@ -786,7 +799,7 @@ impl Gossip {
             let mut batches = std::mem::take(&mut p.checking);
             if p.in_flight
                 .as_ref()
-                .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
+                .is_some_and(|(_, sent)| sent.elapsed() >= self.batch_timeout())
                 && let Some((batch, _)) = p.in_flight.take()
             {
                 p.late_ends += 1;

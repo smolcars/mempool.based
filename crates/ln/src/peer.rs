@@ -287,11 +287,12 @@ enum State {
     Up(Instant),
 }
 
-/// The delay before retrying a peer after `failures` failures in a row.
-fn backoff(config: &Config, failures: u32) -> Duration {
+/// The delay before retrying a peer after `failures` failures in a row: `backoff_min` after the
+/// first (or a stable connection), doubling with each one after.
+pub(crate) fn backoff(config: &Config, failures: u32) -> Duration {
     config
         .backoff_min
-        .saturating_mul(1u32 << failures.min(16))
+        .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
         .min(config.backoff_max)
 }
 
@@ -670,7 +671,9 @@ mod tests {
     fn backoff_doubles_up_to_the_cap() {
         let c = Config::new(crate::Network::Regtest, "x".into());
         assert_eq!(backoff(&c, 0), Duration::from_secs(2));
-        assert_eq!(backoff(&c, 3), Duration::from_secs(16));
+        assert_eq!(backoff(&c, 1), Duration::from_secs(2));
+        assert_eq!(backoff(&c, 2), Duration::from_secs(4));
+        assert_eq!(backoff(&c, 4), Duration::from_secs(16));
         assert_eq!(backoff(&c, 40), Duration::from_secs(600));
     }
 
