@@ -341,6 +341,8 @@ fn node(ctx: &NetworkContext, on: &str, key: &str) -> Option<Head> {
             description: format!("Lightning node {hex} on {on}: its channels, capacity and fees."),
         });
     };
+    // The index cleaned it already; cleaning again changes nothing, and keeps the page's HTML
+    // from depending on how the index it reads was built.
     let name = n
         .alias()
         .and_then(clean_alias)
@@ -374,11 +376,12 @@ fn rankings(on: &str, query: Option<&str>) -> Head {
     }
 }
 
-/// The alias as `cleanAlias` in `web/src/pages/lightning/lightning.ts` makes it for the node
-/// page's title: control and format characters (but the joiner emoji are built with) become
-/// U+FFFD, and a run of combining marks keeps its first two. `None` when no name is left. Gossip
+/// The alias as `cleanAlias` in `web/src/pages/lightning/lightning.ts` makes it: control and
+/// format characters (but the joiner emoji are built with) become U+FFFD, and a run of combining
+/// marks keeps its first two. `None` when no name is left. The index applies it to every alias it
+/// holds, so the API, search and the node page's title serve the same text. Gossip
 /// limits an alias to 32 bytes, under the page's 64-character cut.
-fn clean_alias(alias: &str) -> Option<String> {
+pub(crate) fn clean_alias(alias: &str) -> Option<String> {
     let mut out = String::with_capacity(alias.len());
     let mut marks = 0;
     for c in alias.chars() {

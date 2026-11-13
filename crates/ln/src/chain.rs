@@ -255,10 +255,11 @@ impl Cache {
     }
 }
 
-/// An announcement waiting in LDK, and the script its keys require.
+/// An announcement waiting in LDK, the script its keys require, and when it was queued.
 struct Waiter {
     future: UtxoFuture,
     script: ScriptBuf,
+    since: Instant,
 }
 
 struct State {
@@ -277,8 +278,9 @@ struct State {
     /// Answers from the saved file ([`Lookup::restore`]), kept apart from the cache so nothing
     /// evicts or expires them before the replay has used them; dropped by `unrestore`.
     restored: HashMap<u64, (TxOut, Funded)>,
-    /// The announcement LDK is about to look up: its channel id and the script its keys require.
-    expect: Option<(u64, ScriptBuf)>,
+    /// The announcement LDK is about to look up: its channel id, the script its keys require, and
+    /// whether it is a stored channel being checked again.
+    expect: Option<(u64, ScriptBuf, bool)>,
     /// What the cache answered for it, if it was found.
     found: Option<(u64, TxOut, Funded)>,
     tip: Option<u32>,
@@ -364,9 +366,10 @@ impl Lookup {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Called just before LDK handles an announcement: the script its bitcoin keys require.
-    pub(crate) fn expect(&self, scid: u64, script: Option<ScriptBuf>) {
-        self.lock().expect = script.map(|s| (scid, s));
+    /// Called just before LDK handles an announcement: the script its bitcoin keys require, and
+    /// whether it is a stored channel (`Replay`), which bounds its own share of the queue.
+    pub(crate) fn expect(&self, scid: u64, script: Option<ScriptBuf>, stored: bool) {
+        self.lock().expect = script.map(|s| (scid, s, stored));
     }
 
     /// The output an announcement just answered from the cache was found at, if it was.
@@ -427,10 +430,27 @@ impl Lookup {
         s.waiting.contains_key(&scid) || s.early.contains_key(&scid)
     }
 
+    /// Announcements answered and being handed to LDK.
+    pub(crate) fn resolving(&self) -> usize {
+        self.lock().resolving
+    }
+
     /// Announcements waiting for a lookup or being resolved.
+    #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
         let s = self.lock();
         s.waiting_len + s.resolving
+    }
+
+    /// Every lookup waiting now was queued at or after `mark`: whatever waited then was answered.
+    /// A peer that keeps sending new channels keeps the queue from ever being empty, but not
+    /// this from coming true once the backlog of `mark` is through.
+    pub(crate) fn answered_before(&self, mark: Instant) -> bool {
+        self.lock()
+            .waiting
+            .values()
+            .flatten()
+            .all(|w| w.since >= mark)
     }
 
     pub(crate) fn queue_high(&self) -> bool {
@@ -525,8 +545,8 @@ impl UtxoLookup for Lookup {
     fn get_utxo(&self, chain_hash: &ChainHash, scid: u64) -> UtxoResult {
         let unknown = UtxoResult::Sync(Err(UtxoLookupError::UnknownTx));
         let mut s = self.lock();
-        let script = match s.expect.take() {
-            Some((id, script)) if id == scid => script,
+        let (script, stored) = match s.expect.take() {
+            Some((id, script, stored)) if id == scid => (script, stored),
             // Not asked through our handler: nothing to check the script against.
             _ => return unknown,
         };
@@ -562,6 +582,7 @@ impl UtxoLookup for Lookup {
         let waiter = Waiter {
             future: future.clone(),
             script,
+            since: Instant::now(),
         };
         if s.early.contains_key(&scid) {
             if s.early_len >= self.max_early {
@@ -574,7 +595,9 @@ impl UtxoLookup for Lookup {
             }
             return UtxoResult::Async(future);
         }
-        if s.waiting_len >= self.max_pending + PENDING_SLACK {
+        // Stored channels are not refused: the replay keeps at most half of `max_pending` of its
+        // own waiting, so a peer keeping the queue full cannot starve it.
+        if !stored && s.waiting_len >= self.max_pending + PENDING_SLACK {
             s.rejected.queue_full += 1;
             return unknown;
         }
