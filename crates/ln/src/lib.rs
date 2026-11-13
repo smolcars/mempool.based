@@ -307,6 +307,9 @@ pub struct Totals {
     pub oversize: u64,
     /// New channels refused because the graph is at [`Config::max_channels`].
     pub over_ceiling: u64,
+    /// Requested batches of listed channels a peer ended, or let time out, still owing some: the
+    /// channels owed are asked of another peer that listed them.
+    pub withheld: u64,
 }
 
 impl Totals {

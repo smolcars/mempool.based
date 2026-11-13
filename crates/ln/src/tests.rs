@@ -456,18 +456,29 @@ fn missing_channels_are_requested_from_every_peer_without_overlap() {
         .handle_reply_channel_range(a, reply(vec![1, 2, 3, 4]))
         .unwrap();
     assert_eq!(queries(&h), [(a, vec![2, 3, 4])]);
-    // b's list overlaps a's: only what nobody was asked for, up to the ceiling of 5 for b
-    // alone, so a list of invented ids cannot crowd out another peer's.
+    // b's list overlaps a's: it is asked only for what nobody was asked for. Its list is kept up
+    // to the ceiling of 5 for b alone (3 to 7), so a list of invented ids cannot crowd out
+    // another peer's.
     h.gossip
         .handle_reply_channel_range(b, reply((3..=11).collect()))
         .unwrap();
-    assert_eq!(queries(&h), [(b, vec![5, 6, 7, 8, 9])]);
-    assert_eq!(h.gossip.range_pending(), 8);
-    // One batch at a time per peer.
+    assert_eq!(queries(&h), [(b, vec![5, 6, 7])]);
+    assert_eq!(h.gossip.range_pending(), 6);
+    // One batch at a time per peer. a sends 2 and ends without 3 and 4: b listed those too, so
+    // they are asked of it next, ahead of the rest of its list.
+    h.gossip
+        .handle_channel_announcement(Some(a), &channel(2, 1, 2))
+        .unwrap();
     h.gossip
         .handle_reply_short_channel_ids_end(a, end())
         .unwrap();
     assert_eq!(h.gossip.range_pending(), 5);
+    assert!(queries(&h).is_empty());
+    h.gossip
+        .handle_reply_short_channel_ids_end(b, end())
+        .unwrap();
+    assert_eq!(queries(&h), [(b, vec![3, 4])]);
+    assert_eq!(crate::peer::totals(&h.gossip).withheld, 2);
     // b's list has ended: more of it is refused.
     assert!(
         h.gossip
@@ -531,12 +542,24 @@ fn a_held_channel_with_unannounced_nodes_is_requested_again() {
             .any(|e| matches!(e,
         MessageSendEvent::SendShortIdsQuery { node_id, .. } if *node_id == b))
     );
-    // Node 2's announcement arrives with the answer; the batch is then complete without an end.
+    // The answer: the channel again, and node 2's announcement.
     h.gossip
-        .handle_node_announcement(None, &node(2, "b", 0))
+        .handle_channel_announcement(Some(a), &channel(1, 1, 2))
+        .unwrap_err();
+    h.gossip
+        .handle_node_announcement(Some(a), &node(2, "b", 0))
         .unwrap();
-    h.gossip.range_tick();
+    h.gossip
+        .handle_reply_short_channel_ids_end(
+            a,
+            ReplyShortChannelIdsEnd {
+                chain_hash: chain(),
+                full_information: true,
+            },
+        )
+        .unwrap();
     assert_eq!(h.gossip.range_pending(), 0);
+    assert_eq!(crate::peer::totals(&h.gossip).withheld, 0);
 }
 
 #[test]

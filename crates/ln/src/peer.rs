@@ -340,6 +340,7 @@ pub(crate) fn totals(g: &Gossip) -> Totals {
         trimmed: get(&c.trimmed),
         oversize: get(&c.oversize),
         over_ceiling: get(&c.over_ceiling),
+        withheld: get(&c.withheld),
     }
 }
 

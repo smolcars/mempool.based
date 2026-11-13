@@ -1261,6 +1261,8 @@ pub struct LightningSummary {
     /// Gossip received per second over the last ten seconds, and in all.
     pub messages_per_sec: f64,
     pub gossip_bytes: u64,
+    /// Batches of listed channels a peer withheld: a graph missing channels some peer has.
+    pub withheld_batches: u64,
     /// History records stored and the last one's sequence number.
     pub history_records: u64,
     pub history_seq: u64,
@@ -2084,6 +2086,7 @@ mod tests {
                 reorgs: 0,
                 messages_per_sec: 4.5,
                 gossip_bytes: 50_000_000,
+                withheld_batches: 0,
                 history_records: 36_250,
                 history_seq: 36_250,
                 index_ms: Some(41.5),

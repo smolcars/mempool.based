@@ -62,8 +62,12 @@ const REPLAY_PER_TICK: usize = 2000;
 
 /// Channel ids per `query_short_channel_ids`: 16 KB of ids, well inside a 65 KB message.
 const SCID_BATCH: usize = 2000;
-/// A batch with no answer for this long is given up; its channels return at the next range sync.
-const BATCH_TIMEOUT: Duration = Duration::from_secs(120);
+/// A batch with no end marker for this long is given up, and what it still owes is asked of
+/// another peer that listed it. Tests wait less.
+const BATCH_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 120 });
+/// Batches a peer may withhold (end, or time out, with channels it listed still owed) before it
+/// loses its turn: from then on it is asked only for channels no other connected peer listed.
+const MAX_WITHHELD: u32 = 2;
 /// A channel list whose replies stop for this long, short of the queried range, counts as done.
 const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -84,21 +88,62 @@ struct RangeSync {
 struct PeerRange {
     /// While the peer's channel list is still arriving: when its last reply (or the query) came.
     listing: Option<Instant>,
+    /// Every channel id it listed that we wanted, and whether it was asked of this peer. An id is
+    /// asked of a peer at most once a connection. Holds `wanted` and the batch in flight, and is
+    /// capped at the ceiling.
+    listed: HashMap<u64, bool>,
     /// Channel ids this peer has and we lack, not yet requested.
     wanted: VecDeque<u64>,
-    /// The batch requested and not yet answered, and when it was sent.
-    in_flight: Option<(Vec<u64>, Instant)>,
+    /// The batch requested: the ids it has not delivered yet, and when it was sent.
+    in_flight: Option<(HashSet<u64>, Instant)>,
+    /// Batches it ended, or let time out, still owing channels.
+    withheld: u32,
+}
+
+impl PeerRange {
+    fn demoted(&self) -> bool {
+        self.withheld >= MAX_WITHHELD
+    }
 }
 
 impl RangeSync {
-    /// Forgets a peer's sync. What it still owed is freed for the next range reply to claim.
-    fn finish_batch(&mut self, peer: &PublicKey) {
-        if let Some(p) = self.peers.get_mut(peer)
-            && let Some((batch, _)) = p.in_flight.take()
-        {
-            for scid in batch {
+    /// Ends a peer's batch. Whatever it still owed is offered to another peer ([`Self::reoffer`]).
+    /// Returns whether it owed anything.
+    fn finish_batch(&mut self, peer: &PublicKey) -> bool {
+        let Some((owed, _)) = self.peers.get_mut(peer).and_then(|p| p.in_flight.take()) else {
+            return false;
+        };
+        let withheld = !owed.is_empty();
+        for scid in owed {
+            self.reoffer(peer, scid);
+        }
+        withheld
+    }
+
+    /// Asks for a channel `from` did not deliver of another connected peer that listed it and was
+    /// not asked for it yet, ahead of that peer's own; else frees it for the next range reply.
+    fn reoffer(&mut self, from: &PublicKey, scid: u64) {
+        match self.taker(from, scid) {
+            Some(to) => self.hand(&to, scid),
+            None => {
                 self.queued.remove(&scid);
             }
+        }
+    }
+
+    /// Another peer that listed `scid` and was not asked for it, one that kept its turn first.
+    fn taker(&self, from: &PublicKey, scid: u64) -> Option<PublicKey> {
+        self.peers
+            .iter()
+            .filter(|(id, p)| *id != from && p.listed.get(&scid) == Some(&false))
+            .min_by_key(|(_, p)| p.demoted())
+            .map(|(id, _)| *id)
+    }
+
+    fn hand(&mut self, to: &PublicKey, scid: u64) {
+        if let Some(p) = self.peers.get_mut(to) {
+            p.listed.insert(scid, true);
+            p.wanted.push_front(scid);
         }
     }
 }
@@ -205,6 +250,8 @@ pub(crate) struct Counters {
     pub(crate) oversize: AtomicU64,
     /// Refused by us: the graph is at its ceiling.
     pub(crate) over_ceiling: AtomicU64,
+    /// Requested batches a peer ended, or let time out, without channels it had listed.
+    pub(crate) withheld: AtomicU64,
 }
 
 pub(crate) struct Gossip {
@@ -447,17 +494,19 @@ impl Gossip {
     /// Puts a channel announcement through LDK, which asks [`Lookup`] for its funding output. The
     /// ceiling counts the channels in the graph and those waiting to enter it.
     ///
-    /// A `stored` channel (from the graph file) already holds its place under the ceiling.
+    /// A `stored` channel (from the graph file) already holds its place under the ceiling. Also
+    /// answers whether the sender did send the channel: its signatures held, or it is already
+    /// known or being checked (LDK refuses those before checking signatures).
     fn check_announcement(
         &self,
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
         stored: bool,
-    ) -> Result<bool, LightningError> {
+    ) -> (Result<bool, LightningError>, bool) {
         let c = &msg.contents;
         if c.chain_hash != self.chain {
             self.lookup.count(|r| r.wrong_chain += 1);
-            return Err(ignore("channel announced for another chain"));
+            return (Err(ignore("channel announced for another chain")), false);
         }
         let scid = c.short_channel_id;
         let _admission = self.admission.lock().unwrap_or_else(|e| e.into_inner());
@@ -473,7 +522,7 @@ impl Gossip {
             if !self.at_ceiling.swap(true, Ordering::Relaxed) {
                 let _ = self.events.send(Event::CeilingReached { channels: len });
             }
-            return Err(ignore("graph at its ceiling"));
+            return (Err(ignore("graph at its ceiling")), false);
         }
         // The two-of-two the funding output must pay; LDK's own check compares the same script.
         let script = c
@@ -482,9 +531,11 @@ impl Gossip {
             .ok()
             .zip(c.bitcoin_key_2.as_pubkey().ok())
             .map(|(a, b)| make_funding_redeemscript(&a, &b).to_p2wsh());
+        let keys = script.is_some();
         self.lookup.expect(scid, script, stored);
         let r = self.sync.handle_channel_announcement(their_node_id, msg);
-        self.lookup.expect(scid, None, false);
+        let looked_up = self.lookup.expect(scid, None, false) && keys;
+        let signed = known || looked_up || self.lookup.holds(scid);
         // Answered from the cache: LDK added it at once.
         let found = self.lookup.take_found(scid);
         if r.is_ok() && !known && found.is_some() {
@@ -498,7 +549,7 @@ impl Gossip {
             self.changed(Change::Node(c.node_id_1));
             self.changed(Change::Node(c.node_id_2));
         }
-        r
+        (r, signed)
     }
 
     /// Keeps a channel update for a stored channel not yet checked, if it is newer.
@@ -659,7 +710,7 @@ impl Gossip {
         })
     }
 
-    /// Moves on from batches that fully arrived without their end marker, or timed out.
+    /// Ends lists whose replies stopped, and batches whose end marker never came.
     pub(crate) fn range_tick(&self) {
         let Ok(mut r) = self.range.lock() else { return };
         for p in r.peers.values_mut() {
@@ -667,55 +718,97 @@ impl Gossip {
                 p.listing = None;
             }
         }
-        let graph = self.graph().read_only();
-        let done: Vec<PublicKey> = r
+        // Not when everything arrived: the end marker would then end the next batch (BOLT 7 asks
+        // for one query at a time anyway).
+        let late: Vec<PublicKey> = r
             .peers
             .iter()
             .filter(|(_, p)| {
-                p.in_flight.as_ref().is_some_and(|(batch, sent)| {
-                    sent.elapsed() >= BATCH_TIMEOUT
-                        || batch.iter().all(|scid| complete(&graph, *scid))
-                })
+                p.in_flight
+                    .as_ref()
+                    .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
             })
             .map(|(id, _)| *id)
             .collect();
-        drop(graph);
-        for peer in done {
-            r.finish_batch(&peer);
-            self.next_batch(&mut r, peer);
+        for peer in late {
+            self.end_batch(&mut r, &peer);
+        }
+        self.next_batches(&mut r);
+    }
+
+    /// A peer's batch ended, by its end marker or by timing out.
+    fn end_batch(&self, r: &mut RangeSync, peer: &PublicKey) {
+        if r.finish_batch(peer) {
+            self.counters.withheld.fetch_add(1, Ordering::Relaxed);
+            if let Some(p) = r.peers.get_mut(peer) {
+                p.withheld += 1;
+            }
         }
     }
 
-    /// Requests the peer's next batch of missing channels, unless one is in flight.
-    fn next_batch(&self, r: &mut RangeSync, peer: PublicKey) {
-        let RangeSync { peers, queued, .. } = r;
-        let Some(p) = peers.get_mut(&peer) else {
-            return;
-        };
-        if p.in_flight.is_some() {
-            return;
-        }
-        let graph = self.graph().read_only();
-        let mut batch = Vec::new();
-        while batch.len() < SCID_BATCH
-            && let Some(scid) = p.wanted.pop_front()
+    /// A channel announcement a peer sent: one fewer it owes.
+    fn delivered(&self, peer: &PublicKey, scid: u64) {
+        if let Ok(mut r) = self.range.lock()
+            && let Some((owed, _)) = r.peers.get_mut(peer).and_then(|p| p.in_flight.as_mut())
+            && owed.remove(&scid)
         {
-            if !complete(&graph, scid) {
-                batch.push(scid);
+            r.queued.remove(&scid);
+        }
+    }
+
+    /// Requests every idle peer's next batch. Peers that lost their turn go first, so what they
+    /// hand over is asked in the same pass.
+    fn next_batches(&self, r: &mut RangeSync) {
+        let mut ids: Vec<(bool, PublicKey)> =
+            r.peers.iter().map(|(id, p)| (!p.demoted(), *id)).collect();
+        ids.sort_unstable();
+        for (_, id) in ids {
+            self.next_batch(r, id);
+        }
+    }
+
+    /// Requests the peer's next batch of missing channels, unless one is in flight. A peer that
+    /// lost its turn hands each channel another peer listed to that peer instead.
+    fn next_batch(&self, r: &mut RangeSync, peer: PublicKey) {
+        let graph = self.graph().read_only();
+        let mut batch = HashSet::new();
+        loop {
+            let Some(p) = r.peers.get_mut(&peer) else {
+                return;
+            };
+            if p.in_flight.is_some() || batch.len() >= SCID_BATCH {
+                break;
+            }
+            let demoted = p.demoted();
+            let Some(scid) = p.wanted.pop_front() else {
+                break;
+            };
+            if complete(&graph, scid) {
+                r.queued.remove(&scid);
+            } else if let Some(to) = r
+                .taker(&peer, scid)
+                .filter(|to| demoted && r.peers.get(to).is_some_and(|p| !p.demoted()))
+            {
+                r.hand(&to, scid);
             } else {
-                queued.remove(&scid);
+                batch.insert(scid);
             }
         }
         drop(graph);
+        let Some(p) = r.peers.get_mut(&peer) else {
+            return;
+        };
         if batch.is_empty() {
             return;
         }
-        p.in_flight = Some((batch.clone(), Instant::now()));
+        let mut ids: Vec<u64> = batch.iter().copied().collect();
+        ids.sort_unstable();
+        p.in_flight = Some((batch, Instant::now()));
         self.send(MessageSendEvent::SendShortIdsQuery {
             node_id: peer,
             msg: QueryShortChannelIds {
                 chain_hash: self.chain,
-                short_channel_ids: batch,
+                short_channel_ids: ids,
             },
         });
     }
@@ -772,14 +865,16 @@ impl BaseMessageHandler for Gossip {
 
     fn peer_disconnected(&self, their_node_id: PublicKey) {
         self.sync.peer_disconnected(their_node_id);
-        // What it still owed is freed; another peer's next range reply can claim it.
-        if let Ok(mut r) = self.range.lock() {
-            r.finish_batch(&their_node_id);
-            if let Some(p) = r.peers.remove(&their_node_id) {
-                for scid in p.wanted {
-                    r.queued.remove(&scid);
-                }
+        // What it still owed or was to be asked goes to another peer that listed it, or is freed
+        // for the next range reply to claim.
+        if let Ok(mut r) = self.range.lock()
+            && let Some(p) = r.peers.remove(&their_node_id)
+        {
+            let owed = p.in_flight.map(|(owed, _)| owed).unwrap_or_default();
+            for scid in owed.into_iter().chain(p.wanted) {
+                r.reoffer(&their_node_id, scid);
             }
+            self.next_batches(&mut r);
         }
     }
 
@@ -888,7 +983,13 @@ impl RoutingMessageHandler for Gossip {
             &self.counters.channel_announcements,
             msg.serialized_length(),
         )?;
-        let r = self.check_announcement(their_node_id, msg, false);
+        let (r, signed) = self.check_announcement(their_node_id, msg, false);
+        // A forged one for a channel it owes does not count as sent.
+        if let Some(peer) = their_node_id
+            && signed
+        {
+            self.delivered(&peer, msg.contents.short_channel_id);
+        }
         self.tally(r)
     }
 
@@ -959,9 +1060,8 @@ impl RoutingMessageHandler for Gossip {
         for scid in msg.short_channel_ids {
             // Each peer's list is capped on its own, so one listing invented ids cannot crowd
             // out the others'.
-            // The batch in flight counts too: what one peer holds stays under the ceiling.
-            let held = p.wanted.len() + p.in_flight.as_ref().map_or(0, |(b, _)| b.len());
-            if held >= self.max_channels {
+            // `listed` holds the batch in flight too: what one peer holds stays under the ceiling.
+            if p.listed.len() >= self.max_channels {
                 break;
             }
             let want = match graph.channel(scid) {
@@ -984,12 +1084,17 @@ impl RoutingMessageHandler for Gossip {
                     new
                 }
             };
-            if want && queued.insert(scid) {
-                p.wanted.push_back(scid);
+            // Listed before: asked of it already, or kept for when another peer withholds it.
+            if want && !p.listed.contains_key(&scid) {
+                let first = queued.insert(scid);
+                p.listed.insert(scid, first);
+                if first {
+                    p.wanted.push_back(scid);
+                }
             }
         }
         drop(graph);
-        self.next_batch(&mut r, their_node_id);
+        self.next_batches(&mut r);
         Ok(())
     }
 
@@ -1002,8 +1107,8 @@ impl RoutingMessageHandler for Gossip {
             return Ok(());
         };
         if r.peers.contains_key(&their_node_id) {
-            r.finish_batch(&their_node_id);
-            self.next_batch(&mut r, their_node_id);
+            self.end_batch(&mut r, &their_node_id);
+            self.next_batches(&mut r);
         }
         Ok(())
     }

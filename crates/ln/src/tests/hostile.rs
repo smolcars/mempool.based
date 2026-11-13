@@ -43,6 +43,26 @@ impl Writeable for Raw {
     }
 }
 
+fn end_marker() -> Raw {
+    let end = ReplyShortChannelIdsEnd {
+        chain_hash: chain(),
+        full_information: true,
+    };
+    raw(REPLY_SHORT_CHANNEL_IDS_END, &end)
+}
+
+/// A whole channel list in one reply.
+fn listing(ids: &[u64]) -> Raw {
+    let reply = ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: ids.to_vec(),
+    };
+    raw(REPLY_CHANNEL_RANGE, &reply)
+}
+
 fn raw<T: Writeable>(ty: u16, msg: &T) -> Raw {
     Raw {
         ty,
@@ -56,6 +76,7 @@ const CHANNEL_ANNOUNCEMENT: u16 = 256;
 const NODE_ANNOUNCEMENT: u16 = 257;
 const CHANNEL_UPDATE: u16 = 258;
 const QUERY_SHORT_CHANNEL_IDS: u16 = 261;
+const REPLY_SHORT_CHANNEL_IDS_END: u16 = 262;
 const QUERY_CHANNEL_RANGE: u16 = 263;
 const REPLY_CHANNEL_RANGE: u16 = 264;
 
@@ -84,6 +105,9 @@ struct Script {
     scid_queries: AtomicUsize,
     range_replies: AtomicUsize,
     range_reply_ids: AtomicUsize,
+    /// How it answers `query_short_channel_ids`: `None`, never; else each asked id's messages
+    /// from the map (none for an id it lacks), then the end marker.
+    answers: Mutex<Option<HashMap<u64, Vec<Raw>>>>,
 }
 
 impl BaseMessageHandler for Script {
@@ -172,9 +196,16 @@ impl RoutingMessageHandler for Script {
     fn handle_query_short_channel_ids(
         &self,
         _: PublicKey,
-        _: QueryShortChannelIds,
+        q: QueryShortChannelIds,
     ) -> Result<(), LightningError> {
         self.scid_queries.fetch_add(1, Ordering::Relaxed);
+        if let Some(answers) = &*self.answers.lock().unwrap() {
+            let mut queue = self.queue.lock().unwrap();
+            for id in q.short_channel_ids {
+                queue.extend(answers.get(&id).into_iter().flatten().cloned());
+            }
+            queue.push_back(end_marker());
+        }
         Ok(())
     }
     fn processing_queue_high(&self) -> bool {
@@ -847,6 +878,65 @@ async fn synced_despite(invent: bool, list: bool) {
     // A peer's channel list is capped at the ceiling, whatever it claims.
     assert!(peer.gossip().range_pending() <= 2 * 100_000 + 2);
     attack.abort();
+    peer.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_lists_and_ends_without_are_asked_of_another() {
+    withheld_then_asked_elsewhere(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_lists_and_never_answers_are_asked_of_another() {
+    withheld_then_asked_elsewhere(false).await;
+}
+
+/// A hostile peer and an honest one list the same real channels. The hostile one lists first, so
+/// it is asked for them, and withholds them: it sends the end marker without them (`end`), or
+/// nothing until the batch times out. The honest peer is then asked, and every channel arrives.
+async fn withheld_then_asked_elsewhere(end: bool) {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let honest = Hostile::start().await;
+    let node = FakeChain::at(200);
+    let ids: Vec<u64> = (0..50).map(|i| real(&node, i, 1, 2)).collect();
+    let answers = ids
+        .iter()
+        .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 1, 2))]))
+        .collect();
+    *honest.script.answers.lock().unwrap() = Some(answers);
+    let peer = ours(&dir, vec![h.addr, honest.addr], &node);
+    wait_for("both lists asked for", || {
+        h.script.range_queries.load(Ordering::Relaxed) == 1
+            && honest.script.range_queries.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    h.send([listing(&ids)]);
+    wait_for("the hostile peer asked", || {
+        h.script.scid_queries.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    honest.send([listing(&ids)]);
+    wait_for("the honest list read", || {
+        peer.gossip().range_pending() == ids.len()
+    })
+    .await;
+    if end {
+        h.send([end_marker()]);
+    }
+    let started = std::time::Instant::now();
+    wait_for("every withheld channel", || {
+        peer.read(|g| ids.iter().all(|id| g.channel(*id).is_some()))
+    })
+    .await;
+    println!("withheld channels arrived {:?} after", started.elapsed());
+    assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 1);
+    assert_eq!(h.script.scid_queries.load(Ordering::Relaxed), 1);
+    assert_eq!(totals(&peer).withheld, 1);
+    wait_for("both still up", || {
+        up(&peer, h.addr) && up(&peer, honest.addr)
+    })
+    .await;
     peer.shutdown().await.unwrap();
 }
 

@@ -862,6 +862,7 @@ fn summary(network: &'static str, s: &ln::Stats, status: &ln::Status, l: &Lightn
         reorgs: c.reorgs,
         messages_per_sec: s.messages_per_sec,
         gossip_bytes: s.totals.bytes,
+        withheld_batches: s.totals.withheld,
         history_records: l.records.load(Ordering::Relaxed),
         history_seq: l.seq.load(Ordering::Relaxed),
         index_ms: match l.index_ms.load(Ordering::Relaxed) {
