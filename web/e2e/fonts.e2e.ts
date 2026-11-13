@@ -39,6 +39,13 @@ async function lightning(page: Page) {
   });
 }
 
+/** No replacements recorded. */
+async function noReplacements(page: Page) {
+  await page.route(/\/regtest\/api\/v1\/(fullrbf\/)?replacements$/, (route) =>
+    route.fulfill({ json: [] }),
+  );
+}
+
 /** Every page type, each with what it needs stubbed. */
 const PAGES: { path: string; stub?: (page: Page) => Promise<void> }[] = [
   { path: "/regtest/" },
@@ -51,7 +58,8 @@ const PAGES: { path: string; stub?: (page: Page) => Promise<void> }[] = [
   { path: "/regtest/mining", stub: stubRetargets },
   { path: "/regtest/mining/pool/unknown" },
   { path: "/regtest/mempool" },
-  { path: "/regtest/rbf" },
+  // Empty, whichever test replaced a transaction first: its "none yet" once lay over the next part.
+  { path: "/regtest/rbf", stub: noReplacements },
   { path: "/regtest/lightning", stub: lightning },
   { path: "/regtest/lightning/rankings", stub: lightning },
   { path: `/regtest/lightning/node/${ACINQ}`, stub: lightning },
