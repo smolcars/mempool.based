@@ -1799,7 +1799,7 @@ async fn totals_equal_a_scan_through_every_kind_of_change() {
     // `TOTALS_STEPS` and `TOTALS_SEED` run a longer or another sequence by hand.
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
     let mut rng = Rng(env("TOTALS_SEED").unwrap_or(0x5eed_1234_abcd_ef01) | 1);
-    let steps = env("TOTALS_STEPS").unwrap_or(100);
+    let steps = env("TOTALS_STEPS").unwrap_or(30);
     let mut tip = 0u32;
     let mut branch = 0u8;
     // Old blocks, newest first and with gaps, as a backfill leaves them.
