@@ -1,7 +1,16 @@
 // The mempool over time: its size by fee band and what flowed through it, from the server's
 // history (docs/FRONTEND.md "Mempool history", docs/DESIGN.md "Mempool history").
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  lazy,
+  Loading as Pending,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
@@ -132,10 +141,23 @@ function MempoolHistory(props: { network: Network }) {
  */
 function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
   let list: HTMLUListElement | undefined;
-  // The chosen period in sight on a phone's one row, even when it is far along it.
-  onSettled(() => {
-    const current = list?.querySelector<HTMLElement>("[aria-current]");
+  // The chosen period in sight on a phone's one row, even when it is far along it: whenever the
+  // choice changes, and when the browser brings the page back from its cache (Back, in Safari,
+  // restored the row's old scroll with the chosen period out of sight).
+  const reveal = () => {
+    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
     if (list && current) list.scrollLeft = current.offsetLeft - list.clientWidth / 2;
+  };
+  createEffect(
+    () => [props.interval.id, props.fitted] as const,
+    () => {
+      requestAnimationFrame(reveal);
+    },
+  );
+  onSettled(() => {
+    reveal();
+    window.addEventListener("pageshow", reveal);
+    return () => window.removeEventListener("pageshow", reveal);
   });
   return (
     <nav class="mempool-intervals" aria-label="Period">
@@ -159,7 +181,7 @@ function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
               <Link
                 class="mempool-intervals__item"
                 href={paths.mempool(p.id)}
-                aria-current={!props.fitted && p.id === props.interval.id ? "page" : undefined}
+                aria-current={!props.fitted && p.id === props.interval.id ? "page" : "false"}
               >
                 {p.label}
                 <span class="visually-hidden">: {p.words}</span>

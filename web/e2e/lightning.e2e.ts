@@ -254,6 +254,9 @@ test("History in the section's links lands on the overview's chart from any Ligh
       await expect(nav.getByRole("link", { name: "Rankings" })).toBeVisible();
       await nav.getByRole("link", { name: "History" }).click();
       await expect(page).toHaveURL(/\/regtest\/lightning#history$/);
+      // One current destination: the chart, now the reader is on it.
+      await expect(nav.locator('[aria-current="location"]')).toHaveText("History");
+      await expect(nav.locator('[aria-current="page"]')).toHaveCount(0);
       const heading = page.getByRole("heading", { name: "Over time" });
       await expect(heading).toBeInViewport();
       // Clear of the sticky header, not under it.
@@ -304,4 +307,13 @@ test.describe("Lightning's lists", () => {
       }
     }
   });
+});
+
+test("the overview's own links mark one current place at a time", async ({ page }) => {
+  await serve(page, mainnet());
+  await page.goto("/regtest/lightning");
+  const nav = page.getByRole("navigation", { name: "Lightning" });
+  await expect(nav.locator(":is([aria-current='page'], [aria-current='location'])")).toHaveText(
+    "Overview",
+  );
 });

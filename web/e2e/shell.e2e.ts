@@ -126,3 +126,48 @@ for (const [name, viewport] of [
     }
   });
 }
+
+// The current section was once unmarked once a period was chosen or a child page opened.
+test("the main nav marks the current section on every page under it, whatever the query", async ({
+  page,
+}) => {
+  const routes: [string, string][] = [
+    ["/regtest/blocks", "Blocks"],
+    [`/regtest/block/${chain.blocks[106]}`, "Blocks"],
+    ["/regtest/block/next", "Blocks"],
+    ["/regtest/mempool", "Mempool"],
+    ["/regtest/mempool?interval=2h", "Mempool"],
+    ["/regtest/mempool?interval=all", "Mempool"],
+    ["/regtest/mining", "Mining"],
+    ["/regtest/mining?period=24h", "Mining"],
+    ["/regtest/mining?period=all", "Mining"],
+    ["/regtest/mining/pool/unknown", "Mining"],
+    ["/regtest/lightning", "Lightning"],
+    ["/regtest/lightning/rankings", "Lightning"],
+  ];
+  const nav = page.getByRole("navigation", { name: "Main" });
+  const marked = async () =>
+    nav
+      .locator("a")
+      .evaluateAll((all) =>
+        all
+          .filter(
+            (a) =>
+              a.getAttribute("aria-current") === "true" &&
+              getComputedStyle(a, "::after").backgroundColor !== "rgba(0, 0, 0, 0)",
+          )
+          .map((a) => a.textContent),
+      );
+  for (const [path, section] of routes) {
+    await page.goto(path);
+    await expect.poll(marked, { message: path }).toStrictEqual([section]);
+  }
+  // In-page: a period chosen keeps the section marked.
+  await page.goto("/regtest/mining");
+  await page
+    .getByRole("navigation", { name: "Period" })
+    .getByRole("link", { name: /all time/ })
+    .click();
+  await expect(page).toHaveURL(/period=all$/);
+  await expect.poll(marked).toStrictEqual(["Mining"]);
+});

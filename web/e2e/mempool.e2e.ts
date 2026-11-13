@@ -339,3 +339,25 @@ test("a band under the pointer, a finger or the keys keeps its colour, and a tap
   await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(0);
   await touch.close();
 });
+
+// After Back, Safari brought the period row back scrolled where it was, the chosen one out of sight.
+test("the chosen period is in sight on a phone's row, also after going back", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const periods = page.getByRole("navigation", { name: "Period" });
+  const chosenInView = () =>
+    periods.locator("ul").evaluate((ul) => {
+      const current = ul.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!current) return false;
+      const r = current.getBoundingClientRect();
+      const box = ul.getBoundingClientRect();
+      return r.left >= box.left - 1 && r.right <= box.right + 1;
+    });
+  await page.goto("/regtest/mempool?interval=4y");
+  await expect.poll(chosenInView).toBe(true);
+  await periods.getByRole("link", { name: /the last 2 hours/ }).click();
+  await expect(page).toHaveURL(/interval=2h$/);
+  await expect.poll(chosenInView).toBe(true);
+  await page.goBack();
+  await expect(page).toHaveURL(/interval=4y$/);
+  await expect.poll(chosenInView).toBe(true);
+});

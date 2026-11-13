@@ -1,6 +1,6 @@
 // Pieces every Lightning page shares: the gate that says whether there is anything to show,
 // names from gossip, links, figures and the section's own search.
-import { useNavigate } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
@@ -317,6 +317,9 @@ export function rememberList(href: string, label: string): void {
  */
 export function LightningNav(props: { here: "overview" | "rankings" | "search" | "detail" }) {
   const back = () => (props.here === "detail" ? lastList : undefined);
+  // One current destination: the overview at its top, its chart once the address says so.
+  const location = useLocation();
+  const atChart = () => props.here === "overview" && location.hash === "#history";
   return (
     <nav class="ln-nav" aria-label="Lightning">
       <Show when={back()}>
@@ -329,19 +332,23 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
       <Link
         class="ln-nav__item"
         href={paths.lightning()}
-        aria-current={props.here === "overview" ? "page" : undefined}
+        aria-current={props.here === "overview" && !atChart() ? "page" : "false"}
       >
         Overview
       </Link>
       <Link
         class="ln-nav__item"
         href={paths.lightningRankings()}
-        aria-current={props.here === "rankings" ? "page" : undefined}
+        aria-current={props.here === "rankings" ? "page" : "false"}
       >
         Rankings
       </Link>
       {/* The overview's chart, from wherever the reader is: an anchor, not another page. */}
-      <Link class="ln-nav__item" href={`${paths.lightning()}#history`}>
+      <Link
+        class="ln-nav__item"
+        href={`${paths.lightning()}#history`}
+        aria-current={atChart() ? "location" : "false"}
+      >
         History
       </Link>
     </nav>

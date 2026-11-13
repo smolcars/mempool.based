@@ -264,7 +264,7 @@ function History(props: { network: Network }) {
                   <Link
                     class="ln-picker__item"
                     href={paths.lightning(p.id)}
-                    aria-current={!fitted() && p.id === interval().id ? "page" : undefined}
+                    aria-current={!fitted() && p.id === interval().id ? "page" : "false"}
                   >
                     {p.label}
                     <span class="visually-hidden">: {p.words}</span>

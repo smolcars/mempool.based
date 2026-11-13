@@ -115,9 +115,20 @@
   .nav a:hover {
     color: var(--color-text);
   }
-  .nav a[aria-current="page"] {
+  /* The current section's bar is an element of its own, not an inset shadow, which iOS Safari
+     was seen to leave unpainted after an in-page navigation (a period chosen, a pool opened). */
+  .nav a {
+    position: relative;
+  }
+  .nav a[aria-current="true"] {
     color: var(--color-text);
-    box-shadow: inset 0 -2px 0 var(--color-accent);
+  }
+  .nav a[aria-current="true"]::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0;
+    height: 2px;
+    background: var(--color-accent);
   }
 
   /* A 44 px button around a 36 px drawn one, so the target is a thumb's and the look stays small. */
