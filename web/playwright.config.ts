@@ -30,10 +30,15 @@ const names = DEVICES[engine];
 if (!names) throw new Error(`E2E_ENGINE is ${engine}: use chromium, webkit or firefox`);
 const device = devices[phone ? names.phone : names.desktop];
 if (!device) throw new Error(`Playwright has no device named for ${engine}`);
-const use =
-  phone && engine === "firefox"
+const use = {
+  ...(phone && engine === "firefox"
     ? { ...device, viewport: { width: 393, height: 659 }, deviceScaleFactor: 3, hasTouch: true }
-    : device;
+    : device),
+  // Firefox on Linux allows WebGL2 only if a GPU probe at launch answers within 4 s; on a busy
+  // machine it can miss that, and the browser then has no WebGL2 for its whole life
+  // (docs/FRONTEND.md "Other engines"). Other engines ignore Firefox's prefs.
+  launchOptions: { firefoxUserPrefs: { "webgl.force-enabled": true } },
+};
 const project = phone ? `${engine}-phone` : engine;
 
 export default defineConfig<{ regtestRpc: RegtestRpc | null }>({
