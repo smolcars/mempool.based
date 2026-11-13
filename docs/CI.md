@@ -10,9 +10,9 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 
 | Job | Limit | Warm, 2026-11-13 |
 |---|---|---|
-| `rust` | 120 s | JOB_RUST |
-| `e2e` | 120 s | JOB_E2E |
-| `web` | 60 s | JOB_WEB |
+| `rust` | 120 s | 92 s |
+| `e2e` | 120 s | 94 to 101 s |
+| `web` | 60 s | 31 to 38 s |
 
 The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
 
@@ -120,15 +120,20 @@ Most coverage belongs in the first two layers. Integration and end-to-end tests 
 
 ## Measuring
 
-When a PR changes the workflow, its description states the cold and warm wall-clock time of the run.
+When a PR changes the workflow, its description states the cold and warm wall-clock time of the run, from its creation to the last job's end.
 
-Measured 2026-11-12, from the start of the run to `ci-ok`. Warm reads the caches a `master` push wrote; cold has no `e2e` cache. The `rust` job's cache came from `master` in both.
+**Measured 2026-11-13**, on the pull request that set the limits above, which touches Rust and the frontend, so every job ran. Warm: the caches were an exact hit.
 
-| A PR that touches | Jobs | Warm | Cold |
-|---|---|---|---|
-| Docs only | `changes`, `ci-ok` | 10 s | 10 s (no cache involved) |
-| Rust only | `rust`, `e2e` | 63 s | 50 s |
-| The frontend only | `web`, `e2e`, `image` | 46 s | 58 s |
-| Everything | `rust`, `web`, `e2e`, `image` | 60 s | 67 s |
+| | Before (three PRs that day) | After |
+|---|---|---|
+| Whole run | 180 to 208 s | RUNS |
+| `rust` | 148 to 191 s | 92 s |
+| `e2e` | 101 to 113 s | 94 to 101 s |
+| `web` | 30 to 39 s | 31 to 38 s |
+| `image` | 15 to 20 s | 16 to 19 s |
 
-Runs vary by about 10 s, more than the caches save. The table predates the mempool history page; measured again on 2026-11-12, a warm pull request that touched everything took 125 s. `rust` was the longest job at 111 s, then `e2e` at 77 s, `web` at 35 s and `image` at 20 s. Inside `e2e`, `rustup toolchain install` took 8 s and restoring the cargo cache 2 s, then `bun run e2e` took 61 s. Within that, the build was ready at 16 s, the regtest node (pulling its image and building the scenario's chain) at 19 s, and the 67 tests took 40 s on the runner's 2 workers. The node is the critical path before the tests. No browser test waits for the server to record a live minute: the store starts with history in it ([`FRONTEND.md`](FRONTEND.md#adding-a-test)).
+Before, in `rust`, setup took 18 s (checkout, `rustup toolchain install` 8 s, the cache 4 to 8 s), clippy 9 to 12 s, building the tests 41 s, and running them 113 s: `cargo test` ran 28 binaries one after another, the Lightning one alone 37 s, the server's unit tests 16 s, the engine's 15 s, the WebSocket tests 11 s. Signature checks by secp256k1 compiled at `-O0` were a large part: optimising it alone took the tests' summed time from 295 s to 260 s on a laptop. After: setup 18 s, clippy 9 s, building the tests 26 s (examples no longer built), the tests 36 s with nextest, doc tests 1 s. The tests together take about 290 s; most of it is waiting on sockets and timers, which eight at a time overlap. The longest single tests, about 10 s each, are a random test of the mempool topics and two hostile-peer tests of the Lightning peer.
+
+In `e2e`, setup takes 16 to 24 s, the build and the regtest node are both ready at 24 to 25 s, then the 103 browser tests took 59 s on two workers before and 43 to 47 s on four after: about 33 s for the tests that share the node, then 12 s for the ones that mine, one at a time.
+
+**Cold** (no cache: a new lockfile, toolchain or `rust-cache` key), `rust` took 165 s and `e2e` 107 to 150 s, so a run that rebuilds its dependencies can pass three minutes. The limits are not enforced on it; the next `master` push saves the cache.

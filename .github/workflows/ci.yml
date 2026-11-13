@@ -94,7 +94,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: cache
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || github.head_ref == 't3/ci-budget' }} # TEMP: measure warm
+          save-if: ${{ github.ref == 'refs/heads/master' }}
           # Its key leaves out Cargo.toml's [profile] sections: change this when one changes.
           key: secp256k1-optimised
       # nextest runs every test binary at once, not one after another, and times each test. The
@@ -175,7 +175,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: cache
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || github.head_ref == 't3/ci-budget' }} # TEMP: measure warm
+          save-if: ${{ github.ref == 'refs/heads/master' }}
           # Its key leaves out Cargo.toml's [profile] sections: change this when one changes.
           key: secp256k1-optimised
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
