@@ -732,19 +732,14 @@ async fn protocol_abuse_costs_one_connection_and_never_another_peer() {
         ponglen: 65_531,
         byteslen: 0,
     };
+    let dialled = h.proxy.accepted.load(Ordering::Relaxed);
     h.send((0..5000).map(|_| raw(PING, &ping)));
-    let mut events = peer.events();
-    tokio::time::timeout(HANG, async {
-        loop {
-            if let Ok(Event::PeerDisconnected { peer, .. }) = events.recv().await
-                && peer == h.addr
-            {
-                break;
-            }
-        }
+    // Dropped, and so dialled again: one connection per peer at a time. Read from state, not
+    // from the event stream, which a busy test can fall behind and skip.
+    wait_for("the stalled peer dropped", || {
+        h.proxy.accepted.load(Ordering::Relaxed) > dialled
     })
-    .await
-    .expect("the stalled peer dropped");
+    .await;
     assert!(up(&peer, honest.addr));
     h.proxy.stall.store(false, Ordering::Relaxed);
     h.script.queue.lock().unwrap().clear();

@@ -1154,23 +1154,10 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
     })
     .await;
 
-    // The fake drops us; the peer reconnects.
-    let mut events = peer.events();
+    // The fake drops us; the peer reconnects. Read from state, not from the event stream, which a
+    // busy test can fall behind and skip.
     fake.pm.disconnect_all_peers();
-    let mut disconnected = false;
-    tokio::time::timeout(HANG, async {
-        loop {
-            match events.recv().await {
-                Ok(Event::PeerDisconnected { peer, .. }) if peer == fake.addr => {
-                    disconnected = true
-                }
-                Ok(Event::PeerConnected(p)) if p == fake.addr && disconnected => break,
-                _ => {}
-            }
-        }
-    })
-    .await
-    .expect("reconnected");
+    wait_for("reconnected", || !fake.pm.list_peers().is_empty()).await;
     wait_for("connected again", || status.borrow().peers[1].connected).await;
 
     let written = peer.shutdown().await.unwrap();
