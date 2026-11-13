@@ -118,6 +118,13 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
           timeout: 15_000,
         });
+        // In the wide faces a Linux machine falls back to: CI's runner once broke a line a Mac's
+        // fonts kept whole.
+        await page.evaluate(() => {
+          const root = document.documentElement.style;
+          root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+          root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+        });
         await page.waitForTimeout(300);
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
