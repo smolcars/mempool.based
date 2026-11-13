@@ -1080,14 +1080,20 @@ fn open_channel(to: PublicKey) -> MessageSendEvent {
     }
 }
 
+/// How long a test waits for something before calling it a hang. Only a hang reaches it: a slow
+/// machine (CI runs eight tests at once on four cores) takes longer, never fails. Under nextest's
+/// 30 s, so a hang fails with what it waited for.
+const HANG: Duration = Duration::from_secs(25);
+
 async fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
-    for _ in 0..500 {
-        if ok() {
-            return;
-        }
+    let hang = tokio::time::Instant::now() + HANG;
+    while !ok() {
+        assert!(
+            tokio::time::Instant::now() < hang,
+            "timed out waiting for {what}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("timed out waiting for {what}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1148,23 +1154,10 @@ async fn syncs_refuses_channels_reconnects_and_restarts_from_disk() {
     })
     .await;
 
-    // The fake drops us; the peer reconnects.
-    let mut events = peer.events();
+    // The fake drops us; the peer reconnects. Read from state, not from the event stream, which a
+    // busy test can fall behind and skip.
     fake.pm.disconnect_all_peers();
-    let mut disconnected = false;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match events.recv().await {
-                Ok(Event::PeerDisconnected { peer, .. }) if peer == fake.addr => {
-                    disconnected = true
-                }
-                Ok(Event::PeerConnected(p)) if p == fake.addr && disconnected => break,
-                _ => {}
-            }
-        }
-    })
-    .await
-    .expect("reconnected");
+    wait_for("reconnected", || !fake.pm.list_peers().is_empty()).await;
     wait_for("connected again", || status.borrow().peers[1].connected).await;
 
     let written = peer.shutdown().await.unwrap();
@@ -1780,7 +1773,7 @@ async fn the_node_down_then_back_loses_nothing() {
                 .is_err()
         );
     }
-    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+    let failed = tokio::time::timeout(HANG, async {
         loop {
             if let Ok(Event::LookupFailed { pending, error, .. }) = events.recv().await {
                 // A fixed label, not the node's own text ("down").

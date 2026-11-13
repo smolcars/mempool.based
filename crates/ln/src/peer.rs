@@ -73,6 +73,9 @@ struct Shared {
     status: watch::Sender<Status>,
     events: broadcast::Sender<Event>,
     changes: broadcast::Sender<Change>,
+    /// When each peer was dialled: what tests check the back-off against.
+    #[cfg(test)]
+    dials: std::sync::Mutex<Vec<(PublicKey, Instant)>>,
 }
 
 impl Peer {
@@ -192,6 +195,8 @@ impl Peer {
             status,
             events,
             changes,
+            #[cfg(test)]
+            dials: std::sync::Mutex::new(Vec::new()),
         });
         let stop = Arc::new(Notify::new());
         let task = tokio::spawn(supervise(
@@ -214,6 +219,17 @@ impl Peer {
     #[cfg(test)]
     pub(crate) fn gossip(&self) -> &Arc<Gossip> {
         &self.shared.gossip
+    }
+
+    /// When `node` was dialled, in order.
+    #[cfg(test)]
+    pub(crate) fn dials_of(&self, node: PublicKey) -> Vec<Instant> {
+        self.shared.dials.lock().map_or(Vec::new(), |d| {
+            d.iter()
+                .filter(|(n, _)| *n == node)
+                .map(|(_, at)| *at)
+                .collect()
+        })
     }
 
     /// This peer's identity. It has no channels and is never announced.
@@ -287,11 +303,12 @@ enum State {
     Up(Instant),
 }
 
-/// The delay before retrying a peer after `failures` failures in a row.
-fn backoff(config: &Config, failures: u32) -> Duration {
+/// The delay before retrying a peer after `failures` failures in a row: `backoff_min` after the
+/// first (or a stable connection), doubling with each one after.
+pub(crate) fn backoff(config: &Config, failures: u32) -> Duration {
     config
         .backoff_min
-        .saturating_mul(1u32 << failures.min(16))
+        .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
         .min(config.backoff_max)
 }
 
@@ -314,6 +331,10 @@ fn dial(
 ) -> JoinHandle<()> {
     let shared = Arc::clone(shared);
     let timeout = shared.config.connect_timeout;
+    #[cfg(test)]
+    if let Ok(mut d) = shared.dials.lock() {
+        d.push((peer.node_id, Instant::now()));
+    }
     tokio::spawn(async move {
         if let Ok(Ok(stream)) = tokio::time::timeout(timeout, TcpStream::connect(peer.addr)).await {
             socket::run(&shared.pm, &shared.gossip, peer.node_id, stream).await;
@@ -670,7 +691,9 @@ mod tests {
     fn backoff_doubles_up_to_the_cap() {
         let c = Config::new(crate::Network::Regtest, "x".into());
         assert_eq!(backoff(&c, 0), Duration::from_secs(2));
-        assert_eq!(backoff(&c, 3), Duration::from_secs(16));
+        assert_eq!(backoff(&c, 1), Duration::from_secs(2));
+        assert_eq!(backoff(&c, 2), Duration::from_secs(4));
+        assert_eq!(backoff(&c, 4), Duration::from_secs(16));
         assert_eq!(backoff(&c, 40), Duration::from_secs(600));
     }
 
