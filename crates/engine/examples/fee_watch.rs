@@ -386,7 +386,7 @@ fn replay(lines: impl Iterator<Item = Value>) {
     let mut smoothers = vec![fees::Smoother::default(); tunings.len()];
     let mut inflow = Inflow::default();
     let mut out = Vec::new();
-    let (mut same, mut compared) = ([0usize; 3], 0usize);
+    let (mut same, mut apart, mut compared) = ([0usize; 3], [0f64; 3], 0usize);
     for mut v in lines {
         if let Some(t) = v["arrived"].as_u64() {
             for tx in v["txs"].as_array().unwrap() {
@@ -419,19 +419,24 @@ fn replay(lines: impl Iterator<Item = Value>) {
                 }
                 // How closely the replay of the served tuning follows what was served.
                 compared += 1;
-                for (i, n) in same.iter_mut().enumerate() {
-                    *n += usize::from(v["quarter@0.8"][i] == v["ours"][i]);
+                for i in 0..3 {
+                    let (a, b) = (v["quarter@0.8"][i].as_f64(), v["ours"][i].as_f64());
+                    same[i] += usize::from(a == b);
+                    apart[i] += (a.unwrap() - b.unwrap()).abs() / 1000.0;
                 }
             }
         }
         out.push(v);
     }
-    println!(
-        "replayed the served tuning equals what was served at {compared} samples: high {:.1}%, medium {:.1}%, low {:.1}%",
-        same[0] as f64 * 100.0 / compared as f64,
-        same[1] as f64 * 100.0 / compared as f64,
-        same[2] as f64 * 100.0 / compared as f64,
-    );
+    // The live answer was smoothed over a tick every 2 s, the replay over these samples only.
+    for (i, level) in LEVELS.iter().take(3).enumerate() {
+        println!(
+            "replayed served tuning against served, {}: equal at {:.1}% of {compared} samples, {:.3} sat/vB apart on average",
+            level.name,
+            same[i] as f64 * 100.0 / compared as f64,
+            apart[i] / compared as f64,
+        );
+    }
     if let Ok(path) = std::env::var("REPLAY_OUT") {
         let text: String = out.iter().map(|v| format!("{v}\n")).collect();
         std::fs::write(path, text).unwrap();
@@ -605,6 +610,15 @@ fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len() as f64
 }
 
+/// Three decimals, or `-` when there was nothing to average.
+fn num(x: f64) -> String {
+    if x.is_finite() {
+        format!("{x:.3}")
+    } else {
+        "-".into()
+    }
+}
+
 /// Spans whose outcome means nothing: a gap between two recorded blocks longer than `max_gap`
 /// (the recorder's node lost the network; on a live chain a two-hour gap comes about once in
 /// 450 years), and the [`fees::INFLOW_MINUTES`] after it, while the method's arrivals still
@@ -725,20 +739,20 @@ fn score(lines: &[Value], sources: &[&str]) {
                 tally.over.sort_by(f64::total_cmp);
                 let (lo, hi) = tally.interval();
                 println!(
-                    "{source:<12} {:<7} {:>5} {:>5.1}% {:>6.1}% - {:>5.1}% {:>6} {:>8.3} {:>8.3} {:>8.3} {:>5} {:>16} {:>16}",
+                    "{source:<12} {:<7} {:>5} {:>5.1}% {:>6.1}% - {:>5.1}% {:>6} {:>8} {:>8} {:>8} {:>5} {:>16} {:>16}",
                     level.name,
                     tally.total,
                     tally.met as f64 * 100.0 / tally.total as f64,
                     lo * 100.0,
                     hi * 100.0,
                     tally.groups.len(),
-                    mean(&tally.over),
-                    tally
+                    num(mean(&tally.over)),
+                    num(tally
                         .over
                         .get(tally.over.len() / 2)
                         .copied()
-                        .unwrap_or(f64::NAN),
-                    mean(&tally.short),
+                        .unwrap_or(f64::NAN)),
+                    num(mean(&tally.short)),
                     tally.unscored,
                     Tally::pct(tally.faster.0, tally.faster.1),
                     Tally::pct(tally.slower.0, tally.slower.1),

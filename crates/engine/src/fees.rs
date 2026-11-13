@@ -70,8 +70,8 @@ pub type LeftOut = fn(usize) -> usize;
 
 /// The tuning served.
 pub const TUNING: Tuning = Tuning {
-    confidence: 0.8,
-    busiest_left_out: |n| if n >= 5 { (n / 4).max(1) } else { 0 },
+    confidence: 0.9,
+    busiest_left_out: |n| usize::from(n >= 5),
 };
 
 /// Seconds by which the `blocks`-th block has come with probability `confidence`, block

@@ -104,11 +104,12 @@ fn one_absurd_transaction_moves_nothing() {
 fn steady_arrivals_raise_a_level_that_would_otherwise_be_the_minimum() {
     let d = depth(&[(1_000, B / 2)]);
     assert_eq!(levels(recommend(&d, &Inflow::default(), 100)), [100; 4]);
-    // 50 kvB a minute at 2 sat/vB: 805 kvB before the next block at 80%, on top of half a
-    // block at 1 sat/vB, does not fit: outbid the 1 sat/vB half. Three blocks have room.
+    // 50 kvB a minute at 2 sat/vB: 1.15 MvB before the next block at 90%, more than a block:
+    // outbid the arrivals too. Three blocks hold 2.66 MvB of them but not the 1 sat/vB half as
+    // well: outbid that half. Six blocks hold everything.
     let minutes = vec![vec![(2_000, 50_000)]; 10];
     let r = recommend(&d, &inflow(&minutes), 100);
-    assert_eq!(levels(r), [1_001, 100, 100, 100]);
+    assert_eq!(levels(r), [2_001, 1_001, 100, 100]);
 }
 
 #[test]
@@ -125,21 +126,24 @@ fn a_sudden_burst_counts_where_it_is_and_is_not_extrapolated() {
     // half block, but not the arrivals at 2 sat/vB as well: outbid those too.
     assert_eq!(levels(before), [501, 501, 100, 100]);
     assert_eq!(levels(r), [50_001, 50_001, 2_001, 100]);
-    // The burst's minute is among the busiest quarter, so it is left out of the arrivals.
+    // The burst's minute is the busiest, so it is left out of the arrivals.
     let i = inflow(&minutes);
     assert!((i.per_minute_at_or_above(2_000, &TUNING) - 10_000.0).abs() < 1e-9);
 }
 
 #[test]
-fn bursts_on_a_quiet_network_are_not_taken_for_a_trend() {
-    // Eight minutes, two of them bursts at 3 sat/vB, the rest silent: as on regtest or signet.
+fn one_burst_on_a_quiet_network_is_not_taken_for_a_trend() {
+    // Eight minutes, one a burst, the rest silent: as on regtest or signet.
     let mut minutes = vec![Vec::new(); 8];
     minutes[2] = vec![(10_000, 720_000), (5_000, 720_000), (2_000, 720_000)];
-    minutes[6] = vec![(3_000, 900_000)];
     let i = inflow(&minutes);
     assert_eq!(i.per_minute_at_or_above(100, &TUNING), 0.0);
     let r = recommend(&depth(&[(2_000, B), (3_000, B / 4)]), &i, 100);
     assert_eq!(levels(r), [2_001, 100, 100, 100]);
+    // A second burst is a flow that recurs, and is counted over the minutes watched.
+    minutes[6] = vec![(3_000, 900_000)];
+    let i = inflow(&minutes);
+    assert!((i.per_minute_at_or_above(100, &TUNING) - 900_000.0 / 7.0).abs() < 1e-6);
 }
 
 #[test]
@@ -303,14 +307,22 @@ fn a_recorded_mainnet_mempool_gives_the_recorded_answer() {
     assert_eq!(minutes.len(), INFLOW_MINUTES);
     let i = inflow(&minutes);
     let floor = f["floor"].as_u64().unwrap() as u32;
-    let r = recommend(&d, &i, floor);
+    // The tuning it was recorded with gives the recorded answer, so a replay reproduces it.
+    let before = Tuning {
+        confidence: 0.8,
+        busiest_left_out: |n| if n >= 5 { (n / 4).max(1) } else { 0 },
+    };
+    let then = recommend_tuned(&d, &i, floor, &before);
     let expected: Vec<u32> = f["expected"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_u64().unwrap() as u32)
         .collect();
-    assert_eq!([&r.levels[..], &[r.minimum]].concat(), expected);
+    assert_eq!([&then.levels[..], &[then.minimum]].concat(), expected);
+    // The tuning served since counts more arrivals for longer: every level at least as high.
+    let r = recommend(&d, &i, floor);
+    assert_eq!(levels(r), [2_008, 1_141, 1_001, 100]);
     // Each level outbids the bottom of the projected block after its horizon: what pays the
     // bottom of block N or less does not all fit in N blocks.
     let bottoms: Vec<u32> = f["projected_min_rates"]
