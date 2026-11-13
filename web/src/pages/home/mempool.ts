@@ -1,6 +1,6 @@
 // What the home page computes from the mempool summary, and where the fee ladder puts its pins.
 import type { MempoolSummary, RecentTx } from "../../lib/esplora";
-import { FEE_BOUNDS, feeBand } from "../../lib/format";
+import { FEE_BANDS, FEE_BOUNDS, feeBand } from "../../lib/format";
 import type { MempoolState } from "../../lib/mempool-topics";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -35,7 +35,7 @@ export function isRecentList(v: unknown): v is RecentTx[] {
 
 /** One of the ten fee bands of the mempool bar. */
 export interface FeeBandShare {
-  /** 1–10, as `feeBand` numbers them. */
+  /** 1–12, as `feeBand` numbers them. */
   band: number;
   /** Lower bound in sat/vB; band 1 starts at 0. */
   from: number;
@@ -53,7 +53,7 @@ export interface FeeBandShare {
  * lower bound, banded as printed. An entry that straddles a band boundary lands wholly below it.
  */
 export function bandShares(histogram: readonly (readonly [number, number])[]): FeeBandShare[] {
-  const vsize = Array.from({ length: 10 }, () => 0);
+  const vsize = Array.from({ length: FEE_BANDS }, () => 0);
   for (const [rate, size] of histogram) {
     const i = feeBand(rate) - 1;
     vsize[i] = (vsize[i] ?? 0) + size;
@@ -65,7 +65,7 @@ export function bandShares(histogram: readonly (readonly [number, number])[]): F
 export function sharesOf(vsize: readonly number[]): FeeBandShare[] {
   const total = vsize.reduce((a, b) => a + b, 0);
   let x = 0;
-  return Array.from({ length: 10 }, (_, i) => {
+  return Array.from({ length: FEE_BANDS }, (_, i) => {
     const v = vsize[i] ?? 0;
     const share = total > 0 ? v / total : 0;
     const band = {

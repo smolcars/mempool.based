@@ -41,7 +41,7 @@ describe("FeeRate", () => {
     expect(mount(() => <FeeRate rate={0.1996} />).querySelector(".fee__swatch")).toBeNull();
     const el = mount(() => <FeeRate rate={0.1996} swatch />);
     expect(el.textContent).toBe("0.20 sat/vB");
-    expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-2)");
+    expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-4)");
     expect(mount(() => <FeeRate rate={0.64} approx />).textContent).toBe("~0.64 sat/vB");
   });
 
@@ -62,12 +62,25 @@ describe("FeeRate", () => {
     ).not.toContain("visually-hidden");
   });
 
-  it("has ten bands in the key", () => {
+  it("has twelve bands in the key", () => {
     const el = mount(() => <FeeKey />);
     const labels = [...el.querySelectorAll(".feekey__label")].map((l) => l.textContent);
-    expect(labels).toStrictEqual(["0.1", "0.2", "0.3", "0.5", "1", "1.5", "2", "3", "5", "10+"]);
-    const last = el.querySelectorAll<HTMLElement>(".feekey__swatch")[9];
-    expect(last?.style.getPropertyValue("--swatch")).toBe("var(--fee-10)");
+    expect(labels).toStrictEqual([
+      "0.1",
+      "0.12",
+      "0.15",
+      "0.2",
+      "0.3",
+      "0.5",
+      "1",
+      "1.5",
+      "2",
+      "3",
+      "5",
+      "10+",
+    ]);
+    const last = el.querySelectorAll<HTMLElement>(".feekey__swatch")[11];
+    expect(last?.style.getPropertyValue("--swatch")).toBe("var(--fee-12)");
   });
 });
 

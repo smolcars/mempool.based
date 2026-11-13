@@ -139,20 +139,33 @@ export function vsizeFromWeight(weight: number): number {
   return Math.ceil(weight / 4);
 }
 
-/** Lower bounds (sat/vB) of fee bands 2–10; band 1 is everything below 0.2. docs/DESIGN.md "Fee scale". */
-export const FEE_BOUNDS = [0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5, 10] as const;
-/** Lower bound of each of the ten bands, for the fee key. */
+/** Lower bounds (sat/vB) of fee bands 2–12; band 1 is everything below 0.12. docs/DESIGN.md "Fee scale". */
+export const FEE_BOUNDS = [0.12, 0.15, 0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5, 10] as const;
+/** Lower bound of each of the twelve bands, for the fee key. */
 export const FEE_KEY_BOUNDS = [0.1, ...FEE_BOUNDS] as const;
+/** How many fee bands there are. */
+export const FEE_BANDS = FEE_KEY_BOUNDS.length;
+/** A block or minute stored before the lowest band was split in three has ten, all under 0.2 first. */
+export const UNSPLIT_BANDS = 10;
 
 /**
- * The fee band (1–10) of a rate, taken from the rate as printed, so the color always agrees with
+ * Twelve bands from a server answer of twelve, or of ten from before the lowest band was split
+ * (docs/API.md): then everything under 0.2 sat/vB stays whole, in the first slot, `unsplit`.
+ */
+export function widenBands(bands: readonly number[]): { bands: number[]; unsplit: boolean } {
+  if (bands.length !== UNSPLIT_BANDS) return { bands: [...bands], unsplit: false };
+  return { bands: [bands[0] ?? 0, 0, 0, ...bands.slice(1)], unsplit: true };
+}
+
+/**
+ * The fee band (1–12) of a rate, taken from the rate as printed, so the color always agrees with
  * the number beside it: 0.1996 prints as `0.20` and takes band 2.
  */
 export function feeBand(rate: number, print: (rate: number) => string = formatFeeRate): number {
   const printed = Number(print(rate).replaceAll(NNBSP, ""));
   if (!Number.isFinite(printed)) return 1;
   const i = FEE_BOUNDS.findIndex((bound) => printed < bound);
-  return i === -1 ? 10 : i + 1;
+  return i === -1 ? FEE_BANDS : i + 1;
 }
 
 /** The CSS color for a rate's band. */

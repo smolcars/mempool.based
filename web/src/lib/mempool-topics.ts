@@ -3,6 +3,7 @@
 // in sat per 1,000 vB and are turned into sat/vB here, so pages print them like every other rate.
 import type { RecentTx } from "./esplora";
 import type { Topic } from "./live";
+import { FEE_BANDS } from "./format";
 
 /** Sent once instead of any state when the server does not track this network's mempool. */
 export interface Off {
@@ -31,7 +32,7 @@ export interface SeenTxs {
 const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const isHash = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
 const isBands = (v: unknown): v is number[] =>
-  Array.isArray(v) && v.length === 10 && v.every((x) => isCount(x));
+  Array.isArray(v) && v.length === FEE_BANDS && v.every((x) => isCount(x));
 const rate = (kvb: number) => kvb / 1000;
 
 export const mempoolTopic: Topic<MempoolState | Off> = {

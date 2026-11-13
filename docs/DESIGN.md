@@ -81,25 +81,29 @@ Incoming amounts are not green: a `+` sign carries the direction. Green means co
 
 ### Fee scale
 
-Ten bands, one sequential ramp across neighbouring hues: a quiet steel grey for the cheapest, through blue, to a strong blue-violet for the dearest. Lightness stays nearly constant and colourfulness rises with the fee, so the ramp reads as "quiet to strong" on a white page and a charcoal one alike, and **the same rate is the same colour in both themes**: the fee tokens have one set of values. No band is red, green, amber or pink, so a fee never looks like a status or an error. Band thresholds are in sat/vB, lower bound inclusive.
+Twelve bands, one sequential ramp across neighbouring hues: a quiet steel grey for the cheapest, through blue, to a strong blue-violet for the dearest. Lightness stays nearly constant and colourfulness rises with the fee, so the ramp reads as "quiet to strong" on a white page and a charcoal one alike, and **the same rate is the same colour in both themes**: the fee tokens have one set of values. No band is red, green, amber or pink, so a fee never looks like a status or an error. Band thresholds are in sat/vB, lower bound inclusive.
 
 | Token | Band | Colour |
 |---|---|---|
-| `--fee-1` | under 0.2 | `#868a8d` |
-| `--fee-2` | 0.2 to 0.3 | `#6b8494` |
-| `--fee-3` | 0.3 to 0.5 | `#688fac` |
-| `--fee-4` | 0.5 to 1 | `#5885b7` |
-| `--fee-5` | 1 to 1.5 | `#5c89c3` |
-| `--fee-6` | 1.5 to 2 | `#5d86ce` |
-| `--fee-7` | 2 to 3 | `#6182d7` |
-| `--fee-8` | 3 to 5 | `#687ce0` |
-| `--fee-9` | 5 to 10 | `#7176e7` |
-| `--fee-10` | 10 and up | `#7b6fed` |
+| `--fee-1` | under 0.12 | `#868a8d` |
+| `--fee-2` | 0.12 to 0.15 | `#798791` |
+| `--fee-3` | 0.15 to 0.2 | `#6b8494` |
+| `--fee-4` | 0.2 to 0.3 | `#698aa0` |
+| `--fee-5` | 0.3 to 0.5 | `#688fac` |
+| `--fee-6` | 0.5 to 1 | `#5885b7` |
+| `--fee-7` | 1 to 1.5 | `#5c89c3` |
+| `--fee-8` | 1.5 to 2 | `#5d86ce` |
+| `--fee-9` | 2 to 3 | `#6182d7` |
+| `--fee-10` | 3 to 5 | `#687ce0` |
+| `--fee-11` | 5 to 10 | `#7176e7` |
+| `--fee-12` | 10 and up | `#7b6fed` |
 
-- Bands 5 to 10 are OKLCH lightness 0.623 to 0.615, chroma 0.096 to 0.183 and hue 255 to 284, evenly stepped. The cheap end, where almost every transaction sits today, is spread wider so neighbours can be told apart: a grey (L 0.632, C 0.006), a slate darker than its neighbours (L 0.600, C 0.038, h 236), a lighter steel blue (L 0.632, C 0.062, h 242), then blue (L 0.605, C 0.092, h 252). Rebuild them that way if the thresholds change.
-- The thresholds are a frontend constant (`FEE_BOUNDS` in `web/src/lib/format.ts`). If fee levels move, change the thresholds, not the colours.
-- Band the rate as printed, not the raw value: 0.1996 sat/vB prints as `0.20` and takes band 2, so the colour never disagrees with the number next to it.
-- Every fee colour reaches 3:1 against every surface in both themes (the least is 3.03, `--fee-3` on white), which WCAG requires for graphics. Fee colours are fills: rectangles, gauges, layers and keys. They are never used as text colour.
+- **Why the low end is split three ways:** with the node's minimum at 0.10 sat/vB, "under 0.2" held about 98% of the mempool in November 2026, almost all of it between 0.10 and 0.13. At 0.12 and 0.15 the bulk divides: about a third under 0.12, most of the rest at 0.12 to 0.15. So a drawing can say whether 0.11 clears before 0.15.
+- **The low end is the quietest:** five steps from grey to a light steel blue, chroma 0.007, 0.022, 0.038, 0.050 and 0.062 (OKLCH), at lightness 0.60 to 0.63, each about 0.02 from its neighbours in OKLab, as the upper bands are. Then blue (L 0.605, C 0.091, h 252). Bands 7 to 12 are L 0.623 to 0.615, C 0.101 to 0.183 and h 255 to 284, evenly stepped. Rebuild them that way if the thresholds change.
+- The thresholds are shared with the server, which bands the projected blocks, block facts and mempool history the same way (`FEE_BOUNDS` in `web/src/lib/format.ts`, `BAND_EDGES` in `crates/engine/src/projected/model.rs`). Change both together; change the thresholds, not the colours, if fee levels move.
+- **Before the split:** blocks and mempool minutes stored before the lowest band was split (13 November 2026) carry ten bands, all under 0.2 in one (docs/API.md). A tile or a block's strata draw that whole in the grey of `--fee-1`, and name it "under 0.20 sat/vB". The mempool history draws those minutes as one bottom layer in the same grey, "under 0.2 sat/vB, not yet split"; where its minutes end, the three finer bands begin, so the join is where the one layer stops and three take its place.
+- Band the rate as printed, not the raw value: 0.1996 sat/vB prints as `0.20` and takes band 4, and 0.1196 prints as `0.12` and takes band 2, so the colour never disagrees with the number next to it.
+- Every fee colour reaches 3:1 against every surface in both themes (the least is 3.03, `--fee-5` on white), which WCAG requires for graphics. Fee colours are fills: rectangles, gauges, layers and keys. They are never used as text colour.
 - **Where fee colour goes:** the block map, a tile's layers, the mempool's rows by fee band, the mempool history's layers, a transaction's fee ribbon, and the key beside the drawing that needs one. Not beside numbers in tables, facts or the fee panel: the number says it. `FeeRate` draws a swatch only when asked (`swatch`), as the map's tooltip does.
 
 ### Charts

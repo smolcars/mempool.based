@@ -660,7 +660,7 @@ function projectedMsg(tip: number, blocks = 8, txs = 3000, stale = false) {
     min_rate: i < blocks ? 500 : 0,
     median_rate: i < blocks ? 1000 * (8 - i) : 0,
     max_rate: i < blocks ? 50_000 : 0,
-    bands: Array.from({ length: 10 }, (_, b) => (i < blocks && b === 4 ? 997_500 : 0)),
+    bands: Array.from({ length: 12 }, (_, b) => (i < blocks && b === 6 ? 997_500 : 0)),
   });
   return {
     topic: "projected",
@@ -679,7 +679,7 @@ const MEMPOOL_MSG = {
   vsize: 2_500_000,
   fees: 123_456,
   min_fee_rate: 100,
-  bands: [1_000_000, 0, 0, 0, 500_000, 0, 0, 0, 0, 1_000_000],
+  bands: [1_000_000, 0, 0, 0, 0, 0, 500_000, 0, 0, 0, 0, 1_000_000],
   stale: false,
 };
 const seenTx = (n: number) => ({
@@ -747,13 +747,15 @@ describe("the live mempool", () => {
       "0.000",
       "0.000",
       "0.000",
+      "0.000",
+      "0.000",
       "1.000",
     ]);
     const cells = (r: HTMLElement | undefined) =>
       [...(r?.querySelectorAll("td") ?? [])].map((c) => c.textContent);
     expect(cells(rows[0])).toStrictEqual(["10+", "", "1.00 MvB", "1.0"]);
     expect(cells(rows[1])).toStrictEqual(["5–10", "", "–", "1.0"]);
-    expect(cells(rows[9])).toStrictEqual(["< 0.2", "", "1.00 MvB", "2.5"]);
+    expect(cells(rows[11])).toStrictEqual(["< 0.12", "", "1.00 MvB", "2.5"]);
     // The answer above: the next block's worth runs out in the dearest band.
     expect(el.querySelector(".home-depth__answer")?.textContent).toBe(
       "The next block's worth reaches down to 10+ sat/vB.",

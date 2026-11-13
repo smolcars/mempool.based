@@ -91,8 +91,9 @@ describe("series", () => {
     const h = history({ points: [point(T0), point(T0 + 60), point(T0 + 300)] });
     const s = seriesOf(h);
     expect(s.x).toStrictEqual([T0, T0 + 60, T0 + 300]);
-    expect(s.bands).toHaveLength(10);
-    expect(s.bands[4]).toStrictEqual([400_000, 400_000, 400_000]);
+    expect(s.bands).toHaveLength(12);
+    expect(s.bands[6]).toStrictEqual([400_000, 400_000, 400_000]);
+    expect(s.unsplit).toBeUndefined();
     expect(s.floor[0]).toBe(0.1);
     expect(s.entered[0]).toBe(100);
     expect(s.mined[0]).toBe(40);

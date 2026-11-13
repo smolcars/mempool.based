@@ -1,6 +1,6 @@
 // The squares in motion: where each one comes from, goes to and when, as one instance record each
 // for the GPU. Pure, so changes can be tested without a browser.
-import { feeBand } from "../../lib/format";
+import { FEE_BANDS, feeBand } from "../../lib/format";
 import { type GridTx, type Layout, rateOf } from "./layout";
 
 /** A CSS `cubic-bezier(x1, y1, x2, y2)`. */
@@ -30,7 +30,7 @@ export interface Motion {
  */
 export const STRIDE = 14;
 /** Color slot of the coinbase, after the ten fee bands. */
-export const COINBASE_COLOR = 10;
+export const COINBASE_COLOR = FEE_BANDS;
 const SETTLE = 0;
 const IN_OUT = 1;
 

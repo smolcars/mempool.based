@@ -2,7 +2,7 @@
 // grid"). Loaded lazily: import it with `lazy()` so pages without a grid never fetch it.
 import { useNavigate } from "@solidjs/router";
 import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
-import { formatSats, formatSize, MISSING, truncateMiddle } from "../../lib/format";
+import { FEE_BANDS, formatSats, formatSize, MISSING, truncateMiddle } from "../../lib/format";
 import { onNetwork, paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
 import { Amount } from "../Amount";
@@ -94,8 +94,11 @@ export default function TxGrid(props: TxGridProps) {
   };
   const readPaint = () => {
     const s = style();
-    const colors = new Float32Array(33);
-    const names = [...Array.from({ length: 10 }, (_, i) => `--fee-${i + 1}`), "--color-text-muted"];
+    const colors = new Float32Array((FEE_BANDS + 1) * 3);
+    const names = [
+      ...Array.from({ length: FEE_BANDS }, (_, i) => `--fee-${i + 1}`),
+      "--color-text-muted",
+    ];
     for (const [i, name] of names.entries()) {
       colors.set(parseColor(s.getPropertyValue(name)) ?? [0.5, 0.5, 0.5], i * 3);
     }

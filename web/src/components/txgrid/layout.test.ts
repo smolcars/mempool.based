@@ -259,15 +259,15 @@ describe("rank and colors", () => {
 
   it("colors by the band of the rate as printed, as feeBand does", () => {
     for (const [fee, vsize] of [
-      [1996, 10_000], // 0.1996 prints as 0.20: band 2
+      [1996, 10_000], // 0.1996 prints as 0.20: band 4
       [1994, 10_000],
-      [9996, 1000], // 9.996 prints as 10.0: band 10
+      [9996, 1000], // 9.996 prints as 10.0: band 12
       [100, 1000],
       [0, 100],
     ] as const) {
       expect(colorOf({ id: 1, vsize, fee, value: 0 })).toBe(feeBand(fee / vsize) - 1);
     }
     expect(colorOf({ id: 0, vsize: 100, fee: 0, value: 0, coinbase: true })).toBe(COINBASE_COLOR);
-    expect(colorOf({ id: 1, vsize: 10_000, fee: 1996, value: 0 })).toBe(1);
+    expect(colorOf({ id: 1, vsize: 10_000, fee: 1996, value: 0 })).toBe(3);
   });
 });

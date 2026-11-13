@@ -38,7 +38,7 @@ const REFRESH_OFFSET_MS = 3000;
 export const isNoStore = (e: unknown): boolean =>
   e instanceof ApiError && e.status === 503 && /data directory/i.test(e.message);
 
-/** The ten bands, cheapest first, as the readout shows them beside their colour: `0.2–0.3`, `10+`. */
+/** The twelve bands, cheapest first, as the readout shows them beside their colour: `0.2–0.3`, `10+`. */
 const BAND_SHORT = FEE_KEY_BOUNDS.map((from, k) => {
   const to = FEE_KEY_BOUNDS[k + 1];
   if (k === 0) return `under ${to ?? ""}`;
@@ -288,12 +288,26 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
             series={[{ name: "Total", values: s().vsize, draw: "line", format: formatSize }]}
             notes={notes()}
-            layers={s().bands.map((values, k) => ({
-              name: `${BAND_SHORT[k] ?? ""} sat/vB`,
-              short: BAND_SHORT[k] ?? "",
-              values,
-              fee: k + 1,
-            }))}
+            layers={[
+              // Minutes stored before the lowest band was split: all under 0.2 in one layer, in
+              // the lowest band's grey, until the three finer bands take over where it ends.
+              ...(s().unsplit
+                ? [
+                    {
+                      name: "under 0.2 sat/vB, not yet split",
+                      short: "under 0.2, not split",
+                      values: s().unsplit ?? [],
+                      fee: 1,
+                    },
+                  ]
+                : []),
+              ...s().bands.map((values, k) => ({
+                name: `${BAND_SHORT[k] ?? ""} sat/vB`,
+                short: BAND_SHORT[k] ?? "",
+                values,
+                fee: k + 1,
+              })),
+            ]}
             layerFormat={formatSize}
             time={time()}
             summary={sizeSummary(props.h)}

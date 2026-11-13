@@ -1,7 +1,7 @@
 // The mempool's history (`/app/mempool/history/:interval`, docs/FRONTEND.md "Mempool history"):
 // its shape, a check, the intervals, and what the page says about it. Pure.
 import { formatMoment } from "../../components/chart/scale";
-import { formatSize, groupDigits } from "../../lib/format";
+import { FEE_BANDS, formatSize, groupDigits, UNSPLIT_BANDS, widenBands } from "../../lib/format";
 
 export const INTERVALS = [
   { id: "2h", label: "2 h", words: "the last 2 hours" },
@@ -84,7 +84,8 @@ function isPoint(v: unknown): v is Point {
   return (
     NUMBERS.every((k) => finite(p[k])) &&
     Array.isArray(bands) &&
-    bands.length === 10 &&
+    // Ten for a minute stored before the lowest band was split (widenBands), else twelve.
+    (bands.length === FEE_BANDS || bands.length === UNSPLIT_BANDS) &&
     bands.every((b) => finite(b))
   );
 }
@@ -157,13 +158,22 @@ export function pointTime(step: number): (t: number) => string {
 export function seriesOf(h: History) {
   const ps = h.points;
   const perSecond = (vb: number) => vb / 60;
+  const wide = ps.map((p) => widenBands(p.bands));
+  // A point stored before the lowest band was split keeps all under 0.2 whole: its own series, so
+  // the chart can say so where it joins the three finer bands.
+  const unsplit = wide.some((w) => w.unsplit)
+    ? wide.map((w) => (w.unsplit ? (w.bands[0] ?? 0) : 0))
+    : undefined;
   return {
     x: ps.map((p) => p.time),
     vsize: ps.map((p) => p.vsize),
     count: ps.map((p) => p.count),
     floor: ps.map((p) => p.min_fee_rate / 1000),
     samples: ps.map((p) => p.samples),
-    bands: Array.from({ length: 10 }, (_, k) => ps.map((p) => p.bands[k] ?? 0)),
+    bands: Array.from({ length: FEE_BANDS }, (_, k) =>
+      wide.map((w) => (k === 0 && w.unsplit ? 0 : (w.bands[k] ?? 0))),
+    ),
+    unsplit,
     entered: ps.map((p) => perSecond(p.in_vsize)),
     mined: ps.map((p) => perSecond(p.mined_vsize)),
     otherwise: ps.map((p) => perSecond(Math.max(0, p.out_vsize - p.mined_vsize))),

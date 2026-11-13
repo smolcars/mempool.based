@@ -127,10 +127,10 @@ describe("formatFeeRateUp", () => {
   });
 
   it("bands a rate as it prints, when asked to", () => {
-    expect(feeBand(0.199)).toBe(2);
-    expect(feeBand(0.191, formatFeeRateUp)).toBe(2);
-    expect(feeBand(0.181, formatFeeRateUp)).toBe(1);
-    expect(feeColor(0.2, formatFeeRateUp)).toBe("var(--fee-2)");
+    expect(feeBand(0.199)).toBe(4);
+    expect(feeBand(0.191, formatFeeRateUp)).toBe(4);
+    expect(feeBand(0.181, formatFeeRateUp)).toBe(3);
+    expect(feeColor(0.2, formatFeeRateUp)).toBe("var(--fee-4)");
   });
 });
 
@@ -188,22 +188,27 @@ describe("feeBand", () => {
     FEE_BOUNDS.forEach((bound, i) => {
       expect(feeBand(bound)).toBe(i + 2);
     });
-    expect(feeBand(1000)).toBe(10);
+    expect(feeBand(1000)).toBe(12);
   });
 
   it("puts values just under a bound in the band below", () => {
-    expect(feeBand(0.19)).toBe(1);
-    expect(feeBand(0.99)).toBe(4);
-    expect(feeBand(9.99)).toBe(9);
+    expect(feeBand(0.11)).toBe(1);
+    expect(feeBand(0.14)).toBe(2);
+    expect(feeBand(0.19)).toBe(3);
+    expect(feeBand(0.99)).toBe(6);
+    expect(feeBand(9.99)).toBe(11);
   });
 
   it("bands the rate as printed, so the color never disagrees with the number", () => {
-    // 0.1996 prints as 0.20, so it is band 2 although the raw value is below 0.2.
-    expect(feeBand(0.1996)).toBe(2);
-    expect(feeBand(0.1949)).toBe(1);
-    expect(feeBand(0.995)).toBe(5);
-    expect(feeBand(9.996)).toBe(10);
-    expect(feeColor(0.1996)).toBe("var(--fee-2)");
+    // 0.1996 prints as 0.20, so it is band 4 although the raw value is below 0.2.
+    expect(feeBand(0.1996)).toBe(4);
+    expect(feeBand(0.1949)).toBe(3);
+    // 0.1196 prints as 0.12: the 0.12 to 0.15 band, as the server bands it.
+    expect(feeBand(0.1196)).toBe(2);
+    expect(feeBand(0.1149)).toBe(1);
+    expect(feeBand(0.995)).toBe(7);
+    expect(feeBand(9.996)).toBe(12);
+    expect(feeColor(0.1996)).toBe("var(--fee-4)");
   });
 
   it("puts nonsense in the first band instead of failing", () => {

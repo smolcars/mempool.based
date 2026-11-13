@@ -15,7 +15,7 @@ const totals = (txs: number) => ({
   min_rate: 1000,
   median_rate: 2000,
   max_rate: 25_000,
-  bands: [0, 0, 0, 0, txs * 150, 0, 0, 0, 0, 0],
+  bands: [0, 0, 0, 0, 0, 0, txs * 150, 0, 0, 0, 0, 0],
 });
 const projected = (
   height: number,

@@ -14,7 +14,7 @@ uniform vec2 u_size;
 uniform float u_dpr;
 uniform float u_radius;
 uniform vec4 u_ease[2];
-uniform vec3 u_colors[11];
+uniform vec3 u_colors[13];
 out vec2 v_local;
 out vec2 v_half;
 out float v_radius;

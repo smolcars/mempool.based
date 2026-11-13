@@ -2,6 +2,7 @@
 // sit on and whether the node is answering. Each message is the whole state.
 import type { ChainTip } from "./blocks-topic";
 import type { Topic } from "./live";
+import { FEE_BANDS } from "./format";
 
 /** One projected block's totals. Rates are sat/vB here (the wire's sat per 1,000 vB ÷ 1,000). */
 export interface ProjectedBlock {
@@ -46,7 +47,11 @@ function blockOf(v: unknown): ProjectedBlock | undefined {
   const bands = b["bands"];
   const fields = ["txs", "weight", "vsize", "fees", "min_rate", "median_rate", "max_rate"];
   if (!fields.every((f) => isCount(b[f]))) return undefined;
-  if (!Array.isArray(bands) || bands.length !== 10 || !bands.every((x): x is number => isCount(x)))
+  if (
+    !Array.isArray(bands) ||
+    bands.length !== FEE_BANDS ||
+    !bands.every((x): x is number => isCount(x))
+  )
     return undefined;
   const n = (f: string) => b[f] as number;
   return {

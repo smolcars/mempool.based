@@ -52,15 +52,17 @@
 
   /* Fee bands, cheapest to dearest: one ramp, the same in both themes. Thresholds in docs/DESIGN.md. */
   --fee-1: #868a8d;
-  --fee-2: #6b8494;
-  --fee-3: #688fac;
-  --fee-4: #5885b7;
-  --fee-5: #5c89c3;
-  --fee-6: #5d86ce;
-  --fee-7: #6182d7;
-  --fee-8: #687ce0;
-  --fee-9: #7176e7;
-  --fee-10: #7b6fed;
+  --fee-2: #798791;
+  --fee-3: #6b8494;
+  --fee-4: #698aa0;
+  --fee-5: #688fac;
+  --fee-6: #5885b7;
+  --fee-7: #5c89c3;
+  --fee-8: #5d86ce;
+  --fee-9: #6182d7;
+  --fee-10: #687ce0;
+  --fee-11: #7176e7;
+  --fee-12: #7b6fed;
 
   /* Chart series that are not fees: never a fee or status color. */
   --series-1: #1f6f9c;

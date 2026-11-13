@@ -61,6 +61,10 @@ test("the page shows the minutes the server stored, with the gap where none was"
   ).toBeVisible();
   const column = (await figures.locator("th").allInnerTexts()).indexOf("Transactions");
   expect(column).toBeGreaterThan(0);
+  // Twelve bands: the lowest split three ways, as the server records it.
+  for (const band of ["under 0.12 sat/vB", "0.12–0.15 sat/vB", "0.15–0.2 sat/vB", "10+ sat/vB"]) {
+    await expect(figures.getByRole("columnheader", { name: band, exact: true })).toBeAttached();
+  }
   // The stored minutes are the oldest rows, exactly, so nothing fills the gap; a minute the server
   // records live while the test runs is newer than all of them.
   const counts = await figures.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();

@@ -68,9 +68,9 @@ describe("mempool history page", () => {
     expect(subpaths(total)).toBe(2);
     // Every fee band breaks at the same place; the empty ones draw nothing worth seeing.
     const layers = [...chart.querySelectorAll(".chart__layer")];
-    expect(layers).toHaveLength(10);
-    expect(subpaths(layers[4]?.getAttribute("d"))).toBe(2);
-    expect(layers[4]?.getAttribute("style")).toContain("--fill: var(--fee-5)");
+    expect(layers).toHaveLength(12);
+    expect(subpaths(layers[6]?.getAttribute("d"))).toBe(2);
+    expect(layers[6]?.getAttribute("style")).toContain("--fill: var(--fee-7)");
   });
 
   it("shows a period with a single point", async () => {
@@ -89,7 +89,7 @@ describe("mempool history page", () => {
     const chart = await drawn(el);
     // A lone point is a short tick on the line and a sliver in its layers, not nothing.
     expect(chart.querySelector(".chart__line")?.getAttribute("d")).toContain("h0.1");
-    expect(chart.querySelectorAll(".chart__layer")[4]?.getAttribute("d")).toMatch(/^M.*Z$/);
+    expect(chart.querySelectorAll(".chart__layer")[6]?.getAttribute("d")).toMatch(/^M.*Z$/);
     expect(text(el)).toContain("Recorded from 12 Nov 2026, 15:00 UTC: under 1% of the period.");
     expect(text(el)).toContain("No data stored");
   });
@@ -147,6 +147,24 @@ describe("mempool history page", () => {
     expect(requests.filter((r) => r.includes("/history/"))).toHaveLength(1);
   });
 
+  it("draws minutes from before the low band was split as one layer, then the three finer ones", async () => {
+    // The first minute was stored with ten bands: everything under 0.2 in one.
+    const old = point(T0, { bands: [150_000, 50_000, 400_000, 0, 0, 0, 0, 0, 0, 0] });
+    replies["/app/mempool/history/2h"] = answer(history({ points: [old, point(T0 + 60)] }));
+    const el = mount(() => <MempoolPage />, "/mempool?interval=2h");
+    const chart = await drawn(el);
+    expect(chart.querySelectorAll(".chart__layer")).toHaveLength(13);
+    expect(chart.getAttribute("aria-valuetext")).toContain("under 0.2 sat/vB, not yet split 0 vB");
+    chart.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    flush();
+    const then = chart.getAttribute("aria-valuetext") ?? "";
+    expect(then).toContain("under 0.2 sat/vB, not yet split 150.00 kvB");
+    expect(then).toContain("under 0.12 sat/vB 0 vB");
+    // Its other bands keep their meaning: 0.2 to 0.3, and 0.3 to 0.5.
+    expect(then).toContain("0.2–0.3 sat/vB 50.00 kvB");
+    expect(then).toContain("0.3–0.5 sat/vB 400.00 kvB");
+  });
+
   it("reads a moment's figures by keyboard", async () => {
     replies["/app/mempool/history/2h"] = answer(
       history({ points: [point(T0), point(T0 + 60, { count: 2345, vsize: 610_000 })] }),
@@ -157,7 +175,7 @@ describe("mempool history page", () => {
     const now = chart.getAttribute("aria-valuetext") ?? "";
     expect(now).toMatch(/^12 Nov 2026, 14:01 UTC: Total 610\.00 kvB, Transactions 2 345/);
     expect(now).toContain("Lowest accepted 0.10 sat/vB");
-    expect(now).toContain("under 0.2 sat/vB 100.00 kvB");
+    expect(now).toContain("under 0.12 sat/vB 100.00 kvB");
     expect(now).toContain("10+ sat/vB 0 vB");
     chart.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     flush();

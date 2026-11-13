@@ -3,7 +3,7 @@ import { feeBand } from "../lib/format";
 import { bandRange, describeBands, Strata, strataLayers, strataTop } from "./Strata";
 import { mount } from "./test-utils";
 
-const zeros = () => Array.from({ length: 10 }, () => 0);
+const zeros = () => Array.from({ length: 12 }, () => 0);
 const close = (a: number, b: number) => expect(a).toBeCloseTo(b, 9);
 
 describe("strataLayers", () => {
@@ -14,17 +14,19 @@ describe("strataLayers", () => {
   it("fills to the block's fullness with a single band", () => {
     const bands = zeros();
     bands[3] = 500_000;
-    expect(strataLayers(bands, 0.5, 0.05)).toStrictEqual([{ band: 4, y: 0, h: 0.5, thin: false }]);
+    expect(strataLayers(bands, 0.5, 0.05)).toStrictEqual([
+      { band: 4, unsplit: false, y: 0, h: 0.5, thin: false },
+    ]);
   });
 
   it("stacks every band, cheapest at the bottom, each as thick as its share", () => {
     const layers = strataLayers(
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => n * 10_000),
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => n * 10_000),
       1,
       0.01,
     );
-    expect(layers.map((l) => l.band)).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    for (const [i, l] of layers.entries()) close(l.h, (i + 1) / 55);
+    expect(layers.map((l) => l.band)).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    for (const [i, l] of layers.entries()) close(l.h, (i + 1) / 78);
     for (const [i, l] of layers.entries())
       close(
         l.y,
@@ -36,9 +38,9 @@ describe("strataLayers", () => {
   it("keeps a tiny band visible at the floor, taking its room from the thick ones", () => {
     const bands = zeros();
     bands[0] = 999_000;
-    bands[9] = 150; // one small transaction paying a lot
+    bands[11] = 150; // one small transaction paying a lot
     const [cheap, dear] = strataLayers(bands, 1, 0.05);
-    expect(dear).toMatchObject({ band: 10, h: 0.05, thin: true });
+    expect(dear).toMatchObject({ band: 12, h: 0.05, thin: true });
     close(cheap?.h ?? 0, 0.95);
     close(strataTop(strataLayers(bands, 1, 0.05)), 1);
   });
@@ -61,18 +63,27 @@ describe("strataLayers", () => {
 
   it("never stands taller than the block, however many bands", () => {
     const layers = strataLayers(
-      Array.from({ length: 10 }, () => 1),
+      Array.from({ length: 12 }, () => 1),
       0.3,
       0.05,
     );
-    expect(layers).toHaveLength(10);
+    expect(layers).toHaveLength(12);
     close(strataTop(layers), 0.3);
-    for (const l of layers) close(l.h, 0.03);
+    for (const l of layers) close(l.h, 0.025);
   });
 
   it("ignores values that are not sizes", () => {
-    const layers = strataLayers([Number.NaN, -5, 100, 0, 0, 0, 0, 0, 0, 0], 0.2, 0.05);
-    expect(layers).toStrictEqual([{ band: 3, y: 0, h: 0.2, thin: false }]);
+    const layers = strataLayers([Number.NaN, -5, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0.2, 0.05);
+    expect(layers).toStrictEqual([{ band: 3, unsplit: false, y: 0, h: 0.2, thin: false }]);
+  });
+
+  it("keeps a block stored before the low band was split whole under 0.2", () => {
+    // Ten bands: everything under 0.2 first, then 0.2 to 0.3 and on.
+    const layers = strataLayers([800_000, 100_000, 0, 0, 0, 0, 0, 0, 0, 0], 0.9, 0.05);
+    expect(layers.map((l) => [l.band, l.unsplit])).toStrictEqual([
+      [1, true],
+      [4, false],
+    ]);
   });
 });
 
@@ -80,18 +91,23 @@ describe("describeBands", () => {
   it("names each band that holds anything, with its size and share", () => {
     const bands = zeros();
     bands[0] = 600_000;
-    bands[4] = 395_000;
-    bands[9] = 5000;
+    bands[6] = 395_000;
+    bands[11] = 5000;
     expect(describeBands(bands)).toStrictEqual([
-      "under 0.20 sat/vB: 600.00 kvB, 60%",
+      "under 0.12 sat/vB: 600.00 kvB, 60%",
       "1.00 to 1.50 sat/vB: 395.00 kvB, 40%",
       "10.0 sat/vB and up: 5\u202F000 vB, under 1%",
     ]);
     expect(describeBands(zeros())).toStrictEqual([]);
+    // A block stored before the split: its lowest band is all under 0.2.
+    expect(describeBands([600_000, 0, 0, 0, 395_000, 0, 0, 0, 0, 0])).toStrictEqual([
+      "under 0.20 sat/vB: 600.00 kvB, 60%",
+      "1.00 to 1.50 sat/vB: 395.00 kvB, 40%",
+    ]);
   });
 
   it("names the bands with the bounds the fee key and feeBand use", () => {
-    for (let band = 2; band <= 10; band++) {
+    for (let band = 2; band <= 12; band++) {
       const from = Number(/^([\d.]+)/.exec(bandRange(band))?.[1]);
       expect(feeBand(from)).toBe(band);
       expect(feeBand(from - 0.01)).toBe(band - 1);

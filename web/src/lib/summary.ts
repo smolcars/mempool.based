@@ -2,6 +2,7 @@
 import { fetchApp } from "./api";
 import type { Hash } from "./esplora";
 import type { Network } from "./network";
+import { FEE_BANDS, UNSPLIT_BANDS } from "./format";
 
 /** Fee rates in sat/vB, unrounded; percentiles are weighted by virtual size. */
 export interface FeeRates {
@@ -74,7 +75,8 @@ export function isSummary(v: unknown): v is BlockSummary {
         rates !== null &&
         RATE_KEYS.every((k) => isCount((rates as Record<string, unknown>)[k])))) &&
     Array.isArray(bands) &&
-    bands.length === 10 &&
+    // Ten for a block stored before the lowest band was split (widenBands), else twelve.
+    (bands.length === FEE_BANDS || bands.length === UNSPLIT_BANDS) &&
     bands.every((b) => isCount(b)) &&
     (s["miner"] === undefined || isMiner(s["miner"]))
   );
