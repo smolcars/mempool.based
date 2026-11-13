@@ -466,7 +466,7 @@ Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
 - **Opens on what is recorded, and says so in its choices.** With no period in the address, a view whose records begin inside it starts where they do, under one line ("Everything recorded, since …"), and the period choices gain "Recorded", marked as the current one: a period's name always means its whole width, so choosing "24 h" shows the whole day, the time before the records hatched ("No data stored"). The same holds on the Lightning overview. The fee key is not repeated under the chart: its readout names every band, and on a phone only the bands holding anything at that point.
 - **A few missing minutes are bridged.** Up to five missing steps are drawn across rather than as thin stripes that look like faults; a longer pause in recording breaks the line, and the figures table lists only what was stored.
 - **A phone's time axis names its ends:** too narrow for ticks a reader can place, a chart labels its first and last moment instead ("9 Nov", "12 Nov"; "12 Nov 11:14", "20:35").
-- **The intervals are one row** on a phone, scrolling sideways with their far edge faded and the chosen one in sight, so the chart and its time axis are on the first screen. The coverage is one short line ("Recorded from 12 Nov 2026, 11:14 UTC: 49% of the period.").
+- **The intervals are one row** on a phone, scrolling sideways with their far edge faded and the chosen one in sight, so the chart and its time axis are on the first screen. The coverage is one short line ("49% recorded, from 12 Nov, 11:14 UTC.", the year said only when it is not this one).
 
 ### Lightning (not in the prototype)
 

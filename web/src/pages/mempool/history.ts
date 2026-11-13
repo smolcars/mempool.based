@@ -123,20 +123,28 @@ function share(part: number, whole: number): string {
  * only the minutes since then), so a short history is not mistaken for a quiet mempool. One line
  * on a phone, so the chart below it is on the first screen.
  */
-export function coverageSentence(h: History): string | undefined {
+const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+/** A moment without its year when the year is this one: the line must fit a phone in one. */
+const since = (t: number, now: number) => {
+  const m = formatMoment(t);
+  const year = String(new Date(now * 1000).getUTCFullYear());
+  return m.replace(` ${year},`, ",");
+};
+
+export function coverageSentence(h: History, now = Date.now() / 1000): string | undefined {
   if (h.points.length === 0) return undefined;
   const pct = share(h.sampled, h.minutes);
   if (h.first !== null && h.interval === "all") {
-    const since = formatMoment(h.first);
+    const from = since(h.first, now);
     return h.complete
-      ? `Recorded every minute since ${since}.`
-      : `Recorded since ${since}: ${pct} of the minutes.`;
+      ? `Every minute recorded since ${from}.`
+      : `${cap(pct)} recorded, since ${from}.`;
   }
   if (h.complete) return undefined;
   if (h.first !== null && h.first > h.from) {
-    return `Recorded from ${formatMoment(h.first)}: ${pct} of the period.`;
+    return `${cap(pct)} recorded, from ${since(h.first, now)}.`;
   }
-  return `${pct.charAt(0).toUpperCase()}${pct.slice(1)} of the period recorded: the gaps are when this server was off.`;
+  return `${cap(pct)} recorded, with gaps while this server was off.`;
 }
 
 /**

@@ -90,7 +90,7 @@ describe("mempool history page", () => {
     // A lone point is a short tick on the line and a sliver in its layers, not nothing.
     expect(chart.querySelector(".chart__line")?.getAttribute("d")).toContain("h0.1");
     expect(chart.querySelectorAll(".chart__layer")[6]?.getAttribute("d")).toMatch(/^M.*Z$/);
-    expect(text(el)).toContain("Recorded from 12 Nov 2026, 15:00 UTC: under 1% of the period.");
+    expect(text(el)).toMatch(/Under 1% recorded, from 12 Nov( 2026)?, 15:00 UTC\./);
     expect(text(el)).toContain("No data stored");
   });
 

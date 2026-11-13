@@ -52,7 +52,7 @@ test("the page shows the minutes the server stored, with the gap where none was"
   await page.goto("/regtest/mempool?interval=2h");
   const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
   await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
-  await expect(page.getByText(/^Recorded from .*: (under )?\d+% of the period\.$/)).toBeVisible();
+  await expect(page.getByText(/^(Under 1|\d+)% recorded, from .* UTC\.$/)).toBeVisible();
   const figures = page.getByRole("region", { name: /The mempool's size by fee rate.*, figures/ });
   await chart.locator("xpath=ancestor::figure").getByText("Show the figures").click();
   // The table renders after the click: wait for it before reading it once.
@@ -96,6 +96,18 @@ test("a phone sees the whole size chart, time axis and all, on its first screen"
         new Set([...ul.children].map((li) => Math.round(li.getBoundingClientRect().top))).size,
     );
     expect(rows, path).toBe(1);
+    const coverage = page.locator(".mempool-coverage");
+    if ((await coverage.count()) > 0) {
+      const lines = await coverage.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        // Tops more than half a line apart: the hatch swatch beside the words sits a pixel off.
+        const tops = [...range.getClientRects()].map((r) => r.top);
+        tops.sort((x, y) => x - y);
+        return tops.filter((t, i) => i === 0 || t - (tops[i - 1] ?? t) > 8).length;
+      });
+      expect(lines, `${path}: coverage lines`).toBe(1);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
