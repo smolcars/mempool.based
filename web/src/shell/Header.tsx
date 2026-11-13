@@ -23,15 +23,38 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
   let header: HTMLElement | undefined;
 
   // The header is sticky and its height follows the width and the reader's text size: the page
-  // keeps that much clear above whatever focus or a link scrolls to (global.css), so it is not hidden under it.
+  // keeps that much clear above whatever focus or a link scrolls to (global.css), so nothing the
+  // keyboard reaches is hidden under it.
   onSettled(() => {
     const el = header;
     if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const root = document.documentElement;
+    let frame = 0;
+    // Written in the next frame, not in the observer: WebKit reported a style change made there as
+    // a resize loop.
     const seen = new ResizeObserver(() => {
-      document.documentElement.style.setProperty("--header-h", `${el.offsetHeight}px`);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() =>
+        root.style.setProperty("--header-h", `${el.offsetHeight}px`),
+      );
     });
     seen.observe(el);
-    return () => seen.disconnect();
+    // Firefox leaves an element that focus reaches from below partly under the header, whatever
+    // the scroll padding: it is brought clear of it.
+    const clear = (e: FocusEvent) => {
+      const t = e.target;
+      if (!(t instanceof Element) || el.contains(t) || !t.matches(":focus-visible")) return;
+      if (getComputedStyle(el).position !== "sticky") return;
+      if (t.getBoundingClientRect().top < el.getBoundingClientRect().bottom) {
+        t.scrollIntoView({ block: "nearest" });
+      }
+    };
+    document.addEventListener("focusin", clear);
+    return () => {
+      seen.disconnect();
+      cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", clear);
+    };
   });
 
   // "/" jumps to search from anywhere but a text field.

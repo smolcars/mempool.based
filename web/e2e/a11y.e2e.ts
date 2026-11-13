@@ -8,8 +8,10 @@ import { ACINQ, mainnet, serve } from "./lightning-answers";
 
 // axe-core is a development dependency only: read from node_modules and run in the page through
 // Playwright, never bundled or served.
-const REPLACEMENTS: unknown = JSON.parse(
-  readFileSync(new URL("../../fixtures/api-v1/replacements.json", import.meta.url), "utf8"),
+const REPLACEMENTS = (
+  JSON.parse(
+    readFileSync(new URL("../../fixtures/api-v1/replacements.json", import.meta.url), "utf8"),
+  ) as { all: unknown }
 ).all;
 const AXE = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
@@ -28,11 +30,20 @@ interface Violation {
 
 /** axe-core's violations on the page as it is now, one line each. */
 async function axe(page: Page, only?: string[]): Promise<string[]> {
+  // Fades still under way (they remain under reduced motion) would be measured half done.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
   await page.evaluate(AXE);
   const found = await page.evaluate(
     async ({ tags, rules, only: ids }) => {
-      const run = (window as unknown as { axe: { run: (...a: unknown[]) => Promise<unknown> } })
-        .axe.run;
+      const run = (window as unknown as { axe: { run: (...a: unknown[]) => Promise<unknown> } }).axe
+        .run;
       const r = (await run(document, {
         runOnly: ids ? { type: "rule", values: ids } : { type: "tag", values: tags },
         rules: ids ? {} : rules,
@@ -61,9 +72,9 @@ const here = (page: Page) =>
     e.dataset["walked"] = "";
     // The ring is the element's own outline, or its field's (the search draws it on its box).
     let ring = false;
-    for (let x: Element | null = e, up = 0; x && up < 2; x = x.parentElement, up++) {
-      const s = getComputedStyle(x);
-      if (s.outlineStyle !== "none" && Number.parseFloat(s.outlineWidth) >= 2) ring = true;
+    for (const x of [e, e.parentElement]) {
+      const s = x && getComputedStyle(x);
+      if (s && s.outlineStyle !== "none" && Number.parseFloat(s.outlineWidth) >= 2) ring = true;
     }
     const header = document.querySelector(".site-header");
     const box = e.getBoundingClientRect();
@@ -84,29 +95,33 @@ const here = (page: Page) =>
  * first, every stop shows its focus ring and is never under the sticky header, and every control
  * in sight is reached in the order the page reads, header, main, then footer.
  */
-async function walk(page: Page) {
+async function walk(page: Page, browserName: string) {
+  // Safari's Tab reaches only form fields unless the reader asks for more; Option-Tab reaches all.
+  const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
     window.scrollTo(0, 0);
   });
   const stops: Stop[] = [];
   for (let i = 0; i < 400; i++) {
-    // oxlint-disable-next-line no-await-in-loop -- each key waits for the focus it moved
-    await page.keyboard.press("Tab");
-    // oxlint-disable-next-line no-await-in-loop -- read where that key left focus
+    await page.keyboard.press(tab);
     const s = await here(page);
     if (!s || (i > 0 && s.name === stops[0]?.name)) break;
     stops.push(s);
   }
   expect.soft(stops[0]?.name, "the first stop").toBe('a "Skip to content"');
-  expect.soft(
-    stops.filter((s) => !s.ring).map((s) => s.name),
-    "stops without a focus ring",
-  ).toEqual([]);
-  expect.soft(
-    stops.filter((s) => s.covered).map((s) => s.name),
-    "stops under the header, tabbing down",
-  ).toEqual([]);
+  expect
+    .soft(
+      stops.filter((s) => !s.ring).map((s) => s.name),
+      "stops without a focus ring",
+    )
+    .toEqual([]);
+  expect
+    .soft(
+      stops.filter((s) => s.covered).map((s) => s.name),
+      "stops under the header, tabbing down",
+    )
+    .toEqual([]);
   const order = await page.evaluate(() => {
     const parts = [".site-header", "#main", ".site-footer"];
     const tabbable = [
@@ -123,9 +138,7 @@ async function walk(page: Page) {
     );
     return {
       positive: tabbable.filter((e) => e.tabIndex > 0).length,
-      missed: tabbable
-        .filter((e) => !("walked" in e.dataset))
-        .map((e) => e.outerHTML.slice(0, 80)),
+      missed: tabbable.filter((e) => !("walked" in e.dataset)).map((e) => e.outerHTML.slice(0, 80)),
       parts: tabbable
         .filter((e) => "walked" in e.dataset)
         .map((e) => parts.findIndex((p) => e.closest(p)))
@@ -134,13 +147,16 @@ async function walk(page: Page) {
   });
   expect.soft(order.positive, "a positive tabindex, which reorders the page").toBe(0);
   expect.soft(order.missed, "controls Tab never reached").toEqual([]);
-  expect.soft(order.parts, "header, then main, then footer").toEqual(order.parts.toSorted());
+  expect
+    .soft(
+      order.parts.every((p, i) => p >= (order.parts[i - 1] ?? 0)),
+      "header, then main, then footer",
+    )
+    .toBe(true);
   // Back up the page: focus scrolled into view from below must clear the sticky header.
   const back: string[] = [];
   for (let i = 1; i < stops.length; i++) {
-    // oxlint-disable-next-line no-await-in-loop -- each key waits for the focus it moved
-    await page.keyboard.press("Shift+Tab");
-    // oxlint-disable-next-line no-await-in-loop -- read where that key left focus
+    await page.keyboard.press(`Shift+${tab}`);
     const s = await here(page);
     if (s?.covered) back.push(s.name);
   }
@@ -222,8 +238,9 @@ const PAGES: PageType[] = [
     path: "/regtest/rbf",
     ready: (p) => p.getByRole("table").first(),
     // Mainnet's stories (as rbf.e2e.ts draws them): regtest has none this long.
-    before: (p) =>
-      p.route(/\/regtest\/api\/v1\/replacements$/, (r) => r.fulfill({ json: REPLACEMENTS })),
+    before: async (p) => {
+      await p.route(/\/regtest\/api\/v1\/replacements$/, (r) => r.fulfill({ json: REPLACEMENTS }));
+    },
   },
   {
     name: "not found",
@@ -275,6 +292,7 @@ test.describe("every page type", () => {
   for (const t of PAGES) {
     test(`${t.name}: no checker finding in either theme, a keyboard walk, and no movement under reduced motion`, async ({
       page,
+      browserName,
     }) => {
       await watchMotion(page);
       await open(page, t);
@@ -283,7 +301,7 @@ test.describe("every page type", () => {
       expect.soft(await axe(page, ["color-contrast"]), "contrast, dark").toEqual([]);
       await page.emulateMedia({ colorScheme: "light" });
       // A keyboard is a desktop's; a phone's run checks the rest.
-      if ((page.viewportSize()?.width ?? 0) > 640) await walk(page);
+      if ((page.viewportSize()?.width ?? 0) > 640) await walk(page, browserName);
       expect.soft(await moved(page), "movement under reduced motion").toEqual([]);
     });
   }
@@ -292,7 +310,9 @@ test.describe("every page type", () => {
 // Escape closes what opened and gives focus back to what opened it.
 test("Escape closes the network menu, an exact amount and the search's answer", async ({
   page,
+  browserName,
 }) => {
+  const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
   // A second network, so the switch is a menu rather than a label.
   await page.route("**/app/config", (r) =>
     r.fulfill({ json: { networks: ["regtest", "signet"], version: "test" } }),
@@ -313,7 +333,7 @@ test("Escape closes the network menu, an exact amount and the search's answer", 
   await page.keyboard.press("Enter");
   const copy = page.getByRole("button", { name: /^Copy the exact/ });
   await expect(copy).toBeVisible();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tab);
   await expect(copy).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(copy).toBeHidden();
@@ -326,7 +346,7 @@ test("Escape closes the network menu, an exact amount and the search's answer", 
   await expect(page.getByRole("status").filter({ hasText: "Nothing matches" })).toHaveCount(1);
   await expect(page.getByText("Nothing matches", { exact: true })).toBeVisible();
   expect(await axe(page), "axe-core, the search's answer open").toEqual([]);
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tab);
   await expect(page.locator(".search__panel a").first()).toBeFocused();
   await search.focus();
   await page.keyboard.press("Escape");
@@ -347,7 +367,7 @@ const overflow = (page: Page) =>
       for (let p = e.parentElement; p && !clipped; p = p.parentElement) {
         clipped = getComputedStyle(p).overflowX !== "visible";
       }
-      if (!clipped) out.push(`${e.tagName.toLowerCase()}.${String(e.className)}`);
+      if (!clipped) out.push(`${e.tagName.toLowerCase()}.${e.getAttribute("class") ?? ""}`);
     }
     return { scroll: document.documentElement.scrollWidth - width, out: out.slice(0, 5) };
   });
@@ -375,19 +395,14 @@ for (const [name, path] of [
     ];
     for (const size of sizes) {
       const label = `${size.width} px at ${size.text} px text`;
-      // oxlint-disable-next-line no-await-in-loop -- one size at a time on one page
       await page.setViewportSize(size);
       if (browserName === "chromium") {
-        // oxlint-disable-next-line no-await-in-loop -- before the page loads
         const cdp = await page.context().newCDPSession(page);
-        // oxlint-disable-next-line no-await-in-loop -- before the page loads
         await cdp.send("Page.setFontSizes", {
           fontSizes: { standard: size.text, fixed: Math.round((size.text * 13) / 16) },
         });
       }
-      // oxlint-disable-next-line no-await-in-loop -- each size loads the page afresh
       await open(page, { name, path, ready: (p) => p.getByRole("heading", { level: 1 }) });
-      // oxlint-disable-next-line no-await-in-loop -- read once the page is drawn
       expect(await overflow(page), label).toEqual({ scroll: 0, out: [] });
       const links = await page
         .getByRole("navigation", { name: "Main" })
