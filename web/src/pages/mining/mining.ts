@@ -339,9 +339,14 @@ export function poolColour(name: string): number {
 
 /**
  * Weekly pool shares as stacked layers: the period's six largest pools that have a colour, the
- * biggest over the period at the bottom, then every other pool as one grey layer.
+ * biggest at the bottom, then every other pool as one grey layer. `ranked` is the period's table,
+ * largest first, by blocks: when given, it picks and orders the six, so the chart agrees with the
+ * table even where weeks of different sizes would rank the summed weekly shares otherwise.
  */
-export function poolLayers(weeks: readonly PoolWeek[]): {
+export function poolLayers(
+  weeks: readonly PoolWeek[],
+  ranked?: readonly string[],
+): {
   x: number[];
   layers: { name: string; values: number[]; pool: number }[];
 } {
@@ -349,10 +354,10 @@ export function poolLayers(weeks: readonly PoolWeek[]): {
   const at = new Map(x.map((t, i) => [t, i]));
   const totals = new Map<string, number>();
   for (const w of weeks) totals.set(w.poolName, (totals.get(w.poolName) ?? 0) + w.share);
-  const named = sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([name]) => name)
-    .filter((name) => poolColour(name) > 0)
-    .slice(0, SHARES_DRAWN);
+  const order =
+    ranked ??
+    sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([n]) => n);
+  const named = order.filter((name) => poolColour(name) > 0).slice(0, SHARES_DRAWN);
   const layers = named.map((name) => ({
     name,
     values: x.map(() => 0),

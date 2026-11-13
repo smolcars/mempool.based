@@ -211,11 +211,16 @@ test("the share graphics draw each period's six largest pools, each in its own c
   });
   await page.route(/\/api\/v1\/mining\/hashrate\/pools\/\w+$/, (route) => {
     const names = orders[period(route.request().url())] ?? [];
-    const weeks = [1_790_000_000, 1_790_604_800].flatMap((timestamp) =>
+    const which = period(route.request().url());
+    // A year's second week is small, with the seventh pool in most of it: summed weekly shares
+    // would rank it above the sixth, which has more blocks. The chart follows the table's blocks.
+    const share = (i: number, second: boolean) =>
+      which === "1y" && second && i >= 5 ? (i === 6 ? 0.3 : 0.001) : count(i) / 500;
+    const weeks = [1_790_000_000, 1_790_604_800].flatMap((timestamp, w) =>
       names.map((poolName, i) => ({
         timestamp,
         avgHashrate: 1e18,
-        share: count(i) / 500,
+        share: share(i, w === 1),
         poolName,
       })),
     );

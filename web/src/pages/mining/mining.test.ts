@@ -97,6 +97,27 @@ describe("pool layers", () => {
     // A pool's colour is its own, whatever its rank: AntPool is 2, F2Pool 3, Luxor 7, everywhere.
     expect(layers.map((l) => l.pool)).toStrictEqual([2, 3, 7, 0]);
   });
+  it("picks and orders the pools by the table's blocks, not by summed weekly shares", () => {
+    // Five pools at 17% both weeks; MARA 12% of a 1,000-block week and 1% of a 100-block one,
+    // Luxor 3% and 14%: MARA has 121 blocks to Luxor's 44, so MARA is drawn, not Luxor.
+    const five = ["Foundry USA", "AntPool", "F2Pool", "ViaBTC", "SpiderPool"];
+    const weeks = [1, 2].flatMap((t) => five.map((name) => week(t, name, 0.17)));
+    weeks.push(
+      week(1, "MARA Pool", 0.12),
+      week(1, "Luxor", 0.03),
+      week(2, "MARA Pool", 0.01),
+      week(2, "Luxor", 0.14),
+    );
+    const table = [...five, "MARA Pool", "Luxor"];
+    expect(poolLayers(weeks, table).layers.map((l) => l.name)).toStrictEqual([
+      ...five,
+      "MARA Pool",
+      OTHER_POOLS,
+    ]);
+    // Without the table, the weekly sums are all there is.
+    expect(poolLayers(weeks).layers.map((l) => l.name)).toContain("Luxor");
+  });
+
   it("draws only the period's six largest coloured pools, so it agrees with the table", () => {
     const names = ["Luxor", "Foundry USA", "Ocean.xyz", "AntPool", "SecPool", "F2Pool", "ViaBTC"];
     const weeks = names.map((name, i) => week(1, name, (10 - i) / 100));

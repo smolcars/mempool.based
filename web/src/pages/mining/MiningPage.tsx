@@ -259,7 +259,9 @@ function Pools(props: {
   );
   const layers = createMemo(() => {
     const w = weeks.answer()?.value;
-    return w ? poolLayers(w) : undefined;
+    // The table's own order, when it is of the same period as the weeks.
+    const sameTable = answeredPeriod(props.ranking.answer())?.id === weeksPeriod().id;
+    return w ? poolLayers(w, sameTable ? r()?.pools.map((p) => p.name) : undefined) : undefined;
   });
 
   return (
