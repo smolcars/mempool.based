@@ -51,7 +51,8 @@
   }
   .ln-stats > * {
     flex: 1 1 11rem;
-    min-width: fit-content;
+    /* A phrase under a figure (a node count's kinds) wraps; the figure itself never does. */
+    min-width: min-content;
   }
   .ln-stats--small {
     margin-top: var(--space-4);
