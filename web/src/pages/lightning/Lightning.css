@@ -654,6 +654,13 @@
   .ln-nav__back {
     margin-right: auto;
   }
+  /* On a phone the way back has a line of its own above the section's links, so a long list's
+     name ("Nodes by open channels") never pushes "History" onto a line alone. */
+  @media (max-width: 640px) {
+    .ln-nav__back {
+      flex-basis: 100%;
+    }
+  }
   /* Landed on from "History": clear of the sticky header. */
   .ln-history {
     scroll-margin-top: calc(var(--touch) * 2 + var(--space-6));
