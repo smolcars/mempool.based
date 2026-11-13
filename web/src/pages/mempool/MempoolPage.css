@@ -133,7 +133,12 @@
     }
     /* The readout is four short lines on a phone: the bands wait for a finger on the chart. */
     .mempool-chart--size {
-      min-height: calc(300px + 9rem);
+      min-height: calc(240px + 9rem);
+    }
+    /* One line of coverage in any font: the sentence says from when, which is where the hatch
+       ends, so the key to the hatch steps aside. */
+    .mempool-coverage__swatch {
+      display: none;
     }
   }
 }

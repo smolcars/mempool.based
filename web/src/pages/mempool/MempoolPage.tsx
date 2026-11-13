@@ -1,9 +1,9 @@
 // The mempool over time: its size by fee band and what flowed through it, from the server's
 // history (docs/FRONTEND.md "Mempool history", docs/DESIGN.md "Mempool history").
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
-import { formatMoment, formatSi } from "../../components/chart/scale";
+import { formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
 import { scrollCue } from "../../components/scrollCue";
 import { SectionHeader } from "../../components/SectionHeader";
@@ -23,6 +23,7 @@ import {
   parseInterval,
   pointTime,
   rateText,
+  recentMoment,
   seriesOf,
   sizeSummary,
 } from "./history";
@@ -228,7 +229,19 @@ function ChartSlot(props: { class: string; children: JSX.Element }) {
 /** The longest run of missing steps drawn across rather than as a break. */
 const BRIDGE_STEPS = 5;
 
+/** A phone's size chart is shorter, so it and its time axis are on the first screen in any font. */
+const PHONE = "(max-width: 640px)";
+const SIZE_HEIGHT = 300;
+const SIZE_HEIGHT_PHONE = 240;
+
 function Charts(props: { h: History; interval: Interval; fit: boolean }) {
+  const phone = typeof matchMedia === "function" ? matchMedia(PHONE) : undefined;
+  const [narrow, setNarrow] = createSignal(phone?.matches === true);
+  onSettled(() => {
+    const change = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    phone?.addEventListener("change", change);
+    return () => phone?.removeEventListener("change", change);
+  });
   const fitted = () => (props.fit ? dataFrom(props.h) : undefined);
   // A missing minute or few is bridged, not drawn as a stripe that looks like a fault; a longer
   // pause in recording still breaks the line, and the table lists only what was stored.
@@ -269,7 +282,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
                 choice away. */}
             {fitted() === undefined
               ? text()
-              : `Everything recorded, since ${formatMoment(props.h.first ?? 0)}.`}
+              : `Recorded since ${recentMoment(props.h.first ?? 0)}.`}
           </p>
         )}
       </Show>
@@ -284,7 +297,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
             domain={domain()}
             dataFrom={hatchFrom()}
             gap={bridged()}
-            height={300}
+            height={narrow() ? SIZE_HEIGHT_PHONE : SIZE_HEIGHT}
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
             series={[{ name: "Total", values: s().vsize, draw: "line", format: formatSize }]}
             notes={notes()}

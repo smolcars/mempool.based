@@ -125,7 +125,7 @@ function share(part: number, whole: number): string {
  */
 const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 /** A moment without its year when the year is this one: the line must fit a phone in one. */
-const since = (t: number, now: number) => {
+export const recentMoment = (t: number, now = Date.now() / 1000) => {
   const m = formatMoment(t);
   const year = String(new Date(now * 1000).getUTCFullYear());
   return m.replace(` ${year},`, ",");
@@ -135,14 +135,14 @@ export function coverageSentence(h: History, now = Date.now() / 1000): string | 
   if (h.points.length === 0) return undefined;
   const pct = share(h.sampled, h.minutes);
   if (h.first !== null && h.interval === "all") {
-    const from = since(h.first, now);
+    const from = recentMoment(h.first, now);
     return h.complete
       ? `Every minute recorded since ${from}.`
       : `${cap(pct)} recorded, since ${from}.`;
   }
   if (h.complete) return undefined;
   if (h.first !== null && h.first > h.from) {
-    return `${cap(pct)} recorded, from ${since(h.first, now)}.`;
+    return `${cap(pct)} recorded, from ${recentMoment(h.first, now)}.`;
   }
   return `${cap(pct)} recorded, with gaps while this server was off.`;
 }

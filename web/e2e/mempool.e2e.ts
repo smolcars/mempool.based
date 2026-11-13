@@ -80,6 +80,19 @@ test("a phone sees the whole size chart, time axis and all, on its first screen"
     await page.goto(path);
     const chart = page.getByRole("slider", { name: /The mempool's size by fee rate/ });
     await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
+    // In the wide faces a Linux machine falls back to, as well as these: CI's runner once put the
+    // axis 15 px below the fold that a Mac's fonts kept above it.
+    await page.evaluate(() => {
+      const root = document.documentElement.style;
+      root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+      root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
     // The plot and every label on it, the dates under it included, end above the fold.
     const bottom = await chart.evaluate((el) =>
       Math.max(
