@@ -77,6 +77,63 @@ No budget miss had a fix small and clear enough to make in this change: the one 
 - **Done since (PF5), on Linux** ([On Linux](#on-linux)). No stall up to 20,000 sockets: every message of every run reached every reader, whether the load generator ran as one process beside the server, one process in a network namespace of its own or four. The server's writers did not lag: a block's last reader at 20,000 sockets was 54 ms (median) after the server started queueing it, and one runtime worker instead of four made that 126 ms, so delivery is the server's CPU writing to each socket and scales with cores. What stops a deployment first is a limit: `WS_MAX_SOCKETS` (`503`, logged in `requests_refused`), then the open-file limit, where the server stopped accepting and logged nothing, while its own connections to the node failed too (a mempool refresh took 13.9 s); it now logs `accept_failed`. On the client side, one source address reaches one server port at most 28,232 times at Linux's default port range, connections in `TIME_WAIT` included, which a reverse proxy in front meets too. And the server asked for a listen queue of 128 whatever the host allowed (tokio's `bind` does), so 10,000 sockets opened at once overflowed it 12,178 and 18,453 times; it now asks for the host's maximum: 0 and 212 overflows, every socket open in 0.3 and 1.2 s instead of 2.8 and 3.3 s. Host settings are in [`DEPLOY.md`](DEPLOY.md#many-websockets).
 - **The macOS stall was not measured again.** The same server and load generator deliver everything on Linux, so it is a property of that host: both ends of 20,000 connections on one machine, with macOS's network buffers 89% in use. The load generator made it worse there: it read no socket until every socket had opened, so messages piled up in kernel buffers while the slower ones connected (33 MB in one Linux run whose connections took three minutes). It now reads each socket from the moment it opens.
 
+### 6. Reads that grew with the block table (done)
+
+- **Evidence.** Once the demo server's mainnet block table was full (975,660 rows, a 547 MB file), its log showed store reads hitting their 2 s limit on 2026-11-13: `store_read_timed_out` with `read: mining` 5, 3 and 10 times in the hours from 10:00 to 12:21 UTC, and with `read: block_counts` 4, 2 and 3 times, each `mining` one beside a `mining_failed` (`task: refresh`). Signet (330,000 rows) and testnet4 had one each. The machine ran other builds at load 10 to 20 then; on a quiet moment the same reads were well inside the limit. They cost a full pass over the table each, and ran on every block or every minute.
+- **Done.** The block table keeps running totals per day, per block series point and per pool per 1,008 heights and per week, recomputed from their rows in the same write as any change ([`STORE.md`](STORE.md#totals)). Reads over long ranges add up buckets; the ends of a range are scanned. Proved exact against a full scan through a long random run of every kind of change.
+
+Every read that runs on a schedule or per block, measured on a copy of that mainnet store (975,672 rows) on 2026-11-13, median of five, with `table_reads_benchmark` and `answers_benchmark` ([How to reproduce](#how-to-reproduce)). Load average 8 to 13 for the reads before, 13 to 50 after (other builders on the machine); before, the same reads with a writer committing 10,000-row writes back to back were 4 to 7% slower; after, no different.
+
+| Read | Runs | Statement and plan before | Before | After | How |
+|---|---|---|---|---|---|
+| `span`: how far the stored history reaches | Every minute and after every `follow` write (the mining refresh's fingerprint) | `SELECT height, time … WHERE height BETWEEN` 10,000 at a time: `SEARCH blocks USING INTEGER PRIMARY KEY`, every row | 93 ms | 0.08 ms | Read less: skip the full 1,008-height buckets, walk only the first that is not full |
+| `row_counts` and the backfill's progress counts | Every minute in the mining refresh; every minute for good in the backfill, done or not | `count(*)`: `SCAN blocks USING COVERING INDEX blocks_pool`; `count(*) WHERE rated = 0`: `SCAN … blocks_unrated` | 11 ms | 0.06 ms | A sum of the buckets; and the backfill stops reporting once it is done |
+| The backfill's pass over the table | Every new tip, done or not | `SELECT height … WHERE height BETWEEN` 10,000 at a time over every height: `SEARCH blocks USING INTEGER PRIMARY KEY` | 98 ms | 0.05 to 3 ms | Skip the 1,008-height buckets that hold every height |
+| `pool_counts` over all of history | Every refresh (`pools/all`, every pool's statistics) | `GROUP BY pool`: primary-key range, `USE TEMP B-TREE FOR GROUP BY`, `… ORDER BY` | 228 ms | 2.2 ms | Totals per pool per 1,008 heights |
+| `pool_weeks` over all of history | Every refresh (`hashrate/pools/all`, every pool's weekly shares) | `GROUP BY w, pool`: primary-key range, temp B-tree | 260 ms | 3.0 ms | Totals per pool per week |
+| `periods` by day, all of history (three years) | Every refresh (`hashrate/…` for `1y` and over, every pool's shares) | `GROUP BY k`: primary-key range, temp B-tree | 568 ms (89) | 3.8 ms (0.8) | Totals per day |
+| `periods` by 1,008 (all), 216 (`3y`), 144 (`2y`), 72 (`1y`), 36 (`6m`) heights | Every refresh (the five block series) | The same | 573, 87, 59, 34, 17 ms | 0.5 to 0.6 ms each | Totals per series point |
+| `first_since` three years back | Every refresh, about five times per interval | `min(height)` over `blocks_time` from the time on: `SEARCH … COVERING INDEX blocks_time (time>?)` | 3.3 ms | 0.09 ms | The rest of the day from the index, the later days from their totals |
+| `audit::pool_health` over all of history (the audits' averages) | Every refresh (`pools/:interval`, every pool's statistics) | `SEARCH b USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)` then the audit by hash: every block row, for 129 audits | 164 ms | 0.10 ms | Read less: driven from the audits (`CROSS JOIN`): `SEARCH a USING INDEX audits_height` |
+| `retargets`, `work` | Every refresh | `json_each` of the retarget heights; a 1,008-row primary-key range | 0.6, 0.07 ms | the same | Already bounded |
+| The answers kept in memory ([#77](https://github.com/smolcars/rbitcoin-space/pull/77)): block pages, summaries, audit pages | The first request after the block table or the audits change | Pages by height and lookups by hash | 0.04 to 0.3 ms | the same | Already bounded. `predictions/:interval` scans the audits, which grow by about 52,000 rows a year, not with the block table |
+| `follow`'s reads, `reattribute`'s check | Every new tip; at start | The newest 100 rows; the list version and the top row | under 1 ms | the same | Already bounded |
+
+**What a new block costs now,** with every mining route and every interval asked for (52 computations, 391 answers), measured with `answers_benchmark` on the same copy:
+
+| Work per new block | Before | After |
+|---|---|---|
+| The row's write, its totals settled in it | 0.3 to 0.4 ms | 1.1 to 1.9 ms (4 ms in a burst) |
+| The refresh's fingerprint (`span` and the counts) | 119 to 136 ms | 0.2 ms |
+| The backfill's pass, once it is done | 98 ms | 0.05 to 3 ms |
+| Recomputing every mining answer | 9.5 to 11.3 s | 47 to 53 ms, at load 7 as at load 50 (66 to 135 ms during bursts of other builds) |
+| The first answer of each mining route after a start | up to 1,395 ms (every pool's statistics), 998 ms (`hashrate/pools/all`) | at most 14.6 ms (every pool's statistics); 9 ms (`hashrate/pools/all`) |
+
+Recomputing every answer shares the reads its answers have in common (the network's hashrate points, the pools' weekly counts, the hashrate of the newest blocks) and computes an interval's five block series from one read. What is left is spread over the 52 computations, about 1 ms each: scanning the rows of the periods kept as rows (a month or less), the two ends of each range, and serializing 391 answers, most of whose bytes are every pool's weekly shares.
+
+**How each scales,** on generated tables of 100,000 and 1,000,000 rows (`TABLE_BENCH_ROWS`), median ms:
+
+| Read | Before, 100k | Before, 1M | After, 100k | After, 1M |
+|---|---|---|---|---|
+| `span` | 6.7 | 64 | 0.03 | 0.07 |
+| `row_counts` | 0.2 | 7.8 | 0.02 | 0.06 |
+| The backfill's pass | 6.6 | 64 | 1.6 | 0.05 |
+| `pool_counts`, all | 20 | 205 | 0.29 | 3.1 |
+| `pool_weeks`, all | 26 | 244 | 0.37 | 3.9 |
+| `periods` by day, all | 53 | 543 | 0.45 | 4.2 |
+| `periods` by 1,008, all | 55 | 545 | 0.08 | 0.62 |
+| `audit::pool_health`, all | 5.2 | 50 | 0.02 | 0.02 |
+
+Before, every one grew with the rows, ten times for ten times the rows. After, a read over all of history grows with its buckets: days (about 6,500 on mainnet) for the daily and weekly ones, 1,008-height buckets (968) for the others, and pools in each. Ten years more of blocks add about 3,650 days. The backfill's pass costs what is still missing, not what is there (the 100k table's top bucket was part-filled, so its pass read those heights).
+
+**Targets** (on the full-size store, this machine, quiet):
+
+| Target | Result |
+|---|---|
+| The work done per new block under 50 ms in total | **Met for the store's own work**: write, settle, fingerprint and the backfill's pass take 1.3 to 5 ms. **At the line with every answer asked**: the refresh of all 391 answers took 47 to 53 ms, so the total is 49 to 58 ms. The quietest the machine got was load 7, and the figure was the same there; bursts of other builds gave 66 to 135 ms. By computation: every pool's statistics 13 ms, the ten pool rankings 11 ms, the ten block series families 11 ms, the hashrate charts 15 ms. With the answers a real page asks for (a few routes), it is a few milliseconds. To leave a margin with everything asked: keep the 6-height series (`1m`, 162,000 more rows) and a slimmer daily read for the hashrate points, about 5 ms between them |
+| No scheduled read over 250 ms | **Met**: the slowest is 4.2 ms (`periods` by day over all of a million rows). During the one-time fill after the upgrade (4.6 s on mainnet) reads scan as before |
+| The first answer of every mining route after a start under 250 ms | **Met**: at most 14.6 ms. Until the fill is done, on the first start after the upgrade, they cost what they did before |
+
 ## The machine and the method
 
 - **Hardware.** Apple M4 (10 cores: 4 performance, 6 efficiency), 24 GB, APFS SSD, macOS 27.0.1. Server, node, load generator and browser all on this machine.
@@ -458,6 +515,8 @@ From the repository root, after `cargo build --release --locked -p rbitcoin-spac
 | Store readers, 4 against 10 | Set `readers: 10` in the store `Options` in `crates/server/src/blocks.rs`, build into another target directory (`CARGO_TARGET_DIR=DIR cargo build --release --locked -p rbitcoin-space -p load`), then run `CARGO_TARGET_DIR=DIR dev/perf/bench.sh OUT http` and compare the `store` steps with an unchanged build's |
 | Mainnet footprint and paced timings (reads `.env`) | `dev/perf/mainnet.sh OUT MINUTES [REFERENCE_URL]` |
 | Another site's pages | `cd web && node ../dev/perf/pages.mjs reference https://SITE --runs 2 --tx TXID --address ADDRESS` |
+| The block table's scheduled reads, on a copy of a store or a generated one (fills its totals first, and reports what reads cost meanwhile) | `TABLE_BENCH_DIR=DIR [TABLE_BENCH_NET=mainnet] [TABLE_BENCH_ROWS=N] [TABLE_BENCH_WRITER=1] cargo test --release -p engine -- --ignored --nocapture table_reads_benchmark`. Copy a live store with `sqlite3 FILE ".backup COPY"`; never point it at a server's own file, it writes |
+| Every mining answer's first computation, and a new block's refresh of them all | `MINING_BENCH_DIR=DIR MINING_BENCH_NET=mainnet cargo test --release -p rbitcoin-space -- --ignored --nocapture answers_benchmark`, on a copy: it writes three blocks and deletes them |
 
 The Linux runs have their own method, with the commands, in [On Linux](#on-linux).
 
