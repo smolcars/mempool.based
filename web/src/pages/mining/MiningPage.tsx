@@ -12,6 +12,7 @@ import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { createMiningData, type MiningData } from "./data";
 import {
+  answeredPeriod,
   competitive,
   hashrateInterval,
   hashrateSeries,
@@ -56,6 +57,8 @@ import {
   Section,
   Stat,
 } from "./parts";
+import { Adjustments } from "./Adjustments";
+import { BlockHealth } from "./Health";
 import { RecentBlocks } from "./RecentBlocks";
 import "./MiningPage.css";
 
@@ -94,6 +97,8 @@ function Mining(props: { network: Network }) {
       <Pools period={period()} ranking={ranking} hashrates={hashrates} network={props.network} />
       <Rewards period={period()} ranking={ranking} network={props.network} />
       <OverTime period={period()} network={props.network} />
+      <BlockHealth period={period()} network={props.network} ranking={ranking} />
+      <Adjustments network={props.network} />
       <RecentBlocks />
     </div>
   );
@@ -409,11 +414,6 @@ function Pools(props: {
       </Section>
     </section>
   );
-}
-
-/** The period an answer's route names, if it names one. */
-function answeredPeriod(a: { path: string } | undefined): Period | undefined {
-  return PERIODS.find((p) => a?.path.endsWith(`/${p.id}`));
 }
 
 /**

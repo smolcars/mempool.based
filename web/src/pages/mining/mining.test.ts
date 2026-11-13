@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  adjustmentPercent,
   byTime,
   coverageNote,
   fillWeeks,
   hashrateInterval,
   hashrateSeries,
+  healthCoverage,
+  healthSeries,
+  isAdjustments,
+  isPredictions,
   isPoolStats,
   isRanking,
   networkHashrate,
@@ -295,5 +300,61 @@ describe("ordering and gaps", () => {
       [3 * W, 0.2],
     ]);
     expect(fillWeeks([])).toStrictEqual([]);
+  });
+});
+
+describe("difficulty adjustments and block health", () => {
+  it("reads the routes' tuples and nothing else", () => {
+    expect(isAdjustments([[1_793_301_298, 973_728, 1.48e14, 1.05539]])).toBe(true);
+    expect(isAdjustments([[1, 2, 3]])).toBe(false);
+    expect(isAdjustments([[1, 2, 3, "1.05"]])).toBe(false);
+    expect(isPredictions([[1_794_482_500, 975_542, 100]])).toBe(true);
+    expect(isPredictions([[1, 2, null]])).toBe(false);
+    expect(isPredictions({})).toBe(false);
+    expect(adjustmentPercent(1.05539)).toBeCloseTo(5.539, 9);
+    expect(adjustmentPercent(0.98688)).toBeCloseTo(-1.312, 9);
+  });
+
+  it("draws a block per point, with a gap wherever a block between two has no audit", () => {
+    const h = healthSeries([
+      [1_000, 100, 99.5],
+      [1_600, 101, 97],
+      // 102 was not audited; 103 was stamped before 101.
+      [1_500, 103, 100],
+      [2_000, 104, 60],
+    ]);
+    expect(h.per).toBe(1);
+    expect(h.count).toBe(4);
+    expect(h.first).toBe(1_000);
+    expect(h.rate).toStrictEqual([99.5, 97, null, 100, 60]);
+    expect(h.height).toStrictEqual([100, 101, null, 103, 104]);
+    // Times ascend: the block stamped early is drawn at the time of the one before it.
+    expect(h.x).toStrictEqual([1_000, 1_600, 1_600, 1_600, 2_000]);
+  });
+
+  it("past its limit, a point is the lowest block of a run, and opens that one", () => {
+    const points = Array.from(
+      { length: 10 },
+      (_, i) => [i * 600, 200 + i, i === 3 ? 40 : 99] as const,
+    );
+    const h = healthSeries(points, 5);
+    expect(h.per).toBe(2);
+    expect(h.rate).toStrictEqual([99, 40, 99, 99, 99]);
+    expect(h.height).toStrictEqual([200, 203, 204, 206, 208]);
+    expect(h.audited).toStrictEqual([2, 2, 2, 2, 2]);
+    expect(healthSeries([]).x).toStrictEqual([]);
+  });
+
+  it("says what share of the period's blocks have an audit, and from when", () => {
+    const now = Date.UTC(2026, 10, 13) / 1000;
+    const h = healthSeries([[Date.UTC(2026, 10, 12, 11, 14) / 1000, 975_542, 100]]);
+    expect(healthCoverage(h, 1_008, now)).toBe("Under 1% audited, from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, 5, now)).toBe("20% audited, from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, undefined, now)).toBe("Audited from 12 Nov, 11:14 UTC.");
+    expect(healthCoverage(h, 1, now)).toBeUndefined();
+    expect(healthCoverage(h, 5, Date.UTC(2027, 0, 2) / 1000)).toBe(
+      "20% audited, from 12 Nov 2026, 11:14 UTC.",
+    );
+    expect(healthCoverage(healthSeries([]), 5, now)).toBeUndefined();
   });
 });
