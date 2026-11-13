@@ -118,8 +118,15 @@ fn change(sql: &Sql, c: &Change) -> Result<(), Error> {
 /// Applies changes in order, in one write. Fails with [`Error::Full`] rather than wait behind a
 /// full write queue, so the block table's and the mempool history's writes never wait for it.
 pub async fn apply(store: &Store, changes: Vec<Change>) -> Result<(), Error> {
+    apply_from(store, store.generation(), changes).await
+}
+
+/// [`apply`] for changes taken at `generation` ([`Store::write_from`]).
+pub async fn apply_from(store: &Store, generation: u64, changes: Vec<Change>) -> Result<(), Error> {
     store
-        .try_write(move |sql| changes.iter().try_for_each(|c| change(sql, c)))
+        .try_write_from(generation, move |sql| {
+            changes.iter().try_for_each(|c| change(sql, c))
+        })
         .await
 }
 

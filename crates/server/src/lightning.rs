@@ -448,6 +448,8 @@ pub(crate) struct Pending {
     pub(crate) changes: VecDeque<(u64, Change)>,
     /// The last record taken.
     pub(crate) seq: u64,
+    /// The store's generation when `changes` were taken ([`Store::write_from`]).
+    pub(crate) generation: u64,
 }
 
 impl Pending {
@@ -530,7 +532,7 @@ impl Pending {
     async fn store_front(&mut self, store: &Store, l: &Lightning) -> Result<(), store::Error> {
         let n = self.changes.len().min(BATCH);
         let batch: Vec<Change> = self.changes.iter().take(n).map(|(_, c)| *c).collect();
-        store_ln::apply(store, batch).await?;
+        store_ln::apply_from(store, self.generation, batch).await?;
         if let Some((seq, _)) = self.changes.drain(..n).next_back() {
             l.seq.store(seq, Ordering::Relaxed);
         }
@@ -550,6 +552,9 @@ pub(crate) async fn consume(
     l: &Lightning,
     network: &'static str,
 ) {
+    if p.changes.is_empty() {
+        p.generation = store.generation();
+    }
     p.extend(src, src.recent(p.seq), network);
     let mut failures = 0u32;
     loop {
@@ -574,6 +579,38 @@ pub(crate) async fn consume(
                 failures = 0;
             }
             Ok(()) => {}
+            // The node was found on another chain since these were taken: they and what the
+            // peer sent meanwhile are never written, and the records after them are taken anew.
+            Err(store::Error::Held) => {
+                // Read first: a reopening while this runs must leave what it takes stale too.
+                let now = store.generation();
+                let mut dropped = p.changes.len();
+                p.changes.clear();
+                loop {
+                    match rx.try_recv() {
+                        Ok(r) => {
+                            p.seq = p.seq.max(r.seq);
+                            dropped += 1;
+                        }
+                        Err(TryRecvError::Lagged(n)) => {
+                            dropped =
+                                dropped.saturating_add(usize::try_from(n).unwrap_or(usize::MAX));
+                        }
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                    }
+                }
+                // What the receiver skipped is still in the peer's memory: skip it there too.
+                if let Some(last) = src.recent(p.seq).last() {
+                    p.seq = p.seq.max(last.seq);
+                }
+                p.generation = now;
+                logging::emit(&LightningHistoryFailed {
+                    network,
+                    error: "held",
+                    failures: 1,
+                    waiting: dropped,
+                });
+            }
             Err(e) => {
                 failures = failures.saturating_add(1);
                 if failures.is_power_of_two() {

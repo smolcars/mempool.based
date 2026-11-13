@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use engine::blocks::{
     self, Event, Facts, Header, Lister, NodeSource, Progress, Reorgs, Row, Source, SourceError,
 };
@@ -93,6 +94,7 @@ impl BlockTable {
         };
         let options = store::Options {
             observer: Arc::new(observer),
+            genesis: Some(genesis(config.network)),
             ..store::Options::default()
         };
         let store = match Store::open(dir, network, options) {
@@ -131,6 +133,13 @@ impl BlockTable {
             source,
         })
     }
+}
+
+/// The genesis hash of `network`'s chain, which its store records ([`store::Options::genesis`]).
+pub fn genesis(network: Network) -> [u8; 32] {
+    bitcoin::constants::genesis_block(crate::difficulty::chain(network))
+        .block_hash()
+        .to_byte_array()
 }
 
 /// Starts following the tip and, unless it is off, the backfill.

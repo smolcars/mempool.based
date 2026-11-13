@@ -189,7 +189,7 @@ async fn fetch(esplora: &Esplora, height: u32, tip: BlockHash) -> Result<Block, 
     })
 }
 
-fn chain(network: Network) -> bitcoin::Network {
+pub(crate) fn chain(network: Network) -> bitcoin::Network {
     match network {
         Network::Mainnet => bitcoin::Network::Bitcoin,
         Network::Signet => bitcoin::Network::Signet,

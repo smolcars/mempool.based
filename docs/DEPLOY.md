@@ -25,10 +25,24 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 
 | | Expect |
 |---|---|
-| Memory | Plan for 250 to 330 MB more with [Lightning](#lightning) on. Without it, about 80 MB on mainnet with the mempool engine on and one client ([`WS.md`](WS.md)), plus up to `BLOCK_SUMMARY_CACHE_MB` and `ANSWER_CACHE_MB` (32 MB each) per network as the block summaries and kept answers fill, and more with open WebSockets: 64 MB at the peak with 5,000 |
-| CPU | Under 3% of one core on mainnet with one client; 8% with 5,000 WebSockets open |
-| Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)). The log is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)); the compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
+| Memory | 251 MB resident, [measured](#one-day-on-mainnet) for mainnet, signet and testnet4 together with the mempool engine on each and [Lightning](#lightning) on mainnet, without visitors. [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server) measured Lightning at 250 to 330 MB more, by the process's physical footprint, a larger measure than resident memory; how much of the 251 MB it was is not known. More with open WebSockets (64 MB at the peak with 5,000, in a load test, [`WS.md`](WS.md)) and as the block summaries and kept answers fill, up to `BLOCK_SUMMARY_CACHE_MB` and `ANSWER_CACHE_MB` (32 MB each) per network |
+| CPU | About 6% of one core, measured for the same server. 8% with 5,000 WebSockets open, in a load test |
+| Disk | Measured after the full backfill: 547 MB for mainnet's store, 133 MB for signet's, 72 MB for testnet4's, and 35 MB for the Lightning graph ([the data directory](#the-data-directory)). Growth from there, estimated: about 150 MB a year on mainnet, nearly all of it audits. The log was 6.6 MB a day; it is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)). The compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
 | Network | Nothing published but the node's P2P port and, through the proxy, 443 |
+
+### One day on mainnet
+
+The figures in this guide marked measured come from one server, on one machine, from 2026-11-12 09:11 UTC to 2026-11-13 10:13 UTC: mainnet, signet and testnet4, each with the mempool engine and the backfill on from an empty store, and Lightning on mainnet. The nodes were on another host of the same private network, and had the block listing route ([`STORE.md`](STORE.md#backfill)). The server was restarted twelve times for new builds and had no visitors from 21:52 on; the site was offline from about 23:11 to 03:40, which did not stop the backfill. Memory and CPU were read at the end, 11 hours after the last restart. What they do not say is listed with each figure.
+
+| | Measured | Not confirmed |
+|---|---|---|
+| Memory, CPU | 251 MB resident, about 6% of one core, all three networks | Mainnet alone; without Lightning; with real visitors |
+| Stores | 547 MB mainnet (975,660 block rows, a year of fee rates, a day of audits and mempool history, 36,200 Lightning channels), 133 MB signet, 72 MB testnet4; Lightning graph and saved answers 35 MB | Growth per year: the 150 MB a year for audits is an estimate |
+| Backfill | Mainnet: every block's totals 18 h 11 min after the start, the year of fee rates 59 min later; signet 3 h 13 min and 5 h 20 min; testnet4 1 h 21 min and 2 h 17 min ([the first start](#the-first-start)) | A run with no restarts; a node without the listing route |
+| Node load, mempool | 120 MB a minute of RPC answers on mainnet with 39,000 transactions in the mempool, 200 MB with 63,000; about 45 tracker cycles a minute of 2.6 to 4.3 MB each; the slowest cycle in a minute took 230 ms at the median | |
+| Lightning | First sync from an empty directory 273 s (36,826 outputs looked up in 126 requests, 56 MB of gossip). A restart from its own files: graph loaded in 62 ms, synced in 20 s, one lookup | A first sync with the build that paces lookups (PR #89): the one observed predates it |
+| Log | 6.6 MB a day; without visitors 11 lines a minute ([a healthy minute](#the-log)) | |
+| Requests and WebSockets | 4,255 requests over the first 13 hours, 3,109 of them in one hour, and 166 WebSocket upgrades; at most two clients on a topic | The cost of real traffic: the day had almost none |
 
 ### Many WebSockets
 
@@ -97,12 +111,12 @@ docker run -d --name rbitcoin-space --restart unless-stopped --log-driver local 
 with `server.env` holding the six `MAINNET_*` variables ([`CONFIG.md`](CONFIG.md#networks)), `MAINNET_ESPLORA_URL` an `http://` address such as `http://node.internal:3000`. What differs:
 
 - **The node's Esplora, Electrum and RPC are on a network.** None of them encrypts, and the first two do not authenticate. Put them on a private network or a tunnel (WireGuard, SSH) that only the server's host can reach.
-- **Every node call crosses it.** With the mempool engine on, the server reads about 150 MB a minute of RPC answers on mainnet ([`CONFIG.md`](CONFIG.md#the-live-mempool)): about 9 GB an hour between the two hosts. The backfill's old blocks are mostly round trips, so it runs slower over a network ([`STORE.md`](STORE.md#backfill)).
+- **Every node call crosses it.** With the mempool engine on, the server reads 120 to 200 MB a minute of RPC answers on mainnet, more as the mempool grows ([`CONFIG.md`](CONFIG.md#the-live-mempool)): 7 to 12 GB an hour between the two hosts, measured. The backfill's old blocks are mostly round trips, so it runs slower over a network ([`STORE.md`](STORE.md#backfill)).
 - **No bulk routes.** rbitcoin's `/internal/*` routes are only on its unix socket. Today the server calls none of them, so nothing is lost yet; a later release may use them when they are there.
 
 ### Try it on regtest first
 
-The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In the shell where you made `$pass` above, replace the node's lines and **every** `MAINNET_*` line in `.env` with regtest ones. A `MAINNET_*` line left behind points the explorer's mainnet at the regtest node, which the server reports as `rpc_wrong_network` ([below](#when-it-goes-wrong)):
+The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In the shell where you made `$pass` above, replace the node's lines and **every** `MAINNET_*` line in `.env` with regtest ones. A `MAINNET_*` line left behind points the explorer's mainnet at the regtest node, which the server reports as `rpc_wrong_network` ([below](#when-it-goes-wrong)), writing nothing to `mainnet.sqlite` meanwhile:
 
 ```sh
 sed -i.bak -E '/^(NETWORK|P2P_PORT|MAINNET_[A-Z_]+)=/d' .env && rm .env.bak
@@ -134,7 +148,7 @@ docker run --rm --network rbitcoin-space_default curlimages/curl:8.11.1 -su "rbi
 | Route | Answers | Use it for |
 |---|---|---|
 | `/healthz` | `200` `{"status":"ok","version":"0.1.0","revision":…}` while the process serves HTTP. `revision` is the commit the binary was built from, or `unknown` for a build without one (below). Never asks the node | Liveness. It is the image's own health check, so `docker compose ps` shows `healthy`. And which build is running: after an upgrade, `revision` must be the new release's commit |
-| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `wrong_network` when the node is on another chain, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp. Then four that do not count towards `ready`: `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`); `address_index` (`on`, `off`, or `unknown` until the node has answered); `store` (`ok`, `failing` while SQLite refuses writes, `open_failed`, or `off` without `DATA_DIR`); and `store_written_secs_ago`, since a write last committed (`null` before the first) | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs`. Alert on `address_index` `off` and `store` other than `ok` too |
+| `/readyz` | `200` when every enabled network's node answers RPC with our credentials and its Electrum connection is up, `503` otherwise. Per network: `ready`, `rpc` (`ok`, `auth_failed`, `wrong_network` when the node is on another chain, `unreachable` with `rpc_error`, or `pending` before the first check), `rpc_checked_secs_ago`, `electrum`, `tip_height`, and `tip_age_secs`, how old the newest block we know of is by its timestamp. Then four that do not count towards `ready`: `lightning`, the Lightning peer's state (`off`, `starting`, `syncing`, `synced`, `failed`, `stopped`); `address_index` (`on`, `off`, or `unknown` until the node has answered); `store` (`ok`; `waiting` until a check has found the node on this network's chain, and while it is on another, since nothing is written then; `failing` while SQLite refuses writes; `wrong_chain` when the file belongs to another chain; `open_failed`; or `off` without `DATA_DIR`); and `store_written_secs_ago`, since a write last committed (`null` before the first) | Readiness: a load balancer or monitor deciding whether to send users here. A syncing node shows as a growing `tip_age_secs`. Alert on `address_index` `off` and `store` other than `ok` too |
 
 ```sh
 curl -s http://127.0.0.1:8080/readyz
@@ -225,8 +239,49 @@ It must be your own address. If it is the gateway, the server is not reading the
 How the address is found, `X-Forwarded-For` and chains of proxies are in [`CONFIG.md`](CONFIG.md#client-addresses). Two cautions:
 
 - Docker may give the network another subnet when it is recreated, after `docker compose down`, and then every visitor shares the new gateway's allowance. Check the gateway again after one, and watch for `proxy_header_ignored`.
-- A proxy in a container on the compose network arrives from its own container address, not the gateway, and that address can change when the container is recreated. This guide covers a proxy on the host.
+- A proxy in a container arrives from its own container address, not the gateway: [below](#a-proxy-in-a-container).
 - Anything on the host that connects to the published port comes from the same gateway and is trusted like the proxy. That is why the port stays on loopback: the host is part of the proxy's trust. Never trust a range that clients can connect from.
+
+### A proxy in a container
+
+When Caddy or nginx runs as a container beside the server, the server's peer is the proxy's own address on the network they share, not the gateway, and nothing is published on the host for the server. Docker gives a container whatever address is free when it starts, so trusting it as it happens to be goes stale: after `docker compose down` with another network created meanwhile, the network comes back on another subnet, the proxy arrives from an address the server does not trust, and every visitor shares one allowance (`proxy_header_ignored` names the new address while `LOG_CLIENT_ADDR` is on). [`deploy/compose.proxy.yml`](../deploy/compose.proxy.yml) pins it instead: a network, `edge`, holding only the proxy and the server, a fixed subnet, and the proxy at `172.30.111.2`, an address Docker gives no other container. It also removes the server's published port.
+
+Next to `compose.yml`, write a `Caddyfile` that proxies to the server by its service name:
+
+```caddyfile
+explorer.example.com {
+	encode zstd gzip
+	reverse_proxy server:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+}
+```
+
+add the proxy to `.env`:
+
+```sh
+TRUSTED_PROXY_HEADER=X-Real-IP
+TRUSTED_PROXIES=172.30.111.2
+```
+
+and start everything with both files:
+
+```sh
+docker compose -f compose.yml -f compose.proxy.yml up -d
+```
+
+Every later command needs both `-f` flags, or compose leaves the proxy out. Caddy keeps its certificates in the `proxy-data` volume. If `172.30.111.0/29` overlaps a network the host already has, compose refuses to start: change the subnet, the `ip_range` and the address in `compose.proxy.yml`, and `TRUSTED_PROXIES`, together. Do not trust the network's gateway here, as for a proxy on the host: the proxy does not come from it, and the host does.
+
+Tested on 2026-11-13 with Caddy 2.11.9, plain HTTP in place of a certificate, and visitors as containers on a network of their own that only the proxy joined:
+
+- Two visitors had separate limits: one sent 800 requests back to back and got `429` for 616 of them, while the other got `200` at the same moment. The server logged each by its own address.
+- A visitor that sent `X-Real-IP` and `X-Forwarded-For` naming another address was logged under its own: Caddy overwrites the first, and the server does not read the second.
+- A container on the node's network that went straight to the server with `X-Real-IP` was keyed on its own address, with `proxy_header_ignored`.
+- With `TRUSTED_PROXIES` set to the `edge` gateway, the server saw the proxy at `172.30.111.2`, ignored the header, and warned.
+- The pinned address held when the proxy was recreated, and after `docker compose down`, another network created, and `up`. Without the pin, recreating the proxy happened to keep its address, but `down`, another network and `up` moved it to another subnet, as described above.
+- Responses were compressed (`zstd`) and `/regtest/app/ws` upgraded (`101`) through it.
+
+Not tested: how the published port passes the visitor's address to Caddy. Docker on Linux keeps an outside client's address (the deployment rehearsal checked it for a proxy on the host); Docker Desktop, used for this test, may not, which is why the visitors were containers. Nor IPv6 visitors to an IPv4 network, whom Docker may forward through its own userland proxy, so that Caddy would see the gateway for each of them.
 
 ### Check it
 
@@ -257,7 +312,7 @@ The server keeps one SQLite file per network, `<network>.sqlite`, with `-wal` an
 
 So deleting it costs the backfill's time, and loses for good the audits, the mempool chart's past and the replacement history. The node is untouched either way.
 
-**Size on mainnet:** the block table is about 220 bytes a block, about 215 MB for the whole chain; audits add about 150 MB a year; the mempool history stays under 3 MB, and the replacement record at about 2 MB. The write-ahead log can add up to 64 MB.
+**Size on mainnet:** 547 MB [measured](#one-day-on-mainnet) once the backfill was done and a day had been recorded. Estimated by table: the block table about 220 bytes a block, about 215 MB for the whole chain; audits about 150 MB a year; the mempool history under 3 MB, and the replacement record about 2 MB. The write-ahead log can add up to 64 MB. The measured file is larger than those add up to; it was not split by table.
 
 **Back it up while it runs** with SQLite's own backup, from a throwaway container (the image has no shell or `sqlite3`):
 
@@ -282,8 +337,8 @@ docker compose start server
 
 On its first start with an empty store the server runs the **backfill**: it fills the block table from the node, newest blocks first, with every block's totals and the last year's fee rates. The table is its progress, so it resumes where it stopped after any restart.
 
-- **How long.** On mainnet at the default pace, about a day and a half for every block's totals, measured; a year of fee rates adds little on a node with the block listing route, and about another day through `getblock` on rbitcoin v0.9.2, which lacks it. The numbers, and how they were measured, are in [`STORE.md`](STORE.md#backfill), which owns them.
-- **What it reads.** Totals are small: about 1.2 GB from the node for the whole chain. Fee rates read every transaction of each block: about 17 GB for the year through the listing route, 550 GB through `getblock`. The node does that work, so a node on the same host matters here.
+- **How long.** On mainnet at the default pace, about 19 hours [measured](#one-day-on-mainnet) for every block's totals and a year of fee rates, on a node with the block listing route; through `getblock` on rbitcoin v0.9.2, which lacks it, the year of fee rates is estimated at about another day. The numbers, and what the measured run included, are in [`STORE.md`](STORE.md#backfill), which owns them.
+- **What it reads.** On a node with the listing route, about 18 GB for every block's totals and the year's fee rates, as estimated and as the measured run read once it used the route; through `getblock` the fee rates are estimated at 550 GB. The node does that work, so a node on the same host matters here.
 - **Gentler.** `BACKFILL_BUSY_PERCENT` (default 50) is the share of time its one call keeps the node busy; lower is gentler and slower. `BACKFILL_FEE_RATE_DEPTH` (default 52560, a year) is how far back fee rates go; `0` skips them, and the block facts route then computes older blocks' rates on demand.
 - **Pause it** with `BACKFILL_ENABLED=false` in `.env` and `docker compose up -d`; set it back to resume. All three are in [`CONFIG.md`](CONFIG.md#block-table).
 - **Progress** is a `block_backfill_progress` line every minute: `rows` and `rated` against `tip`. A line without them means the count timed out; the next one that has them shows the real change.
@@ -300,14 +355,14 @@ The server writes one JSON object per line to stdout: `ts`, `level`, `event`, th
 docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 ```
 
-**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, plus a `block_audited` and a few `ws_fanout` lines when a block arrives, and one `http_request` per request served (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` (`info`) with `warming_up` means the node's fee estimates are served for the first five minutes. A reorg is `chain_reorg` and `block_rows_reorged` at `info`: testnet4 has several a day.
+**A healthy minute**, with no visitors, is one `mempool_summary`, one `fees_summary` and one `block_backfill_progress` per network, a `tracking_summary` per network that saw a replacement, a `lightning_summary` with Lightning on, then `block_audited`, `mempool_block`, `difficulty_computed` and two to four `ws_fanout` lines when a block arrives, and one `http_request` per request served. [Measured](#one-day-on-mainnet) with three networks and Lightning, that was 11 lines a minute and 6.1 MB a day, and two `warn` lines (`mempool_poll_failed` with `timeout`) in five and a half hours (`LOG_REQUESTS=failures` keeps only those answered with an error). Requests refused by a limit are not lines of their own: they are counted in one `requests_refused` a minute, whatever `LOG_REQUESTS` says ([`LOGGING.md`](LOGGING.md#for-operators)). Nothing at `warn` or `error`. In the first seconds after a start, `electrum_unreachable`, `mempool_poll_failed` and `block_rows_failed` are normal while the node comes up, and `fees_fallback_started` (`info`) with `warming_up` means the node's fee estimates are served for the first five minutes. A reorg is `chain_reorg` and `block_rows_reorged` at `info`: testnet4 has several a day.
 
 **Alert on:**
 
 | Event or check | Means |
 |---|---|
-| Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `rpc_wrong_network`, `store_open_failed`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
-| `store_write_failed`, or `/readyz` `store` not `ok` | SQLite refuses writes; `error` says why (`disk_full`, `read_only`, `corrupt`, `busy`, `io`). History is not being recorded |
+| Any `error`: `config_invalid`, `listen_failed`, `rpc_auth_failed`, `rpc_wrong_network`, `store_open_failed`, `store_wrong_chain`, `panic` | Act now; each is in [When it goes wrong](#when-it-goes-wrong) |
+| `store_write_failed`, or `/readyz` `store` not `ok` | History is not being recorded. `failing`: SQLite refuses writes, and `error` says why (`disk_full`, `read_only`, `corrupt`, `busy`, `io`). `waiting` for more than a minute: the node is unreachable or on another chain, or `store_chain_unverified` says an older file cannot be checked yet |
 | `address_index_off`, or `/readyz` `address_index` `off` | The node runs without `--sh-index`: address pages are down |
 | `/readyz` not `200` for more than a few minutes | The node is down, unreachable or refusing our password |
 | `tip_age_secs` in `/readyz` over two hours on mainnet | The node has stopped following the chain |
@@ -372,7 +427,7 @@ All of these are in [`CONFIG.md`](CONFIG.md); change `.env` and run `docker comp
 
 Off unless `MAINNET_LIGHTNING_ENABLED=true` is in `.env` ([`CONFIG.md`](CONFIG.md#lightning)). Switched on, the server **connects out to public Lightning nodes** (the defaults on TCP port 9735, at addresses in [`LIGHTNING.md`](LIGHTNING.md#peers)) and keeps three connections open. Nothing is published or listened on: the compose file needs no change, and the default bridge network lets the container connect out. Behind a firewall that filters outbound traffic, allow TCP to the peers' addresses, or list peers you can reach in `MAINNET_LIGHTNING_PEERS`. The peer does not speak Tor: under a Tor-only egress policy, leave it off or point it at a clearnet node of your own.
 
-It keeps a 32-byte node key, its graph (about 33 MB on mainnet) and the answers it saved so a restart need not ask the node again (3.3 MB) in `/data/lightning/mainnet/` on the `server-data` volume, beside the SQLite file that holds its history. The key is created on first start, readable by the server's user only; it identifies the peer to the nodes it dials and holds no funds. Deleting the directory costs a fresh sync (about 4 minutes and 50 MB of download on mainnet); deleting the SQLite file loses the record of closed channels ([`STORE.md`](STORE.md#ln_channels)). Memory: plan for 250 to 330 MB more with Lightning on (measured in [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server)).
+It keeps a 32-byte node key, its graph and the answers it saved so a restart need not ask the node again (35 MB together, [measured](#one-day-on-mainnet) with 36,200 channels) in `/data/lightning/mainnet/` on the `server-data` volume, beside the SQLite file that holds its history. The key is created on first start, readable by the server's user only; it identifies the peer to the nodes it dials and holds no funds. Deleting the directory costs a fresh sync (273 s and 56 MB of gossip, measured; a restart from the files took 20 s); deleting the SQLite file loses the record of closed channels ([`STORE.md`](STORE.md#ln_channels)). Memory: plan for 250 to 330 MB more with Lightning on (measured in [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server)).
 
 ### Add a network
 
@@ -423,7 +478,7 @@ The server serves it under `/signet` ([`ARCHITECTURE.md`](ARCHITECTURE.md#networ
 From [`SECURITY.md`](SECURITY.md), for the operator:
 
 - [ ] The node's RPC, Esplora and Electrum are reachable by the server only: on the compose network and the socket, or a private network. Only P2P is published.
-- [ ] The server's port is on loopback (`HTTP_PUBLISH` unchanged) and reached only through the proxy.
+- [ ] The server's port is on loopback (`HTTP_PUBLISH` unchanged) and reached only through the proxy, or, with the [proxy in a container](#a-proxy-in-a-container), not published at all.
 - [ ] The site is served over HTTPS, and HTTP redirects to it.
 - [ ] `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES` are set only once the proxy overwrites the header, `TRUSTED_PROXIES` names the proxy's address and nothing clients can reach, and the [check](#client-addresses) showed your own address.
 - [ ] `LOG_CLIENT_ADDR` is off, unless you mean to keep a record of who looked at what.
@@ -442,7 +497,10 @@ Read the log as [above](#the-log) and `/readyz`.
 |---|---|---|
 | The server stops at once | `config_invalid` with the variable's name (never its value) | Fix that variable. A network needs all six of its variables or none ([`CONFIG.md`](CONFIG.md#networks)) |
 | Pages load but nothing from the chain; `/readyz` `503` with `rpc` `unreachable` | `rpc_unreachable`, `electrum_unreachable` and `mempool_poll_failed` with `unavailable`, repeating | The node is down or its address is wrong: `docker compose ps`, `docker compose logs node`, then the `*_HOST`, `*_PORT` and `*_ADDR` settings |
-| `/readyz` `503` with `rpc` `wrong_network`; pages show another chain's blocks | `rpc_wrong_network` (an `error`) with `network`, the one configured, and `node_chain`, the node's (`main`, `testnet4`, `signet`, `regtest`) | The `{NET}_*` variables point at another network's node, often a `MAINNET_*` line left in `.env` beside a test network's. Fix them, then delete that network's `<network>.sqlite` with the server stopped ([restore](#the-data-directory) shows how to reach the volume): it recorded the other chain's blocks |
+| `/readyz` `503` with `rpc` `wrong_network` and `store` `waiting`; pages show another chain's blocks | `rpc_wrong_network` (an `error`) with `network`, the one configured, and `node_chain`, the node's (`main`, `testnet4`, `signet`, `regtest`) | The `{NET}_*` variables point at another network's node, often a `MAINNET_*` line left in `.env` beside a test network's. Fix them and `docker compose up -d`. Nothing was written to the store meanwhile ([`STORE.md`](STORE.md#chain)), so it needs no clean-up. A node repointed while the server ran may have had up to 30 s of its data written before the check noticed |
+| The store did not open: `/readyz` `store` `open_failed` | `store_open_failed` with `… was written for another chain (genesis …)` | The file belongs to another network: the data directory was moved, or files were renamed. The hash names the chain: `000000000019d6…` mainnet, `00000008819873…` signet, `00000000da84f2…` testnet4, `0f9188f13cb7b2…` regtest. Move the file out of the volume (keep it, and give it to the right network if you have one) and restart: an empty file is created and the backfill fills it |
+| `/readyz` `store` `wrong_chain`; no new mining rows, audits or mempool chart | `store_wrong_chain` (an `error`) with the `height` of a block row the node does not have | A file from an earlier release, before files recorded their chain, holds another chain's blocks, as an earlier release wrote when the variables pointed at the wrong node. Nothing more is written to it. With the server stopped, move it out of the volume, then start: an empty file is created and backfilled |
+| `/readyz` `store` stays `waiting` though `rpc` is `ok` | `store_chain_unverified` (a `warn`) with the file's lowest block `height` and the node's `node_height` | A file from an earlier release that cannot be checked yet: the node is more than 100 blocks behind its rows (syncing again from scratch), and writes resume once it has caught up; or the file's rows span fewer than 100 blocks, too few ever to check, so with the server stopped move it out of the volume and start again |
 | `/readyz` `503` with `rpc` `auth_failed` | `rpc_auth_failed` (an `error`), then `mempool_poll_failed` with `auth` | The password in `.env` and the one in `rpc.cookie` differ. Make them equal and `docker compose up -d --force-recreate` |
 | Address pages show an error; everything else works; `/readyz` `address_index` `off` | `address_index_off` (a `warn`) once Electrum connects, and `http_request` with `status` `503` and `endpoint` `script_stats` or `script_txs` | The node runs without `--sh-index`, which rbitcoin leaves off by default. Turn it on, as the compose file does, and restart the node: the server asks again when it reconnects and logs `address_index_on` |
 | Visitors get `429`, on pages they barely used | `proxy_header_ignored` from the first request on; `requests_refused` every minute with `untrusted_forwarded` or `proxy_keyed` close to `total` | Everyone is counted as the proxy: [client addresses](#client-addresses) are not set up (`untrusted_forwarded`: `TRUSTED_PROXIES` is not the address the proxy arrives from; `proxy_keyed`: the proxy does not send the header named in `TRUSTED_PROXY_HEADER`). Check with `LOG_CLIENT_ADDR=true` |
@@ -487,7 +545,7 @@ docker export "$c" | tar -t | grep -E '^(usr/)?(local/)?s?bin/.'                
 docker rm "$c"
 ```
 
-Measured 2026-11-12: 51 MB unpacked, 16.6 MB compressed for amd64 and 17.0 MB for arm64. A cold build takes about 2 minutes on GitHub's runners, 18 s on an Apple Silicon Mac with the base images pulled. The [release workflow](CI.md#releases) builds and publishes both architectures.
+Measured: 57.9 MB unpacked for arm64 (2026-11-13; 57.7 MB on 2026-11-12), and 16.6 MB compressed for amd64 and 17.0 MB for arm64 (2026-11-12). The amd64 image's unpacked size was not measured. A cold build takes about 2 minutes on GitHub's runners, 18 s on an Apple Silicon Mac with the base images pulled. The [release workflow](CI.md#releases) builds and publishes both architectures.
 
 ### Hardening in the compose file, and why
 

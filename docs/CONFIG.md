@@ -31,7 +31,7 @@ A network is enabled when all six of its variables are set, and disabled when no
 |---|---|---|
 | `{NET}_MEMPOOL_ENABLED` | `true` | `false` stops the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOOL.md#in-the-server)). The mempool topics then answer `off` ([`WS.md`](WS.md#mempool-topics)), fee recommendations are the node's own estimates and `/api/v1/fees/mempool-blocks` is `503` ([`API.md`](API.md#fees)); blocks, the rest of the API and everything else keep working. Optional, unlike the six above |
 
-**Turn it off when you share a node.** With it on, every running server polls its node continuously: on mainnet about 150 MB a minute of RPC answers (one 3.6 MB `getrawmempool` a second), plus an initial sync of about 250 MB and 10 s. Several developers each running a server against the same node multiply that. Leave it on only on the server that serves the mempool, or while you work on it.
+**Turn it off when you share a node.** With it on, every running server polls its node continuously: on mainnet 120 to 200 MB a minute of RPC answers, measured over a day with 39,000 to 63,000 transactions in the mempool (about 45 tracker cycles a minute, 2.6 to 4.3 MB each, [`DEPLOY.md`](DEPLOY.md#one-day-on-mainnet)), plus an initial sync of about 250 MB and 10 s. Several developers each running a server against the same node multiply that. Leave it on only on the server that serves the mempool, or while you work on it.
 
 ### Lightning
 

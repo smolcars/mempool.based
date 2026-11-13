@@ -462,6 +462,10 @@ async fn start_app(
     let store = app
         .network(rbitcoin_space::Network::Regtest)
         .and_then(|n| Some(Arc::clone(&n.blocks.as_ref()?.store)));
+    // The mock answers no `getblockchaininfo`, so nothing confirms the chain: open the gate.
+    if let Some(s) = &store {
+        s.set_gate(engine::store::Gate::Open);
+    }
     tokio::spawn(app.serve(listener, std::future::pending()));
     (addr, store)
 }
