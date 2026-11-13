@@ -584,9 +584,22 @@ pub(crate) async fn consume(
             Err(store::Error::Held) => {
                 let mut dropped = p.changes.len();
                 p.changes.clear();
-                while let Ok(r) = rx.try_recv() {
-                    p.seq = p.seq.max(r.seq);
-                    dropped += 1;
+                loop {
+                    match rx.try_recv() {
+                        Ok(r) => {
+                            p.seq = p.seq.max(r.seq);
+                            dropped += 1;
+                        }
+                        Err(TryRecvError::Lagged(n)) => {
+                            dropped =
+                                dropped.saturating_add(usize::try_from(n).unwrap_or(usize::MAX));
+                        }
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                    }
+                }
+                // What the receiver skipped is still in the peer's memory: skip it there too.
+                if let Some(last) = src.recent(p.seq).last() {
+                    p.seq = p.seq.max(last.seq);
                 }
                 p.generation = store.generation();
                 logging::emit(&LightningHistoryFailed {

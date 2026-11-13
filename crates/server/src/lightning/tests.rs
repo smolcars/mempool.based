@@ -474,7 +474,8 @@ async fn records_sent_while_the_node_was_on_another_chain_are_never_stored() {
     )
     .unwrap();
     store.set_gate(engine::store::Gate::Open);
-    let (peer, rx) = Scripted::new(100, 100);
+    // Room for two on the stream, so what arrives during the hold overflows it.
+    let (peer, rx) = Scripted::new(100, 2);
     let l = lightning();
     let wait = || tokio::time::sleep(Duration::from_millis(50));
     tokio::join!(run(&peer, rx, &store, &l), async {
@@ -484,7 +485,9 @@ async fn records_sent_while_the_node_was_on_another_chain_are_never_stored() {
         store.set_gate(engine::store::Gate::Held);
         peer.send(&History::Opened(opened(B, 1)));
         wait().await;
-        peer.send(&History::Opened(opened(C, 1)));
+        for scid in [C, B + 1, C + 1, B + 2, C + 2] {
+            peer.send(&History::Opened(opened(scid, 1)));
+        }
         wait().await;
         store.set_gate(engine::store::Gate::Open);
         wait().await;
