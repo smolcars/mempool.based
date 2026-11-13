@@ -220,3 +220,48 @@ test("the browser's chrome takes the colour of the scheme on screen, not only th
   await page.getByRole("button", { name: "Switch to light theme" }).click();
   await expect.poll(chrome).toStrictEqual({ theme: ["#f4f6f7"], scheme: "light" });
 });
+
+// At 150% page zoom a phone is about 268 px wide: the search shrank to "Se" and the sections touched.
+test("the header keeps a usable search and apart sections down to a zoomed phone's width", async ({
+  page,
+}) => {
+  for (const width of [320, 268]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/regtest/");
+    const search = page.getByRole("searchbox", { name: "Search" });
+    const box = await search.boundingBox();
+    expect(box?.width ?? 0, `search at ${width} px`).toBeGreaterThanOrEqual(
+      width >= 300 ? 90 : 200,
+    );
+    // The placeholder whole: its text fits the field.
+    const fits = await search.evaluate((input: HTMLInputElement) => {
+      const probe = document.createElement("span");
+      const style = getComputedStyle(input);
+      probe.style.font = style.font;
+      probe.textContent = input.placeholder;
+      document.body.append(probe);
+      const w = probe.getBoundingClientRect().width;
+      probe.remove();
+      return (
+        w <=
+        input.clientWidth -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight) +
+          1
+      );
+    });
+    expect(fits, `placeholder at ${width} px`).toBe(true);
+    const links = await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("link")
+      .evaluateAll((all) => all.map((a) => a.getBoundingClientRect()));
+    for (let i = 1; i < links.length; i++) {
+      expect((links[i]?.left ?? 0) >= (links[i - 1]?.right ?? 0), `sections at ${width} px`).toBe(
+        true,
+      );
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      width,
+    );
+  }
+});

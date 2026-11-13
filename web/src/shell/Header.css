@@ -258,4 +258,19 @@
       display: none;
     }
   }
+  /* Narrower than any phone held upright (a page zoomed to 150%): the search takes a row of its
+     own at a usable width, and the sections a size smaller so their names never touch. */
+  @media (max-width: 300px) {
+    .site-header__inner {
+      grid-template-columns: auto auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        "brand network . theme"
+        "search search search search"
+        "nav nav nav nav";
+      row-gap: var(--space-2);
+    }
+    .nav a {
+      font-size: var(--text-xs);
+    }
+  }
 }

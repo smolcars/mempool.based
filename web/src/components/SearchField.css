@@ -118,7 +118,9 @@
     display: none;
     margin-right: var(--space-2);
   }
-  @media (hover: hover) and (pointer: fine) {
+  /* A keyboard's hint, where there is one and room for it: on a narrow window it took the room
+     the placeholder needs ("Searc"). */
+  @media (hover: hover) and (pointer: fine) and (min-width: 641px) {
     .search__field:not(:focus-within) input:placeholder-shown ~ .search__slash {
       display: inline-grid;
     }
