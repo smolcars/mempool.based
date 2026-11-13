@@ -156,7 +156,10 @@ describe("mempool history page", () => {
     const el = mount(() => <MempoolPage />, "/mempool?interval=2h");
     const chart = await drawn(el);
     expect(chart.querySelectorAll(".chart__layer")).toHaveLength(13);
-    expect(chart.getAttribute("aria-valuetext")).toContain("under 0.2 sat/vB, not yet split 0 vB");
+    // The latest minute was split: it has no unsplit part to read out, unseen in its place.
+    expect(chart.getAttribute("aria-valuetext")).not.toContain("not yet split");
+    const rare = el.querySelector(".chart__value--rare");
+    expect(rare?.classList.contains("chart__value--empty")).toBe(true);
     chart.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
     flush();
     const then = chart.getAttribute("aria-valuetext") ?? "";

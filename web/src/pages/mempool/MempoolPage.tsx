@@ -337,6 +337,7 @@ function Charts(props: { h: History; interval: Interval; fit: boolean }) {
                       short: "under 0.2, not split",
                       values: s().unsplit ?? [],
                       fee: 1,
+                      rare: true,
                     },
                   ]
                 : []),
