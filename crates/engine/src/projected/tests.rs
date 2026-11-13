@@ -183,22 +183,28 @@ fn a_chunk_pulls_in_the_unplaced_chunks_before_it() {
 
 #[test]
 fn summaries_band_by_printed_rate() {
+    // Rates are sat per 1,000 vB; band 0 is the cheapest of the 12.
     assert_eq!(band(0), 0);
-    assert_eq!(band(194), 0); // 0.19
-    assert_eq!(band(195), 1); // prints as 0.20
-    assert_eq!(band(994), 3); // 0.99
-    assert_eq!(band(995), 4); // prints as 1.00
-    assert_eq!(band(1000), 4);
-    assert_eq!(band(9_999), 9); // prints as 10.00
-    assert_eq!(band(u32::MAX), 9);
+    assert_eq!(band(114), 0); // 0.11
+    assert_eq!(band(115), 1); // prints as 0.12
+    assert_eq!(band(119), 1); // 0.119, as 0.1196 rounds down to whole sat/kvB: prints as 0.12
+    assert_eq!(band(144), 1); // 0.14
+    assert_eq!(band(145), 2); // prints as 0.15
+    assert_eq!(band(194), 2); // 0.19
+    assert_eq!(band(195), 3); // prints as 0.20
+    assert_eq!(band(994), 5); // 0.99
+    assert_eq!(band(995), 6); // prints as 1.00
+    assert_eq!(band(1000), 6);
+    assert_eq!(band(9_999), 11); // prints as 10.00
+    assert_eq!(band(u32::MAX), 11);
 
     let mut m = Model::default();
-    m.add(id(1), 150, 1000, 4000); // 0.15: band 0
-    m.add(id(2), 600, 2000, 8000); // 0.30: band 2
-    m.add(id(3), 5000, 500, 2000); // 10: band 9
+    m.add(id(1), 150, 1000, 4000); // 0.15: band 2
+    m.add(id(2), 600, 2000, 8000); // 0.30: band 4
+    m.add(id(3), 5000, 500, 2000); // 10: band 11
     let (blocks, _) = m.pack(ONE_BLOCK);
     let mut bands = [0; super::BANDS];
-    (bands[0], bands[2], bands[9]) = (1000, 2000, 500);
+    (bands[2], bands[4], bands[11]) = (1000, 2000, 500);
     assert_eq!(
         blocks[0].summary,
         BlockSummary {

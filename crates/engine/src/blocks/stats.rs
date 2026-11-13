@@ -7,9 +7,7 @@ use serde::Serialize;
 use super::Coinbase;
 use crate::mining::pools;
 
-/// Upper bounds of the design's fee bands 1–9 in hundredths of a sat/vB (`FEE_BOUNDS` in
-/// `web/src/lib/format.ts`); band 10 is everything above.
-const BAND_BOUNDS: [u64; 9] = [20, 30, 50, 100, 150, 200, 300, 500, 1000];
+use crate::projected::{BAND_EDGES, BANDS, Bands};
 
 /// Version of the [`encode_txs`] format, its first four bytes.
 pub const TXS_FORMAT: u32 = 1;
@@ -33,9 +31,10 @@ pub struct Facts {
     pub weight: u64,
     /// `None` for a block holding only its coinbase.
     pub fee_rate: Option<Rates>,
-    /// Virtual size paid at each of the ten design bands, cheapest first, banded on the rate as
-    /// the frontend prints it (two decimals), so a stratum's color agrees with its number.
-    pub fee_bands: [u64; 10],
+    /// Virtual size paid at each of the design's bands, cheapest first, banded on the rate as
+    /// the frontend prints it (two decimals), so a stratum's color agrees with its number. 12
+    /// bands, or 10 for a block stored before the lowest was split ([`Bands`]).
+    pub fee_bands: Bands,
     /// Who mined it, by the pool list's rules.
     pub miner: Miner,
 }
@@ -83,7 +82,7 @@ pub struct Rates {
 /// One block's facts. The first transaction is taken as the coinbase, whatever its fee says.
 pub fn facts(block: &Block) -> Facts {
     let paying = block.tx.get(1..).unwrap_or_default();
-    let mut fee_bands = [0u64; 10];
+    let mut fee_bands = [0u64; BANDS];
     let (mut fees, mut vsize, mut weight) = (0u64, 0u64, 0u64);
     for tx in paying {
         let (fee, size) = fee_and_size(tx);
@@ -102,7 +101,7 @@ pub fn facts(block: &Block) -> Facts {
         vsize,
         weight,
         fee_rate: rates(paying),
-        fee_bands,
+        fee_bands: Bands::new(fee_bands),
         miner: Miner::of(&Coinbase::from_parts(
             block.coinbase.script.as_bytes(),
             &block.coinbase.outputs,
@@ -115,10 +114,10 @@ fn fee_and_size(tx: &BlockTx) -> (u64, u64) {
     (tx.fee.map_or(0, |f| f.to_sat()), u64::from(tx.vsize.max(1)))
 }
 
-/// The band index (0–9) of `fee / size`, rounded half up to hundredths first, as printed.
+/// The band index (0–11) of `fee / size`, rounded half up to hundredths first, as printed.
 fn band(fee: u64, size: u64) -> usize {
     let hundredths = (u128::from(fee) * 200 + u128::from(size)) / (2 * u128::from(size));
-    BAND_BOUNDS
+    BAND_EDGES
         .iter()
         .take_while(|&&b| u128::from(b) <= hundredths)
         .count()
@@ -283,7 +282,7 @@ mod tests {
         let f = facts(&block(&[]));
         assert_eq!(f.tx_count, 1);
         assert_eq!((f.fees, f.vsize, f.fee_rate), (0, 0, None));
-        assert_eq!(f.fee_bands, [0; 10]);
+        assert_eq!(f.fee_bands.list(), [0; 12]);
         let empty = Block {
             tx: Vec::new(),
             ..block(&[])
@@ -299,42 +298,47 @@ mod tests {
         for v in [r.min, r.p10, r.p25, r.median, r.p75, r.p90, r.max] {
             assert_eq!(v, 0.5);
         }
-        assert_eq!(f.fee_bands[3], 1610);
+        assert_eq!(f.fee_bands.list()[5], 1610);
     }
 
     #[test]
     fn bands_follow_the_printed_rate_and_sum_to_the_whole() {
-        // 0.1995 prints as 0.20 (band 2); 0.1949 as 0.19 (band 1); 9.996 as 10.0 (band 10).
-        assert_eq!(band(1995, 10_000), 1);
-        assert_eq!(band(1949, 10_000), 0);
-        assert_eq!(band(9996, 1000), 9);
+        // 0.1995 prints as 0.20 (band 4); 0.1949 as 0.19 (band 3); 0.1196 as 0.12 (band 2);
+        // 0.1149 as 0.11 (band 1); 9.996 as 10.0 (band 12).
+        assert_eq!(band(1995, 10_000), 3);
+        assert_eq!(band(1949, 10_000), 2);
+        assert_eq!(band(1196, 10_000), 1);
+        assert_eq!(band(1149, 10_000), 0);
+        assert_eq!(band(9996, 1000), 11);
         assert_eq!(band(0, 1), 0);
-        assert_eq!(band(u64::MAX, 1), 9);
-        let edges = [
-            (1, 10),
-            (2, 10),
-            (3, 10),
-            (5, 10),
-            (10, 10),
-            (15, 10),
-            (20, 10),
-            (30, 10),
-            (50, 10),
-            (100, 10),
-        ];
-        for (i, (fee, size)) in edges.into_iter().enumerate() {
-            assert_eq!(band(fee, size), i, "{fee}/{size}");
+        assert_eq!(band(u64::MAX, 1), 11);
+        let edges = [0, 12, 15, 20, 30, 50, 100, 150, 200, 300, 500, 1000];
+        for (i, fee) in edges.into_iter().enumerate() {
+            assert_eq!(band(fee, 100), i, "{fee}/100");
         }
         let b = block(&[
             (11, 100),
+            (13, 100),
+            (17, 100),
             (2500, 10_000),
             (50, 100),
             (400, 200),
             (5000, 333),
         ]);
         let f = facts(&b);
-        assert_eq!(f.fee_bands.iter().sum::<u64>(), f.vsize);
-        assert_eq!(f.fee_bands, [100, 10_000, 0, 100, 0, 0, 200, 0, 0, 333]);
+        assert_eq!(f.fee_bands.list().iter().sum::<u64>(), f.vsize);
+        assert_eq!(
+            f.fee_bands.list(),
+            [100, 100, 100, 10_000, 0, 100, 0, 0, 200, 0, 0, 333]
+        );
+        // Stored as the ten bands, the lowest under 0.2 whole, and its split.
+        assert_eq!(
+            f.fee_bands.stored,
+            [300, 10_000, 0, 100, 0, 0, 200, 0, 0, 333]
+        );
+        assert_eq!(f.fee_bands.split, Some([100, 100]));
+        let json = serde_json::to_value(&f).unwrap();
+        assert_eq!(json["fee_bands"].as_array().unwrap().len(), 12);
     }
 
     #[test]

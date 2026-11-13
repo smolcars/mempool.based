@@ -9,6 +9,7 @@ use rusqlite::types::Type;
 use super::stats::Rates;
 use super::{Coinbase, Rated, Row, hash_bytes};
 use crate::mining::pools;
+use crate::projected::{Bands, STORED_BANDS};
 use crate::store::{Error, OptionalExtension, Read, Sql, SqlError, Store, params};
 
 /// Most rows [`page`] returns at once.
@@ -21,7 +22,7 @@ macro_rules! select {
             "SELECT height, hash, time, tx_count, size, weight, paying_weight, fees, subsidy, ",
             "reward, difficulty, coinbase_tag, payouts, rated, fee_min, fee_p10, fee_p25, ",
             "fee_median, fee_p75, fee_p90, fee_max, band0, band1, band2, band3, band4, band5, ",
-            "band6, band7, band8, band9 FROM blocks ",
+            "band6, band7, band8, band9, band0_12_15, band0_15_20 FROM blocks ",
             $rest
         )
     };
@@ -34,9 +35,9 @@ macro_rules! insert {
             " INTO blocks (height, hash, time, tx_count, size, weight, paying_weight, fees, ",
             "subsidy, reward, difficulty, coinbase_tag, payouts, rated, fee_min, fee_p10, fee_p25, ",
             "fee_median, fee_p75, fee_p90, fee_max, band0, band1, band2, band3, band4, band5, ",
-            "band6, band7, band8, band9, pool) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ",
-            "?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ",
-            "?28, ?29, ?30, ?31, ?32)",
+            "band6, band7, band8, band9, band0_12_15, band0_15_20, pool) VALUES (?1, ?2, ?3, ?4, ",
+            "?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ",
+            "?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34)",
             $tail
         )
     };
@@ -50,21 +51,29 @@ pub(super) const REPLACE: &str = insert!("INSERT OR REPLACE", "");
 pub(super) const RATE: &str = "UPDATE blocks SET rated = 1, fee_min = ?3, fee_p10 = ?4, \
     fee_p25 = ?5, fee_median = ?6, fee_p75 = ?7, fee_p90 = ?8, fee_max = ?9, band0 = ?10, \
     band1 = ?11, band2 = ?12, band3 = ?13, band4 = ?14, band5 = ?15, band6 = ?16, band7 = ?17, \
-    band8 = ?18, band9 = ?19 WHERE height = ?1 AND hash = ?2";
+    band8 = ?18, band9 = ?19, band0_12_15 = ?20, band0_15_20 = ?21 WHERE height = ?1 AND hash = ?2";
 
 /// SQLite integers are `i64`; no value stored here comes near the limit.
 pub(super) fn int(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
-fn rate_columns(r: Option<&Rated>) -> ([Option<f64>; 7], [Option<i64>; 10]) {
+/// The rate columns, then `band0` to `band9`, `band0_12_15` and `band0_15_20`.
+fn rate_columns(r: Option<&Rated>) -> ([Option<f64>; 7], [Option<i64>; 12]) {
     let rates = r
         .and_then(|r| r.fee_rate)
         .map(|f| [f.min, f.p10, f.p25, f.median, f.p75, f.p90, f.max].map(Some));
-    (
-        rates.unwrap_or([None; 7]),
-        r.map_or([None; 10], |r| r.fee_bands.map(|b| Some(int(b)))),
-    )
+    let mut bands = [None; 12];
+    if let Some(b) = r.map(|r| r.fee_bands) {
+        let split = b.split.map(|s| s.map(Some)).unwrap_or_default();
+        for (c, v) in bands
+            .iter_mut()
+            .zip(b.stored.map(Some).into_iter().chain(split))
+        {
+            *c = v.map(int);
+        }
+    }
+    (rates.unwrap_or([None; 7]), bands)
 }
 
 /// Runs [`INSERT_NEW`] or [`REPLACE`] for one row, attributing it to a pool; the number of rows
@@ -104,6 +113,8 @@ pub(super) fn write_row(stmt: &mut rusqlite::Statement, row: &Row) -> Result<usi
         b[7],
         b[8],
         b[9],
+        b[10],
+        b[11],
         pool,
     ])
 }
@@ -136,6 +147,8 @@ pub(super) fn rate_row(
         b[7],
         b[8],
         b[9],
+        b[10],
+        b[11],
     ])?;
     Ok(n > 0)
 }
@@ -163,10 +176,15 @@ fn read_row(r: &rusqlite::Row) -> Result<Row, SqlError> {
             r.get(19)?,
             r.get(20)?,
         ];
-        let mut bands = [0u64; 10];
-        for (i, b) in bands.iter_mut().enumerate() {
+        let mut stored = [0u64; STORED_BANDS];
+        for (i, b) in stored.iter_mut().enumerate() {
             *b = get(r, 21 + i)?;
         }
+        // Both or neither: a row stored before the split has neither.
+        let split = match (r.get::<_, Option<i64>>(31)?, r.get::<_, Option<i64>>(32)?) {
+            (Some(_), Some(_)) => Some([get(r, 31)?, get(r, 32)?]),
+            _ => None,
+        };
         let fee_rate = match f {
             [
                 Some(min),
@@ -196,7 +214,7 @@ fn read_row(r: &rusqlite::Row) -> Result<Row, SqlError> {
         };
         Some(Rated {
             fee_rate,
-            fee_bands: bands,
+            fee_bands: Bands { stored, split },
         })
     } else {
         None

@@ -516,7 +516,7 @@ The mempool through time, from the history table ([`STORE.md`](STORE.md#mempool_
 | Route | Answer |
 |---|---|
 | `GET /api/v1/statistics/:interval` | `[{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}]`, newest first, the reference's shape (below) |
-| `GET /app/mempool/history/:interval` | Our own shape for our chart, with our ten bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)) |
+| `GET /app/mempool/history/:interval` | Our own shape for our chart, with our bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)). A point's `bands` is 12 numbers, or 10 when its lowest band's split was not recorded ([`STORE.md`](STORE.md#fee-bands)) |
 
 Each new sample is also pushed as `live-2h-chart` on `/api/v1/ws`, serialized by the same function as a `/statistics/2h` point, and its inflow is that socket's `vBytesPerSecond` ([`WS.md`](WS.md#what-the-server-sends)).
 
@@ -543,18 +543,18 @@ Points are aligned to multiples of the step in UTC (Unix time), and the period s
 
 Whole numbers are written as integers and means to three decimals, as the reference writes its long intervals' averages.
 
-**The fee ranges.** The reference's `vsizes` are 39 whole-sat/vB ranges, read from its answers: they open `[0, 1)`, `[1, 2)`, `[2, 3)`, `[3, 4)`, `[4, 5)`, `[5, 6)`, `[6, 8)`, `[8, 10)`, `[10, 12)`, and widen from there. We keep the design's ten bands ([`DESIGN.md`](DESIGN.md#fee-scale)), with six of their nine edges under 2 sat/vB. Each band goes whole to the range that holds its lower edge:
+**The fee ranges.** The reference's `vsizes` are 39 whole-sat/vB ranges, read from its answers: they open `[0, 1)`, `[1, 2)`, `[2, 3)`, `[3, 4)`, `[4, 5)`, `[5, 6)`, `[6, 8)`, `[8, 10)`, `[10, 12)`, and widen from there. We keep the design's 12 bands ([`DESIGN.md`](DESIGN.md#fee-scale)), with eight of their eleven edges at 2 sat/vB or under. Each band goes whole to the range that holds its lower edge:
 
 | Our bands (sat/vB) | Range |
 |---|---|
-| under 0.2, 0.2–0.3, 0.3–0.5, 0.5–1 | `[0, 1)`, index 0 |
+| under 0.12, 0.12–0.15, 0.15–0.2, 0.2–0.3, 0.3–0.5, 0.5–1 | `[0, 1)`, index 0 |
 | 1–1.5, 1.5–2 | `[1, 2)`, index 1 |
 | 2–3 | `[2, 3)`, index 2 |
 | 3–5 | `[3, 4)`, index 3 |
 | 5–10 | `[5, 6)`, index 5 |
 | 10 and up | `[10, 12)`, index 8 |
 
-Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat/vB is exact, the ranges sum to the whole mempool, and nothing is split by a guess; but a chart of the reference's ranges shows the 3-to-5, 5-to-10 and over-10 vbytes at their lowest range. On rbitcoin's mempool that is little: in the reference's own answers for the last day, the vbytes this moves (paying 4 to 5, 6 to 10, or 12 sat/vB and up) were 0.03 % to 0.6 % of the mempool; in a nearly empty mempool (its oldest point, 0.4 MvB) 3.4 %. Ranges under 1 sat/vB, where most of it is, are one range there and four bands here; use `/app` for those. A rate is banded as it prints, at two decimals, so 0.996 sat/vB counts in `[1, 2)`; and by its effective rate (its chunk's), as the projected blocks place it.
+Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat/vB is exact, the ranges sum to the whole mempool, and nothing is split by a guess; but a chart of the reference's ranges shows the 3-to-5, 5-to-10 and over-10 vbytes at their lowest range. On rbitcoin's mempool that is little: in the reference's own answers for the last day, the vbytes this moves (paying 4 to 5, 6 to 10, or 12 sat/vB and up) were 0.03 % to 0.6 % of the mempool; in a nearly empty mempool (its oldest point, 0.4 MvB) 3.4 %. Ranges under 1 sat/vB, where most of it is, are one range there and six bands here; use `/app` for those. The ranges are summed from the stored bands, whose `band0` is all under 0.2 whether or not its split was recorded ([`STORE.md`](STORE.md#fee-bands)), so a point answers the same before and after the split. A rate is banded as it prints, at two decimals, so 0.996 sat/vB counts in `[1, 2)`; and by its effective rate (its chunk's), as the projected blocks place it.
 
 **Coverage.** History begins when the server first ran with the engine on, and has holes wherever it did not sample ([`STORE.md`](STORE.md#mempool_history) says when). The answer says so in the mining routes' headers ([above](#coverage)):
 

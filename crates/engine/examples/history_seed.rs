@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use engine::history::{self, Flow, MINUTE, Point, Totals};
+use engine::projected::{BANDS, Bands};
 use engine::store::{Options, Store};
 
 const MINUTES: u64 = 20;
@@ -29,15 +30,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first = (now / MINUTE - 60 - MINUTES) * MINUTE;
     for i in (0..MINUTES).filter(|i| !GAP.contains(i)) {
         let count = 901 + i;
-        // 200 vB a transaction, all in one fee band: the bands sum to `vsize`, as the sampler's do.
-        let mut bands = [0; 10];
-        bands[2] = count * 200;
+        // 200 vB a transaction, all in one fee band (0.3 to 0.5 sat/vB, the fifth of 12): the
+        // bands sum to `vsize`, as the sampler's do, and the lowest band's split is known (zero).
+        let mut bands = [0; BANDS];
+        bands[4] = count * 200;
         let sums = Totals {
             count,
             vsize: count * 200,
             fees: count * 400,
             min_fee: 1_000,
-            bands,
+            bands: Bands::new(bands),
             flow: Flow {
                 in_count: 3,
                 in_vsize: 600,
