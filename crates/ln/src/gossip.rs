@@ -61,9 +61,9 @@ pub(crate) const MAX_NODE_ADDRESSES: usize = 8;
 const REPLAY_PER_TICK: usize = 2000;
 
 /// How far ahead of [`Config::checks_per_sec`] a peer may run before it is not read: an initial
-/// dump is one burst (mainnet's, 34,000 channels with their updates in 20 s, is about 220,000
-/// checks), a flood is sustained.
-const CHECKS_AHEAD: Duration = Duration::from_secs(30);
+/// dump is one burst (mainnet's, 34,000 channels with their updates and nodes in 20 s, is about
+/// 350,000 checks), a flood is sustained.
+const CHECKS_AHEAD: Duration = Duration::from_secs(60);
 
 /// Channel ids per `query_short_channel_ids`: 16 KB of ids, well inside a 65 KB message.
 const SCID_BATCH: usize = 2000;
@@ -823,6 +823,10 @@ impl Gossip {
                 .filter(|to| demoted && r.peers.get(to).is_some_and(|p| !p.demoted()))
             {
                 r.hand(&to, scid);
+                // Not asked of it after all: it may still be, should the other peer leave.
+                if let Some(p) = r.peers.get_mut(&peer) {
+                    p.listed.insert(scid, false);
+                }
             } else {
                 batch.insert(scid);
             }
@@ -1013,8 +1017,9 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
     ) -> Result<bool, LightningError> {
-        // Four signatures: both nodes' and both funding keys'.
-        self.charge(their_node_id, 4);
+        // Four signatures (both nodes' and both funding keys'), checked again when a lookup
+        // answers it later.
+        self.charge(their_node_id, 8);
         self.admit(
             &self.counters.channel_announcements,
             msg.serialized_length(),

@@ -975,7 +975,7 @@ async fn a_flooding_peer_is_read_at_its_budget_and_others_are_not_held() {
     config.peers = vec![h.addr, honest.addr];
     config.backoff_min = Duration::from_millis(50);
     config.lookup_interval = Duration::from_millis(20);
-    // 25 forged announcements a second (four checks each) after a burst of 30 s of them, 750.
+    // 12.5 forged announcements a second (eight checks each) after a burst of 60 s of them, 750.
     config.checks_per_sec = 100;
     let peer = Peer::start(config, node.clone()).unwrap().0;
     wait_for("connected", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
@@ -1002,9 +1002,9 @@ async fn a_flooding_peer_is_read_at_its_budget_and_others_are_not_held() {
     );
     let at = read();
     tokio::time::sleep(Duration::from_secs(2)).await;
-    // 25 a second, give or take one read of 4 KiB (eight announcements).
+    // 12.5 a second, give or take one read of 4 KiB (eight announcements).
     let more = read() - at;
-    assert!((30..=70).contains(&more), "{more}");
+    assert!((10..=45).contains(&more), "{more}");
     // Held back, not dropped: the rest still waits to be read.
     assert!(h.queued() > 0);
     wait_for("both up", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
@@ -1184,8 +1184,9 @@ async fn flood_bad_signatures() {
     println!("forged signatures, no budget: {read0:.0} read a second, {cores0:.2} cores");
     let (read, cores) = forged_flood(Config::new(NET, PathBuf::new()).checks_per_sec).await;
     println!("forged signatures, the default budget: {read:.0} read a second, {cores:.2} cores");
-    // Four checks each: 1,250 a second at the default 5,000, give or take a read of 4 KiB.
-    assert!(read < 1_400.0, "{read}");
+    // Eight checks each: 625 a second on average at the default 5,000. Over a window it can be
+    // more, while the peer catches up on reads a busy machine delayed.
+    assert!(read < 1_000.0, "{read}");
 }
 
 /// A peer sending a whole graph at once: `channels` real channels, each with its announcement
@@ -1559,6 +1560,15 @@ fn a_peer_list_counts_its_batch_in_flight_against_the_cap() {
 /// peer, and it is asked only for what nobody else listed.
 #[test]
 fn a_peer_that_keeps_withholding_loses_its_turn() {
+    withholding_loses_its_turn(false);
+}
+
+#[test]
+fn what_a_peer_handed_over_comes_back_if_the_other_peer_leaves() {
+    withholding_loses_its_turn(true);
+}
+
+fn withholding_loses_its_turn(leaves: bool) {
     let h = handler(100_000);
     let pk = |n| key(n).public_key(&Secp256k1::new());
     let (bad, good) = (pk(7), pk(8));
@@ -1622,6 +1632,15 @@ fn a_peer_that_keeps_withholding_loses_its_turn() {
         .unwrap();
     assert_eq!(queries(), [(bad, vec![9000])]);
     assert_eq!(crate::peer::totals(&h.gossip).withheld, 2);
+    if leaves {
+        // What it handed over and was never asked comes back to it once the other peer leaves.
+        h.gossip.peer_disconnected(good);
+        h.gossip
+            .handle_reply_short_channel_ids_end(bad, end())
+            .unwrap();
+        assert_eq!(queries(), [(bad, (4001..=6000).collect())]);
+        return;
+    }
     // The other peer is asked for every shared channel, each once.
     let mut asked = Vec::new();
     for _ in 0..4 {

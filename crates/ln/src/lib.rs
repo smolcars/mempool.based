@@ -219,9 +219,9 @@ pub struct Config {
     /// Announcements held because their funding output is not yet six blocks deep.
     pub max_early: usize,
     /// Signature checks one peer's gossip may cost a second, on average: a channel announcement
-    /// counts four, an update or node announcement one. A peer may run 30 s ahead (an initial
-    /// dump fits); past that it is not read until it is back within the rate, so it cannot keep a
-    /// core busy.
+    /// counts eight (four now, four again when a lookup answers it), an update or node
+    /// announcement one. A peer may run 60 s ahead (an initial dump fits); past that it is not
+    /// read until it is back within the rate, so it cannot keep a core busy.
     pub checks_per_sec: u32,
     /// Lookup results kept, found or not, so a channel announced again is not looked up again.
     pub cache_entries: usize,
