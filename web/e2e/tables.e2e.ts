@@ -148,10 +148,9 @@ test.describe("a tap anywhere on any list's row", () => {
   });
 });
 
-test("every table fits its panel or shows that it scrolls, at 320, 390 and 720 px", async ({
-  page,
-}) => {
-  for (const width of [320, 390, 720]) {
+// A test to a width: each is its own client, so no reader's allowance is spent on 24 page loads.
+for (const width of [320, 390, 720]) {
+  test(`every table fits its panel or shows that it scrolls, at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     for (const { path, table } of LISTS) {
       await page.goto(path);
@@ -160,8 +159,8 @@ test("every table fits its panel or shows that it scrolls, at 320, 390 and 720 p
       ).toBeVisible({ timeout: 30_000 });
       await tablesFit(page, `${path} at ${width} px`);
     }
-  }
-});
+  });
+}
 
 // Only a row's small link text was a target once: on a phone the whole row opens its item.
 test("a tap anywhere on a list's row opens its item, and the keyboard meets it once", async ({
