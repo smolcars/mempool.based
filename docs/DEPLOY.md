@@ -281,7 +281,7 @@ Tested on 2026-11-13 with Caddy 2.11.9, plain HTTP in place of a certificate, an
 - The pinned address held when the proxy was recreated, and after `docker compose down`, another network created, and `up`. Without the pin, recreating the proxy happened to keep its address, but `down`, another network and `up` moved it to another subnet, as described above.
 - Responses were compressed (`zstd`) and `/regtest/app/ws` upgraded (`101`) through it.
 
-Not tested: how the published port passes the visitor's address to Caddy. Docker on Linux keeps an outside client's address ([the earlier test](#caddy) of a proxy on the host); Docker Desktop, used for this test, may not, which is why the visitors were containers. Nor IPv6 visitors to an IPv4 network, whom Docker may forward through its own userland proxy, so that Caddy would see the gateway for each of them.
+Not tested: how the published port passes the visitor's address to Caddy. Docker on Linux keeps an outside client's address (the deployment rehearsal checked it for a proxy on the host); Docker Desktop, used for this test, may not, which is why the visitors were containers. Nor IPv6 visitors to an IPv4 network, whom Docker may forward through its own userland proxy, so that Caddy would see the gateway for each of them.
 
 ### Check it
 
