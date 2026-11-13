@@ -68,7 +68,7 @@ Fed by the network's mempool tracker and projected blocks ([`MEMPOOL.md`](MEMPOO
 | `fees` | The home page's "Fee to pay now" panel | JSON, the whole state each time, only when it changed, and at once on a new block | about 390 bytes, one or two a minute |
 | `projected-txs:0` to `projected-txs:6` | One projected block's grid | Binary: a snapshot, then deltas | snapshot 48 bytes a transaction; see [Cost](#cost-of-the-mempool-topics) |
 
-With `{NET}_MEMPOOL_ENABLED=false` every one of them but `fees` answers subscribe with `{"topic":"…","type":"off"}` and nothing else; `fees` then carries the node's own estimates.
+With `{NET}_MEMPOOL_ENABLED=false` every one of them but `fees` (and [`replacements`](#replacements) too) answers subscribe with `{"topic":"…","type":"off"}` and nothing else; `fees` then carries the node's own estimates.
 
 Rates are integers in **sat per 1,000 vB**, the node's own unit and resolution (`1234` is 1.234 sat/vB); sizes are sigop-adjusted virtual bytes; amounts are satoshis.
 
@@ -116,6 +116,17 @@ What to pay to be mined within each horizon ([`MEMPOOL.md`](MEMPOOL.md#fee-recom
 **`projected-txs:N`**
 
 Block `N` of `projected`, 0 to 6. The last block has no topic: it is the rest of the mempool and has no size bound. One socket holds at most `WS_MAX_BLOCK_SUBSCRIPTIONS` (2) of these; switch by subscribing to the new one and unsubscribing from the old. The first message is a snapshot (kind 1), possibly followed at once by up to 16 deltas (kind 2) that bring it to the current state; then a delta whenever the block's transactions change, or a snapshot when that is smaller (a new block usually replaces block 0 whole).
+
+### `replacements`
+
+For pages that list replacements (`/rbf` and the recent replacements on the home and mempool pages): it says when the replacement record changed, and the page asks `GET /api/v1/replacements` (or `/fullrbf/replacements`) again. The lists are built once per change and kept ([`API.md`](API.md#cost-and-comparison)), so a change costs each page one cheap request rather than every subscriber a copy of 25 trees.
+
+| Message | Meaning |
+|---|---|
+| `{"topic":"replacements","type":"replacements","version":812}` | The record's version: it changes with every replacement recorded, every replacement confirmed, and every change a reorg makes. Sent from the tracker's first cycle and then on each change, at most once per tracker cycle (one delta), and kept as the snapshot for new subscribers. Compare it with the last one seen; it means nothing else. It starts again from a low number when the server restarts |
+| `{"topic":"replacements","type":"off"}` | The mempool engine is switched off on this network: there is no record |
+
+About 70 bytes a message. On mainnet in November 2026 a replacement arrived every six seconds or so. The reply to `/api/v1/replacements` is `max-age=1`, so a page asks again no sooner than 1.5 s after its last ask, or the browser's cache would answer with the list from before the change.
 
 ### When a block is found
 

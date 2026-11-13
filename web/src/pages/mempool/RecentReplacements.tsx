@@ -60,7 +60,7 @@ const COLUMNS: Column<Story | null>[] = [
  * The newest few replacements, each opening its newest version; the rest are on `/rbf`. The home
  * page and the mempool's history end with it.
  */
-export function RecentReplacements(props: { network: Network; class?: string }) {
+export default function RecentReplacements(props: { network: Network; class?: string }) {
   const feed = createReplacements(props.network, () => false, { gapMs: GAP_MS });
   const rows = () => feed.stories()?.slice(0, ROWS);
   return (

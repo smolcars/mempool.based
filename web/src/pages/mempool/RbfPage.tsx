@@ -206,8 +206,10 @@ function Lead(props: { stories: Story[] | undefined; full: boolean; off: boolean
     <Show when={!props.off && props.stories && counts().n > 0} fallback={" "}>
       <span class="num">{groupDigits(counts().n)}</span>{" "}
       {props.full ? "replacements of a transaction that did not signal" : "replacements"}, the
-      newest <TimeAgo time={counts().newest ?? 0} />. <span class="num">{counts().mined}</span>{" "}
-      {counts().mined === 1 ? "was" : "were"} mined.
+      newest <TimeAgo time={counts().newest ?? 0} />;{" "}
+      <Show when={counts().mined > 0} fallback="none of them mined yet.">
+        <span class="num">{groupDigits(counts().mined)}</span> of them mined.
+      </Show>
     </Show>
   );
 }

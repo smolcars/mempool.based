@@ -115,7 +115,7 @@ The defaults above are derived from what the frontend really asks for, so an ord
 
 At most 7 static files were in flight at once on any page (18 before).
 
-Opening a block's audit list adds two files and one API request. An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
+Opening a block's audit list adds two files and one API request. Since the recording, the home page's recent replacements add one API request to its cold load (`/api/v1/replacements`), and one more whenever a replacement arrives, at most every 10 s. An open home page then polls about once every 3 seconds. Static files are `/assets`, the app shell and `boot.js`; a second load takes them from the browser cache.
 
 | Limit | Default | Derivation |
 |---|---|---|

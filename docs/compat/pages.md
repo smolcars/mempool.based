@@ -10,7 +10,7 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 |---|---|---|---|---|---|---|
 | Home `/` | Projected and recent blocks, fees, mempool size, difficulty progress, latest transactions | Engine, Esplora, store | served | M1 | ref | Also the mempool's fee bands |
 | Home: mempool inflow | Incoming vB/s beside the mempool's size | Store | different | M3 | — | On `/mempool` (Flow), not the home page |
-| Home: recent replacements | The newest replacements | Engine | planned | M2 | — | Not built; comes with the `/rbf` page |
+| Home: recent replacements | The newest replacements | Engine | served | M2 | — | The newest five, each opening its newest version, last on the page so it pushes nothing down; also at the foot of `/mempool`. Live through the `replacements` topic ([`WS.md`](../WS.md#replacements)) |
 | Block strip | Projected blocks to the left of mined blocks | Engine, Esplora | served | M2 | ref | |
 | Block strip on other pages | The strip above most pages, not only the home page | Engine, Esplora | different | M2 | ref | On the home page only; the block and projected-block pages link to their neighbours instead |
 | Projected block `/mempool-block/:index` | One projected block's fee range, size, and its transactions drawn | Engine | served | M2 | ref | At `/block/next` and `/block/next/:n`. With the mempool engine off it says so |
@@ -21,7 +21,7 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 | Address `/address/:address` | Balance, totals, paged history, live updates | Esplora; Electrum push | served | M1 | ref | Large addresses hit the node's 503 cap on totals; the page shows history anyway and says why totals are missing |
 | Address: balance chart | Balance over time | Esplora `/txs/summary` | served | M1 | — | The confirmed balance after each block, as a step line, from at most the newest 200 transactions: a longer history says so and is anchored to the true balance. An address too large for the node to total gets a sentence instead ([`FRONTEND.md`](../FRONTEND.md#the-address-balance-chart)) |
 | Search | Exact txid, block hash, height, address; Lightning node and channel | Esplora; Lightning store | served | M1 | — | The header finds transactions, blocks, heights and addresses on every network. Lightning nodes and channels are found on `/lightning` and `/lightning/search`, by design ([`FRONTEND.md`](../FRONTEND.md#lightning-pages)). Prefix autocomplete is out of scope |
-| RBF `/rbf` | Recent replacement trees, with a full-RBF filter | Engine | planned | M2 | ref | Not built. Its data is served: `GET /api/v1/replacements` and `/fullrbf/replacements` |
+| RBF `/rbf` | Recent replacement trees, with a full-RBF filter | Engine | served | M2 | ref | The 25 newest trees, each drawn as its line of versions (oldest first, with how long each stood and its rate), what else it removed, the rise in rate, and whether it was mined, not, or unknown after a reorg. Full RBF only is `/rbf?view=full-rbf`. Live through the `replacements` topic |
 | Mempool goggles | Filters on the block drawing by transaction kind | Engine flags | planned | M5 | — | Not built. Needs per-transaction flags, which nothing computes yet (`/v1/block/:hash/summary` has none) |
 
 ## Transaction tools

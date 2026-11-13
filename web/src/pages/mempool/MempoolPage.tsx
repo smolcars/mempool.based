@@ -36,7 +36,7 @@ import {
   seriesOf,
   sizeSummary,
 } from "./history";
-import { RecentReplacements } from "./RecentReplacements";
+import RecentReplacements from "./RecentReplacements";
 import "./MempoolPage.css";
 
 /** The chart loads only on pages that draw one. */

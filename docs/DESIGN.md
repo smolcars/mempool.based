@@ -475,6 +475,26 @@ Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
 - **A phone's time axis names its ends:** too narrow for ticks a reader can place, a chart labels its first and last moment instead ("9 Nov", "12 Nov"; "12 Nov 11:14", "20:35").
 - **The intervals are one row** on a phone, scrolling sideways with their far edge faded and the chosen one in sight, so the chart and its time axis are on the first screen. The coverage is one short line ("49% recorded, from 12 Nov, 11:14 UTC.", the year said only when it is not this one).
 
+### Replacements (not in the prototype)
+
+```text
+← Mempool history
+Replacements                                              [All | Full RBF only]
+25 replacements, the newest 17 s ago; 8 of them mined.
+Newest first ════════════════════════════════════════════════════════════ ● Live
+What replaced what, oldest first, sat/vB              Rate rose, sat/vB   Status
+■ 990f7d1f…3138 4.12 ─6 s→ ■ 30d6fb23…e6ae 4.47 ─3 s→ ◘ 096809c9…1607 4.79   +0.67   ◌ Not mined
+Also replaced: 51fb6b4f…a1c2                                                    17 s ago
+```
+
+Decided while building it:
+
+- **A row is a story, not a list of ids.** The versions of one replacement, oldest first, on a line: each a mark in its rate's fee colour (the line is a drawing, so the fee ramp belongs there), a short id that opens its page and its rate; between two, how long the first stood. The version that stands has its mark ringed and its id in the text colour; the ones it replaced are muted. A row opens the version that stands. A story longer than four keeps its first and last two and folds the rest behind "N more versions". What else a replacement removed (the children of what it replaced, other conflicts) is one muted line under the story, three named and the rest behind "N more". A version that did not signal says "did not signal" under its rate; a story with one is marked "Full RBF".
+- **The answer per row** is at its right end: how much the rate rose (or fell: a replacement can pay more in all over more bytes), and whether the version that stands was mined, as an icon and a word: Mined (positive), Not mined (caution), Unknown (muted, after a reorg took its block away), with how long ago it arrived under it.
+- **On a phone** the story runs down the row, each version on its own line and the time it stood between them on a short rule; the rise drops first when the table does not fit.
+- **Live without moving the reader.** A new story comes in at the top with the row flash; a reader scrolled into the list keeps the story they read where it was.
+- **Where it sits.** The header's Mempool is current on `/rbf`, which has a "← Mempool history" link above its title; the mempool's own pages are two, so they get no row of tabs (on a phone it would push the history chart off the first screen). The recent replacements panel, the newest five, is the home page's last panel, below everything the council placed, and the foot of `/mempool`: the way to `/rbf` from both.
+
 ### Lightning (not in the prototype)
 
 ```text

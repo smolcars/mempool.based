@@ -86,6 +86,10 @@
     }
   }
 
+  /* Room on the left for the ring around the newest version's mark, at the cell's edge. */
+  .rbf-story {
+    padding-left: 4px;
+  }
   .rbf-story__line {
     display: flex;
     flex-wrap: wrap;
