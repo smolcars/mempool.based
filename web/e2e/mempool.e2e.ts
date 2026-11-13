@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
 test("the home page links to the mempool's history, which switches interval in the address", async ({
@@ -282,6 +283,32 @@ test.describe("the join between ten and twelve bands", () => {
   }
 });
 
+/** A point on screen inside one of the size chart's bands: where a pointer or finger finds one. */
+async function pointOnABand(p: Page): Promise<{ x: number; y: number }> {
+  await p.locator(".mempool-chart--size svg").first().scrollIntoViewIfNeeded();
+  const point = await p
+    .locator(".mempool-chart--size svg")
+    .first()
+    .evaluate((svg) => {
+      const ctm = (svg as SVGSVGElement).getScreenCTM();
+      for (const layer of svg.querySelectorAll<SVGPathElement>("path.chart__layer")) {
+        const b = layer.getBBox();
+        for (let fy = 0.2; fy < 1; fy += 0.2) {
+          for (let fx = 0.1; fx < 1; fx += 0.1) {
+            const at = new DOMPoint(b.x + b.width * fx, b.y + b.height * fy);
+            if (ctm && layer.isPointInFill(at)) {
+              const screen = at.matrixTransform(ctm);
+              return { x: screen.x, y: screen.y };
+            }
+          }
+        }
+      }
+      return null;
+    });
+  if (!point) throw new Error("no band drawn");
+  return point;
+}
+
 // A band under the pointer was once repainted in the pink accent: a 25 MvB magenta slab on the
 // most natural gesture, its colour no longer its key's. It keeps its own colour now.
 test("a band under the pointer, a finger or the keys keeps its colour, and a tap away lets it go", async ({
@@ -309,9 +336,8 @@ test("a band under the pointer, a finger or the keys keeps its colour, and a tap
   await expect(chart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
   const before = await plotLayers(page);
   // The pointer over the stack's lowest part, at the right, where the seeded minutes are.
-  const box = await chart.boundingBox();
-  if (!box) throw new Error("no chart");
-  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.85);
+  const onBand = await pointOnABand(page);
+  await page.mouse.move(onBand.x, onBand.y);
   await expect(page.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(1);
   const during = await plotLayers(page);
   for (const [k, l] of during.layers.entries()) {
@@ -330,9 +356,8 @@ test("a band under the pointer, a finger or the keys keeps its colour, and a tap
   await phone.goto(`${new URL(page.url()).origin}/regtest/mempool?interval=2h`);
   const phoneChart = phone.getByRole("slider", { name: /The mempool's size by fee rate/ });
   await expect(phoneChart).toHaveAttribute("aria-valuetext", /UTC: Total [\d.]+/);
-  const pbox = await phoneChart.boundingBox();
-  if (!pbox) throw new Error("no chart");
-  await phone.touchscreen.tap(pbox.x + pbox.width * 0.6, pbox.y + pbox.height * 0.85);
+  const onPhoneBand = await pointOnABand(phone);
+  await phone.touchscreen.tap(onPhoneBand.x, onPhoneBand.y);
   await expect(phone.locator(".mempool-chart--size .chart__layer--on")).toHaveCount(1);
   for (const l of (await plotLayers(phone)).layers) expect(l.fill).not.toBe(during.accent);
   await phone.getByRole("heading", { level: 1 }).tap();

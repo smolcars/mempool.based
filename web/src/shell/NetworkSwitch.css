@@ -57,7 +57,10 @@
   }
 
   /* Without anchor positioning the menu opens centred, like a small dialog. */
+  /* Absolute, not the popover's own fixed box: iOS Safari treated a fixed layer as a bar and left a
+     plain band behind its toolbar while the menu was open. It still sits by its button. */
   .network__menu {
+    position: absolute;
     position-anchor: --network-switch;
     position-area: bottom span-right;
     position-try-fallbacks: flip-inline;

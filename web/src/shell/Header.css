@@ -32,7 +32,7 @@
   .site-header__inner {
     max-width: var(--page-max);
     margin-inline: auto;
-    padding: var(--space-2) var(--gutter);
+    padding: var(--space-2) max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
     grid-template-areas: "brand network search nav theme";
@@ -217,7 +217,7 @@
       grid-template-areas:
         "brand network search theme"
         "nav nav nav nav";
-      padding-inline: var(--space-3);
+      padding-inline: max(var(--space-3), var(--safe-l)) max(var(--space-3), var(--safe-r));
       column-gap: var(--space-2);
     }
     .nav {

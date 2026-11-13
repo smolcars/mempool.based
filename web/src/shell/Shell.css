@@ -21,7 +21,7 @@
   /* Test networks only: a slim band in the network's colour, with the warning in words and a short
      hatched mark before it. The logo tile and the network switch carry the colour too. */
   .network-band {
-    padding: var(--space-1) var(--gutter);
+    padding: var(--space-1) max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
     background: color-mix(in srgb, var(--color-network) 12%, var(--color-surface));
     border-bottom: 2px solid var(--color-network);
   }

@@ -42,6 +42,12 @@
 }
 
 @layer base {
+  /* The page runs under the notch in landscape (viewport-fit=cover), its backgrounds to both edges;
+     every row of content keeps at least the safe area's inset on each side. */
+  :root {
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+  }
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
@@ -163,7 +169,7 @@
     width: 100%;
     max-width: var(--page-max);
     margin-inline: auto;
-    padding-inline: var(--gutter);
+    padding-inline: max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
   }
 }
 

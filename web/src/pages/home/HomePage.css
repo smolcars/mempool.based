@@ -44,7 +44,8 @@
     overscroll-behavior-x: contain;
     scrollbar-width: thin;
     /* Room above for the "now" label and the crossing tile's lift. */
-    padding: var(--space-6) var(--gutter) var(--space-2);
+    padding-block: var(--space-6) var(--space-2);
+    padding-inline: max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
     /* More tiles beyond either edge. */
     mask-image: linear-gradient(
       to right,
