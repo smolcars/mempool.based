@@ -557,6 +557,21 @@ export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS)
   return out;
 }
 
+/**
+ * How many blocks the period holds, from the pools ranking's answer: only when that answer is of
+ * the same period and covers all of it (a history still filling in counts fewer blocks).
+ */
+export function periodBlocks(
+  ranking:
+    | { path: string; value: { blockCount: number }; coverage: Coverage | undefined }
+    | undefined,
+  p: Period,
+): number | undefined {
+  return answeredPeriod(ranking)?.id === p.id && ranking?.coverage?.complete === true
+    ? ranking.value.blockCount
+    : undefined;
+}
+
 /** A share of a whole, never rounded up to all of it: `15%`, `under 1%`, `99%`. */
 function shareOf(part: number, whole: number): string {
   const pct = whole > 0 ? (part / whole) * 100 : 0;

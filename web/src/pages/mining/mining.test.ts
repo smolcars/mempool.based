@@ -16,6 +16,7 @@ import {
   networkNote,
   OTHER_POOLS,
   parsePeriod,
+  periodBlocks,
   periodDomain,
   poolLayers,
   type Ranking,
@@ -372,5 +373,20 @@ describe("difficulty adjustments and block health", () => {
       "20% audited, from 12 Nov 2026, 11:14 UTC.",
     );
     expect(healthCoverage(healthSeries([]), 5, now)).toBeUndefined();
+  });
+
+  it("counts the period's blocks only from a ranking of that period that covers all of it", () => {
+    const week = parsePeriod("1w");
+    const ranking = (path: string, complete: boolean | undefined) => ({
+      path,
+      value: { blockCount: 144 },
+      coverage: complete === undefined ? undefined : { fromHeight: 0, fromTime: 0, complete },
+    });
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", true), week)).toBe(144);
+    // Backfill has stored only the latest day: 144 is not the week's count.
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", false), week)).toBeUndefined();
+    expect(periodBlocks(ranking("/v1/mining/pools/1w", undefined), week)).toBeUndefined();
+    expect(periodBlocks(ranking("/v1/mining/pools/24h", true), week)).toBeUndefined();
+    expect(periodBlocks(undefined, week)).toBeUndefined();
   });
 });

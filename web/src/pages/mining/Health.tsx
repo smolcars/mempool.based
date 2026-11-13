@@ -14,6 +14,7 @@ import {
   healthSeries,
   isPredictions,
   type Period,
+  periodBlocks,
   periodDomain,
   type Ranking,
 } from "./mining";
@@ -38,10 +39,7 @@ export function BlockHealth(props: {
   });
   // While the next period loads the last answer stays, so every word follows the answer shown.
   const period = (): Period => answeredPeriod(data.answer()) ?? props.period;
-  const blocks = () =>
-    answeredPeriod(props.ranking.answer())?.id === period().id
-      ? props.ranking.answer()?.value.blockCount
-      : undefined;
+  const blocks = () => periodBlocks(props.ranking.answer(), period());
   const coverage = () => {
     const h = health();
     return h ? healthCoverage(h, blocks()) : undefined;
