@@ -38,10 +38,10 @@ One table per group, each on its own page:
 | Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
 | mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 52 | 5 | 2 | 14 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 21 | 1 | 4 | 22 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 31 | 13 | 5 | 6 | 31 |
-| **Total** | | **232** | **148** | **21** | **11** | **52** | **194** |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 33 | 11 | 5 | 6 | 31 |
+| **Total** | | **232** | **150** | **19** | **11** | **52** | **194** |
 
-Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), the Lightning node's fee histogram and history when they were (task G3), and the three mining rows of the pages when they were (task G2): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
+Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), the Lightning node's fee histogram and history when they were (task G3), the three mining rows of the pages when they were (task G2), and the two replacements rows of the pages when they were (task G4): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -65,7 +65,6 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 
 | Item | What it is | Needs | Size | Recommendation |
 |---|---|---|---|---|
-| RBF `/rbf`, and the home page's recent replacements | Recent replacement trees, with a full-RBF filter, and the newest few on the home page | Nothing: `/api/v1/replacements` and `/fullrbf/replacements` | A day | Build |
 | Lightning graphs by network type | Clearnet, Tor and unannounced nodes over time | Nothing: the stored snapshots and `/api/v1/lightning/statistics/:interval` have them | A few hours | Build later |
 | Units | BTC or sats | Nothing: one setting read by the amount component | A day | Build later |
 | Clock `/clock` | Full-screen tip height, fee and mempool size | Nothing, without the price | A few hours | Build later; leave the price out |

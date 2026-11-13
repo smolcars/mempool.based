@@ -15,6 +15,8 @@ beforeEach(() => {
   replies = {};
   vi.stubGlobal("fetch", async (url: string) => {
     const path = url.replace(/^\/(regtest|signet|testnet4)/, "");
+    // The replacements panel at the foot of the page asks for its own list.
+    if (path.endsWith("/v1/replacements")) return Response.json([]);
     requests.push(path);
     const reply = replies[path];
     return reply ? reply() : Response.json({ error: "not found" }, { status: 404 });
@@ -230,6 +232,7 @@ describe("mempool history page", () => {
     vi.setSystemTime(T0 * 1000);
     let signal: AbortSignal | undefined;
     vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+      if (url.endsWith("/v1/replacements")) return Promise.resolve(Response.json([]));
       requests.push(url);
       signal = init.signal ?? undefined;
       // A server that never answers.

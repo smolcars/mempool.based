@@ -642,7 +642,7 @@ fn every_topic_name_parses_back() {
     for topic in topics() {
         assert_eq!(Topic::parse(topic.name()), Some(topic));
     }
-    assert_eq!(topics().count(), 3 + TXS_TOPICS);
+    assert_eq!(topics().count(), 4 + TXS_TOPICS);
     // Every projected block but the last, which holds the rest of the mempool.
     assert_eq!(TXS_TOPICS, projected::Config::default().blocks - 1);
 }
@@ -962,7 +962,7 @@ async fn the_off_switch_says_so_on_every_topic_and_polls_nothing() {
         assert_eq!(v["type"], "off", "{v}");
         seen += 1;
     }
-    assert_eq!(seen, 3 + TXS_TOPICS);
+    assert_eq!(seen, 4 + TXS_TOPICS);
 }
 
 #[tokio::test]

@@ -429,7 +429,8 @@
     grid-template-areas:
       "fees mempool"
       "difficulty mempool"
-      "recent recent";
+      "recent recent"
+      "rbf rbf";
     align-items: stretch;
     gap: var(--space-5);
     padding-top: var(--space-5);
@@ -451,6 +452,10 @@
   }
   .home-difficulty {
     grid-area: difficulty;
+  }
+  /* Last on every width: below everything the council placed, so it pushes nothing down. */
+  .home-rbf {
+    grid-area: rbf;
   }
 
   .home-stats {
@@ -710,7 +715,8 @@
     .home-fees,
     .home-mempool,
     .home-recent,
-    .home-difficulty {
+    .home-difficulty,
+    .home-rbf {
       grid-area: auto;
     }
   }

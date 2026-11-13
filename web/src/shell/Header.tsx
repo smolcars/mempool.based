@@ -10,7 +10,7 @@ import "./Header.css";
 
 const NAV = [
   { href: "/blocks", label: "Blocks", match: (p: string) => /^\/blocks?(\/|$)/.test(p) },
-  { href: "/mempool", label: "Mempool", match: (p: string) => /^\/mempool(\/|$)/.test(p) },
+  { href: "/mempool", label: "Mempool", match: (p: string) => /^\/(mempool|rbf)(\/|$)/.test(p) },
   { href: "/mining", label: "Mining", match: (p: string) => /^\/mining(\/|$)/.test(p) },
   { href: "/lightning", label: "Lightning", match: (p: string) => /^\/lightning(\/|$)/.test(p) },
 ];

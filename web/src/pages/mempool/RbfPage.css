@@ -1,0 +1,281 @@
+/* Recent replacements: each row a story of versions on a line, oldest first. */
+@layer pages {
+  /* The way back to the section's other page, in one short row above the title. */
+  .mempool-nav {
+    margin-bottom: calc(var(--space-6) * -1 + var(--space-2));
+    font-size: var(--text-sm);
+  }
+  .mempool-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    color: var(--color-text-muted);
+    text-decoration: none;
+  }
+  @media (hover: hover) {
+    .mempool-nav a:hover {
+      color: var(--color-text);
+    }
+  }
+  .rbf-lead {
+    margin: calc(var(--space-6) * -1 + var(--space-3)) 0 0;
+    min-height: calc(1em * var(--leading-body));
+    color: var(--color-text-muted);
+  }
+  /* Rows that come in above the reader are held in place by the page, not by the browser too. */
+  .rbf-list {
+    overflow-anchor: none;
+  }
+  .rbf-slot {
+    position: relative;
+  }
+  .rbf-slot > .state {
+    position: absolute;
+    inset: var(--space-7) 0 auto;
+    z-index: 2;
+  }
+  .rbf-bone {
+    display: inline-block;
+    width: min(28rem, 100%);
+    height: 2.75rem;
+    vertical-align: middle;
+  }
+  .rbf-bone--short {
+    width: 5rem;
+  }
+
+  .rbf-live {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .rbf-live__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid var(--color-text-muted);
+  }
+  .rbf-live--on .rbf-live__dot {
+    border-color: var(--color-live);
+    background: var(--color-live);
+    animation: rbf-breathe 2.4s var(--ease-in-out) infinite;
+  }
+  @keyframes rbf-breathe {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  /* The story takes the row's width and wraps; the other columns keep to their figures. */
+  .rbf-list .table td:first-child {
+    width: 100%;
+    white-space: normal;
+  }
+  .rbf-list .table td {
+    vertical-align: top;
+    padding-block: var(--space-3);
+  }
+  .rbf-row--new {
+    animation: rbf-row-new 1.6s var(--ease-out);
+  }
+  @keyframes rbf-row-new {
+    from {
+      background-color: var(--color-accent-soft);
+    }
+  }
+
+  /* Room on the left for the ring around the newest version's mark, at the cell's edge. */
+  .rbf-story {
+    padding-left: 4px;
+  }
+  .rbf-story__line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .rbf-v {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-right: var(--space-1);
+  }
+  /* How long the version before stood: a stretch of the line with its time over it. */
+  .rbf-v__after {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 3.5rem;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+    line-height: 1;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .rbf-v__after::after {
+    content: "";
+    align-self: stretch;
+    height: 6px;
+    margin-top: 3px;
+    background:
+      linear-gradient(var(--color-line-strong), var(--color-line-strong)) left center /
+        calc(100% - 5px) 1.5px no-repeat,
+      conic-gradient(from 225deg at 100% 50%, var(--color-line-strong) 0 90deg, transparent 0) right
+        center / 6px 6px no-repeat;
+  }
+  .rbf-v__mark {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    border-radius: var(--radius-s);
+    background: var(--c);
+  }
+  .rbf-v__mark--none {
+    border: 1.5px dashed var(--color-line-strong);
+  }
+  /* The version that stands: its mark ringed, its id in the text colour. */
+  .rbf-v--newest .rbf-v__mark {
+    outline: 1.5px solid var(--color-text);
+    outline-offset: 2px;
+  }
+  .rbf-v__id .hash__text {
+    color: var(--color-text-muted);
+  }
+  .rbf-v--newest .rbf-v__id .hash__text {
+    color: var(--color-text);
+    font-weight: var(--weight-bold);
+  }
+  @media (hover: hover) {
+    .rbf-v__id a.hash__text:hover {
+      color: var(--color-accent);
+    }
+  }
+  .rbf-v__rate {
+    display: inline-flex;
+    flex-direction: column;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: var(--leading-tight);
+  }
+  .rbf-v__nosig {
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .rbf-story__fold {
+    display: inline-flex;
+    padding: 0 var(--space-2);
+  }
+  .rbf-story__button {
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border: 1px dashed var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    background: none;
+    font: inherit;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+  @media (hover: hover) {
+    .rbf-story__button:hover {
+      color: var(--color-text);
+      border-color: var(--color-text);
+    }
+  }
+  @media (pointer: coarse) {
+    .rbf-story__button {
+      min-height: var(--touch);
+    }
+  }
+  .rbf-story__others {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  .rbf-story__others .hash__text {
+    color: var(--color-text-muted);
+  }
+
+  .rbf-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+  .rbf-status__when {
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  .rbf-status__full {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+
+  /* A phone tells the story down the row: each version on its line, the time it stood between. */
+  @media (max-width: 640px) {
+    .rbf-lead {
+      min-height: calc(2em * var(--leading-body));
+    }
+    .rbf-story__line {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0;
+    }
+    .rbf-v {
+      flex-wrap: wrap;
+      row-gap: 0;
+    }
+    .rbf-v__after {
+      flex-basis: 100%;
+      flex-direction: row;
+      gap: var(--space-2);
+      min-width: 0;
+      padding: var(--space-1) 0 var(--space-1) 5px;
+    }
+    .rbf-v__after::after {
+      display: none;
+    }
+    .rbf-v__after::before {
+      content: "";
+      width: 1.5px;
+      height: 1rem;
+      background: var(--color-line-strong);
+    }
+    .rbf-v__rate {
+      flex-direction: row;
+      gap: var(--space-2);
+    }
+    .rbf-story__fold {
+      padding: var(--space-1) 0;
+    }
+  }
+  /* The narrowest phones: the rate goes under its id rather than wrap to the mark's side. */
+  @media (max-width: 380px) {
+    .rbf-v {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: var(--space-2);
+    }
+    .rbf-v__after {
+      grid-column: 1 / -1;
+    }
+    .rbf-v__rate {
+      grid-column: 2;
+    }
+  }
+}

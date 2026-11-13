@@ -1,0 +1,31 @@
+/* The newest few replacements: the home page's panel, and the foot of the mempool's history. */
+@layer pages {
+  .rbf-recent {
+    min-width: 0;
+  }
+  .rbf-recent__bone {
+    display: inline-block;
+    width: 9rem;
+    vertical-align: middle;
+  }
+  /* The id takes what is left and shortens further, so the table never scrolls. */
+  .rbf-recent td:first-child {
+    width: 100%;
+    max-width: 0;
+  }
+  .rbf-recent .hash {
+    display: flex;
+    min-width: 0;
+  }
+  .rbf-recent .hash__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @media (max-width: 640px) {
+    /* Headers wrap, so the figures, not the units, set each column's width. */
+    .rbf-recent th {
+      white-space: normal;
+      vertical-align: bottom;
+    }
+  }
+}

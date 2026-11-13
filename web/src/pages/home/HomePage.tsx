@@ -1,4 +1,4 @@
-import { createEffect, Show } from "solid-js";
+import { createEffect, lazy, Loading as Pending, Show } from "solid-js";
 import { ApiError } from "../../lib/api";
 import { useLiveStatus } from "../../lib/live";
 import type { Network } from "../../lib/network";
@@ -13,6 +13,10 @@ import { RecentTxs } from "./RecentTxs";
 import { createSummaries } from "./summaries";
 import { DifficultyPanel } from "./DifficultyPanel";
 import "./HomePage.css";
+
+// The last panel, below the fold everywhere, and its list waits for the live topic anyway: its
+// code comes after the page's, so a cold home page still needs ten files (docs/FRONTEND.md).
+const RecentReplacements = lazy(() => import("../mempool/RecentReplacements"));
 
 /** A failure that means the node, not the request, is the problem. */
 // The server's word that its node is not answering: a 5xx. A request that got no answer at all
@@ -68,6 +72,9 @@ function Home(props: { network: Network }) {
         <MempoolPanel feed={live.mempool} />
         <RecentTxs feed={live.recent} />
         <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
+        <Pending>
+          <RecentReplacements network={props.network} class="home-rbf" />
+        </Pending>
       </div>
     </div>
   );

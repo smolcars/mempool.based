@@ -154,6 +154,12 @@ impl Pages {
                     "{on}'s mempool over time: its size by fee rate, and the flow in and out."
                 ),
             },
+            [_, Some("rbf"), None, None] => Head {
+                title: "Replacements".into(),
+                description: format!(
+                    "Transactions replaced on {on}'s mempool, newest first: what replaced what, how much the fee rate rose, and which was mined, live."
+                ),
+            },
             [_, Some("lightning"), None, None] => Head {
                 title: "Lightning".into(),
                 description: format!(

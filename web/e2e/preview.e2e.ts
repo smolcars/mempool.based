@@ -39,6 +39,7 @@ const PAGES = [
   `/regtest/address/${chain.addresses.p2pkh}`,
   "/regtest/mining",
   "/regtest/mempool",
+  "/regtest/rbf",
   "/regtest/lightning",
   "/regtest/lightning/channel/1x2x3",
   "/regtest/lightning/search",

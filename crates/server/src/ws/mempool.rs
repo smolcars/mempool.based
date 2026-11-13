@@ -55,9 +55,14 @@ pub(super) const HOLD: Duration = Duration::from_secs(3);
 
 /// Every topic this module produces.
 fn topics() -> impl Iterator<Item = Topic> {
-    [Topic::Mempool, Topic::Projected, Topic::Transactions]
-        .into_iter()
-        .chain((0..TXS_TOPICS).filter_map(|i| u8::try_from(i).ok().map(Topic::ProjectedTxs)))
+    [
+        Topic::Mempool,
+        Topic::Projected,
+        Topic::Transactions,
+        Topic::Replacements,
+    ]
+    .into_iter()
+    .chain((0..TXS_TOPICS).filter_map(|i| u8::try_from(i).ok().map(Topic::ProjectedTxs)))
 }
 
 /// Starts the network's tracker and projector on their own node clients, and the tasks that

@@ -230,7 +230,7 @@ export const isBusy = (error: unknown): error is ApiError =>
   error instanceof ApiError &&
   (error.status === 429 ||
     (error.status === 503 &&
-      !/too large|index is disabled|needs a block table|needs a data directory|switched off/i.test(
+      !/too large|index is disabled|needs a block table|needs a data directory|switched off|engine is off/i.test(
         error.message,
       )));
 

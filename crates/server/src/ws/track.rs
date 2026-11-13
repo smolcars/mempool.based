@@ -116,6 +116,8 @@ struct State {
     applied: u64,
     /// Distinguishes an address entry from a later one for the same script.
     next_gen: u64,
+    /// The `replacements` topic has been told the record's version.
+    record_said: bool,
     stats: Stats,
 }
 
@@ -282,6 +284,7 @@ impl Tracking {
                 replacements: Replacements::new(limits.replacements_kept),
                 applied: 0,
                 next_gen: 0,
+                record_said: false,
                 stats: Stats::default(),
             }),
         }
@@ -488,6 +491,18 @@ impl Tracking {
         }
     }
 
+    /// Tells the `replacements` topic the record's version, so a page listing replacements asks
+    /// for them again when it changes.
+    fn say_record(&self, st: &mut State) {
+        st.record_said = true;
+        let msg = json!({
+            "topic": "replacements",
+            "type": "replacements",
+            "version": st.replacements.version(),
+        });
+        self.publish(st, Topic::Replacements, &msg);
+    }
+
     fn publish(&self, st: &mut State, topic: Topic, msg: &Value) {
         let frame = Frame::text(msg.to_string().as_bytes());
         st.stats.messages += 1;
@@ -603,6 +618,10 @@ impl Tracking {
                 moved = true;
             }
         }
+        // The first delta says the record as it stands, for new subscribers; then each change.
+        if st.replacements.version() != version || !st.record_said {
+            self.say_record(&mut st);
+        }
         (moved, st.replacements.take_changes())
     }
 
@@ -617,6 +636,9 @@ impl Tracking {
         let version = st.replacements.version();
         st.replacements.answers(epoch, answers);
         let changed = st.replacements.version() != version;
+        if changed {
+            self.say_record(&mut st);
+        }
         (changed, st.replacements.take_changes())
     }
 
