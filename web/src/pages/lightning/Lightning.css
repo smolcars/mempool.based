@@ -431,15 +431,10 @@
   }
   .ln-fees {
     margin: 0;
+    container-type: inline-size;
   }
-  .ln-fees__key {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1) var(--space-4);
-    margin: 0 0 var(--space-3);
-    padding: 0;
-    list-style: none;
-    font-size: var(--text-xs);
+  .ln-fees__key.ln-fees__bars {
+    border-left-color: transparent;
     color: var(--color-text-muted);
   }
   .ln-fees__way {
@@ -470,6 +465,7 @@
     font-size: var(--text-xs);
   }
   .ln-fees__unit {
+    align-self: end;
     color: var(--color-text-muted);
   }
   .ln-fees__label {
@@ -501,6 +497,20 @@
   .ln-fees__n {
     white-space: nowrap;
     color: var(--color-text-muted);
+  }
+  /* Where there is room, out and in side by side: half the height, the same scale. */
+  @container (min-width: 30rem) {
+    .ln-fees__bars {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: var(--space-3);
+      padding-left: 0;
+      border-left: 0;
+    }
+    /* Each column on its own baseline. */
+    .ln-fees__bar {
+      padding-left: var(--space-1);
+      border-left: 1px solid var(--color-line-strong);
+    }
   }
   .ln-fees .chart__caption {
     margin-top: var(--space-3);

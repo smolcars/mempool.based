@@ -153,14 +153,14 @@ export function NodeFees(props: { node: NodeDetail }) {
       >
         <p class="ln-fees__answer">{feeSentence(rows())}</p>
         <figure class="ln-fees">
-          <ul class="ln-fees__key" aria-hidden="true">
-            <li class="ln-fees__way ln-fees__way--out">It charges</li>
-            <li class="ln-fees__way ln-fees__way--in">Its peers charge</li>
-          </ul>
           {/* The table under "Show the figures" says the same to a screen reader. */}
           <div class="ln-fees__plot" aria-hidden="true">
             <span class="ln-fees__unit">ppm</span>
-            <span />
+            {/* The key heads the bars, in their order: stacked on a phone, side by side if wide. */}
+            <span class="ln-fees__bars ln-fees__key">
+              <span class="ln-fees__way ln-fees__way--out">It charges</span>
+              <span class="ln-fees__way ln-fees__way--in">Its peers charge</span>
+            </span>
             <For each={rows()}>
               {(r) => (
                 <>
