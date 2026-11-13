@@ -29,7 +29,12 @@ describe("NetworkSwitch", () => {
     document.body.append(under);
     const tap = () => {
       under.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-      under.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      under.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+      return clicks;
+    };
+    /** A keyboard's activation: a click with no pointer behind it. */
+    const enter = () => {
+      under.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 }));
       return clicks;
     };
     expect(tap()).toBe(0);
@@ -38,6 +43,17 @@ describe("NetworkSwitch", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
     // With the menu closed, the next tap goes where it lands.
     expect(tap()).toBe(1);
+    // A press that ends in no click (a right-click) never swallows a later key's activation.
+    open();
+    under.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 2 }));
+    flush();
+    expect(menu.hidden).toBe(true);
+    expect(enter()).toBe(2);
+    // Nor does a primary press whose click never came, once a key is pressed.
+    open();
+    under.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(enter()).toBe(3);
     open();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     flush();

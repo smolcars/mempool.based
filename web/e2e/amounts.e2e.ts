@@ -244,12 +244,15 @@ async function copiesPlain(page: Page, path: string) {
   const pairs = await page.evaluate(() => {
     const copied = (window as unknown as { copied: string[] }).copied;
     return [...document.querySelectorAll<HTMLButtonElement>("main button.copy")].map((b) => {
+      const before = copied.length;
       b.click();
-      return [b.title, copied.at(-1) ?? ""] as const;
+      // Its own copy, not the last button's: exactly one new entry.
+      return [b.title, copied.length - before, copied.at(-1) ?? ""] as const;
     });
   });
   expect(pairs.length, `${path}: copy controls`).toBeGreaterThan(0);
-  for (const [label, text] of pairs) {
+  for (const [label, added, text] of pairs) {
+    expect(added, `${path}: "${label}" copied once`).toBe(1);
     const kind = COPIED.find(([name]) => name.test(label));
     expect(kind, `${path}: "${label}" is a kind this test knows`).toBeDefined();
     expect(text, `${path}: "${label}"`).toMatch(kind?.[1] ?? /^$/);

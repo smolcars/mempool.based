@@ -26,7 +26,8 @@ export function openPop(
     )
       return;
     close();
-    if (options.absorb === true) absorbClick();
+    // A primary press only: a right-click ends in a menu of the browser's, never in a click.
+    if (options.absorb === true && e.button === 0) absorbClick();
   };
   const key = (e: KeyboardEvent) => {
     if (e.key !== "Escape") return;
@@ -60,22 +61,23 @@ export function openPop(
 }
 
 /**
- * Swallows the click that ends the press under way, so it activates nothing. The next press, or a
- * press the browser cancels (a scroll), lets clicks through again.
+ * Swallows the click that ends the press under way, so it activates nothing. Only a pointer's
+ * click (a keyboard's has `detail` 0), and only until the next press, a cancelled press (a
+ * scroll), a key or the browser's own menu: a later, unrelated activation always goes through.
  */
 function absorbClick(): void {
-  const eat = (e: Event) => {
+  const ends = ["pointerdown", "pointercancel", "keydown", "contextmenu"] as const;
+  const eat = (e: MouseEvent) => {
+    if (e.detail === 0) return;
     e.preventDefault();
     e.stopPropagation();
     done();
   };
   const done = () => {
     window.removeEventListener("click", eat, true);
-    window.removeEventListener("pointerdown", done, true);
-    window.removeEventListener("pointercancel", done, true);
+    for (const end of ends) window.removeEventListener(end, done, true);
   };
   window.addEventListener("click", eat, true);
   // Added while this press is being dispatched: the window's capture phase is already past for it.
-  window.addEventListener("pointerdown", done, true);
-  window.addEventListener("pointercancel", done, true);
+  for (const end of ends) window.addEventListener(end, done, true);
 }
