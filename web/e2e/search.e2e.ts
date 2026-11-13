@@ -64,3 +64,26 @@ test("nothing found says what was searched and what search finds", async ({ page
   await field.press("Escape");
   await expect(box.getByText("Nothing matches", { exact: true })).toBeHidden();
 });
+
+// iOS's Done key closed the keyboard and took the focus: the panel then shrank to the resting
+// field's width, a word or two a line. It keeps the searching layout while it is shown.
+test("a phone's nothing-found panel keeps its width when the field loses focus", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/");
+  const field = search(page);
+  await field.fill("884406x95x0");
+  await field.press("Enter");
+  const panel = page.locator(".search__panel");
+  await expect(panel).toBeVisible();
+  const focused = (await panel.boundingBox())?.width ?? 0;
+  await field.blur();
+  await expect(panel).toBeVisible();
+  expect((await panel.boundingBox())?.width ?? 0).toBeCloseTo(focused, 0);
+  expect(focused).toBeGreaterThan(300);
+  // A press outside closes it, and the header returns to rest.
+  await page.getByRole("main").click({ position: { x: 5, y: 5 } });
+  await expect(panel).toHaveCount(0);
+  await expect(page.locator(".brand")).toBeVisible();
+});
