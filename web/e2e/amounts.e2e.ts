@@ -129,6 +129,9 @@ for (const width of [320, 390]) {
     await lightning(page);
     await esplora(page);
     await stubRetargets(page);
+    // On the same loads at 390 px: every copy control copies plain text of its kind (below).
+    const copies = width === 390;
+    if (copies) await recordCopies(page);
     await page.setViewportSize({ width, height: 900 });
     for (const path of PAGES) {
       await page.emulateMedia({ colorScheme: "light" });
@@ -143,6 +146,7 @@ for (const width of [320, 390]) {
         );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
+      if (copies && !path.includes("/mining/")) await copiesPlain(page, path);
     }
   });
 
@@ -218,9 +222,8 @@ const COPIED: [RegExp, RegExp][] = [
   [/hex$|^Copy item \d+$/, /^(?:[0-9a-f]{2})+$/],
 ];
 
-test("every copy control copies plain text of its kind", async ({ page }) => {
-  await lightning(page);
-  await esplora(page);
+/** Records what the page hands the clipboard, in place of the clipboard itself. */
+async function recordCopies(page: Page) {
   await page.addInitScript(() => {
     const copied: string[] = [];
     Object.assign(window, { copied });
@@ -234,27 +237,21 @@ test("every copy control copies plain text of its kind", async ({ page }) => {
       },
     });
   });
-  for (const path of [
-    `/regtest/block/${chain.blocks[106]}`,
-    `/regtest/tx/${chain.txs.script_types}`,
-    `/regtest/address/${chain.addresses.p2tr}`,
-    "/regtest/lightning/channel/811984x2037x0",
-    `/regtest/lightning/node/${ACINQ}`,
-  ]) {
-    await load(page, path);
-    // Every one on the page, those in closed pop-ups and disclosures too, in one call.
-    const pairs = await page.evaluate(() => {
-      const copied = (window as unknown as { copied: string[] }).copied;
-      return [...document.querySelectorAll<HTMLButtonElement>("main button.copy")].map((b) => {
-        b.click();
-        return [b.title, copied.at(-1) ?? ""] as const;
-      });
+}
+
+/** Clicks every copy control on the page, those in closed pop-ups too, in one call. */
+async function copiesPlain(page: Page, path: string) {
+  const pairs = await page.evaluate(() => {
+    const copied = (window as unknown as { copied: string[] }).copied;
+    return [...document.querySelectorAll<HTMLButtonElement>("main button.copy")].map((b) => {
+      b.click();
+      return [b.title, copied.at(-1) ?? ""] as const;
     });
-    expect(pairs.length, `${path}: copy controls`).toBeGreaterThan(0);
-    for (const [label, text] of pairs) {
-      const kind = COPIED.find(([name]) => name.test(label));
-      expect(kind, `${path}: "${label}" is a kind this test knows`).toBeDefined();
-      expect(text, `${path}: "${label}"`).toMatch(kind?.[1] ?? /^$/);
-    }
+  });
+  expect(pairs.length, `${path}: copy controls`).toBeGreaterThan(0);
+  for (const [label, text] of pairs) {
+    const kind = COPIED.find(([name]) => name.test(label));
+    expect(kind, `${path}: "${label}" is a kind this test knows`).toBeDefined();
+    expect(text, `${path}: "${label}"`).toMatch(kind?.[1] ?? /^$/);
   }
-});
+}
