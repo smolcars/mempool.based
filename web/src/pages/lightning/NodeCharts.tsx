@@ -1,5 +1,5 @@
-// A node's past (its channels and capacity each day since this server's record began) and how it
-// prices its channels, out and in (docs/DESIGN.md "Lightning").
+// A node's past (its channels and capacity since this server's record began, stepping at each
+// open and close) and how it prices its channels, out and in (docs/DESIGN.md "Lightning").
 import { createSignal, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatDay, formatMoment } from "../../components/chart/scale";
@@ -43,7 +43,7 @@ export function NodeHistory(props: { network: Network; id: string }) {
   return (
     <section aria-labelledby="ln-node-history-title">
       <SectionHeader title="Over time" id="ln-node-history-title">
-        Each midnight UTC
+        Each change and midnight UTC
       </SectionHeader>
       <Show
         when={history.state !== "errored"}
@@ -81,23 +81,26 @@ export function NodeHistory(props: { network: Network; id: string }) {
                     height={200}
                     left={channelAxis()}
                     right={{ zero: true, format: btcAxis }}
+                    // Steps: a channel opens or closes in a block, at a moment the record has, and
+                    // the count holds until the next change. A slope would invent the time between.
                     series={[
                       {
                         name: "Channels",
                         values: col((p) => p.channels),
-                        draw: "area",
+                        draw: "step-area",
                         format: groupDigits,
                       },
                       {
                         name: "Capacity",
                         values: col((p) => p.capacity),
-                        draw: "line",
+                        draw: "step",
                         axis: "right",
                         tone: 2,
-                        format: (v) => `${formatBtc(v)} BTC`,
+                        format: formatBtc,
+                        unit: "BTC",
                       },
                     ]}
-                    // Midnights are days; the last point is now.
+                    // Midnights are days; a change and the last point (now) are moments.
                     time={(t) => (t % DAY === 0 ? formatDay(t) : formatMoment(t))}
                   />
                 </Pending>
@@ -115,32 +118,16 @@ export function NodeFees(props: { node: NodeDetail }) {
   const [figures, setFigures] = createSignal(false);
   // One scale for both ways, so a bar out and a bar in compare by length.
   const most = () => Math.max(1, ...rows().flatMap((r) => [r.outgoing.count, r.incoming.count]));
-  const columns: Column<FeeRow>[] = [
+  // One table each way, under the chart's own words: three columns fit a 320 px phone whole, where
+  // five scrolled, and the capacities are only here.
+  const columns = (way: "outgoing" | "incoming"): Column<FeeRow>[] => [
     { header: "Fee rate, ppm", cell: (r) => r.label },
-    {
-      header: "It charges, channels",
-      short: "Out",
-      numeric: true,
-      cell: (r) => groupDigits(r.outgoing.count),
-    },
-    // Every column stays on a phone, where the table scrolls: the capacities are only here.
+    { header: "Channels", numeric: true, cell: (r) => groupDigits(r[way].count) },
     {
       header: "Their capacity, BTC",
-      short: "Out, BTC",
+      short: "Capacity, BTC",
       numeric: true,
-      cell: (r) => <Amount sats={r.outgoing.capacity} unit={false} short />,
-    },
-    {
-      header: "Its peers charge, channels",
-      short: "In",
-      numeric: true,
-      cell: (r) => groupDigits(r.incoming.count),
-    },
-    {
-      header: "Their capacity, BTC",
-      short: "In, BTC",
-      numeric: true,
-      cell: (r) => <Amount sats={r.incoming.capacity} unit={false} short />,
+      cell: (r) => <Amount sats={r[way].capacity} unit={false} short />,
     },
   ];
   return (
@@ -183,17 +170,28 @@ export function NodeFees(props: { node: NodeDetail }) {
               <summary>Show the figures</summary>
               <Show when={figures()}>
                 <div
-                  class="chart__table"
+                  class="chart__table ln-fees__figures"
                   // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrolling region must take focus to be scrolled by keyboard
                   tabindex="0"
                   role="region"
                   aria-label="Its channels by fee rate, figures"
                 >
-                  <DataTable
-                    caption="Its open channels by fee rate"
-                    columns={columns}
-                    rows={rows()}
-                  />
+                  <div class="ln-fees__table ln-fees__table--out">
+                    <DataTable
+                      caption="It charges"
+                      showCaption
+                      columns={columns("outgoing")}
+                      rows={rows()}
+                    />
+                  </div>
+                  <div class="ln-fees__table ln-fees__table--in">
+                    <DataTable
+                      caption="Its peers charge"
+                      showCaption
+                      columns={columns("incoming")}
+                      rows={rows()}
+                    />
+                  </div>
                 </div>
               </Show>
             </details>

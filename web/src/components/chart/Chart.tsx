@@ -46,13 +46,24 @@ export interface ChartAxis {
 export interface ChartSeries {
   name: string;
   values: readonly Value[];
-  draw: "line" | "area" | "step";
+  /** `step-area`: a step with the area under it, for counts that change at a moment. */
+  draw: "line" | "area" | "step" | "step-area";
   /** Which value axis; `right` needs the chart's `right` axis. */
   axis?: "left" | "right";
   /** 1 is the main series (solid, text color), 2 a second one (dashed, muted). */
   tone?: 1 | 2;
   /** The value in the readout and the figures. */
   format: (v: number) => string;
+  /**
+   * The unit `format` leaves out: the readout writes it after the figure, the figures table in
+   * its header ("Capacity, BTC"), so its cells are bare numbers.
+   */
+  unit?: string;
+  /**
+   * Its points are samples, the moments something was looked at: each is marked with a dot when
+   * they stand {@link MARK_SPACING} px or more apart, so a line between two reads as two looks.
+   */
+  marks?: boolean;
   /** A step holds its last value on to this time (a balance that has not changed since). */
   until?: number;
 }
@@ -147,6 +158,8 @@ export interface ChartProps {
 
 /** How far from the picked point, in px, a second tap still means that point. */
 const TAP_SLOP = 16;
+/** Samples this far apart on screen, or farther, are each marked (`ChartSeries.marks`). */
+const MARK_SPACING = 24;
 
 const MARGIN = { top: 10, bottom: 26, left: 66, right: 14, rightAxis: 58 };
 /** Shades of the text color for stacked layers, alternating so neighbours stand apart. */
@@ -282,6 +295,8 @@ export default function Chart(props: ChartProps) {
     // Too narrow for ticks a reader can place (a phone): the axis names its two ends instead.
     const ends = right - left < 420 ? endLabels(domain[0], domain[1], right - left) : undefined;
     const covered = props.dataFrom;
+    // The median step on screen: samples far apart are few, and each is marked.
+    const spread = (maxGap(xs) / 3) * ((right - left) / Math.max(1, domain[1] - domain[0]));
     return {
       w,
       h,
@@ -303,16 +318,34 @@ export default function Chart(props: ChartProps) {
       bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap, sliver)),
       // An area only over an axis from zero: filled down to a cut axis, it would overstate a change.
       areas: series().map((s) =>
-        s.draw === "area" && yOf(s).domain[0] === 0
-          ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver)
+        (s.draw === "area" || s.draw === "step-area") && yOf(s).domain[0] === 0
+          ? areaPath(
+              xs,
+              s.values,
+              yOf(s).domain[0],
+              sx,
+              yOf(s),
+              gap,
+              sliver,
+              undefined,
+              s.draw === "step-area",
+            )
           : "",
       ),
       lines: series().map(
         (s) =>
-          linePath(xs, s.values, sx, yOf(s), gap, s.draw === "step") +
+          linePath(xs, s.values, sx, yOf(s), gap, s.draw === "step" || s.draw === "step-area") +
           (s.draw === "step" && s.until !== undefined && typeof s.values.at(-1) === "number"
             ? `H${Math.round(sx(s.until) * 10) / 10}`
             : ""),
+      ),
+      marks: series().map((s) =>
+        s.marks === true && spread >= MARK_SPACING
+          ? xs.flatMap((x, i) => {
+              const v = s.values[i];
+              return typeof v === "number" ? [{ x: sx(x), y: yOf(s)(v) }] : [];
+            })
+          : [],
       ),
       floor,
       fee: props.left.fee === true ? feeStrip(yl.scale) : [],
@@ -351,6 +384,8 @@ export default function Chart(props: ChartProps) {
         typeof b.lo[i] !== "number" || typeof b.hi[i] !== "number"
           ? "no data"
           : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}`,
+      unit: undefined,
+      bare: undefined,
       empty: false,
       rare: false,
     })),
@@ -361,7 +396,11 @@ export default function Chart(props: ChartProps) {
       layer: -1,
       name: s.name,
       short: undefined,
-      value: reading(s.values[i], s.format),
+      value:
+        reading(s.values[i], s.format) +
+        (s.unit !== undefined && typeof s.values[i] === "number" ? ` ${s.unit}` : ""),
+      unit: s.unit,
+      bare: reading(s.values[i], s.format),
       empty: false,
       rare: false,
     })),
@@ -373,6 +412,8 @@ export default function Chart(props: ChartProps) {
       name: s.name,
       short: undefined,
       value: reading(s.values[i], s.format),
+      unit: undefined,
+      bare: undefined,
       empty: false,
       rare: false,
     })),
@@ -384,6 +425,8 @@ export default function Chart(props: ChartProps) {
       name: l.name,
       short: l.short,
       value: reading(l.values[i], layerFormat),
+      unit: undefined,
+      bare: undefined,
       empty: l.values[i] === 0,
       rare: l.rare === true,
     })),
@@ -464,19 +507,47 @@ export default function Chart(props: ChartProps) {
     setPicked(Math.max(0, Math.min(n - 1, next)));
   };
 
+  // Times that say UTC say it once, in the header, so a phone's column is two short lines.
+  const utc = () => props.x.some((_, i) => when(i).endsWith(" UTC"));
+  // On a phone the time of day takes a line under the day, so the figures beside it fit; the day
+  // breaks before its year only where even that is too wide (the widest fonts, at 320 px).
+  const cellTime = (i: number) => {
+    const [day = "", clock] = when(i).replace(/ UTC$/, "").split(", ");
+    const cut = day.lastIndexOf(" ");
+    return (
+      <>
+        <Show when={cut > 0} fallback={day}>
+          <span class="chart__when-part">{day.slice(0, cut)}</span>{" "}
+          <span class="chart__when-part">{day.slice(cut + 1)}</span>
+        </Show>
+        <Show when={clock}>
+          {(c) => (
+            <>
+              {/* The comma goes where the time of day takes its own line. */}
+              <span class="chart__when-comma">,</span>{" "}
+              <span class="chart__when-part chart__when-clock">{c()}</span>
+            </>
+          )}
+        </Show>
+      </>
+    );
+  };
   const columns = () => [
     {
-      header: "Time",
+      header: utc() ? "Time, UTC" : "Time",
       cell: (i: number) => (
-        <Show when={props.href?.(i)} fallback={when(i)}>
-          {(to) => <Link href={to()}>{when(i)}</Link>}
+        <Show when={props.href?.(i)} fallback={cellTime(i)}>
+          {(to) => <Link href={to()}>{cellTime(i)}</Link>}
         </Show>
       ),
     },
     ...readings(0).map((r, k) => ({
-      header: r.name,
+      header: r.unit === undefined ? r.name : `${r.name}, ${r.unit}`,
       numeric: true,
-      cell: (i: number) => readings(i)[k]?.value ?? "",
+      cell: (i: number) => {
+        const at = readings(i)[k];
+        return at?.bare ?? at?.value ?? "";
+      },
     })),
   ];
 
@@ -647,6 +718,20 @@ export default function Chart(props: ChartProps) {
               <For each={f().lines}>
                 {(d, k) => (
                   <path class={`chart__line chart__line--${series()[k()]?.tone ?? 1}`} d={d} />
+                )}
+              </For>
+              <For each={f().marks}>
+                {(points, k) => (
+                  <For each={points}>
+                    {(p) => (
+                      <circle
+                        class={`chart__mark chart__mark--${series()[k()]?.tone ?? 1}`}
+                        cx={p.x}
+                        cy={p.y}
+                        r="2.5"
+                      />
+                    )}
+                  </For>
                 )}
               </For>
               <line

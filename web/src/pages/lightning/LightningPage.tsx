@@ -365,12 +365,14 @@ function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
             height={240}
             left={{ format: (v) => groupDigits(v) }}
             right={{ format: btcAxis }}
+            // Samples of the whole network every ten minutes: when there are few, each is marked.
             series={[
               {
                 name: "Channels",
                 values: col((p) => p.channels),
                 draw: "area",
                 format: groupDigits,
+                marks: true,
               },
               {
                 name: "Capacity",
@@ -378,7 +380,9 @@ function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
                 draw: "line",
                 axis: "right",
                 tone: 2,
-                format: (v) => `${formatBtc(v)} BTC`,
+                format: formatBtc,
+                unit: "BTC",
+                marks: true,
               },
             ]}
             notes={[

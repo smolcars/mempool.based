@@ -209,6 +209,17 @@
   .chart__dot--2 {
     fill: var(--series-2);
   }
+  /* A sample, where a sparse series was looked at (ChartSeries.marks). */
+  .chart__mark {
+    stroke: var(--color-surface);
+    stroke-width: 1.5;
+  }
+  .chart__mark--1 {
+    fill: var(--series-1);
+  }
+  .chart__mark--2 {
+    fill: var(--series-2);
+  }
 
   .chart__caption {
     margin-top: var(--space-2);
@@ -245,5 +256,22 @@
   }
   .chart__table .table-scroll {
     overflow: visible;
+  }
+  /* On a phone a point's time is two lines, the day and the time of day, at the size of the
+     figures beside it, so a big node's capacity still fits 320 px. */
+  @media (max-width: 640px) {
+    .chart__table td:first-child {
+      white-space: normal;
+      font-size: var(--text-xs);
+    }
+    .chart__when-clock {
+      display: block;
+    }
+    .chart__when-comma {
+      display: none;
+    }
+  }
+  .chart__when-part {
+    white-space: nowrap;
   }
 }
