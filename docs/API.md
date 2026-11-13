@@ -817,7 +817,7 @@ Values and their differences from the reference:
 - **Feature names** follow BOLT 9 (`gossip-queries-ex`, `route-blinding`, `dual-fund`, `quiesce`, `onion-messages` where the reference says `unknown`); implementation-specific bits the reference names (31 `amp`, 2023 `script-enforced-lease`) are `unknown` here.
 - **Errors** are our `{"error": …}` model; the reference answers some with plain text (`Channel not found`).
 
-**Cost.** Measured on mainnet (36,223 channels, 13,639 nodes), release build, a client on the same machine, three requests each: every route answered in 0.3 to 0.9 ms, first and repeated alike, except the three that read a node's rows from the store (its closed channels, `/history` and `/statistics`, 1.5 to 2.6 ms for ACINQ's 1,807 channels). The largest answers are the 100-node rankings (25 KB) and the overview (7 KB). A test builds a graph of mainnet's size and holds every route under 250 ms in a debug build on a CI runner (`crates/server/tests/lightning.rs`).
+**Cost.** Measured on mainnet (36,223 channels, 13,639 nodes), release build, a client on the same machine, three requests each: every route answered in 0.3 to 0.9 ms, first and repeated alike, except the three that read a node's rows from the store (its closed channels, `/history` and `/statistics`, 1.5 to 2.6 ms for ACINQ's 1,807 channels). The largest answers are the 100-node rankings (25 KB) and the overview (7 KB). A test builds a graph of mainnet's size and checks every route answers it without the node (`crates/server/tests/lightning.rs`); an ignored one beside it holds each under 250 ms in a debug build, on a machine with nothing else running.
 
 ## Using it from the frontend
 

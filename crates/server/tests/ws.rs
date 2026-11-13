@@ -39,7 +39,8 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Block JSON the mock Esplora serves, by hash. Unknown hashes are a 404.
 type Blocks = Arc<Mutex<HashMap<String, Value>>>;
 
-/// How many times the mock Esplora answered 404, by hash.
+/// How many times the mock Esplora answered 404, by hash; under `"served"`, how many blocks it
+/// served.
 type Misses = Arc<Mutex<HashMap<String, u32>>>;
 
 async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
@@ -48,7 +49,10 @@ async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
         State((blocks, misses)): State<(Blocks, Misses)>,
     ) -> impl IntoResponse {
         match blocks.lock().unwrap().get(&hash) {
-            Some(b) => (StatusCode::OK, b.to_string()).into_response(),
+            Some(b) => {
+                *misses.lock().unwrap().entry("served".into()).or_default() += 1;
+                (StatusCode::OK, b.to_string()).into_response()
+            }
             None => {
                 *misses.lock().unwrap().entry(hash).or_default() += 1;
                 (StatusCode::NOT_FOUND, "Block not found").into_response()
@@ -961,11 +965,12 @@ async fn quiet_clients_are_pinged_then_closed() {
         ..limits()
     })
     .await;
+    // Before the server opens the socket, so the close can never come sooner than the timeout.
+    let started = Instant::now();
     let mut silent = s.connect().await;
     let mut polite = s.connect().await;
     silent.json().await;
     polite.json().await;
-    let started = Instant::now();
     // Answering every ping keeps a socket open across several idle periods.
     let polite = tokio::spawn(async move {
         let mut pings = 0;
@@ -982,11 +987,11 @@ async fn quiet_clients_are_pinged_then_closed() {
     });
     assert_eq!(silent.recv_raw().await.0, Msg::Ping);
     assert_eq!(silent.close_code().await, (4004, "idle timeout".to_owned()));
+    // Never before the idle timeout. How late is the watchdog's tick plus however long a busy
+    // machine takes to run it, which no bound here can know; the ping before the close shows the
+    // watchdog ran on time.
     let closed_after = started.elapsed();
-    assert!(
-        closed_after >= Duration::from_secs(1) && closed_after < Duration::from_millis(1600),
-        "{closed_after:?}"
-    );
+    assert!(closed_after >= Duration::from_secs(1), "{closed_after:?}");
     assert!(polite.await.unwrap() >= 3);
 }
 
@@ -1623,6 +1628,7 @@ async fn a_client_that_never_reads_but_pings_is_dropped_once_its_writes_stall() 
     });
     let pad = "x".repeat(256 * 1024);
     let started = Instant::now();
+    let served = || s.misses.lock().unwrap().get("served").copied().unwrap_or(0);
     let blocks = chain(s.h[2].block_hash(), 400, 5);
     for (i, header) in blocks.iter().enumerate() {
         if s.sockets.open() == 0 {
@@ -1635,13 +1641,18 @@ async fn a_client_that_never_reads_but_pings_is_dropped_once_its_writes_stall() 
             .lock()
             .unwrap()
             .insert(id.clone(), json!({"id": id, "height": height, "pad": pad}));
+        // Each next tip once the hub has fetched this one, so every block goes out whole. Pushed on
+        // a timer instead, a machine slow enough for the hub to fall behind turned the feed into
+        // small `resync` messages that never filled the buffers.
+        let before = served();
         s.peer.push_tip(height, header).await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        while served() == before && s.sockets.open() > 0 {
+            assert!(started.elapsed() < Duration::from_secs(30), "never dropped");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
-    let took = started.elapsed();
     pinging.abort();
-    eprintln!("dropped after {took:?} of 256 KB blocks every 50 ms");
+    // Dropped, though its pings keep it from ever being idle. How soon depends on how fast the
+    // machine fills the buffers before the write timeout starts, so only the 30 s guard above.
     assert_eq!(s.sockets.open(), 0, "dropped");
-    // Its buffers fill in well under a second; then at most the write timeout, and a margin.
-    assert!(took < Duration::from_secs(timeout_secs + 3), "{took:?}");
 }

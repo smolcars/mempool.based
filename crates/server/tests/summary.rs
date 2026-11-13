@@ -37,6 +37,8 @@ struct Node {
     calls: Mutex<HashMap<String, usize>>,
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
+    /// While a test holds this for writing, `getblock` answers nothing.
+    gate: tokio::sync::RwLock<()>,
 }
 
 impl Node {
@@ -65,6 +67,7 @@ async fn rpc(
     let now = node.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     node.max_in_flight.fetch_max(now, Ordering::SeqCst);
     tokio::time::sleep(node.delay).await;
+    drop(node.gate.read().await);
     node.in_flight.fetch_sub(1, Ordering::SeqCst);
     if hash.starts_with("ff") {
         let e =
@@ -183,7 +186,6 @@ struct Reply {
     status: u16,
     head: String,
     body: Vec<u8>,
-    took: Duration,
 }
 
 impl Reply {
@@ -200,7 +202,6 @@ impl Reply {
 
 /// `GET target` from client `ip`, with the request line exactly as written.
 async fn get(addr: &str, target: &str, ip: &str) -> Reply {
-    let started = Instant::now();
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let req =
         format!("GET {target} HTTP/1.1\r\nHost: t\r\nConnection: close\r\nX-Real-IP: {ip}\r\n\r\n");
@@ -213,7 +214,6 @@ async fn get(addr: &str, target: &str, ip: &str) -> Reply {
         status: head[9..12].parse().unwrap(),
         head,
         body: raw[split + 4..].to_vec(),
-        took: started.elapsed(),
     }
 }
 
@@ -529,61 +529,58 @@ async fn the_cache_is_bounded_and_drops_the_least_recently_used() {
 
 #[tokio::test]
 async fn computations_are_capped_and_a_full_queue_is_refused_at_once() {
-    let delay = Duration::from_millis(200);
-    let (addr, node) = start(delay, 100).await;
+    let (addr, node) = start(Duration::ZERO, 100).await;
+    // The node answers nothing until every refusal is in, so a refusal cannot have waited for
+    // the queue: it came back while every admitted computation was still waiting.
+    let held = node.gate.write().await;
     // 20 clients, each asking for a different uncached block at the same moment.
-    let tasks: Vec<_> = (0..20u32)
-        .map(|i| {
-            let addr = addr.clone();
-            tokio::spawn(async move {
-                get(&addr, &summary(&hash(100 + i)), &format!("198.51.100.{i}")).await
-            })
-        })
-        .collect();
-    let mut ok = Vec::new();
-    let mut busy = Vec::new();
-    for t in tasks {
-        let r = t.await.unwrap();
-        match r.status {
-            200 => ok.push(r),
-            503 => busy.push(r),
-            s => panic!("unexpected {s}: {r:?}"),
-        }
+    let (tx, mut replies) = tokio::sync::mpsc::unbounded_channel();
+    for i in 0..20u32 {
+        let (addr, tx) = (addr.clone(), tx.clone());
+        tokio::spawn(async move {
+            let r = get(&addr, &summary(&hash(100 + i)), &format!("198.51.100.{i}")).await;
+            tx.send(r).unwrap();
+        });
     }
-    assert_eq!(ok.len(), MAX_PENDING, "the queue admits exactly its size");
+    let mut busy = Vec::new();
+    while busy.len() < 20 - MAX_PENDING {
+        let r = replies.recv().await.unwrap();
+        assert_eq!(r.status, 503, "only refusals while the node holds: {r:?}");
+        assert_eq!(r.json()["error"], "server busy");
+        assert_eq!(r.header("retry-after"), Some("1"));
+        assert_eq!(r.header("cache-control"), Some("no-store"));
+        busy.push(r);
+    }
+    drop(held);
+    for _ in 0..MAX_PENDING {
+        let r = replies.recv().await.unwrap();
+        assert_eq!(r.status, 200, "the queue admits exactly its size: {r:?}");
+    }
     assert_eq!(
         node.max_in_flight.load(Ordering::SeqCst),
         1,
         "one getblock at a time"
     );
     assert_eq!(node.total(), MAX_PENDING);
-    for r in &busy {
-        assert!(r.took < delay, "refused without waiting: {:?}", r.took);
-        assert_eq!(r.json()["error"], "server busy");
-        assert_eq!(r.header("retry-after"), Some("1"));
-        assert_eq!(r.header("cache-control"), Some("no-store"));
-    }
     assert_eq!(request_event(&busy[0]).await["refused"], "summary_busy");
-    // Run one after another, the last admitted waited for the five before it.
-    let slowest = ok.iter().map(|r| r.took).max().unwrap();
-    assert!(slowest >= delay * MAX_PENDING as u32, "{slowest:?}");
     // A cold batch larger than the queue is refused at once, but the work it got admitted goes
     // on into the cache, so its retry finds more of it each time and is served in the end.
     let list: Vec<String> = (500..510).map(hash).collect();
     let target = format!("/regtest/app/blocks/summary?hashes={}", list.join(","));
+    let held = node.gate.write().await;
     let first = get(&addr, &target, "198.51.100.200").await;
     assert_eq!(first.status, 503);
-    assert!(first.took < delay);
-    let mut tries = 1;
+    drop(held);
+    // Retried until served: a refused retry still admits what fits, so this ends.
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        tries += 1;
+        tokio::time::sleep(Duration::from_millis(20)).await;
         let r = get(&addr, &target, "198.51.100.200").await;
         if r.status == 200 {
             assert_eq!(r.json().as_array().unwrap().len(), 10);
             break;
         }
-        assert!(tries < 5, "{r:?}");
+        assert!(Instant::now() < deadline, "never served: {r:?}");
     }
     assert_eq!(
         list.iter().map(|h| node.calls(h)).sum::<usize>(),

@@ -6,24 +6,40 @@
 
 A PR that adds a slower step must make room for it or move it out of the PR path (to a scheduled or post-merge job).
 
+**Each job has a limit of its own,** a little above its time on the day it was set, so a job that drifts is named the moment it does, not after thirty merges have each added a little:
+
+| Job | Limit | Warm, 2026-11-13 |
+|---|---|---|
+| `rust` | 135 s | 92 to 121 s |
+| `e2e` | 125 s | 80 to 101 s |
+| `web` | 60 s | 30 to 39 s |
+
+The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
+
+### When a job goes over
+
+Make room in the same pull request; never raise a limit to pass. In order: shrink or delete a test that re-proves something slowly (a random test runs a few steps in the suite and its long form behind `#[ignore]`, with the command beside it); replace a real wait with an event or a paused clock; stop building what no test needs. Read the summary's slowest tests first. Raise a limit only in a pull request that does nothing else and says why the time is worth it.
+
 ## How it stays fast
 
 1. **One workflow, one required check.** `ci.yml` ends in a `ci-ok` job that depends on every other job. Branch protection requires only `ci-ok`, so skipped jobs never block a merge.
 2. **Run only what changed.** A first `changes` job maps changed paths to jobs. A docs-only PR runs nothing but `ci-ok`. On `master`, a push that touches code runs every job, which verifies the merge and refreshes the caches; a docs-only push runs nothing but `changes` and `ci-ok`.
 3. **Jobs run in parallel,** never chained unless one needs another's output.
-4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them. The `rust` and `e2e` jobs each cache the cargo registry and `target/`. `bun install` from the registry is faster than restoring a cache, and so is downloading Playwright's headless Chromium, which `e2e` does while it compiles.
+4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them. The `rust` and `e2e` jobs each cache the cargo registry and `target/`. `rust-cache`'s key leaves out the `[profile]` sections of `Cargo.toml`, so its `key` input names the profile: change it when a profile changes, or every run rebuilds what the profile touches and no run saves it. `bun install` from the registry is faster than restoring a cache, and so is downloading Playwright's headless Chromium, which `e2e` does while it compiles.
 5. **Cancel superseded runs.** A new push to a PR cancels the run in progress.
 6. **No compiling tools in CI.** Tools are installed as prebuilt binaries.
 7. **Slow waits overlap.** The `e2e` job starts the regtest node and the browser download in the background, then compiles while the node mines.
-8. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size.
-9. **Every job has a timeout of 10 minutes.** A hung job fails fast.
+8. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size. One dependency is optimised even there: secp256k1's C library, which at `-O0` made signature checks most of the Lightning tests' time (a test of 1,500 announcements took 6.9 s; optimised, 0.3 s). It builds once into the cache.
+9. **The test binaries run at once.** [cargo-nextest](https://nexte.st) runs every test as its own process, eight at a time on the runner's four cores, since most slow tests wait on a socket or a timer ([`.config/nextest.toml`](../.config/nextest.toml)). `cargo test` ran the 28 test binaries one after another, each waiting for its slowest test. nextest is a prebuilt binary checked against a pinned checksum; it adds nothing to the product or the lockfile. Doc tests, which nextest does not run, run after it with `cargo test --doc`. Examples are not built for the tests: clippy already checks they compile.
+10. **Browser tests use the runner's four cores:** four Playwright workers.
+11. **Every job has a timeout of 10 minutes.** A hung job fails fast; a test past 30 s fails too (nextest's `slow-timeout`).
 
 ## Jobs
 
 | Job | Runs when | Does |
 |---|---|---|
 | `changes` | always | Decides which jobs below run. Pull requests run only the jobs their paths need; a `master` push runs every job when it touches code and none when it touches only docs |
-| `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile or workflow changes | Format check, clippy with warnings denied, tests |
+| `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile, `.config/nextest.toml` or workflow changes | Format check, clippy with warnings denied, tests with nextest, doc tests |
 | `web` | `web/`, the files the frontend imports from `design/` (`tokens.css`, `logo.svg`, `fonts/`) or workflow changes | Type check (both tsconfigs), `oxlint` with type-aware rules and the `oxfmt` format check, unit tests, production build, bundle-size check |
 | `e2e` | anything `rust` or `web` runs for, or `dev/regtest/` | `bun run e2e` ([`FRONTEND.md`](FRONTEND.md#browser-tests)): the server and frontend built from the PR, a regtest node with the known chain, Playwright in headless Chromium |
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
@@ -98,20 +114,26 @@ Most coverage belongs in the first two layers. Integration and end-to-end tests 
 - **Tests never reach the public internet or a shared node.** CI has no access to either.
 - **Tests bind port 0** or take their port from the environment.
 - **A flaky test is a failing test.** Fix it or delete it; do not retry it.
+- **A test never passes or fails on how long something took on the machine that runs it.** CI's runner is shared and slow, and a busy laptop is slower: a bound that held on an idle machine fails there for no fault of the code. Wait for the event the test means (a reply, a log line, a gate the test opens), or run it on tokio's paused clock (`#[tokio::test(start_paused = true)]`), where a timer's spacing is exact. A time budget the code must meet is a benchmark: put it behind `#[ignore]` with the command to run it, and keep a test of the same work's answers, without the clock, in the suite. A lower bound on a real clock (it waited at least the timeout) is fine; an upper bound is a budget.
 - **Browser tests run at the server's production limits** and fail on any refusal, naming the limit and the request ([`FRONTEND.md`](FRONTEND.md#browser-tests)). A test that trips one has found a page that asks for too much, or a test that does; never raise a limit to make it pass.
 - **New logic with a branch, a loop or a parser ships with a test.**
 
 ## Measuring
 
-When a PR changes the workflow, its description states the cold and warm wall-clock time of the run.
+When a PR changes the workflow, its description states the cold and warm wall-clock time of the run, from its creation to the last job's end.
 
-Measured 2026-11-12, from the start of the run to `ci-ok`. Warm reads the caches a `master` push wrote; cold has no `e2e` cache. The `rust` job's cache came from `master` in both.
+**Measured 2026-11-13**, on the pull request that set the limits above, which touches Rust and the frontend, so every job ran. Warm: the caches were an exact hit.
 
-| A PR that touches | Jobs | Warm | Cold |
-|---|---|---|---|
-| Docs only | `changes`, `ci-ok` | 10 s | 10 s (no cache involved) |
-| Rust only | `rust`, `e2e` | 63 s | 50 s |
-| The frontend only | `web`, `e2e`, `image` | 46 s | 58 s |
-| Everything | `rust`, `web`, `e2e`, `image` | 60 s | 67 s |
+| | Before (three PRs that day) | After |
+|---|---|---|
+| Whole run | 180 to 208 s | 106, 138 and 126 s (three runs in a row of one commit) |
+| `rust` | 148 to 191 s | 94 to 121 s |
+| `e2e` | 101 to 113 s | 80 to 101 s |
+| `web` | 30 to 39 s | 30 to 39 s |
+| `image` | 15 to 20 s | 14 to 18 s |
 
-Runs vary by about 10 s, more than the caches save. The table predates the mempool history page; measured again on 2026-11-12, a warm pull request that touched everything took 125 s. `rust` was the longest job at 111 s, then `e2e` at 77 s, `web` at 35 s and `image` at 20 s. Inside `e2e`, `rustup toolchain install` took 8 s and restoring the cargo cache 2 s, then `bun run e2e` took 61 s. Within that, the build was ready at 16 s, the regtest node (pulling its image and building the scenario's chain) at 19 s, and the 67 tests took 40 s on the runner's 2 workers. The node is the critical path before the tests. No browser test waits for the server to record a live minute: the store starts with history in it ([`FRONTEND.md`](FRONTEND.md#adding-a-test)).
+Before, in `rust`, setup took 18 s (checkout, `rustup toolchain install` 8 s, the cache 4 to 8 s), clippy 9 to 12 s, building the tests 41 s, and running them 113 s: `cargo test` ran 28 binaries one after another, the Lightning one alone 37 s, the server's unit tests 16 s, the engine's 15 s, the WebSocket tests 11 s. Signature checks by secp256k1 compiled at `-O0` were a large part: optimising it alone took the tests' summed time from 295 s to 260 s on a laptop. After: setup 18 s, clippy 9 to 13 s, building the tests 26 s (examples no longer built), the tests 36 to 50 s with nextest, doc tests 1 s. The tests together take about 290 s; most of it is waiting on sockets and timers, which eight at a time overlap. The longest single tests, about 10 s each, are a random test of the mempool topics and two hostile-peer tests of the Lightning peer.
+
+In `e2e`, setup takes 16 to 24 s, the build and the regtest node are both ready at 24 to 25 s, then the 103 browser tests took 59 s on two workers before and 43 to 47 s on four after: about 33 s for the tests that share the node, then 12 s for the ones that mine, one at a time.
+
+**Cold** (no cache: a new lockfile, toolchain or `rust-cache` key), `rust` took 165 s and `e2e` 107 to 150 s, so a run that rebuilds its dependencies can pass three minutes. The limits are not enforced on it; the next `master` push saves the cache.
