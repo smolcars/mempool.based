@@ -6,7 +6,7 @@ import { NetworkSwitch } from "./NetworkSwitch";
 describe("NetworkSwitch", () => {
   // In the page, not the browser's top layer: iOS Safari stopped the page above its toolbar while
   // a popover showed. It still closes on a press outside, on Escape and on a choice.
-  it("opens its menu in the page and closes it on a press outside, Escape or a choice", () => {
+  it("opens its menu in the page and closes it on a press outside (doing nothing else), Escape or a choice", () => {
     const el = mount(() => <NetworkSwitch networks={() => ["mainnet", "signet"]} />, "/blocks");
     const button = el.querySelector<HTMLButtonElement>(".network__button");
     const menu = el.querySelector<HTMLElement>(".network__menu");
@@ -22,10 +22,22 @@ describe("NetworkSwitch", () => {
     expect(menu.querySelector('a[data-network="signet"]')?.getAttribute("href")).toBe(
       "/signet/blocks",
     );
-    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    // A tap outside only closes it: what is under the finger does nothing (Safari followed a link).
+    const under = document.createElement("button");
+    let clicks = 0;
+    under.addEventListener("click", () => (clicks += 1));
+    document.body.append(under);
+    const tap = () => {
+      under.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      under.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return clicks;
+    };
+    expect(tap()).toBe(0);
     flush();
     expect(menu.hidden).toBe(true);
     expect(button.getAttribute("aria-expanded")).toBe("false");
+    // With the menu closed, the next tap goes where it lands.
+    expect(tap()).toBe(1);
     open();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     flush();

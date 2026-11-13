@@ -29,6 +29,7 @@ export function NetworkSwitch(props: { networks: Accessor<readonly Network[] | u
         setOpen(false);
       },
       () => [button, menu],
+      { absorb: true },
     );
   };
   // While the list is loading, offer the current network only, in the button's final shape.
