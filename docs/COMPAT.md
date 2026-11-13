@@ -35,13 +35,13 @@ One table per group, each on its own page:
 
 | Group | Page | Rows | served | planned | different | skipped | Confirmed live |
 |---|---|---|---|---|---|---|---|
-| Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 2 | 0 | 10 | 48 |
-| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 52 | 5 | 2 | 14 | 72 |
+| Esplora REST (`/api`) | [`compat/esplora.md`](compat/esplora.md) | 56 | 44 | 0 | 0 | 12 | 48 |
+| mempool.space REST (`/api/v1`) | [`compat/api-v1.md`](compat/api-v1.md) | 73 | 52 | 4 | 2 | 15 | 72 |
 | WebSocket | [`compat/websocket.md`](compat/websocket.md) | 48 | 21 | 1 | 4 | 22 | 43 |
-| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 33 | 11 | 5 | 6 | 31 |
-| **Total** | | **232** | **150** | **19** | **11** | **52** | **194** |
+| Pages and visible features | [`compat/pages.md`](compat/pages.md) | 55 | 33 | 9 | 5 | 8 | 31 |
+| **Total** | | **232** | **150** | **14** | **11** | **57** | **194** |
 
-Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), the Lightning node's fee histogram and history when they were (task G3), the three mining rows of the pages when they were (task G2), and the two replacements rows of the pages when they were (task G4): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
+Every row's status was checked against `master` on 2026-11-12 (task C1), and the rows of `vBytesPerSecond`, `live-2h-chart` and `backend-info` again when they were built (task G1), the Lightning node's fee histogram and history when they were (task G3), the three mining rows of the pages when they were (task G2), the two replacements rows of the pages when they were (task G4), and the five rows of broadcast, test-accept and package submission when the owner decided on them (2026-11-13): routes by request to a server on regtest and, read-only, on mainnet, signet and testnet4; pages by loading them in headless Chromium on each network. A page is `served` only when it shows everything its row names; a part it lacks has a row of its own.
 
 Each row gives the feature, what it returns, where our answer comes from (an rbitcoin Esplora route or RPC method, our engine, our store, or Lightning), its status, its milestone from [`PLAN.md`](PLAN.md) and how it was checked.
 
@@ -59,7 +59,7 @@ All requests were read-only and sequential. Three `/api/v1` rows (`POST /v1/cpfp
 
 ## What is left
 
-Every `planned` row, as of the count above. "Needs" is what we do not have yet; "nothing" means the data is already served and only the page or message is missing. Sizes are rough: an hour, a day, several days. Rows marked `different` are settled and not listed.
+Every `planned` row, as of the count above, and the rows the owner has decided. "Needs" is what we do not have yet; "nothing" means the data is already served and only the page or message is missing. Sizes are rough: an hour, a day, several days. Rows marked `different` are settled and not listed.
 
 ### Pages
 
@@ -69,7 +69,7 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 | Units | BTC or sats | Nothing: one setting read by the amount component | A day | Build later |
 | Clock `/clock` | Full-screen tip height, fee and mempool size | Nothing, without the price | A few hours | Build later; leave the price out |
 | TV `/tv` | Full-screen block strip and mempool chart | Nothing | A day | Skip: the home page in full screen is the same view |
-| Preview `/tx/preview` | Decodes a pasted transaction or PSBT | A transaction and PSBT parser in the browser, for untrusted input | Several days | Build later, after the broadcast decision |
+| Preview `/tx/preview` | Decodes a pasted transaction or PSBT | A transaction and PSBT parser in the browser, for untrusted input | Several days | An idea for later: with no broadcast page (the owner's decision), nothing is scheduled |
 | Mempool goggles | Filters the block drawing by transaction kind | Per-transaction flags (script types, signalling, CPFP, …) computed in the engine and carried to the grid | Several days | Build later, with the same flags for `/v1/block/:hash/summary` |
 
 ### REST routes
@@ -79,14 +79,14 @@ Every `planned` row, as of the count above. "Needs" is what we do not have yet; 
 | `POST /api/v1/cpfp` | CPFP data for several transactions | Nothing: the engine answers `/v1/cpfp/:txid` | An hour | Skip until a client asks: the reference's request shape is unconfirmed, and one request per transaction already works |
 | `POST /api/v1/psbt/addparents` | A PSBT with its parents filled in | A PSBT parser on the server for untrusted input, and a node read per input | Several days | Skip: a wallet tool, not explorer data, with a large untrusted-input surface |
 
-### Waiting on the owner
+### Decided by the owner
 
 | Item | Rows | Decision |
 |---|---|---|
-| Fiat prices | `/v1/prices`, `/v1/historical-price`, `conversions`, fiat currency choice, the calculator, block fees in fiat | Parked: a price feed is a new outside source with its own trust and off switch |
-| Broadcast page `/tx/push` | Pages: broadcast | `POST /api/tx` is served under its rules ([`SECURITY.md`](SECURITY.md) rule 5); a page for it is a product decision. Recommend building it once decided: a day |
-| Package submission | `POST /api/txs/package`, `POST /api/v1/txs/package`, packages on `/tx/push` | A second write path, with its own caps. Recommend skipping until a wallet needs it |
-| Test-accept | `POST /api/txs/test`, `/tx/test` | Not a broadcast, but every call makes the node validate up to 25 transactions. Recommend skipping: `/tx/preview` covers looking at a transaction |
+| Fiat prices | `/v1/prices`, `/v1/historical-price`, `conversions`, fiat currency choice, the calculator, block fees in fiat | Parked: a price feed is a new outside source with its own trust and off switch. The rows stay `planned` |
+| Broadcast page `/tx/push` | Pages: broadcast | No broadcast page for now (2026-11-13). `POST /api/tx` stays served under its rules ([`SECURITY.md`](SECURITY.md) rule 5). Skipped |
+| Package submission | `POST /api/txs/package`, `POST /api/v1/txs/package`, packages on `/tx/push` | Not served, with no broadcast page to use it (2026-11-13). Skipped |
+| Test-accept | `POST /api/txs/test`, `/tx/test` | Not served, for the same reason (2026-11-13). Skipped |
 
 ## Reference backend against rbitcoin's Esplora
 

@@ -218,7 +218,7 @@ Relative time ("13 min ago", "1 day 23 h ago", "9 days ago": days lead from a da
 Rules:
 
 1. **Move with `transform`, fade with `opacity`.** Never animate width, height, top or left. Bars that change size are positioned with `translateX` and sized with `scaleX` (see the difficulty bar and the tile gauge).
-2. **Read durations from the tokens** in JavaScript too (`getComputedStyle(...).getPropertyValue("--dur-slow")`), so reduced motion applies everywhere.
+2. **Read durations from the tokens** in JavaScript too (`getComputedStyle(...).getPropertyValue("--dur-slow")`), so reduced motion applies everywhere. The build's minifier rewrites them in seconds (`520ms` becomes `.52s`), so read both units (`toMs` in `pages/home/motion.ts`).
 3. **Leaders move first.** When a row of things shifts, stagger from the one at the front of the movement so nothing overlaps.
 4. **One moment per event.** A new block is one sequence. Live rows get a background flash, not a slide.
 5. **Reduced motion:** all durations except `--dur-fade` become 0. Nothing translates or scales. Content still updates, and short opacity fades remain. Ambient loops (the live dot) are opacity only.
@@ -292,7 +292,7 @@ Decided while building it (`/block/next`, `/block/next/:n`), where the rest of t
 Decided while building it, where the rest of this document left it open. The page is where people land from a wallet, often worried, so it says exactly what the server knows and no more.
 
 - **Five words for where it is.** Unconfirmed (in the mempool), Confirmed, Replaced (another transaction spending the same coins took its place), Dropped (it left without being mined, for a reason the node does not report) and Removed (the node no longer has it and nothing says why). The timeline's middle step carries the same word with its detail; a replaced version's last step is "Will not confirm", struck through.
-- **Where it waits** sits above the fee, beside the flow, so the answer is in the first screen. The projected blocks are a row of dashed slots running to a dashed "now" line, the next block nearest it, the last one "8+". The transaction is one square in the fee colour of the group it will be mined with. Under it, in words: "In the next block" (linked to that block's page), "In about 3 blocks", or "In more than 7 blocks"; how much would be mined before it; and what that means in time. A block is on average ten minutes away whenever one looks, and about one in seven takes more than twenty (an exponential wait), so the next block is said that way; later blocks get a rough figure ("~30 min") at the usual pace, with the condition that nothing paying more arrives; regtest says it has no schedule. A last, muted line says this is a projection, not a promise.
+- **Where it waits** sits above the fee, under the flow and beside the details. The projected blocks are a row of dashed slots running to a dashed "now" line, the next block nearest it, the last one "8+". The transaction is one square in the fee colour of the group it will be mined with. Under it, in words: "In the next block" (linked to that block's page), "In about 3 blocks", or "In more than 7 blocks"; how much would be mined before it; and what that means in time. A block is on average ten minutes away whenever one looks, and about one in seven takes more than twenty (an exponential wait), so the next block is said that way; later blocks get a rough figure ("~30 min") at the usual pace, with the condition that nothing paying more arrives; regtest says it has no schedule. A last, muted line says this is a projection, not a promise.
 - **Alive without twitching.** The square travels only when its block changes (`--dur-slow`, `--ease-in-out`); what is ahead of it changes in place. Nothing is announced for a position that only moves: only entering or leaving the next block, and every change of state, once, in a polite live region.
 - **The position bar of the prototype is not used.** The projection says which block a transaction is in, not a percentile of one, and the lane says that directly.
 - **Mined with.** When the rate it will be mined at prints differently from its own, an "Effective fee rate" fact joins the fee list, and under it the group: its members in mining order (this transaction, its child, its parent), each with its own rate and a link, eight at a time with a "Show all" button (this transaction always among them), one sentence saying who lifts whom ("On its own it pays 1.00 sat/vB, but its child pays enough to lift the group to 12.5 sat/vB as a whole") and one explaining why miners take such a group whole, naming child pays for parent last.
@@ -362,7 +362,7 @@ Wide screens: the fee answer and the difficulty stacked beside the mempool, abou
 ### Block
 
 ```text
-‹ Previous: 975 410                                   Next: 975 412 ›
+← Previous: 975 410                                   Next: 975 412 →
 Block 975 411
 00000000 00000000 0004f2c1 …  [copy]
 ┌ facts ──────────────────────┐  ┌ map ───────────────────────────┐
@@ -375,7 +375,7 @@ Block 975 411
 │ Size, confirmations, tag,   │
 │ header fields               │
 └─────────────────────────────┘
-Audit, then Transactions
+Audit, then Transactions (in block order, the coinbase first)
 ```
 
 The facts come first in reading order; on a phone the map follows them, then the details.
@@ -389,24 +389,33 @@ Transaction  (✓ Confirmed)
 └──────────────────────────────────────────────────────────────────┘
 [notice: this version was replaced → replacement txid]   (replaced only)
 ① Broadcast  ② Confirmed  ③ Six confirmations 3 of 6     (one line once confirmed)
-┌ Inputs and outputs (3/5) ─────────────────┐ ┌ Fee (2/5) ───────────┐
-│ [input]  ═══╗          ╔═══ [output]      │ │ Fee rate, fee, vsize │
-│ [input]  ═══╣ ┃trunk┃  ╠═══ [output]      │ │ chunk fee rate       │
-│             ╚══════════╚~~~ [fee]         │ │                      │
-└───────────────────────────────────────────┘ └──────────────────────┘
+┌ Inputs and outputs ──────────────────────────────────────────────┐
+│ [input]  ═══╗                    ╔═══ [output]                   │
+│ [input]  ═══╣      ┃trunk┃       ╠═══ [output]                   │
+│             ╚════════════════════╚~~~ [fee]                      │
+└──────────────────────────────────────────────────────────────────┘
+┌ Where it waits (unconfirmed) ┐ ┌ Details ──────────────────────────┐
+│ Fee: rate, effective rate,   │ │ Version, witness, lock time,      │
+│ fee, vsize, weight, size     │ │ raw transaction                   │
+└──────────────────────────────┘ └───────────────────────────────────┘
 ```
 
-While unconfirmed, the full timeline stays, with where it waits beside the fee. Long input or output lists collapse after ten; each "Show more" adds a hundred, and the hidden rest travels as one ribbon, so a transaction with thousands of outputs never renders them all at once.
+The flow takes the page's width, so an address fits its box on one line; the fee and the details share the row under it. While unconfirmed, the full timeline stays, with where it waits above the fee. Long input or output lists collapse after ten; each "Show more" adds a hundred, and the hidden rest travels as one ribbon, so a transaction with thousands of outputs never renders them all at once.
 
 ### Address (not in the prototype)
 
 ```text
-Address
-bc1qxy2k gdygjrsq tzq2n0yr f2493p83 kkfjhx0w lh   [copy]  [QR]
-Balance (big)   Received   Sent   Transactions   Unconfirmed
-[balance-over-time line chart]
-Transactions ═════════════════════════════════════════════════════
-time  txid  this address +/-  (positive or text color)  fee rate  status
+Address  (P2WPKH)
+bc1qxy2k gdygjrsq tzq2n0yr f2493p83 kkfjhx0w lh   [copy]
+● Live
+┌ Balance (big), Confirmed ──────────────────────────────────────┐
+│ Received     Sent     Transactions     Unconfirmed             │
+└────────────────────────────────────────────────────────────────┘
+┌ Balance over time ─────────────────────── n confirmed transactions ┐
+│ [line chart]                                     Show the figures │
+└───────────────────────────────────────────────────────────────────┘
+[Transactions] [Unspent outputs] ══════════════════════════ 4 of 4
+time (or Unconfirmed)   txid   this address +/-   fee rate
 ```
 
 Incoming amounts are `+`, outgoing `−`, both in the text colour: the sign carries the direction. The live line sits below the address, never over it.

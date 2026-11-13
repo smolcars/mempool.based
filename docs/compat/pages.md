@@ -28,8 +28,8 @@ Paths are mempool.space's; ours are under the network prefixes in [`ARCHITECTURE
 
 | Page | Does | Source | Status | M | Live | Note |
 |---|---|---|---|---|---|---|
-| Broadcast `/tx/push` | Broadcasts a transaction or a package, with max fee rate and burn limits | rbitcoin `POST /tx`, `POST /txs/package` | planned | M5 | ref | Not built. `POST /api/tx` is served; packages are not. Waits on the owner (a page that writes) |
-| Test `/tx/test` | Test-accepts transactions without broadcasting | rbitcoin `POST /txs/test` | planned | M5 | ref | Not built, and the route is not served. Waits on the owner |
+| Broadcast `/tx/push` | Broadcasts a transaction or a package, with max fee rate and burn limits | rbitcoin `POST /tx`, `POST /txs/package` | skipped | — | ref | Not built: the owner decided on 2026-11-13 against a broadcast page for now. `POST /api/tx` is served; packages are not |
+| Test `/tx/test` | Test-accepts transactions without broadcasting | rbitcoin `POST /txs/test` | skipped | — | ref | Not built, and the route is not served: with no broadcast page (the owner's decision of 2026-11-13), test-accept stays unserved too |
 | Preview `/tx/preview` | Decodes a pasted transaction or PSBT and shows it as a tx page | Our decoder; prevouts from Esplora | planned | M5 | ref | Not built |
 
 ## Mining
