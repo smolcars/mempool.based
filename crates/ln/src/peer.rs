@@ -37,8 +37,9 @@ type Pm = PeerManager<
     IgnoringMessageHandler,
 >;
 
-/// LDK's recommended period for `timer_tick_occurred`: pings and stale-peer checks.
-const TIMER_TICK: Duration = Duration::from_secs(10);
+/// LDK's recommended period for `timer_tick_occurred`: pings and stale-peer checks. A peer that
+/// has not completed the handshake by the second tick is dropped. Tests tick faster.
+const TIMER_TICK: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 10 });
 /// LDK's staleness horizon: channels without an update this old are pruned.
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
 /// A saved graph younger than this is shown at once after a restart.
@@ -47,6 +48,10 @@ const FRESH_ON_DISK: Duration = Duration::from_secs(13 * 24 * 3600);
 /// window for peers it does not fully sync. A day would be most of the graph again, as nodes
 /// refresh their channel updates about daily.
 const RESUME_MARGIN_SECS: u64 = 3600;
+/// The channel-range sync holds back [`Status::synced`] for at most this long after the first
+/// peer connected: a peer whose channel list never ends, or that never sends what it listed,
+/// cannot hold it for ever. Mainnet's first sync took four minutes. Tests wait less.
+const RANGE_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 600 });
 /// A connection that lasted this long resets the peer's failure count.
 const STABLE: Duration = Duration::from_secs(60);
 
@@ -206,6 +211,11 @@ impl Peer {
         self.shared.pace.run(request).await
     }
 
+    #[cfg(test)]
+    pub(crate) fn gossip(&self) -> &Arc<Gossip> {
+        &self.shared.gossip
+    }
+
     /// This peer's identity. It has no channels and is never announced.
     pub fn node_id(&self) -> PublicKey {
         self.shared.node_id
@@ -315,7 +325,7 @@ fn dial(
     })
 }
 
-fn totals(g: &Gossip) -> Totals {
+pub(crate) fn totals(g: &Gossip) -> Totals {
     let c = &g.counters;
     let get = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed);
     Totals {
@@ -333,7 +343,8 @@ fn totals(g: &Gossip) -> Totals {
     }
 }
 
-fn validation(g: &Gossip, verified: usize) -> Validation {
+/// `answered`: every lookup waiting at the last check has been answered since.
+fn validation(g: &Gossip, verified: usize, answered: bool) -> Validation {
     let l = g.lookup.snapshot();
     let unchecked = g.replay_left();
     Validation {
@@ -342,7 +353,7 @@ fn validation(g: &Gossip, verified: usize) -> Validation {
         pending: l.pending,
         early: l.early,
         rejected: l.rejected,
-        caught_up: !g.replaying() && l.pending == 0,
+        caught_up: !g.replaying() && answered,
         node_failures: l.failures,
         requests: l.requests,
         outputs: l.outputs,
@@ -490,6 +501,8 @@ async fn supervise(
     let mut saved_changes = 0;
     let mut synced = false;
     let mut first_up: Option<Instant> = None;
+    // Lookups waiting before this moment must be answered for validation to be caught up.
+    let mut mark = Instant::now();
 
     loop {
         tokio::select! {
@@ -550,12 +563,17 @@ async fn supervise(
                     let ro = shared.gossip.graph().read_only();
                     (ro.nodes().len(), ro.channels().len())
                 };
-                let validation = validation(&shared.gossip, channels);
+                let answered = shared.gossip.lookup.answered_before(mark);
+                if answered {
+                    mark = now;
+                }
+                let validation = validation(&shared.gossip, channels, answered);
                 let up = slots.iter().filter(|s| matches!(s.state, State::Up(_))).count();
 
                 let settled = |t: Instant| now.duration_since(t) >= config.sync_settle;
                 let quiet = shared.gossip.last_new_channel.lock().map(|t| settled(*t)).unwrap_or(false);
-                let drained = shared.gossip.range_pending() == 0;
+                let drained = shared.gossip.range_pending() == 0
+                    || first_up.is_some_and(|t| now.duration_since(t) >= RANGE_WAIT);
                 let caught_up = up > 0 && channels > 0 && first_up.is_some_and(settled) && quiet && drained
                     && validation.caught_up;
                 if caught_up {

@@ -722,7 +722,11 @@ pub(crate) fn context_with(
     config.ws.position_interval = Duration::from_millis(200);
     tweak(&mut config);
     let sockets = Sockets::new(&config.ws, Duration::from_secs(1));
-    Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap())
+    Arc::new(
+        NetworkContext::new(&config.networks[0], &config, &sockets)
+            .unwrap()
+            .with_open_store(),
+    )
 }
 
 impl Server {

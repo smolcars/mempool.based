@@ -55,6 +55,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 pub use config::{Config, Limits, Network, NetworkConfig, WsLimits};
 pub use error::ApiError;
 use limits::Limiter;
+pub use serve::bind;
 
 /// Sent on every response. The CSP is SECURITY.md rule 15.
 pub const SECURITY_HEADERS: [(HeaderName, &str); 4] = [
@@ -139,6 +140,15 @@ impl std::fmt::Debug for NetworkContext {
 }
 
 impl NetworkContext {
+    /// For tests with no node to confirm the chain: the store takes writes at once.
+    #[cfg(test)]
+    pub(crate) fn with_open_store(self) -> Self {
+        if let Some(t) = &self.blocks {
+            t.store.set_gate(engine::store::Gate::Open);
+        }
+        self
+    }
+
     /// Starts the network's Electrum client, so it must run inside a tokio runtime.
     fn new(config: &NetworkConfig, all: &Config, sockets: &Arc<ws::Sockets>) -> Option<Self> {
         let url = match &config.esplora {

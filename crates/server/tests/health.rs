@@ -207,3 +207,68 @@ async fn liveness_ignores_the_node_and_readiness_does_not() {
         (200, r#"{"networks":{},"status":"ready"}"#)
     );
 }
+
+/// The server with regtest on the mock RPC and a store in `dir`, and that store.
+async fn start_stored(rpc_port: u16, dir: &std::path::Path) -> (String, Arc<engine::store::Store>) {
+    capture();
+    let vars: HashMap<&str, String> = [
+        ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
+        ("REGTEST_RPC_PORT", rpc_port.to_string()),
+        ("REGTEST_RPC_USER", "u".to_owned()),
+        ("REGTEST_RPC_PASSWORD", "p".to_owned()),
+        ("REGTEST_ESPLORA_URL", "http://127.0.0.1:1".to_owned()),
+        ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1".to_owned()),
+        ("DATA_DIR", dir.display().to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
+    config.web_dir = std::env::temp_dir().join("rbitcoin-space-no-web-dir");
+    let app = App::new(&config);
+    let store = app
+        .network(rbitcoin_space::Network::Regtest)
+        .and_then(|n| Some(Arc::clone(&n.blocks.as_ref()?.store)))
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(app.serve(listener, std::future::pending()));
+    (addr, store)
+}
+
+async fn store_state(addr: &str) -> Value {
+    let (_, body) = get(addr, "/readyz").await;
+    let ready: Value = serde_json::from_str(&body).unwrap();
+    ready["networks"]["regtest"]["store"].clone()
+}
+
+#[tokio::test]
+async fn a_node_on_another_chain_gets_nothing_written_and_the_right_one_does() {
+    // Every writer is started, against a node that says it is on mainnet.
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-health-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = rpc(Arc::new(AtomicBool::new(false)), "main").await;
+    let (addr, store) = start_stored(port, &dir).await;
+    logged(|v| v["event"] == "rpc_wrong_network").await;
+    assert_eq!(store_state(&addr).await, "waiting");
+    // A write, as any writer makes one, waits instead of landing; none has committed.
+    let write = store.write(|_| Ok(()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), write)
+            .await
+            .is_err()
+    );
+    assert!(store.write_health().last_ok.is_none());
+
+    // A regtest node: the writers get in.
+    let port = rpc(Arc::new(AtomicBool::new(false)), "regtest").await;
+    drop(store);
+    let other = dir.join("again");
+    let (addr, store) = start_stored(port, &other).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while store_state(&addr).await != "ok" {
+        assert!(Instant::now() < deadline, "never ok");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    store.write(|_| Ok(())).await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

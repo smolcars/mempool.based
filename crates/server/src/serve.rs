@@ -17,7 +17,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Sleep;
 use tower::ServiceExt;
@@ -63,6 +63,24 @@ impl Early {
     }
 }
 
+/// The listen queue asked for. The kernel cuts it to the host's own cap (`net.core.somaxconn` on
+/// Linux, `kern.ipc.somaxconn` on macOS), so that setting decides; tokio's `bind` asks for 128.
+const BACKLOG: u32 = 65_535;
+
+/// Binds `addr` with the longest listen queue the host allows, so a burst of connections, such as
+/// every open page reconnecting after a restart, waits in the queue instead of being dropped.
+pub fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
+    let socket = if addr.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }?;
+    // As std and tokio's `bind` do on Unix: a restart can bind while old connections linger.
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
+}
+
 /// Largest request head (request line and headers) a client may send.
 const MAX_HEAD_BYTES: usize = 16 * 1024;
 
@@ -79,11 +97,11 @@ pub async fn serve(
     let open = Arc::new(Semaphore::new(limits.max_connections));
     let (stop, stopped) = watch::channel(());
     let mut shutdown = pin!(shutdown);
-    let mut refused = 0u64;
+    let (mut refused, mut failed) = (0u64, 0u64);
     loop {
         let accepted = tokio::select! {
             () = &mut shutdown => break,
-            accepted = accept(&listener, &open) => accepted,
+            accepted = accept(&listener, &open, &mut failed) => accepted,
         };
         let Some((stream, peer, permit)) = accepted else {
             continue;
@@ -145,15 +163,23 @@ pub async fn serve(
     let _ = tokio::time::timeout(limits.request_timeout, open.acquire_many(all)).await;
 }
 
-/// Waits for a free connection slot, then for a connection.
+/// Waits for a free connection slot, then for a connection. `failed` counts failed accepts.
 async fn accept(
     listener: &TcpListener,
     open: &Arc<Semaphore>,
+    failed: &mut u64,
 ) -> Option<(TcpStream, SocketAddr, OwnedSemaphorePermit)> {
     let permit = Arc::clone(open).acquire_owned().await.ok()?;
     match listener.accept().await {
         Ok((stream, peer)) => Some((stream, peer, permit)),
-        Err(_) => {
+        Err(e) => {
+            *failed += 1;
+            if failed.is_power_of_two() {
+                logging::emit(&logging::events::AcceptFailed {
+                    error: e.to_string(),
+                    total: *failed,
+                });
+            }
             // Usually out of file descriptors: back off instead of spinning on the error.
             tokio::time::sleep(Duration::from_millis(50)).await;
             None
@@ -239,5 +265,33 @@ impl AsyncWrite for WriteDeadline {
         let this = self.get_mut();
         let poll = Pin::new(&mut this.io).poll_shutdown(cx);
         this.watch(cx, poll)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// More clients than tokio's default queue of 128 connect while nothing accepts: each
+    /// handshake completes in the queue. With a queue of 128 the 130th is dropped and retried a
+    /// second later.
+    #[tokio::test]
+    async fn a_burst_waits_in_the_listen_queue() {
+        let cap: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let listener = bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut held = Vec::new();
+        for i in 0..cap.min(512) {
+            let connect =
+                tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr)).await;
+            assert!(connect.is_ok(), "connection {i} was dropped");
+            held.push(connect.unwrap().unwrap());
+        }
     }
 }

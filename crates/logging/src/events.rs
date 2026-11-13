@@ -184,6 +184,15 @@ pub struct ConnectionsRefused {
 }
 event!(ConnectionsRefused, "connections_refused", Warn);
 
+/// Accepting a connection failed, usually because the process is out of file descriptors: new
+/// clients wait in the listen queue until one closes. Written at a total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct AcceptFailed {
+    pub error: String,
+    pub total: u64,
+}
+event!(AcceptFailed, "accept_failed", Warn);
+
 /// Requests that named a client address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded` but came
 /// from a peer outside `TRUSTED_PROXIES`, so the header was ignored and the peer counted as the
 /// client: a proxy in front that is not trusted puts every visitor in one allowance. Written at a
@@ -624,6 +633,29 @@ pub struct StoreOpenFailed {
     pub error: String,
 }
 event!(StoreOpenFailed, "store_open_failed", Error);
+
+/// A store from before files recorded their chain holds a block row the node does not have at
+/// that height: it was written for another chain. Its writes are refused until the server is
+/// restarted with the file moved aside.
+#[derive(Debug, Serialize)]
+pub struct StoreWrongChain {
+    pub network: &'static str,
+    /// The height of the row that is not on the node's chain.
+    pub height: u32,
+}
+event!(StoreWrongChain, "store_wrong_chain", Error);
+
+/// A store from before files recorded their chain has no block row deep enough in the node's
+/// chain to check, so its writes wait. Written once; checked again at each RPC check.
+#[derive(Debug, Serialize)]
+pub struct StoreChainUnverified {
+    pub network: &'static str,
+    /// The file's lowest block row.
+    pub height: u32,
+    /// The node's tip.
+    pub node_height: u32,
+}
+event!(StoreChainUnverified, "store_chain_unverified", Warn);
 
 /// A schema migration was applied while opening the file.
 #[derive(Debug, Serialize)]
@@ -1607,6 +1639,10 @@ mod tests {
                 node_chain: "main",
             }),
             both(&ConnectionsRefused { total: 8 }),
+            both(&AcceptFailed {
+                error: "Too many open files (os error 24)".into(),
+                total: 2,
+            }),
             both(&ProxyHeaderIgnored {
                 header: "x-real-ip",
                 peer: Some("172.18.0.1".into()),
@@ -1717,6 +1753,15 @@ mod tests {
             both(&StoreOpenFailed {
                 network: n,
                 error: "data/signet.sqlite is corrupt".into(),
+            }),
+            both(&StoreWrongChain {
+                network: n,
+                height: 0,
+            }),
+            both(&StoreChainUnverified {
+                network: n,
+                height: 900_000,
+                node_height: 1_000,
             }),
             both(&StoreMigrationApplied {
                 network: n,

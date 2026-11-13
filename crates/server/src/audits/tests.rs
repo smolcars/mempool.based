@@ -60,7 +60,11 @@ impl Setup {
         .collect();
         let config = Config::from_vars(|k| vars.get(k).map(|v| (*v).to_owned())).unwrap();
         let sockets = Sockets::new(&config.ws, Duration::from_secs(1));
-        let ctx = Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap());
+        let ctx = Arc::new(
+            NetworkContext::new(&config.networks[0], &config, &sockets)
+                .unwrap()
+                .with_open_store(),
+        );
         let (tracker, t1) = Tracker::start(
             mock.clone(),
             mempool::Config {

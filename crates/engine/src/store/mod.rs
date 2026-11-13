@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::{Connection, ErrorCode, OpenFlags, TransactionBehavior};
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 pub use migrate::MigrationError;
 pub use rusqlite::{Error as SqlError, OptionalExtension, Row, Statement, params};
@@ -94,6 +94,8 @@ pub enum Read {
     MempoolHistory,
     Replacements,
     Lightning,
+    /// The rows that show which chain a file from before `chain` was written for.
+    Chain,
 }
 
 impl Read {
@@ -108,6 +110,7 @@ impl Read {
             Self::MempoolHistory => "mempool_history",
             Self::Replacements => "replacements",
             Self::Lightning => "lightning",
+            Self::Chain => "chain",
         }
     }
 }
@@ -174,6 +177,10 @@ pub struct Options {
     pub read_time_limit: Duration,
     /// Called with each [`Event`], from whichever thread saw it. Keep it quick.
     pub observer: Observer,
+    /// The genesis hash of the chain the file is for, in internal order. When set, opening a
+    /// file written for another chain fails with [`OpenError::WrongChain`], and writes wait for
+    /// [`Store::set_gate`] to open. When unset, nothing is checked and writes go through.
+    pub genesis: Option<[u8; 32]>,
 }
 
 impl Default for Options {
@@ -183,6 +190,7 @@ impl Default for Options {
             queue: 64,
             read_time_limit: Duration::from_secs(2),
             observer: Arc::new(|_| {}),
+            genesis: None,
         }
     }
 }
@@ -210,6 +218,9 @@ pub enum OpenError {
     },
     /// The filesystem would not give us WAL mode (some network filesystems).
     NoWal(String),
+    /// The file was written for another chain, whose genesis hash is `genesis` (internal
+    /// order). Nothing is changed: move the file aside, or point at the right network's files.
+    WrongChain { path: PathBuf, genesis: Vec<u8> },
     /// The writer thread could not be started.
     Thread(std::io::Error),
     /// Any other SQLite error.
@@ -235,6 +246,14 @@ impl fmt::Display for OpenError {
             Self::BadMigrations(e) => write!(f, "bad migrations: {e}"),
             Self::Migration { name, source } => write!(f, "migration {name} failed: {source}"),
             Self::NoWal(mode) => write!(f, "could not enable WAL mode (got {mode:?})"),
+            Self::WrongChain { path, genesis } => {
+                let hex: String = genesis.iter().rev().map(|b| format!("{b:02x}")).collect();
+                write!(
+                    f,
+                    "{} was written for another chain (genesis {hex}); nothing was changed: move it out of the data directory, or point the server at that chain",
+                    path.display()
+                )
+            }
             Self::Thread(e) => write!(f, "could not start the writer thread: {e}"),
             Self::Sql(e) => write!(f, "sqlite: {e}"),
         }
@@ -261,6 +280,9 @@ pub enum Error {
     TimedOut,
     /// The closure panicked. A write was rolled back.
     Panicked,
+    /// The write was refused by the gate ([`Store::set_gate`]): the node was found on another
+    /// chain while it waited, or the file belongs to another chain. Nothing was written.
+    Held,
 }
 
 impl fmt::Display for Error {
@@ -271,6 +293,7 @@ impl fmt::Display for Error {
             Self::Closed => f.write_str("store is closed"),
             Self::TimedOut => f.write_str("store read timed out"),
             Self::Panicked => f.write_str("store closure panicked"),
+            Self::Held => f.write_str("store writes are held: the node's chain is not confirmed"),
         }
     }
 }
@@ -322,9 +345,27 @@ enum Wrote {
     Other,
 }
 
+/// Whether writes may commit. The server sets it from its checks of the node, so that nothing
+/// from another chain is written into a file named for this one (docs/STORE.md, "chain").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// The node is not confirmed yet. Writes wait, and commit once the gate opens.
+    Waiting,
+    Open,
+    /// The node was found on another chain. Writes wait; once the gate opens again, those that
+    /// were waiting fail with [`Error::Held`], since they carry what was read meanwhile.
+    Held,
+    /// For as long as the process runs: the file belongs to another chain. Every write fails.
+    Refused,
+}
+
 /// One network's SQLite file. Share it behind an `Arc`.
 pub struct Store {
     queue: mpsc::Sender<Job>,
+    /// The [`Gate`], and its [`Store::generation`].
+    gate: watch::Sender<(Gate, u64)>,
+    /// Block rows from before the file recorded its chain: see [`Store::unstamped`].
+    unstamped: AtomicBool,
     health: Arc<Mutex<WriteHealth>>,
     writer: JoinHandle<()>,
     readers: Arc<Readers>,
@@ -445,6 +486,39 @@ impl Store {
             },
         )?;
         versions.settle();
+        let mut unstamped = false;
+        if let Some(genesis) = options.genesis {
+            let found: Option<Vec<u8>> = conn
+                .query_row("SELECT genesis FROM chain", [], |r| r.get(0))
+                .optional()?;
+            match found {
+                Some(found) if found != genesis => {
+                    return Err(OpenError::WrongChain {
+                        path,
+                        genesis: found,
+                    });
+                }
+                Some(_) => {}
+                // Rows from before the file recorded its chain are checked against the node
+                // before it is recorded; an empty file has nothing to check.
+                None if conn
+                    .query_row("SELECT EXISTS (SELECT 1 FROM blocks)", [], |r| r.get(0))? =>
+                {
+                    unstamped = true;
+                }
+                None => {
+                    conn.execute(
+                        "INSERT INTO chain (id, genesis) VALUES (0, ?1)",
+                        [&genesis[..]],
+                    )?;
+                }
+            }
+        }
+        let gate = if options.genesis.is_some() {
+            Gate::Waiting
+        } else {
+            Gate::Open
+        };
 
         let mut idle = Vec::with_capacity(options.readers);
         for _ in 0..options.readers.max(1) {
@@ -488,6 +562,8 @@ impl Store {
             .map_err(OpenError::Thread)?;
         Ok(Self {
             queue,
+            gate: watch::Sender::new((gate, 0)),
+            unstamped: AtomicBool::new(unstamped),
             health,
             writer,
             readers,
@@ -501,7 +577,28 @@ impl Store {
     /// Runs `f` in one transaction on the writer, after the writes queued before it. Resolves
     /// once the transaction is committed and on disk; an error or a panic rolls it back. Waits
     /// for room when the queue is full: that wait is the back-pressure.
+    /// Waits while the [`Gate`] is not open, and fails with [`Error::Held`] when it refuses.
     pub async fn write<T, F>(&self, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.write_from(self.generation(), f).await
+    }
+
+    /// [`Store::write`] for data read at `generation` ([`Store::generation`]): it commits only if
+    /// the gate has not been held since. For a caller that keeps data waiting in a queue of its
+    /// own, which a hold could otherwise let through once the gate reopens.
+    pub async fn write_from<T, F>(&self, generation: u64, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let f = self.pass(generation, f).await?;
+        self.enqueue(f).await
+    }
+
+    async fn enqueue<T, F>(&self, f: F) -> Result<T, Error>
     where
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
@@ -511,14 +608,99 @@ impl Store {
         done.await.map_err(|_| Error::Closed)?
     }
 
+    /// Waits for the gate to open, then wraps `f` so that it fails if the gate has closed by the
+    /// time the writer runs it. Data read at another generation fails: it was read while the
+    /// node was on another chain, or before a hold that a write cannot see past.
+    async fn pass<T, F>(
+        &self,
+        generation: u64,
+        f: F,
+    ) -> Result<impl FnOnce(&Sql) -> Result<T, Error> + Send + 'static, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let mut gate = self.gate.subscribe();
+        let now = *gate
+            .wait_for(|(g, _)| matches!(g, Gate::Open | Gate::Refused))
+            .await
+            .map_err(|_| Error::Closed)?;
+        if now != (Gate::Open, generation) {
+            return Err(Error::Held);
+        }
+        Ok(move |sql: &Sql| {
+            if *gate.borrow() != (Gate::Open, generation) {
+                return Err(Error::Held);
+            }
+            f(sql)
+        })
+    }
+
+    /// The gate's state.
+    pub fn gate(&self) -> Gate {
+        self.gate.borrow().0
+    }
+
+    /// A number that moves when the gate is held or refused, and again when a hold ends, but not
+    /// when it first opens. Data read at one generation is written only at that generation
+    /// ([`Store::write_from`]), so nothing read while the node was on another chain is written.
+    pub fn generation(&self) -> u64 {
+        self.gate.borrow().1
+    }
+
+    /// Opens, holds or refuses writes. [`Gate::Refused`] is final.
+    pub fn set_gate(&self, to: Gate) {
+        self.gate.send_if_modified(|(g, generation)| {
+            if *g == to || *g == Gate::Refused {
+                return false;
+            }
+            if matches!(to, Gate::Held | Gate::Refused) || *g == Gate::Held {
+                *generation = generation.wrapping_add(1);
+            }
+            *g = to;
+            true
+        });
+    }
+
+    /// Whether the file holds block rows written before it recorded its chain, so the caller
+    /// must check them against the node and then call [`Store::stamp`].
+    pub fn unstamped(&self) -> bool {
+        self.unstamped.load(Ordering::Relaxed)
+    }
+
+    /// Records the chain given in [`Options::genesis`] in a file whose rows the caller has
+    /// checked. Not held by the gate.
+    pub async fn stamp(&self) -> Result<(), Error> {
+        let Some(genesis) = self.options.genesis else {
+            return Ok(());
+        };
+        self.enqueue(move |sql| {
+            sql.prepare("INSERT OR IGNORE INTO chain (id, genesis) VALUES (0, ?1)")?
+                .execute([&genesis[..]])?;
+            Ok(())
+        })
+        .await?;
+        self.unstamped.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Like [`Store::write`], but fails with [`Error::Full`] at once when the queue is full,
-    /// for callers that would rather drop a sample than wait.
+    /// for callers that would rather drop a sample than wait. It still waits for the gate.
     pub async fn try_write<T, F>(&self, f: F) -> Result<T, Error>
     where
         F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (job, done) = job(f);
+        self.try_write_from(self.generation(), f).await
+    }
+
+    /// [`Store::try_write`] for data read at `generation`, as [`Store::write_from`].
+    pub async fn try_write_from<T, F>(&self, generation: u64, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Sql) -> Result<T, Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (job, done) = job(self.pass(generation, f).await?);
         self.queue.try_send(job).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => Error::Full,
             mpsc::error::TrySendError::Closed(_) => Error::Closed,

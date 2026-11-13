@@ -1,0 +1,43 @@
+# The reverse proxy in a container beside the server, in place of one on the host
+# (docs/DEPLOY.md, "A proxy in a container"). With a Caddyfile in this directory:
+#   docker compose -f compose.yml -f compose.proxy.yml up -d
+services:
+  proxy:
+    image: ${PROXY_IMAGE:-caddy:2.11.9@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c}
+    # The same hardening as the node and the server: Caddy writes only its two volumes.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging:
+      driver: local
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - proxy-data:/data
+      - proxy-config:/config
+    networks:
+      # Pinned: the server trusts this one address (TRUSTED_PROXIES), so it must not move when
+      # the container or the network is recreated, nor pass to another container.
+      edge:
+        ipv4_address: 172.30.111.2
+    depends_on: [server]
+
+  server:
+    # Reached through the proxy only: nothing published on the host.
+    ports: !reset []
+    networks: [default, edge]
+
+networks:
+  # Only the proxy and the server. Other containers are given addresses from ip_range, which
+  # leaves out the proxy's. Change all three together if the subnet overlaps one the host has.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.111.0/29
+          ip_range: 172.30.111.4/30
+
+volumes:
+  # Caddy's certificates and state.
+  proxy-data:
+  proxy-config:

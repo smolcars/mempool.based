@@ -36,6 +36,8 @@ The server sits between the public internet and a Bitcoin node. A client must ne
 
 22. **Clients cannot drive unbounded writes to disk or unbounded logging.** A refusal is counted, not logged one by one; every event a client can cause at will is one per request served or a summary; and the log has a ceiling past which events that may be dropped are dropped and counted ([`LOGGING.md`](LOGGING.md#what-a-client-can-make-us-write)). No client, and no number of clients, makes the server write in proportion to how hard it pushes.
 
+23. **A Lightning peer is a stranger, and so is the gossip it relays.** Nothing a peer sends makes the server ask the node for more than one request at a time, four a second and a quarter of its time; store anything on disk or in SQLite for a channel without a real, unspent, six-deep funding output; hold more memory than a fixed bound (about 40 MB for one peer) beyond what its real channels earn in the graph; write a log line per message; or keep the graph from being shown. Every map and queue keyed by something a peer chose has a bound, and text a peer chose (aliases) is cleaned once and served only as data. The numbers, and the hostile peer that checks them, are in [`LIGHTNING.md`](LIGHTNING.md#hostile-peers).
+
 ### Handling data
 
 12. **SQL is always parameterized.** Request handlers get read-only connections.

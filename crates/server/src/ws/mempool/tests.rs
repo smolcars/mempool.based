@@ -392,7 +392,11 @@ fn context(mempool: bool, interval: Duration) -> Arc<NetworkContext> {
     config.ws.mempool_interval = interval;
     config.ws.latest_txs = 5;
     let sockets = Sockets::new(&config.ws, Duration::from_secs(1));
-    Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap())
+    Arc::new(
+        NetworkContext::new(&config.networks[0], &config, &sockets)
+            .unwrap()
+            .with_open_store(),
+    )
 }
 
 impl Server {

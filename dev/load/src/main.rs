@@ -4,7 +4,7 @@
 //! ```text
 //! load http <http://host:port> <path>... [--clients N] [--seconds S] [--ips N] [--rate R] [--pid PID]
 //! load ws <ws://host:port/path> [--sockets N] [--seconds S] [--topics a,b] [--block-every K]
-//!         [--slow N] [--ips N] [--pid PID] [--server-log FILE] [--drain S]
+//!         [--slow N] [--ips N] [--pid PID] [--server-log FILE] [--drain S] [--concurrent N]
 //! ```
 //!
 //! `--ips N` names each client as one of N addresses in `X-Forwarded-For` (the server must trust
@@ -13,7 +13,9 @@
 //! request still unanswered [`GRACE`] after `--seconds` is counted as a timeout and the run ends.
 //! A WebSocket run counts messages first seen during `--seconds`, then keeps reading for
 //! `--drain` seconds (default 15) so a late reader is still counted; a message's last-reader
-//! time is reported only when every reader subscribed to it got it.
+//! time is reported only when every reader subscribed to it got it. Each socket is read from the
+//! moment it opens, and how readers ended (`readers_ended`: the server's close code, or `lost`) is
+//! counted. `--concurrent N` (default 200) is how many sockets may be opening at once.
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a command-line tool: printing is its output
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -548,6 +550,8 @@ struct Seen {
 }
 
 type Messages = Arc<Mutex<HashMap<u64, Seen>>>;
+/// Counts by name: refusals by status, sockets ended by close code.
+type Counts = Arc<Mutex<BTreeMap<String, u64>>>;
 
 /// A message's label (topic and type, or binary kind and block) and its topic.
 fn label(opcode: u8, payload: &[u8]) -> (String, String) {
@@ -565,16 +569,26 @@ fn label(opcode: u8, payload: &[u8]) -> (String, String) {
     (format!("{}:{}", s("topic"), s("type")), s("topic"))
 }
 
+/// Reads one socket until it ends, then counts how it ended in `ended`: the server's close code,
+/// or `lost` for a connection that dropped without one.
 async fn ws_reader(
     id: u32,
     mut r: BufReader<OwnedReadHalf>,
     mut w: OwnedWriteHalf,
     seen: Messages,
+    ended: Counts,
 ) {
+    let end = |how: String| {
+        *ended
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(how)
+            .or_default() += 1;
+    };
     let mut buf = Vec::new();
     loop {
         let Ok(opcode) = read_frame(&mut r, &mut buf).await else {
-            return;
+            return end("lost".into());
         };
         let at = now_us();
         match opcode {
@@ -601,10 +615,13 @@ async fn ws_reader(
             }
             9 => {
                 if w.write_all(&client_frame(10, &buf)).await.is_err() {
-                    return;
+                    return end("lost".into());
                 }
             }
-            8 => return,
+            8 => {
+                let code = buf.first_chunk().map_or(0, |c| u16::from_be_bytes(*c));
+                return end(code.to_string());
+            }
             _ => {}
         }
     }
@@ -674,10 +691,13 @@ async fn ws(o: Opts) -> Result<Value, String> {
     let own = own_cpu_secs().unwrap_or(0.0);
     let started = Instant::now();
 
-    // Connect in waves the listener's backlog can take.
-    let gate = Arc::new(Semaphore::new(200));
+    // Connect in waves the listener's backlog can take, unless a storm is what is measured.
+    let gate = Arc::new(Semaphore::new(
+        usize::try_from(o.num("concurrent", 200)?).map_err(|e| e.to_string())?,
+    ));
     let open = Arc::new(AtomicUsize::new(0));
-    let refused: Arc<Mutex<BTreeMap<String, u64>>> = Arc::default();
+    let refused = Counts::default();
+    let ended = Counts::default();
     let connect_us: Arc<Mutex<Vec<u32>>> = Arc::default();
     let mut held = Vec::new();
     let mut tasks = Vec::new();
@@ -702,6 +722,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
             Arc::clone(&refused),
             Arc::clone(&connect_us),
         );
+        let (seen, ended) = (Arc::clone(&seen), Arc::clone(&ended));
         tasks.push(tokio::spawn(async move {
             let _permit = gate.acquire().await.ok()?;
             let t = Instant::now();
@@ -722,7 +743,15 @@ async fn ws(o: Opts) -> Result<Value, String> {
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(u32::try_from(t.elapsed().as_micros()).unwrap_or(u32::MAX));
                     open.fetch_add(1, Ordering::Relaxed);
-                    Some((id, is_slow, want, r, w))
+                    // Read from the start: a socket left unread while the others connect fills
+                    // kernel buffers that the run then measures.
+                    let reading = if is_slow {
+                        Err((r, w))
+                    } else {
+                        let id = u32::try_from(id).unwrap_or(u32::MAX);
+                        Ok(tokio::spawn(ws_reader(id, r, w, seen, ended)))
+                    };
+                    Some((want, reading))
                 }
                 Err(code) => {
                     *refused
@@ -739,16 +768,15 @@ async fn ws(o: Opts) -> Result<Value, String> {
     // Readers subscribed to each topic: how many should get each of its messages.
     let mut topic_readers: HashMap<String, usize> = HashMap::new();
     for t in tasks {
-        if let Ok(Some((id, is_slow, want, r, w))) = t.await {
-            if is_slow {
-                held.push((r, w)); // never read
-            } else {
+        match t.await {
+            Ok(Some((_, Err(halves)))) => held.push(halves), // never read
+            Ok(Some((want, Ok(reader)))) => {
                 for topic in want {
                     *topic_readers.entry(topic).or_default() += 1;
                 }
-                let id = u32::try_from(id).unwrap_or(u32::MAX);
-                readers.push(tokio::spawn(ws_reader(id, r, w, Arc::clone(&seen))));
+                readers.push(reader);
             }
+            _ => {}
         }
     }
     let connected_s = started.elapsed().as_secs_f64();
@@ -835,6 +863,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
     }
     let connect = std::mem::take(&mut *connect_us.lock().unwrap_or_else(PoisonError::into_inner));
     let refused = std::mem::take(&mut *refused.lock().unwrap_or_else(PoisonError::into_inner));
+    let ended = std::mem::take(&mut *ended.lock().unwrap_or_else(PoisonError::into_inner));
     Ok(json!({
         "mode": "ws",
         "sockets": sockets,
@@ -848,6 +877,7 @@ async fn ws(o: Opts) -> Result<Value, String> {
         "topics": topics,
         "block_topic_every": every,
         "slow_still_open_at_end": still_open_slow,
+        "readers_ended": ended,
         "messages": messages,
         "server_mempool_fanout_ms_max": mempool_fanout_max,
         "server": server,

@@ -76,8 +76,9 @@ pub struct Validation {
     /// Announcements whose funding output is not yet six blocks deep. Checked again once it is.
     pub early: usize,
     pub rejected: Rejected,
-    /// Nothing unchecked or pending, and the graph file fully replayed. Early announcements do
-    /// not count: they wait for blocks.
+    /// The graph file is fully replayed, and every lookup that waited at the previous check has
+    /// been answered since. Not "nothing pending": a peer that keeps sending new channels keeps
+    /// the queue from ever emptying. Early announcements do not count: they wait for blocks.
     pub caught_up: bool,
     /// Failed requests to the node in a row; 0 while it answers.
     pub node_failures: u32,
@@ -267,8 +268,8 @@ pub struct Status {
     pub validation: Validation,
     pub closes: Closes,
     /// The graph is complete enough to show: validation is caught up, and the graph came from a
-    /// recent file or every channel a peer listed was requested and no new channel has arrived for
-    /// [`Config::sync_settle`].
+    /// recent file or every channel a peer listed was requested (for at most ten minutes after the
+    /// first peer connected) and no new channel has arrived for [`Config::sync_settle`].
     pub synced: bool,
     pub nodes: usize,
     pub channels: usize,

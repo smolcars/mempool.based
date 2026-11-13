@@ -156,7 +156,14 @@ async fn start(dir: &Path) -> (String, Arc<AtomicUsize>) {
     config.limits.client_burst = 10_000;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(App::new(&config).serve(listener, std::future::pending()));
+    let app = App::new(&config);
+    // The mock answers `{}` to everything, so nothing confirms the chain: open the gate.
+    if let Some(n) = app.network(rbitcoin_space::Network::Regtest)
+        && let Some(t) = &n.blocks
+    {
+        t.store.set_gate(engine::store::Gate::Open);
+    }
+    tokio::spawn(app.serve(listener, std::future::pending()));
     // Ready once the first pass has attributed the rows.
     let started = Instant::now();
     while get(&addr, &format!("{V1}/pools/all")).await.status != 200 {
