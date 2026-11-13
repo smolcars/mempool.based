@@ -224,11 +224,15 @@
     color: var(--color-text);
   }
 
+  /* Two columns where each has room for a whole figure (a 50 BTC reward, a fee range), one on
+     the narrowest phone. The last row's rule is cut off with the list's last pixel, however the
+     facts fall into rows (as .tx-facts). */
   .block-facts {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
     gap: 0 var(--space-5);
     align-content: start;
+    clip-path: inset(-100vmax -100vmax 1px -100vmax);
   }
   .block-fact {
     min-width: 0;
@@ -238,10 +242,9 @@
   .block-fact--wide {
     grid-column: 1 / -1;
   }
-  /* Rules between facts, none after the last: a panel ends on its content, not a stray line. */
-  .block-facts > .block-fact:last-child,
-  .block-facts > .block-fact:has(+ .block-fact:last-child:not(.block-fact--wide)) {
-    border-bottom: 0;
+  /* A range and its unit stay one line: "2.00 – 3.00 sat/vB". */
+  .block-range {
+    white-space: nowrap;
   }
   .block-fact dt {
     color: var(--color-text-muted);

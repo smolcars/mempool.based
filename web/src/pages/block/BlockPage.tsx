@@ -542,7 +542,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                     sum() === undefined ? undefined : (
                       <Show when={rates()} fallback={MISSING}>
                         {(r) => (
-                          <span class="num">
+                          <span class="num block-range">
                             {formatFeeRate(r().min)} – {formatFeeRate(r().max)}
                             <span class="unit"> sat/vB</span>
                           </span>

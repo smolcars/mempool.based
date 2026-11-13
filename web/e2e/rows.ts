@@ -63,3 +63,42 @@ async function tablesFitNow(page: Page, label: string) {
   const wide = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(wide, `${label}: page width`).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
 }
+
+/**
+ * Every amount on the page whole: a number never wraps inside itself or away from its unit, and
+ * never runs out of the field that holds it into its neighbour.
+ */
+export async function amountsIntact(page: Page, label: string) {
+  const faults = await page.evaluate(() => {
+    const SELECTOR = ".amount, .fee, .ln-msat, .num";
+    const out: string[] = [];
+    for (const el of document.querySelectorAll<HTMLElement>(`main :is(${SELECTOR})`)) {
+      // The innermost figure only, shown, with a digit in it.
+      if (el.querySelector(SELECTOR) || el.getClientRects().length === 0) continue;
+      // Times are phrases ("1 day 9 h ago"), free to wrap between their words.
+      if (el.closest(".visually-hidden, [hidden], svg, time")) continue;
+      const text = (el.textContent ?? "").trim();
+      if (!/\d/.test(text)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const tops = [...range.getClientRects()]
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => r.top);
+      tops.sort((a, b) => a - b);
+      const lines = tops.filter((t, i) => i === 0 || t - (tops[i - 1] ?? t) > 6).length;
+      if (lines > 1) out.push(`"${text}" wraps onto ${lines} lines`);
+      const cell = el.closest("td, th, dd, li") ?? el.parentElement;
+      if (!cell) continue;
+      const r = el.getBoundingClientRect();
+      const c = cell.getBoundingClientRect();
+      if (r.left < c.left - 1 || r.right > c.right + 1) {
+        const where = `${cell.tagName.toLowerCase()}.${cell.className}`;
+        out.push(
+          `"${text}" runs out of its field (${where}: ${Math.round(r.left)}–${Math.round(r.right)} in ${Math.round(c.left)}–${Math.round(c.right)})`,
+        );
+      }
+    }
+    return out;
+  });
+  expect(faults, label).toStrictEqual([]);
+}

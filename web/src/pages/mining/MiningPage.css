@@ -282,9 +282,10 @@
   }
 
   /* Figures side by side; two to a row on a phone, never one long column. */
+  /* As many columns as hold a whole figure (a pool's 21 000 000 BTC), one on the narrowest phone. */
   .mining-rewards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(12rem, 40%), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
     gap: var(--space-4);
   }
   .mining-tabs {

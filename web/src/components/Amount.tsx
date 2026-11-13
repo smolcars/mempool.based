@@ -17,8 +17,14 @@ export function Amount(props: {
   signed?: boolean;
   short?: boolean;
   approx?: boolean;
+  /**
+   * Exact, but where a phone's narrow field cannot hold it (a thousand bitcoin and more), in
+   * magnitude there (`.amount--long`, CSS by the field), the exact amount in its title.
+   */
+  fit?: boolean;
 }) {
   const parts = () => btcParts(props.sats);
+  const long = () => props.fit === true && Math.abs(props.sats) >= LONG;
   const direction = () => (props.signed && props.sats > 0 ? "in" : undefined);
   return (
     <Show when={parts()} fallback={<span class="amount">{MISSING}</span>}>
@@ -36,10 +42,22 @@ export function Amount(props: {
             </span>
           }
         >
-          <span class="amount num" title={`${formatSats(props.sats)} sats`}>
-            {direction() === "in" ? "+" : p().sign}
-            {p().whole}.{p().significant}
-            <span class="amount__zeros">{p().zeros}</span>
+          <span
+            class={["amount num", { "amount--long": long() }]}
+            title={
+              long()
+                ? `${formatBtc(props.sats)} BTC, ${formatSats(props.sats)} sats`
+                : `${formatSats(props.sats)} sats`
+            }
+          >
+            <span class="amount__exact">
+              {direction() === "in" ? "+" : p().sign}
+              {p().whole}.{p().significant}
+              <span class="amount__zeros">{p().zeros}</span>
+            </span>
+            <Show when={long()}>
+              <span class="amount__short">{formatBtcShort(props.sats)}</span>
+            </Show>
             <span class={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>
           </span>
         </Show>
@@ -47,6 +65,9 @@ export function Amount(props: {
     </Show>
   );
 }
+
+/** A thousand bitcoin: from here an exact amount outgrows a phone's flow card. */
+const LONG = 100_000_000_000;
 
 /** An amount in sats, grouped. */
 export function Sats(props: { sats: number; unit?: boolean }) {

@@ -961,25 +961,34 @@
     .tx-facts--two {
       grid-template-columns: minmax(0, 1fr);
     }
+    /* Two to a row while they fit, each at least as wide as its figures: a long one takes a row
+       of its own rather than running into its neighbour; the amount always has a row. */
     .tx-summary {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      display: flex;
+      flex-wrap: wrap;
       gap: var(--space-3);
     }
-    /* An amount can run to thousands of bitcoin in eight decimals: a row of its own, so it fits a
-       320 px phone in any face, its unit free to wrap. */
+    .tx-summary__item {
+      flex: 1 1 calc(50% - var(--space-3));
+      min-width: fit-content;
+    }
     .tx-summary__item--amount {
-      grid-column: 1 / -1;
+      flex-basis: 100%;
     }
-    .tx-summary__item--amount .amount {
-      white-space: normal;
+    /* A card is a third of a phone: a thousand bitcoin and more read in magnitude there, the
+       exact amount in the title and in the card's details. */
+    .amount--long .amount__exact {
+      display: none;
     }
-    /* The last fact takes the row it would otherwise sit in alone. */
-    .tx-summary__item:last-child {
-      grid-column: 1 / -1;
+    .amount--long .amount__short {
+      display: inline;
     }
+    /* Each fact's name above its value, which then has the panel's width: a 13-digit fee and its
+       unit on one line. */
     .tx-facts--single .tx-fact,
     .tx-inspector .tx-fact {
-      grid-template-columns: 7rem minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
     }
     .tx-inspector {
       padding: var(--space-3);

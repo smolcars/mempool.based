@@ -7,4 +7,8 @@
   .amount__zeros {
     color: var(--color-text-muted);
   }
+  /* Exact unless a field says otherwise (a phone's flow card): see Amount's `fit`. */
+  .amount__short {
+    display: none;
+  }
 }

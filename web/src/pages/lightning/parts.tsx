@@ -17,6 +17,8 @@ import {
   count,
   cut,
   isStatus,
+  msat,
+  msatShort,
   NAME_IN_LIST,
   type NodeRef,
   type RankedNode,
@@ -343,5 +345,34 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
         History
       </Link>
     </nav>
+  );
+}
+
+/**
+ * A channel term in millisatoshis, in magnitude (`0.190 BTC`), never broken inside: the exact
+ * figure is its title, and a tap or a key shows it in place (`18 958 366 000 msat`).
+ */
+export function Msat(props: { msat: number }) {
+  const [exact, setExact] = createSignal(false);
+  return (
+    <span class="ln-msat-wrap">
+      <button
+        type="button"
+        class="ln-msat num"
+        title={msat(props.msat)}
+        aria-expanded={exact() ? "true" : "false"}
+        onClick={() => setExact(!exact())}
+        onBlur={() => setExact(false)}
+      >
+        {msatShort(props.msat)}
+        <span class="visually-hidden">, exactly {msat(props.msat)}</span>
+      </button>
+      {/* Above the figure, over its neighbours: the exact msat is longer than a phone's column. */}
+      <Show when={exact()}>
+        <span class="ln-msat__exact num" aria-hidden="true">
+          {msat(props.msat)}
+        </span>
+      </Show>
+    </span>
   );
 }

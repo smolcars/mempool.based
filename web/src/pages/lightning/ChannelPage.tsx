@@ -1,7 +1,7 @@
 // One Lightning channel: its ends and what each charges, where it was funded, and how it closed
 // and how sure that is (docs/LIGHTNING.md "How a close is classified").
 import { useParams } from "@solidjs/router";
-import { For, Match, Show, Switch } from "solid-js";
+import { createUniqueId, For, Match, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
@@ -20,12 +20,11 @@ import {
   type End,
   isChannelDetail,
   isChannelId,
-  msat,
   ppm,
   STATE_WHY,
   STATE_WORDS,
 } from "./lightning";
-import { ask, BlockLink, Gate, NodeName, Stat, LightningNav } from "./parts";
+import { ask, BlockLink, Gate, NodeName, Msat, Stat, LightningNav } from "./parts";
 
 export default function ChannelPage() {
   const params = useParams<{ id: string }>();
@@ -103,6 +102,7 @@ function When(props: { block: BlockRef }) {
 
 function Body(props: { channel: ChannelDetail }) {
   const c = () => props.channel;
+  const ids = createUniqueId();
   return (
     <>
       <header class="ln-identity">
@@ -254,34 +254,41 @@ function Body(props: { channel: ChannelDetail }) {
             )}
           </Show>
         </SectionHeader>
-        {/* One table, so the two ends' terms can be read across: a column for each end. */}
+        {/* One table read across, a column for each end. Each term's name is a row of its own
+            above its two figures, so the two ends have the width between them on a phone and
+            equal terms line up; each figure names its term and its end (`headers`). */}
         <div class="table-scroll">
           <table class="table ln-policies">
             <caption class="visually-hidden">What each end charges to forward a payment</caption>
             <thead>
               <tr>
-                <th scope="col">
-                  <span class="visually-hidden">Term</span>
-                </th>
-                <th scope="col">
+                <th scope="col" id={`${ids}-one`}>
                   <NodeName node={c().node_one} />
                 </th>
-                <th scope="col">
+                <th scope="col" id={`${ids}-two`}>
                   <NodeName node={c().node_two} />
                 </th>
               </tr>
             </thead>
-            <tbody>
-              <For each={POLICY_ROWS}>
-                {(row) => (
-                  <tr>
-                    <th scope="row">{row.label}</th>
-                    <td>{policyCell(c().node_one, row, c().closed !== null)}</td>
-                    <td>{policyCell(c().node_two, row, c().closed !== null)}</td>
+            <For each={POLICY_ROWS}>
+              {(row, i) => (
+                <tbody>
+                  <tr class="ln-policies__term">
+                    <th colspan={2} id={`${ids}-term-${i()}`}>
+                      {row.label}
+                    </th>
                   </tr>
-                )}
-              </For>
-            </tbody>
+                  <tr>
+                    <td headers={`${ids}-term-${i()} ${ids}-one`}>
+                      {policyCell(c().node_one, row, c().closed !== null)}
+                    </td>
+                    <td headers={`${ids}-term-${i()} ${ids}-two`}>
+                      {policyCell(c().node_two, row, c().closed !== null)}
+                    </td>
+                  </tr>
+                </tbody>
+              )}
+            </For>
           </table>
         </div>
         <More label="About these">
@@ -300,7 +307,7 @@ type Policy = NonNullable<End["policy"]>;
 /** The terms an end sets, as the rows of the two ends' table. */
 const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }[] = [
   { label: "Fee rate", value: (p) => <span class="num">{ppm(p.fee_rate)}</span> },
-  { label: "Base fee", value: (p) => <span class="num">{msat(p.base_fee_msat)}</span> },
+  { label: "Base fee", value: (p) => <Msat msat={p.base_fee_msat} /> },
   {
     label: "Time lock delta",
     value: (p) => <span class="num">{groupDigits(p.cltv_delta)} blocks</span>,
@@ -308,8 +315,11 @@ const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }
   {
     label: "Payments forwarded",
     value: (p) => (
-      <span class="num">
-        {msat(p.min_htlc_msat)} to {msat(p.max_htlc_msat)}
+      // Each figure whole on its line: two ends' equal limits look equal.
+      <span class="ln-range">
+        <Msat msat={p.min_htlc_msat} />
+        <span class="ln-range__to">to</span>
+        <Msat msat={p.max_htlc_msat} />
       </span>
     ),
   },

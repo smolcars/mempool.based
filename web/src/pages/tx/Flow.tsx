@@ -219,7 +219,7 @@ export function Flow(props: {
               data-key="0"
             >
               <div class="tx-flow__top">
-                <Amount sats={totalOut(props.tx)} unit={false} />
+                <Amount sats={totalOut(props.tx)} unit={false} fit />
                 {openButton("in", 0)}
               </div>
               <span class="tx-flow__who">Coinbase</span>
@@ -237,7 +237,7 @@ export function Flow(props: {
               >
                 <div class="tx-flow__top">
                   <Show when={input.prevout} fallback={<span class="amount">–</span>}>
-                    {(p) => <Amount sats={p().value} unit={false} />}
+                    {(p) => <Amount sats={p().value} unit={false} fit />}
                   </Show>
                   {openButton("in", i())}
                 </div>
@@ -322,7 +322,7 @@ export function Flow(props: {
               data-key={i()}
             >
               <div class="tx-flow__top">
-                <Amount sats={out.value} unit={false} />
+                <Amount sats={out.value} unit={false} fit />
                 {openButton("out", i())}
               </div>
               <span class="tx-flow__who">
@@ -374,7 +374,7 @@ export function Flow(props: {
             data-key="fee"
           >
             <div class="tx-flow__top">
-              <Amount sats={fee()} unit={false} />
+              <Amount sats={fee()} unit={false} fit />
             </div>
             <span class="tx-flow__who">Fee</span>
             <span class="tx-flow__meta">

@@ -41,15 +41,23 @@
   }
 
   /* Figures: a label over a large number, as on the mining page. */
+  /* Figures side by side while they fit, each at least as wide as its content: a long capacity
+     or name takes its own row rather than running into its neighbour. */
   .ln-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-4) var(--space-5);
     margin: 0;
   }
+  .ln-stats > * {
+    flex: 1 1 11rem;
+    min-width: fit-content;
+  }
   .ln-stats--small {
-    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
     margin-top: var(--space-4);
+  }
+  .ln-stats--small > * {
+    flex-basis: 9rem;
   }
   .ln-stat__label {
     font-size: var(--text-sm);
@@ -422,8 +430,8 @@
       flex-direction: column;
       align-items: stretch;
     }
-    .ln-stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+    .ln-stats > * {
+      flex-basis: 8rem;
     }
     .ln-node {
       max-width: 9rem;
@@ -433,6 +441,42 @@
 
 @layer pages {
   /* A channel's two ends side by side under its capacity. */
+  /* A term in magnitude, a button that shows the exact msat in place: drawn as the figure. */
+  .ln-msat {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    white-space: nowrap;
+    text-align: start;
+    cursor: pointer;
+    text-decoration: underline dotted var(--color-line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+  }
+  .ln-msat-wrap {
+    position: relative;
+  }
+  .ln-msat__exact {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    z-index: 2;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-pop);
+    white-space: nowrap;
+  }
+  .ln-range {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: var(--space-2);
+  }
+  .ln-range__to {
+    color: var(--color-text-muted);
+  }
   .ln-between {
     display: grid;
     gap: var(--space-1);
@@ -457,17 +501,27 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .ln-policies th[scope="row"],
-  .ln-policies thead th:first-child {
-    width: 30%;
-    padding-right: var(--space-3);
+  /* Each term's name, a row of its own above its two figures. */
+  .ln-policies__term th {
+    padding: var(--space-3) 0 0;
+    border-top: 1px solid var(--color-line);
     color: var(--color-text-muted);
     font-weight: var(--weight-regular);
     white-space: normal;
   }
+  .ln-policies__term + tr td {
+    padding-top: var(--space-1);
+    border-top: 0;
+  }
   .ln-policies td {
     white-space: normal;
     vertical-align: top;
+    /* The exact msat opens above its figure, over the cells beside it. */
+    overflow: visible;
+  }
+  /* A figure and its unit stay one: "999 999 ppm", "2 016 blocks". */
+  .ln-policies td .num {
+    white-space: nowrap;
   }
   .ln-policies thead th {
     vertical-align: bottom;
