@@ -16,12 +16,33 @@ function forced(): Scheme | null {
 // boot.js has applied any stored choice before this module runs.
 const [scheme, setScheme] = createSignal<Scheme>(forced() ?? osScheme());
 
+/**
+ * The browser's own chrome follows the scheme on screen, not only the OS: Safari tinted its
+ * toolbar with the OS's colour over a page toggled the other way. One theme colour, the page's
+ * own background, and a colour scheme that is the one shown.
+ */
+export function applyChrome(shown: Scheme = scheme()): void {
+  const head = document.head;
+  for (const m of head.querySelectorAll('meta[name="theme-color"]')) m.remove();
+  const meta = document.createElement("meta");
+  meta.name = "theme-color";
+  meta.content = getComputedStyle(root()).getPropertyValue("--color-bg").trim() || "#f4f6f7";
+  head.append(meta);
+  head.querySelector('meta[name="color-scheme"]')?.setAttribute("content", shown);
+}
+
 /** The scheme on screen now. It follows the OS while {@link watchTheme} runs. */
 export { scheme };
 
 /** Starts tracking the OS setting. Returns a function that stops. */
 export function watchTheme(): () => void {
-  const sync = () => setScheme(forced() ?? osScheme());
+  // A write is seen at the next flush: the new scheme is handed on, not read back.
+  const sync = () => {
+    const shown = forced() ?? osScheme();
+    setScheme(shown);
+    applyChrome(shown);
+  };
+  applyChrome();
   const q = osQuery();
   q.addEventListener("change", sync);
   return () => q.removeEventListener("change", sync);
@@ -43,4 +64,5 @@ export function toggleTheme(): void {
     // Storage blocked (private mode): the choice still applies to this page.
   }
   setScheme(next);
+  applyChrome(next);
 }

@@ -202,3 +202,21 @@ test("on a touch screen no field is small enough to zoom into, and a tap leaves 
   expect(await button.evaluate((b) => getComputedStyle(b).backgroundColor)).toBe(rest);
   await touch.close();
 });
+
+// Safari kept its toolbar in the system's colour over a page toggled the other way.
+test("the browser's chrome takes the colour of the scheme on screen, not only the system's", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/regtest/");
+  const chrome = () =>
+    page.evaluate(() => ({
+      theme: [...document.querySelectorAll('meta[name="theme-color"]')].map((m) =>
+        m.getAttribute("content"),
+      ),
+      scheme: document.querySelector('meta[name="color-scheme"]')?.getAttribute("content"),
+    }));
+  await expect.poll(chrome).toStrictEqual({ theme: ["#121518"], scheme: "dark" });
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  await expect.poll(chrome).toStrictEqual({ theme: ["#f4f6f7"], scheme: "light" });
+});
