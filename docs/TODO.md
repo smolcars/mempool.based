@@ -164,4 +164,4 @@ Refined when M4 lands.
 | LN6 | Default Lightning peers for signet (two public nodes chosen by the owner), so signet needs only the switch | LN5 | doing |
 | LN7 | Lightning on testnet4: needs a peer to dial; none is known yet | LN5 | waits on a peer |
 | REL1 | The first release, `v0.1.0`: the owner approved it on 2026-11-13 for when everything else is done (the redesign merged, the paused frontend tasks finished) | RD1, Q2, D2 | todo |
-| RD2 | After the redesign merges: the reviewers' closing notes (a clipped exact-amount tooltip on a channel at phone width, the Low fee answer beside the block strip, the small layout notes) and whatever the second Safari pass finds | RD1 | todo |
+| RD2 | After the redesign merges: the reviewers' closing notes (a clipped exact-amount tooltip on a channel at phone width, the Low fee answer beside the block strip, the small layout notes) and whatever the second Safari pass finds | RD1 | doing, as a second pull request stacked on the first, so #81 stays exactly as the council scored it; it waits for the owner like #81 |
