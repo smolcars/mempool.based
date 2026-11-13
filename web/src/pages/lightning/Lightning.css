@@ -532,6 +532,10 @@
   .ln-fees__table {
     flex: 1 1 auto;
   }
+  /* At most thirteen rows each: both tables in sight, not behind the figures' own scroll. */
+  .ln-fees__figures.chart__table {
+    max-height: none;
+  }
   .ln-fees__table .table__caption {
     color: var(--color-text);
     font-weight: var(--weight-medium);

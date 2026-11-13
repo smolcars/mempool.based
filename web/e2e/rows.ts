@@ -279,7 +279,8 @@ export async function rowsWhole(page: Page, scope: string, label: string) {
             (n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "",
           );
           if (!own) continue;
-          const r = el.getBoundingClientRect();
+          // An id is shortened by design, with an ellipsis: its own box is what must stay inside.
+          const r = (el.closest(".hash") ?? el).getBoundingClientRect();
           const text = (el.textContent ?? "").trim();
           if (r.right > box.right + 0.5 || r.left < box.left - 0.5) {
             out.push(`${name}: "${text}" reaches past the edge`);
