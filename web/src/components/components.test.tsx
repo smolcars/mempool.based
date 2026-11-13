@@ -28,18 +28,6 @@ describe("Amount", () => {
     expect(q(el, ".amount").title).toBe(`3${NNBSP}500${NNBSP}000 sats`);
   });
 
-  it("lets whole bitcoins and two decimals lead a balance", () => {
-    const el = mount(() => <Amount sats={123_456_789} lead />);
-    expect(el.textContent).toBe("1.23456789 BTC");
-    expect(q(el, ".amount__zeros").textContent).toBe("456789");
-    expect(
-      q(
-        mount(() => <Amount sats={50_000_000} lead />),
-        ".amount__zeros",
-      ).textContent,
-    ).toBe("000000");
-  });
-
   it("signs incoming amounts and survives bad input", () => {
     expect(mount(() => <Amount sats={150} signed />).textContent).toBe("+0.00000150 BTC");
     expect(mount(() => <Amount sats={-150} signed />).textContent).toBe("−0.00000150 BTC");

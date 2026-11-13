@@ -1,11 +1,11 @@
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
 
+const box = (page: Page, label: string) =>
+  page.locator(".address-stat", { has: page.getByText(label, { exact: true }) });
+/** The figure a total shows: in magnitude for an amount, the exact one a tap away. */
 const stat = (page: Page, label: string) =>
-  page
-    .locator(".address-stat", { has: page.getByText(label, { exact: true }) })
-    .locator("dd")
-    .first();
+  box(page, label).locator("dd .amount, dd > .num").first();
 
 test("a taproot address shows its totals, history and unspent outputs from the chain", async ({
   page,
@@ -14,9 +14,9 @@ test("a taproot address shows its totals, history and unspent outputs from the c
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Address");
   await expect(page.getByText("P2TR", { exact: true })).toBeVisible();
   // Block 106 paid it 1 BTC and block 107 0.49 BTC; the RBF replacement in the mempool pays it 0.25.
-  await expect(stat(page, "Balance")).toHaveText("1.49000000 BTC");
-  await expect(stat(page, "Received")).toHaveText("1.49000000 BTC");
-  await expect(stat(page, "Sent")).toHaveText("0.00000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("1.49 BTC");
+  await expect(stat(page, "Received")).toHaveText("1.49 BTC");
+  await expect(stat(page, "Sent")).toHaveText("0 BTC");
   await expect(stat(page, "Transactions")).toHaveText("3");
   await expect(stat(page, "Unconfirmed")).toHaveText("+0.25000000 BTC");
 
@@ -62,8 +62,8 @@ test("a taproot address shows its totals, history and unspent outputs from the c
 
 test("a spend and a receive net out per transaction", async ({ page }) => {
   await page.goto(`/regtest/address/${chain.addresses.p2sh}`);
-  await expect(stat(page, "Balance")).toHaveText("0.00000000 BTC");
-  await expect(stat(page, "Sent")).toHaveText("0.50000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("0 BTC");
+  await expect(stat(page, "Sent")).toHaveText("0.500 BTC");
   const rows = page.getByRole("table").locator("tbody tr");
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText("−0.50000000");
@@ -84,7 +84,7 @@ test("unconfirmed payments are marked and agree with the node's own figures", as
     await request.get(`/regtest/api/address/${address}/txs/summary`)
   ).json()) as { txid: string; value: number }[];
   await page.goto(`/regtest/address/${address}`);
-  await expect(stat(page, "Balance")).toHaveText("91.00000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("91.00 BTC");
   const pending = stats.mempool_stats.funded_txo_sum - stats.mempool_stats.spent_txo_sum;
   await expect(stat(page, "Unconfirmed")).toHaveText(`+${(pending / 1e8).toFixed(8)} BTC`);
 
@@ -167,4 +167,34 @@ test.describe("an address with more history than the server adds up", () => {
     await expect(main.getByRole("tab")).toHaveCount(0);
     await expect(main.getByRole("table")).toHaveCount(0);
   });
+});
+
+// Summary totals read in magnitude, the exact amount a tap away and what its copy button copies.
+test("a total reads in magnitude, on one line on a phone, and opens to the exact amount", async ({
+  page,
+}) => {
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    for (const label of ["Balance", "Received", "Sent"]) {
+      const figure = stat(page, label);
+      await expect(figure).toHaveText(/^[\d.\s\u202F]+ BTC$/);
+      // Number and unit share one line.
+      const lines = await figure.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+      });
+      expect(lines, `${label} at ${width} px`).toBe(1);
+    }
+  }
+  const balance = box(page, "Balance");
+  const exact = balance.locator(".address-total__exact");
+  await expect(exact).toBeHidden();
+  await expect(balance.locator(".address-total")).toHaveAttribute("title", "1.49000000 BTC");
+  await balance.getByRole("button", { name: /show the exact amount/ }).click();
+  await expect(exact).toBeVisible();
+  await expect(exact).toContainText("1.49000000");
+  await exact.getByRole("button", { name: "Copy the exact balance" }).click();
+  await expect(exact.locator(".copy__note")).toHaveText("Copied");
 });

@@ -63,14 +63,35 @@
     font-size: var(--text-3xl);
     letter-spacing: var(--tracking-tight);
   }
-  /* An amount may wrap only before its unit; the number itself never breaks. */
-  .address-stat__value .amount {
-    white-space: normal;
+  /* A total in magnitude, the exact amount a tap away: drawn as the figure, not as a button. */
+  .address-total {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    margin-block: calc((var(--touch) - 1lh) / -2);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: start;
+    cursor: pointer;
+    text-decoration: underline dotted var(--color-line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
   }
-  @media (min-width: 641px) {
-    .address-stat--balance .amount {
-      white-space: nowrap;
-    }
+  .address-total:hover {
+    text-decoration-color: var(--color-text-muted);
+  }
+  .address-total__exact:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: normal;
+    color: var(--color-text-muted);
   }
 
   /* Balance over time: the chart's whole height is held while its code and data load. */
@@ -314,8 +335,9 @@
     .address {
       padding-top: var(--space-5);
     }
+    /* The right column holds the exact unconfirmed change, the left only figures in magnitude. */
     .address-stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
       gap: var(--space-4);
     }
     .address-stat__value {

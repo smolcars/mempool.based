@@ -170,14 +170,26 @@ describe("address page", () => {
     });
     const el = open(`/address/${ME}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
-    const values = [...el.querySelectorAll(".address-stat__value")].map((e) => text(e));
-    expect(values).toStrictEqual([
-      "1.00000000 BTC",
-      "1.50000000 BTC",
-      "0.50000000 BTC",
+    // Totals in magnitude; the exact amount behind each, a tap away, with its own copy button.
+    const shown = [
+      ...el.querySelectorAll(".address-stat__value .amount, .address-stat__value > .num"),
+    ];
+    expect(shown.map((e) => text(e))).toStrictEqual([
+      "1.00 BTC",
+      "1.50 BTC",
+      "0.500 BTC",
       "4",
       "+0.00050000 BTC",
     ]);
+    const exact = [...el.querySelectorAll<HTMLElement>(".address-total__exact")];
+    expect(exact.map((e) => [e.hidden, text(e.querySelector(".num") as Element)])).toStrictEqual([
+      [true, "1.00000000"],
+      [true, "1.50000000"],
+      [true, "0.50000000"],
+    ]);
+    el.querySelector<HTMLButtonElement>(".address-total")?.click();
+    await until(() => expect(exact[0]?.hidden).toBe(false));
+    expect(el.querySelector(".address-total")?.getAttribute("aria-expanded")).toBe("true");
     const rows = [...el.querySelectorAll("tbody tr")];
     const change = rows.map((r) => text(r.querySelectorAll("td")[2] as Element));
     expect(change).toStrictEqual(["+0.00050000 BTC", "−0.00040210 BTC", "−0.00000210 BTC"]);
@@ -470,7 +482,7 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     await until(() => expect(text(el)).toContain("This address has never been used"));
     expect(el.querySelector('[role="alert"]')).toBeNull();
-    expect(text(el.querySelector(".address-stat__value") as Element)).toBe("0.00000000 BTC");
+    expect(text(el.querySelector(".address-stat__value .amount") as Element)).toBe("0 BTC");
   });
 
   it("answers a malformed address without asking the server, as text", async () => {
@@ -601,7 +613,7 @@ describe("address page", () => {
     up = true;
     const retry = [...el.querySelectorAll("button")].find((b) => text(b) === "Try again");
     retry?.click();
-    await until(() => expect(text(el)).toContain("1.00000000 BTC"));
+    await until(() => expect(text(el)).toContain("1.00 BTC"));
     expect(text(el)).not.toContain("Could not load");
   });
 
