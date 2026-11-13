@@ -345,7 +345,7 @@ fn log_day(ctx: &NetworkContext, day: u64, r: &Report) {
             let (lo, hi) = t.interval();
             let shown = |x: Option<f64>| x.filter(|_| enough);
             FeesScoreLevel {
-                level: l.name,
+                name: l.name,
                 scored: t.total,
                 blocks: t.blocks(),
                 min_blocks: MIN_BLOCKS,

@@ -968,8 +968,8 @@ event!(FeesScore, "fees_score", Info, keep);
 /// `min_blocks` blocks decided the level's samples.
 #[derive(Debug, Serialize)]
 pub struct FeesScoreLevel {
-    /// `high`, `medium`, `low` or `no_rush`.
-    pub level: &'static str,
+    /// `high`, `medium`, `low` or `no_rush`. Not `level`: that names the line's level.
+    pub name: &'static str,
     pub scored: usize,
     /// Distinct blocks that decided them: the number of outcomes.
     pub blocks: usize,
@@ -1975,7 +1975,7 @@ mod tests {
                 day: 1_763_078_400,
                 levels: vec![
                     FeesScoreLevel {
-                        level: "high",
+                        name: "high",
                         scored: 2_225,
                         blocks: 121,
                         min_blocks: 30,
@@ -1989,7 +1989,7 @@ mod tests {
                         no_clearing: 0,
                     },
                     FeesScoreLevel {
-                        level: "no_rush",
+                        name: "no_rush",
                         scored: 0,
                         blocks: 0,
                         min_blocks: 30,

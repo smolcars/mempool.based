@@ -1532,12 +1532,21 @@ async fn the_fee_score_asks_the_node_nothing_and_survives_a_restart() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     // Sampling and scoring, some fifty times over, ask the node for nothing beyond the
-    // tracker's own polling: no block, no transaction, no cluster. Times are whole seconds, so
-    // this also puts the samples a second before the block.
+    // tracker's own polling: no block, no transaction, no cluster. Times are whole seconds:
+    // waiting for the second to turn twice puts a sample of ours a second before the block.
     let calls = |m| mock.node().calls.get(m).copied().unwrap_or(0);
     let asked = |c: &dyn Fn(&'static str) -> usize| ["block", "details", "clusters"].map(c);
     let idle = asked(&calls);
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let unix = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let served_at = unix();
+    while unix() < served_at + 2 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(asked(&calls), idle);
 
     // A block takes the 5 sat/vB transactions: it cleared at 5 sat/vB, and the only block

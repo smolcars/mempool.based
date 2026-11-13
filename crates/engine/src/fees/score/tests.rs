@@ -119,7 +119,9 @@ async fn the_recorded_fixture_scores_as_the_recorder_scored_it() {
         samples: Vec::new(),
         blocks: vec![block(975_700, later, None)],
     };
-    db::write(&store, store.generation(), batch, later).await.unwrap();
+    db::write(&store, store.generation(), batch, later)
+        .await
+        .unwrap();
     let (s, b) = db::load(&store, now).await.unwrap();
     assert!(s.is_empty());
     assert_eq!(b, [block(975_700, later, None)]);

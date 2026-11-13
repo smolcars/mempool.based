@@ -78,6 +78,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`block_totals`, `pool_totals`](#totals) | `0010_block_totals.sql` | The block table's running totals: per day and per block series point, and per pool per 1,008 heights and per week | Yes: recomputed from `blocks` |
 | `totals_dirty` | `0010_block_totals.sql` | The buckets a write has touched; always empty once it commits | Yes |
 | `totals_pending` | `0010_block_totals.sql` | One row while rows from before the totals are still being totalled ([Filling](#filling-the-totals)) | Yes |
+| [`fee_samples`, `fee_blocks`](#fee_samples-and-fee_blocks) | `0011_fee_score.sql` | What the fee recommendations served every 30 s, and every block's clearing rate: the score the server keeps of itself | No: observed live, lost with the file |
 
 ### Adding a table
 
@@ -383,6 +384,27 @@ The replacement record ([`MEMPOOL.md`](MEMPOOL.md#following-a-transaction)), so 
 **Size.** At most `REPLACEMENTS_KEPT` rows (10,000 by default). Measured with `cargo test --release -p engine -- --ignored --nocapture replacements_benchmark` (20,000 links written 20 at a time, so the bound had pruned half): 10,000 rows, 2.06 MB for the table and its two indexes, 205 bytes a row; reading them back took 3.6 ms.
 
 **Rebuildable:** no. The node does not keep replaced transactions; deleting the file forgets every replacement seen before.
+### fee_samples and fee_blocks
+
+The evidence for the score the server keeps of its own fee recommendations ([`MEMPOOL.md`](MEMPOOL.md#the-score-the-server-keeps)): enough to score every sample again, and nothing more. The code is `crates/engine/src/fees/db.rs`; the server writes it from `crates/server/src/ws/fees/score.rs`.
+
+| Table | Column | Type | Why |
+|---|---|---|---|
+| `fee_samples` | `time` | integer key | Unix seconds the answer was read, every 30 s |
+| | `served` | integer | 0 ours, 1 the node's estimates (warming up, or the projection stale), 2 nothing. Samples not ours are kept only to be counted |
+| | `high`, `medium`, `low`, `no_rush` | integer or `NULL` | Our answer for 1, 3, 6 and 144 blocks, sat per 1,000 vB; `NULL` unless `served` is 0. The minimum is not stored: nothing scores it |
+| `fee_blocks` | `height` | integer key | A block that replaced another at its height (a reorg) replaces its row |
+| | `time` | integer | Unix seconds the server saw it: the scorer orders blocks and samples by it |
+| | `clearing` | integer or `NULL` | The rate that sufficed to get in, sat per 1,000 vB; `NULL` when no projection before it held any of its transactions, or it came while the server was down |
+
+**Writes.** The keeper hands each sample and each block's rows to a writer task through a queue of 64, tagged with the store's generation when it read them, and the writer commits them in order with `write_from`, through the gate like every write: one write every 30 s, and one per block. A full queue drops the write (the record in memory keeps it) and counts it in the next `fees_score` line's `unsaved`. Each write also deletes samples older than 30 days, and a write with a block deletes blocks older than 31: the oldest sample's day-long horizon still has its blocks. Both are rowid-ordered deletes.
+
+**Reading.** `load` once, when the engine starts: every row still in its retention, about 90,000 samples and 4,500 blocks at the bound. Requests never read the tables; they read the scores kept in memory.
+
+**Size.** Measured on a table filled with a month of mainnet-shaped rows: 21.9 bytes per sample and 17 bytes per block, about 65 KB a day (2,880 samples and 144 blocks), and under 2 MB at the 30-day bound.
+
+**Rebuildable:** no. It was observed live; deleting the file starts the score over.
+
 ### ln_channels
 
 Every public channel the Lightning peer verified, and how it ended: what a node's channel list, a channel's page and the tx page need once gossip has forgotten a closed channel ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)). The code is `crates/engine/src/lightning/`; the server feeds it from `crates/server/src/lightning.rs`.
