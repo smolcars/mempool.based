@@ -184,6 +184,23 @@ pub struct ConnectionsRefused {
 }
 event!(ConnectionsRefused, "connections_refused", Warn);
 
+/// Requests that named a client address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded` but came
+/// from a peer outside `TRUSTED_PROXIES`, so the header was ignored and the peer counted as the
+/// client: a proxy in front that is not trusted puts every visitor in one allowance. Written at a
+/// total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct ProxyHeaderIgnored {
+    /// The first of the three headers the request had, in lower case.
+    pub header: &'static str,
+    /// The peer, the address `TRUSTED_PROXIES` is missing if it is a proxy. Only with
+    /// `LOG_CLIENT_ADDR=true`, since without a proxy in front it is a visitor's; else null.
+    pub peer: Option<String>,
+    /// Whether `TRUSTED_PROXIES` is set at all.
+    pub trusted_proxies_set: bool,
+    pub total: u64,
+}
+event!(ProxyHeaderIgnored, "proxy_header_ignored", Warn);
+
 // HTTP.
 
 /// One HTTP request, written when its response head is ready.
@@ -318,6 +335,16 @@ pub struct RpcAuthFailed {
     pub network: &'static str,
 }
 event!(RpcAuthFailed, "rpc_auth_failed", Error);
+
+/// The node's RPC answered for another chain than the network it is configured as: the `{NET}_*`
+/// variables point at the wrong node. Written at startup and whenever a check finds it anew.
+#[derive(Debug, Serialize)]
+pub struct RpcWrongNetwork<'a> {
+    pub network: &'static str,
+    /// `getblockchaininfo`'s `chain`, cut to 16 characters.
+    pub node_chain: &'a str,
+}
+event!(RpcWrongNetwork<'a>, "rpc_wrong_network", Error);
 
 /// The readiness check could not reach the node's RPC: at the 1st, 2nd, 4th, 8th… check in a row.
 #[derive(Debug, Serialize)]
@@ -1575,7 +1602,17 @@ mod tests {
                 total: 2,
             }),
             both(&RpcAuthFailed { network: n }),
+            both(&RpcWrongNetwork {
+                network: n,
+                node_chain: "main",
+            }),
             both(&ConnectionsRefused { total: 8 }),
+            both(&ProxyHeaderIgnored {
+                header: "x-real-ip",
+                peer: Some("172.18.0.1".into()),
+                trusted_proxies_set: false,
+                total: 1,
+            }),
             both(&RpcUnreachable {
                 network: n,
                 error: "timeout",

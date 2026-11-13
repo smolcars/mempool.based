@@ -123,6 +123,15 @@ impl Refusals {
     /// Counts one refusal of `path` for `reason`. True when it is the first of its reason since
     /// a window without any: then the caller writes it whole.
     pub fn record(&self, reason: &'static str, path: &str, who: Refusal) -> bool {
+        self.tally(reason, path, who, true)
+    }
+
+    /// Counts one refusal that has no request line to write: a WebSocket message refused.
+    pub fn count(&self, reason: &'static str, path: &str, who: Refusal) {
+        self.tally(reason, path, who, false);
+    }
+
+    fn tally(&self, reason: &'static str, path: &str, who: Refusal, whole: bool) -> bool {
         let route = route_class(path);
         let bit = usize::try_from(self.keys.hash_one(who.client)).unwrap_or(0) % SKETCH_BITS;
         let mut w = self.window.lock().unwrap_or_else(PoisonError::into_inner);
@@ -134,7 +143,7 @@ impl Refusals {
             }
             None => {
                 w.reasons.push((reason, 1));
-                !w.recent.contains(&reason)
+                whole && !w.recent.contains(&reason)
             }
         };
         w.logged += u64::from(first);

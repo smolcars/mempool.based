@@ -34,7 +34,7 @@ use node::rpc::model::{Cluster, ClusterChunk, EntryFees, MempoolEntry, MempoolIn
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -810,13 +810,22 @@ struct Client {
 impl Client {
     fn new(queue: usize) -> Self {
         let (tx, rx) = mpsc::channel(queue);
-        let conn = Arc::new(Conn {
-            id: IDS.fetch_add(1, Ordering::Relaxed),
-            queue: tx,
-            closing: watch::Sender::new(None),
-        });
+        let conn = Arc::new(Conn::test(IDS.fetch_add(1, Ordering::Relaxed), tx));
         Self {
             conn,
+            rx,
+            last: HashMap::new(),
+            count: HashMap::new(),
+        }
+    }
+
+    /// Another socket of the same client address.
+    fn beside(&self, queue: usize) -> Self {
+        let (tx, rx) = mpsc::channel(queue);
+        let mut conn = Conn::test(IDS.fetch_add(1, Ordering::Relaxed), tx);
+        conn.who = self.conn.who;
+        Self {
+            conn: Arc::new(conn),
             rx,
             last: HashMap::new(),
             count: HashMap::new(),
@@ -838,7 +847,7 @@ impl Client {
         }
     }
 
-    fn sub(&self, s: &Server, name: &str) -> Result<(), Full> {
+    fn sub(&self, s: &Server, name: &str) -> Result<(), Declined> {
         let (topic, name) = parse(name, Network::Regtest).unwrap();
         s.track().subscribe(topic, &name, &self.conn)
     }
@@ -1298,7 +1307,7 @@ async fn global_bounds_refuse_clearly_and_release_frees_them() {
         clients[i].sub(&s, &tx_topic(ids[i])).unwrap();
     }
     // A fourth distinct transaction is refused, to that socket only; it stays connected.
-    assert_eq!(clients[3].sub(&s, &tx_topic(ids[3])), Err(Full));
+    assert_eq!(clients[3].sub(&s, &tx_topic(ids[3])), Err(Declined::Full));
     clients[3].drain();
     assert_eq!(
         clients[3].last[&tx_topic(ids[3])],
@@ -1325,7 +1334,7 @@ async fn global_bounds_refuse_clearly_and_release_frees_them() {
     let a1 = format!("address:{}", crate::ws::tests::address(1));
     let a2 = format!("address:{}", crate::ws::tests::address(2));
     clients[0].sub(&s, &a1).unwrap();
-    assert_eq!(clients[1].sub(&s, &a2), Err(Full));
+    assert_eq!(clients[1].sub(&s, &a2), Err(Declined::Full));
     // Released, but its node request still counts until it ends.
     clients[0].unsub(&s, &a1);
     let deadline = Instant::now() + WAIT;
@@ -1463,11 +1472,69 @@ async fn addresses_signal_changes_and_say_what_the_node_refused() {
         None,
         true,
         &WsLimits::default(),
+        &crate::config::Limits::default(),
     ));
     let mut e = Client::new(8);
     let (topic, n) = parse(&name(5), Network::Regtest).unwrap();
     lone.subscribe(topic, &n, &e.conn).unwrap();
     e.wait(&n, |v| state(v) == "unavailable").await;
+}
+
+/// A client's budget pays for node work only: following an address the node is already asked
+/// about is free, whoever asked, and following one it is no longer asked about is not.
+#[tokio::test]
+async fn new_address_follows_are_charged_only_when_the_node_is_asked() {
+    let electrum = Electrum::start().await;
+    // A budget of 2, refilled at 0.5 a second: under one token in this test's time.
+    let ctx = context_with(&electrum.addr, "http://127.0.0.1:1", false, None, |c| {
+        c.limits.client_burst = 8;
+        c.limits.client_rate_per_sec = 1;
+    });
+    let follow = tokio::spawn(follow_addresses(
+        Arc::clone(&ctx.track),
+        ctx.electrum.events(),
+        ctx.electrum.health(),
+    ));
+    let s = Server::on(ctx, &Mock::new());
+    let name = |n: u8| format!("address:{}", crate::ws::tests::address(n));
+    let subscribes = || electrum.subscribes.load(Ordering::Relaxed);
+    electrum.delay.store(100, Ordering::Relaxed);
+    let mut c = Client::new(64);
+    let mut d = c.beside(64);
+    let other = Client::new(64);
+
+    // A first follow asks the node: one token. Leaving and coming back while the node is still
+    // being asked, or a second socket of the client joining, asks it nothing: free.
+    c.sub(&s, &name(1)).unwrap();
+    c.unsub(&s, &name(1));
+    c.sub(&s, &name(1)).unwrap();
+    d.sub(&s, &name(1)).unwrap();
+    // Another client already following an address makes it free too.
+    other.sub(&s, &name(2)).unwrap();
+    c.sub(&s, &name(2)).unwrap();
+    // The second token, then none.
+    c.sub(&s, &name(3)).unwrap();
+    assert_eq!(d.sub(&s, &name(4)), Err(Declined::Rate));
+    let v = d.wait(&name(4), |v| v["type"] == "refused").await;
+    assert_eq!(v["reason"], "follow_rate");
+    for n in 1..=3 {
+        c.wait(&name(n), |v| state(v) == "watching").await;
+    }
+    assert_eq!(subscribes(), 3, "addresses 1, 2 and 3, once each");
+    assert_eq!(s.track().tracked().1, 3);
+
+    // Released by every socket once the node answered: following it again is a new request to
+    // the node, and the budget is spent.
+    c.unsub(&s, &name(1));
+    d.unsub(&s, &name(1));
+    assert_eq!(c.sub(&s, &name(1)), Err(Declined::Rate));
+    // Another client has a budget of its own.
+    other.sub(&s, &name(1)).unwrap();
+    // A refusal leaves the socket as it was: its follows still work.
+    c.wait(&name(3), |v| state(v) == "watching").await;
+    assert_eq!(c.conn.reason(), None);
+    assert_eq!(d.conn.reason(), None);
+    follow.abort();
 }
 
 /// The consistency test: a random sequence of sends, fee bumps, children, blocks, evictions and
@@ -1744,7 +1811,10 @@ async fn address_churn_cannot_outrun_the_total() {
     for n in 0..20 {
         match c.sub(&s, &name(n)) {
             Ok(()) => c.unsub(&s, &name(n)),
-            Err(Full) => refused += 1,
+            Err(why) => {
+                assert_eq!(why, Declined::Full);
+                refused += 1;
+            }
         }
         assert!(s.track().tracked().1 <= 2);
     }

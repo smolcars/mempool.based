@@ -38,6 +38,8 @@ const FETCHES: usize = 2;
 const MAX_PAGE: usize = 8 << 20;
 /// Longest `mempool-blocks` on another tip waits for the block just sent, as on `/app/ws`.
 const HOLD: Duration = super::mempool::HOLD;
+/// The answer to a follow past the client's budget for new addresses.
+const TOO_FAST: &str = "too many new addresses from this client; retry in a moment";
 /// Messages the reference has that this server does not serve, answered with `<key>-error` so a
 /// person reading the traffic sees why nothing comes.
 const UNSERVED: [&str; 8] = [
@@ -137,11 +139,22 @@ impl Compat {
         lock(&self.addresses).by_script.len()
     }
 
-    fn follow(&self, ctx: &Arc<NetworkContext>, sh: ScriptHash, address: &str) {
+    /// Follows `sh` for `conn`. A first follow reads its history from the node, which takes one
+    /// of the client's tokens for new node work; `false` when it has none left.
+    fn follow(
+        &self,
+        ctx: &Arc<NetworkContext>,
+        sh: ScriptHash,
+        address: &str,
+        conn: &Conn,
+    ) -> bool {
         let mut a = lock(&self.addresses);
         if let Some(f) = a.by_script.get_mut(&sh) {
             f.refs += 1;
-            return;
+            return true;
+        }
+        if !ctx.track.charge(conn, "/api/v1/ws") {
+            return false;
         }
         a.next_epoch += 1;
         let epoch = a.next_epoch;
@@ -158,6 +171,7 @@ impl Compat {
             },
         );
         tokio::spawn(read_address(Arc::clone(ctx), sh, epoch));
+        true
     }
 
     fn release(&self, sh: ScriptHash) {
@@ -301,8 +315,8 @@ impl<'a> Session<'a> {
             self.subs.part(Topic::V1Tx(t));
         }
         match self.subs.join(Topic::V1Tx(txid), "", limits) {
-            Ok(true) => self.tx = Some(txid),
-            Ok(false) => self.error(
+            Ok(None) => self.tx = Some(txid),
+            Ok(Some(_)) => self.error(
                 "track-tx",
                 "the server follows too many transactions; retry later",
             ),
@@ -376,13 +390,21 @@ impl<'a> Session<'a> {
         key: &str,
     ) -> bool {
         match self.subs.join(topic, name, limits) {
-            Ok(true) => {
+            Ok(None) => {
                 let address = name.strip_prefix("address:").unwrap_or(name);
-                self.ctx.v1.follow(self.ctx, sh, address);
-                true
+                if self.ctx.v1.follow(self.ctx, sh, address, self.subs.conn()) {
+                    return true;
+                }
+                self.subs.part(topic);
+                self.error(key, TOO_FAST);
+                false
             }
-            Ok(false) => {
+            Ok(Some(track::Declined::Full)) => {
                 self.error(key, "the server follows too many addresses; retry later");
+                false
+            }
+            Ok(Some(track::Declined::Rate)) => {
+                self.error(key, TOO_FAST);
                 false
             }
             Err(_) => {

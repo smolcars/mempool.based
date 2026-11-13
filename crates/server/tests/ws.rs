@@ -5,7 +5,9 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic
+    clippy::panic,
+    // The bound tests print what they measured, for docs/WS.md.
+    clippy::print_stderr
 )]
 
 use std::collections::HashMap;
@@ -60,9 +62,15 @@ async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
         all.truncate(10);
         Value::Array(all).to_string()
     }
+    // Address history pages, counted under one key: the node's work for `/api/v1/ws` follows.
+    async fn history(State((_, misses)): State<(Blocks, Misses)>) -> impl IntoResponse {
+        *misses.lock().unwrap().entry("history".into()).or_default() += 1;
+        "[]"
+    }
     let app = axum::Router::new()
         .route("/block/{hash}", get(block))
         .route("/blocks", get(recent))
+        .route("/scripthash/{hash}/txs", get(history))
         .with_state((blocks, misses));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -194,8 +202,11 @@ impl Harness {
         let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
         config.ws = ws;
         config.limits.request_timeout = request_timeout;
-        config.limits.client_burst = 10_000;
-        config.limits.client_rate_per_sec = 10_000;
+        // Out of the way of the socket limits under test, unless the test sets its own.
+        if !extra.iter().any(|(k, _)| k.starts_with("CLIENT_")) {
+            config.limits.client_burst = 10_000;
+            config.limits.client_rate_per_sec = 10_000;
+        }
 
         let h = chain(BlockHash::all_zeros(), 3, 0);
         for (height, header) in h.iter().enumerate() {
@@ -1436,4 +1447,201 @@ async fn refused_upgrades_and_oversized_messages_write_a_bounded_log() {
         .collect();
     assert!(totals.iter().all(|t| t.is_power_of_two()), "{totals:?}");
     assert_eq!(totals.iter().filter(|t| **t > 2).count(), 4, "{totals:?}");
+}
+
+/// A regtest address of its own for each `n`: a made-up witness script hash.
+fn address(n: u32) -> String {
+    let mut bytes = [7u8; 32];
+    bytes[..4].copy_from_slice(&n.to_be_bytes());
+    let script = bitcoin::ScriptBuf::new_p2wsh(&bitcoin::WScriptHash::from_byte_array(bytes));
+    bitcoin::Address::from_script(&script, bitcoin::Network::Regtest)
+        .unwrap()
+        .to_string()
+}
+
+/// Answers the Electrum peer's address subscribes until `until`, and counts them: the node's work.
+async fn count_subscribes(peer: &mut Peer, until: Instant) -> usize {
+    let mut subscribes = 0;
+    while let Ok(Ok(Some(line))) =
+        tokio::time::timeout_at(until.into(), peer.lines.next_line()).await
+    {
+        let req: Value = serde_json::from_str(&line).unwrap();
+        match req["method"].as_str().unwrap() {
+            "blockchain.scripthash.subscribe" => {
+                subscribes += 1;
+                peer.reply(&req, Value::Null).await;
+            }
+            _ => peer.reply(&req, json!(true)).await,
+        }
+    }
+    subscribes
+}
+
+/// One client address with as many sockets as it may open, each following two fresh addresses
+/// in every message at the full message rate for `secs`: on `/app/ws` subscribe two, then
+/// unsubscribe them; on `/api/v1/ws` a new `track-addresses` pair, which replaces the last.
+/// Returns the sockets.
+async fn follow_flood(addr: String, path: &'static str, secs: u64) -> Vec<Ws> {
+    let app = path.ends_with("app/ws");
+    let mut sent = Vec::new();
+    for i in 0..if app { 16 } else { 4 } {
+        let mut ws = Ws::connect(&addr, path).await;
+        sent.push(tokio::spawn(async move {
+            let end = Instant::now() + Duration::from_secs(secs);
+            let mut n = 0;
+            while Instant::now() < end {
+                let pair = [address(i << 16 | n), address(i << 16 | (n + 1))];
+                n += 2;
+                if app {
+                    let topics = pair.map(|a| format!("address:{a}"));
+                    ws.send(json!({"op": "subscribe", "topics": topics})).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    ws.send(json!({"op": "unsubscribe", "topics": topics}))
+                        .await;
+                } else {
+                    ws.send(json!({"track-addresses": pair})).await;
+                }
+                // One message each 100 ms: exactly `WS_MESSAGES_PER_SEC`, never over it.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            ws
+        }));
+    }
+    let mut out = Vec::new();
+    for t in sent {
+        out.push(t.await.unwrap());
+    }
+    out
+}
+
+/// Floods `path` from one client address for three seconds with the default per-client
+/// limits, and returns the node's work: subscribes and history reads, the time taken, the
+/// sockets and the server.
+async fn flood(path: &'static str) -> (usize, usize, f64, Vec<Ws>, Harness) {
+    const SECS: u64 = 3;
+    // A `CLIENT_` variable keeps the default per-client limits, which the budget comes from.
+    let mut s =
+        Harness::start_vars(limits(), Duration::from_secs(2), &[("CLIENT_BURST", "120")]).await;
+    let started = Instant::now();
+    let flood = tokio::spawn(follow_flood(s.addr.clone(), path, SECS));
+    let subscribes = count_subscribes(&mut s.peer, started + Duration::from_secs(SECS + 1)).await;
+    let socks = flood.await.unwrap();
+    let elapsed = started.elapsed().as_secs_f64();
+    let reads = s
+        .misses
+        .lock()
+        .unwrap()
+        .get("history")
+        .copied()
+        .unwrap_or(0) as usize;
+    eprintln!(
+        "{path}: {subscribes} subscribes and {reads} history reads in {elapsed:.1} s from one client address"
+    );
+    // 30 at once, then 2 a second (docs/CONFIG.md, "Address and batch routes").
+    assert!(
+        (subscribes + reads) as f64 <= 30.0 + 2.0 * elapsed + 1.0,
+        "{subscribes} subscribes and {reads} reads in {elapsed:.1} s"
+    );
+    (subscribes, reads, elapsed, socks, s)
+}
+
+/// The refusals were counted in the summary written at shutdown, never one line each.
+async fn refusals_summarised(mut s: Harness) {
+    s.stop.take().unwrap().send(()).unwrap();
+    timeout(WAIT, &mut s.served).await.unwrap().unwrap();
+    let summary = logged(|v| {
+        v["event"] == "requests_refused" && v["reasons"]["follow_rate"].as_u64() > Some(0)
+    })
+    .await;
+    assert!(summary["routes"]["ws"].as_u64() > Some(0), "{summary}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_client_starts_new_address_follows_only_at_its_budget() {
+    let (subscribes, _, _, mut socks, s) = flood("/regtest/app/ws").await;
+    assert!(subscribes >= 30, "the budget's burst is served");
+    // Each socket is still open and usable, and was told why.
+    for ws in &mut socks {
+        ws.send(json!({"op": "ping"})).await;
+        loop {
+            let v = ws.json().await;
+            if v["type"] == "pong" {
+                break;
+            }
+            assert!(
+                v["type"] == "hello"
+                    || v["type"] == "address"
+                    || (v["type"] == "refused" && v["reason"] == "follow_rate"),
+                "{v}"
+            );
+        }
+    }
+    drop(socks);
+    refusals_summarised(s).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v1_one_client_starts_new_address_follows_only_at_its_budget() {
+    let (subscribes, reads, _, mut socks, s) = flood("/regtest/api/v1/ws").await;
+    // A first follow is a subscribe and a history read: two of the client's tokens.
+    assert!(subscribes > 0 && reads > 0);
+    for ws in &mut socks {
+        ws.send(json!({"action": "ping"})).await;
+        loop {
+            let v = ws.json().await;
+            if v == json!({"pong": true}) {
+                break;
+            }
+            assert_eq!(
+                v,
+                json!({"track-addresses-error": "too many new addresses from this client; retry in a moment"})
+            );
+        }
+    }
+    drop(socks);
+    refusals_summarised(s).await;
+}
+
+/// A client that never reads but keeps pinging, so it is never idle, on a busy feed: once its
+/// buffers are full the server's writes stall, and it is dropped within `REQUEST_TIMEOUT_SECS`
+/// of that, whatever its send queue still holds (docs/WS.md, "Close codes").
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_never_reads_but_pings_is_dropped_once_its_writes_stall() {
+    let timeout_secs = 2;
+    let mut s = Harness::start_with(limits(), Duration::from_secs(timeout_secs)).await;
+    let sock = TcpSocket::new_v4().unwrap();
+    sock.set_recv_buffer_size(4096).unwrap();
+    let stream = sock.connect(s.addr.parse().unwrap()).await.unwrap();
+    let mut ws = Ws::connect_stream(stream, "/regtest/app/ws").await.unwrap();
+    ws.send(json!({"op": "subscribe", "topics": ["blocks"]}))
+        .await;
+    let pinging = tokio::spawn(async move {
+        loop {
+            ws.send(json!({"op": "ping"})).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    });
+    let pad = "x".repeat(256 * 1024);
+    let started = Instant::now();
+    let blocks = chain(s.h[2].block_hash(), 400, 5);
+    for (i, header) in blocks.iter().enumerate() {
+        if s.sockets.open() == 0 {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30), "never dropped");
+        let height = 3 + i as u32;
+        let id = header.block_hash().to_string();
+        s.blocks
+            .lock()
+            .unwrap()
+            .insert(id.clone(), json!({"id": id, "height": height, "pad": pad}));
+        s.peer.push_tip(height, header).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let took = started.elapsed();
+    pinging.abort();
+    eprintln!("dropped after {took:?} of 256 KB blocks every 50 ms");
+    assert_eq!(s.sockets.open(), 0, "dropped");
+    // Its buffers fill in well under a second; then at most the write timeout, and a margin.
+    assert!(took < Duration::from_secs(timeout_secs + 3), "{took:?}");
 }
