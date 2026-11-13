@@ -21,7 +21,8 @@ export function Amount(props: {
    * Exact, but where a phone's narrow field cannot hold it (a thousand bitcoin and more), in
    * magnitude there (`.amount--long`, CSS by the field), the exact amount in its title. A field
    * that measures its exact amount wider than itself in the reader's font marks it
-   * `.amount--tight`, which reads in magnitude too.
+   * `.amount--tight`, which reads in magnitude too (`data-short`, drawn by CSS, so the text is
+   * still the exact amount).
    */
   fit?: boolean;
 }) {
@@ -46,6 +47,7 @@ export function Amount(props: {
         >
           <span
             class={["amount num", { "amount--long": long() }]}
+            data-short={props.fit === true && !long() ? formatBtcShort(props.sats) : undefined}
             title={
               props.fit === true
                 ? `${formatBtc(props.sats)} BTC, ${formatSats(props.sats)} sats`
@@ -57,7 +59,7 @@ export function Amount(props: {
               {p().whole}.{p().significant}
               <span class="amount__zeros">{p().zeros}</span>
             </span>
-            <Show when={props.fit}>
+            <Show when={long()}>
               <span class="amount__short">{formatBtcShort(props.sats)}</span>
             </Show>
             <span class={{ unit: true, "visually-hidden": props.unit === false }}> BTC</span>

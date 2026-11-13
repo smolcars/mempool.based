@@ -737,8 +737,13 @@
     .home-live {
       margin-left: auto;
     }
+    /* Two to a row, each at least as wide as its figure; one to a row where two do not fit. */
     .home-stats {
-      grid-template-columns: repeat(2, minmax(min-content, 1fr));
+      display: flex;
+      flex-wrap: wrap;
+    }
+    .home-stat {
+      flex: 1 1 calc(50% - var(--space-4));
     }
     .home-grid {
       gap: var(--space-4);
