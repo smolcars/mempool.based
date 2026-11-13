@@ -124,10 +124,12 @@
   .address-history__head {
     align-items: flex-end;
   }
+  /* Room under the chosen tab's bar, which hangs below the tabs, so it never meets the table. */
   .address-tabs {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2) var(--space-5);
+    margin-bottom: var(--space-3);
   }
   .address-tab {
     position: relative;

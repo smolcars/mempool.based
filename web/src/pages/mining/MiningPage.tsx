@@ -282,7 +282,7 @@ function Pools(props: {
           when={(r()?.blockCount ?? 0) > 0}
           fallback={<NothingStored what="blocks" period={period()} />}
         >
-          <div class="mining-pools">
+          <div class={["mining-pools", { "mining-pools--bar": !sharesOverTime(period()) }]}>
             <div class="mining-pools__ranking">
               <DataTable
                 caption={`Pools ranked by blocks found in ${period().words}`}

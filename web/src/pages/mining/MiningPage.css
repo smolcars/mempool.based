@@ -371,8 +371,9 @@
   }
 
   /* A pool's page. Its figures' height, a coverage note's included, is held while they load. */
-  .pool-stats {
-    min-height: 12rem;
+  /* Held only while the figures load: loaded, the panel ends where they do. */
+  .pool-stats:has(> .mining-rewards[aria-busy="true"]) {
+    min-height: 9rem;
   }
   .mining-pool-title {
     overflow-wrap: anywhere;
@@ -415,6 +416,15 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+  /* A day or a week: one bar, not a chart, so it goes above the table, the panel's width, rather
+     than beside it over empty space. */
+  .mining-pools--bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+  .mining-pools--bar .mining-pools__shares {
+    order: -1;
+  }
   @media (max-width: 640px) {
     .mining {
       --tile-w: 7.5rem;
@@ -430,8 +440,8 @@
     .mining-share__bar {
       display: none;
     }
-    .pool-stats {
-      min-height: 20rem;
+    .pool-stats:has(> .mining-rewards[aria-busy="true"]) {
+      min-height: 16rem;
     }
     /* Stacked, so a long name arriving cannot push its neighbour onto a new line. */
     .mining-head {

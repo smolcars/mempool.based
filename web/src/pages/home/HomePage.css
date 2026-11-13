@@ -418,13 +418,15 @@
   }
 
   /* ---------- Below the strip ---------- */
-  /* Two columns whose panels share each row's height, so both columns end together. */
+  /* The fee answer and the difficulty stacked beside the mempool, about its height, so no panel
+     is stretched far past its content; the latest transactions take the width below. */
   .home-grid {
     display: grid;
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     grid-template-areas:
       "fees mempool"
-      "difficulty recent";
+      "difficulty mempool"
+      "recent recent";
     align-items: stretch;
     gap: var(--space-5);
     padding-top: var(--space-5);
@@ -617,9 +619,12 @@
   }
   /* One answer for every wait fills the panel's two rows: centred and larger, it reads as the
      answer rather than as a well left empty. */
+  /* One answer for every wait: one row, not a tall tile for a single number. */
+  .home-fees__list:has(.home-fees__item--all) {
+    grid-template-rows: auto;
+  }
   .home-fees__item--all {
     grid-column: span 2;
-    grid-row: span 2;
     justify-content: center;
     align-items: center;
     gap: var(--space-3);

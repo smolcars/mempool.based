@@ -29,8 +29,10 @@ export function Pagination(props: PaginationProps) {
       >
         Previous
       </button>
-      <span class="pagination__status num" aria-live="polite">
-        Page {groupDigits(props.page)}
+      {/* Only the page is announced when it changes: a count that moves with a live list would be
+          read out on every update. */}
+      <span class="pagination__status num">
+        <span aria-live="polite">Page {groupDigits(props.page)}</span>
         <Show when={props.pageCount}>{(n) => <>{` of ${groupDigits(n())}`}</>}</Show>
       </span>
       <button

@@ -565,10 +565,14 @@
   }
 
   /* ---- Fact lists ---- */
+  /* Each fact has a rule under it, except the last row's: the list's last pixel is cut off, which
+     finds the last row however the facts wrap. Only the bottom: a focus ring or note can spill
+     out of the other sides. */
   .tx-facts {
     display: grid;
     gap: 0 var(--space-5);
     align-content: start;
+    clip-path: inset(-100vmax -100vmax 1px -100vmax);
   }
   .tx-fact {
     min-width: 0;

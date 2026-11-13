@@ -398,14 +398,12 @@ function ProjectedView(props: { index: number }) {
             </div>
             <Show when={pageCount() > 1}>
               <div class="projected-txs__pages">
-                {/* hasNext rather than a page count, which would be read out on every update. */}
                 <Pagination
                   page={page()}
-                  hasNext={page() < pageCount()}
+                  pageCount={pageCount()}
                   onPage={setPage}
                   label="Pages of transactions"
                 />
-                <span class="projected-txs__of num">of {groupDigits(pageCount())}</span>
               </div>
             </Show>
           </section>
