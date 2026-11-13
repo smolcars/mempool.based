@@ -598,3 +598,45 @@ async fn a_record_sent_as_the_hold_ends_is_never_stored() {
     scids.sort_unstable();
     assert_eq!(scids, [A, D]);
 }
+
+#[tokio::test]
+async fn the_totals_at_the_first_sync_stand_in_until_a_newer_snapshot_is_stored() {
+    let t = temp();
+    let l = lightning();
+    let point = |time, channels| Point {
+        time,
+        samples: 1,
+        sums: Stats {
+            channels,
+            ..Stats::default()
+        },
+    };
+    // Not synced yet: nothing, so the routes say there are no statistics.
+    assert_eq!(newest(&l, &t.store).await.unwrap(), None);
+    // Synced, before its first ten minutes: the live totals, not a 404 or nulls.
+    *l.live.lock().unwrap() = Some(point(1_000_100, 1_065));
+    assert_eq!(
+        newest(&l, &t.store).await.unwrap(),
+        Some(point(1_000_100, 1_065))
+    );
+    // A snapshot from before this start (a restart after downtime) is older: still the live ones.
+    store_ln::insert(&t.store, store_ln::Level::Minute, vec![point(999_600, 900)])
+        .await
+        .unwrap();
+    assert_eq!(
+        newest(&l, &t.store).await.unwrap(),
+        Some(point(1_000_100, 1_065))
+    );
+    // The first snapshot since: the stored one.
+    store_ln::insert(
+        &t.store,
+        store_ln::Level::Minute,
+        vec![point(1_000_200, 1_066)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        newest(&l, &t.store).await.unwrap(),
+        Some(point(1_000_200, 1_066))
+    );
+}

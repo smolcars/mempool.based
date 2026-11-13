@@ -349,6 +349,10 @@ pub enum Event {
         peer: PeerAddr,
         connected_for: Duration,
     },
+    /// A peer's `init` named only other chains (a mainnet node in a signet list, say): it was
+    /// disconnected, and is redialled after the backoff like an unreachable one. Sent once per
+    /// peer.
+    PeerWrongChain(PublicKey),
     /// A connection attempt failed: TCP, timeout or handshake. `failures` is the count in a row.
     PeerUnreachable {
         peer: PeerAddr,
