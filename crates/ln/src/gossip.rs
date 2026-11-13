@@ -229,6 +229,9 @@ pub(crate) struct Gossip {
     outbox: Mutex<Vec<MessageSendEvent>>,
     changes: broadcast::Sender<Change>,
     pub(crate) events: broadcast::Sender<Event>,
+    /// Peers refused for naming only other chains, each reported once. Only configured peers are
+    /// dialled, so this holds at most their number.
+    wrong_chain: Mutex<HashSet<PublicKey>>,
 }
 
 impl Gossip {
@@ -267,6 +270,7 @@ impl Gossip {
             outbox: Mutex::new(Vec::new()),
             changes,
             events,
+            wrong_chain: Mutex::new(HashSet::new()),
         }
     }
 
@@ -793,6 +797,22 @@ impl BaseMessageHandler for Gossip {
         msg: &Init,
         inbound: bool,
     ) -> Result<(), ()> {
+        // A peer on another chain has no gossip for ours but would hold a connection slot for
+        // good, and its handshake succeeds: refuse it, which disconnects it, and say why.
+        if msg
+            .networks
+            .as_ref()
+            .is_some_and(|n| !n.contains(&self.chain))
+        {
+            if self
+                .wrong_chain
+                .lock()
+                .is_ok_and(|mut s| s.insert(their_node_id))
+            {
+                let _ = self.events.send(Event::PeerWrongChain(their_node_id));
+            }
+            return Err(());
+        }
         self.sync.peer_connected(their_node_id, msg, inbound)?;
         if msg.features.supports_gossip_queries()
             && let Ok(mut r) = self.range.lock()

@@ -1196,6 +1196,15 @@ pub struct LightningPeerLost {
 }
 event!(LightningPeerLost, "lightning_peer_lost", Info, keep);
 
+/// A Lightning peer named only other chains in its `init` (a mainnet node in a signet list, say):
+/// it was disconnected and is redialled after the backoff. Once per peer. `peer` is its key.
+#[derive(Debug, Serialize)]
+pub struct LightningPeerWrongChain {
+    pub network: &'static str,
+    pub peer: String,
+}
+event!(LightningPeerWrongChain, "lightning_peer_wrong_chain", Warn);
+
 /// Dialling a Lightning peer failed (TCP, timeout or handshake): at the 1st, 2nd, 4th, 8th…
 /// failure in a row.
 #[derive(Debug, Serialize)]
@@ -2037,6 +2046,10 @@ mod tests {
                 network: n,
                 peer: "02aa@203.0.113.1:9735".into(),
                 failures: 4,
+            }),
+            both(&LightningPeerWrongChain {
+                network: n,
+                peer: "02aa".into(),
             }),
             both(&LightningSynced {
                 network: n,

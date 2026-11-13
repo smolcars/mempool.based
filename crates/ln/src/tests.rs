@@ -2049,5 +2049,40 @@ async fn stored_channels_keep_their_place_under_the_ceiling() {
     assert_eq!(g.counters.over_ceiling.load(Ordering::Relaxed), 2);
 }
 
+#[test]
+fn a_peer_on_another_chain_is_refused_and_reported_once() {
+    let mut h = handler(5);
+    let peer = key(7).public_key(&Secp256k1::new());
+    let init = |networks| Init {
+        features: InitFeatures::empty(),
+        networks,
+        remote_network_address: None,
+    };
+    let mainnet = ChainHash::using_genesis_block(Network::Bitcoin);
+    // Refused, which makes LDK disconnect it, and said once however often it is redialled.
+    for _ in 0..2 {
+        assert!(
+            h.gossip
+                .peer_connected(peer, &init(Some(vec![mainnet])), false)
+                .is_err()
+        );
+    }
+    let mut wrong = 0;
+    while let Ok(e) = h.events.try_recv() {
+        if let Event::PeerWrongChain(k) = e {
+            assert_eq!(k, peer);
+            wrong += 1;
+        }
+    }
+    assert_eq!(wrong, 1);
+    // Ours among others, or no chain named at all (it cannot be told): kept.
+    assert!(
+        h.gossip
+            .peer_connected(peer, &init(Some(vec![mainnet, chain()])), false)
+            .is_ok()
+    );
+    assert!(h.gossip.peer_connected(peer, &init(None), false).is_ok());
+}
+
 mod closes;
 mod hostile;

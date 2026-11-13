@@ -28,9 +28,9 @@ use logging::events::{
     LightningCeilingReached, LightningChannelClosed, LightningFailed, LightningGraphSaved,
     LightningHistoryFailed, LightningHistoryGap, LightningHistoryResumed, LightningLdkRecord,
     LightningLookupFailed, LightningPeerConnected, LightningPeerLost, LightningPeerUnreachable,
-    LightningPruned, LightningReorg, LightningSaveFailed, LightningStarted, LightningStatsSkipped,
-    LightningStatsStored, LightningStopped, LightningSummary, LightningSynced,
-    LightningWatchFailed, LightningWatchReset,
+    LightningPeerWrongChain, LightningPruned, LightningReorg, LightningSaveFailed,
+    LightningStarted, LightningStatsSkipped, LightningStatsStored, LightningStopped,
+    LightningSummary, LightningSynced, LightningWatchFailed, LightningWatchReset,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -89,6 +89,9 @@ pub struct Lightning {
     /// What the node, channel, search and ranking routes read: `None` until the graph is synced.
     /// Requests clone the `Arc` and let go; only the index task writes it.
     index: RwLock<Option<Arc<Index>>>,
+    /// The graph's totals when it first synced: the latest statistics until a snapshot is stored,
+    /// which can take ten minutes.
+    live: Mutex<Option<Point>>,
     /// The last index build, microseconds, and funding txids learned since start.
     index_ms: AtomicU64,
     funded: AtomicU64,
@@ -118,6 +121,7 @@ impl Lightning {
             answers: Mutex::new(HashMap::new()),
             compute: tokio::sync::Mutex::new(()),
             index: RwLock::new(None),
+            live: Mutex::new(None),
             index_ms: AtomicU64::new(0),
             funded: AtomicU64::new(0),
         }
@@ -750,6 +754,10 @@ async fn report(
                 peer: peer.to_string(),
                 connected_secs: connected_for.as_secs(),
             }),
+            Event::PeerWrongChain(key) => logging::emit(&LightningPeerWrongChain {
+                network,
+                peer: key.to_string(),
+            }),
             Event::PeerUnreachable { peer, failures } => {
                 if failures.is_power_of_two() {
                     logging::emit(&LightningPeerUnreachable {
@@ -1268,12 +1276,17 @@ struct V1Point {
     clearnet_tor_nodes: u64,
 }
 
+/// The newest totals: the latest snapshot stored, or the graph's at its first sync when newer, so
+/// a synced graph never answers that it has no statistics.
+pub(crate) async fn newest(l: &Lightning, store: &Store) -> Result<Option<Point>, ApiError> {
+    let stored = store_ln::latest(store).await.map_err(|e| store_error(&e))?;
+    let live = *l.live.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(stored.into_iter().chain(live).max_by_key(|p| p.time))
+}
+
 async fn latest(ctx: &NetworkContext, shape: Shape) -> Result<Response, ApiError> {
-    let (_, store) = enabled(ctx)?;
-    let p = store_ln::latest(store)
-        .await
-        .map_err(|e| store_error(&e))?
-        .ok_or(NO_STATISTICS)?;
+    let (l, store) = enabled(ctx)?;
+    let p = newest(l, store).await?.ok_or(NO_STATISTICS)?;
     let route = "lightning_statistics_latest";
     Ok(match shape {
         Shape::App => to_json(&means(&p), route),
