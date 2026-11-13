@@ -1018,52 +1018,81 @@ async fn a_lookup_that_never_ends_cannot_hold_the_replay_open() {
     assert!(!g.replaying(), "every stored channel was answered");
 }
 
-/// A peer flooding forged announcements is read at its budget once it has spent its burst, and
-/// every one is read in the end; a peer beside it is read as before, and both stay connected.
-/// Waits on what was read, not on time: the unread part of the flood sits in the kernel's socket
-/// buffers, whose size differs by platform.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_flooding_peer_is_read_at_its_budget_and_others_are_not_held() {
-    let dir = TempDir::new();
-    let h = Hostile::start().await;
-    let honest = Hostile::start().await;
-    let node = FakeChain::at(200);
+/// Our peer with a budget of 100 checks a second: 12.5 forged announcements (eight checks each)
+/// after a burst of 60 s of them, 750. Dials the hostile peer `h` and the honest one.
+async fn flooded(dir: &TempDir, h: &Hostile, honest: &Hostile, node: &FakeChain) -> Peer {
     let mut config = Config::new(NET, dir.0.clone());
     config.max_peers = 2;
     config.peers = vec![h.addr, honest.addr];
     config.backoff_min = Duration::from_millis(50);
     config.lookup_interval = Duration::from_millis(20);
-    // 12.5 forged announcements a second (eight checks each) after a burst of 60 s of them, 750.
     config.checks_per_sec = 100;
-    let (burst, rate) = (750, 12.5);
     let peer = Peer::start(config, node.clone()).unwrap().0;
     wait_for("connected", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
+    peer
+}
+
+const FLOOD_BURST: u32 = 750;
+const FLOOD_RATE: f64 = 12.5;
+
+/// `n` forged announcements, queued at once.
+fn queue_forged(h: &Hostile, n: u32) {
     let signed = channel(scid(100, 1, 0), 1, 2);
-    // The burst and 50 more: four seconds' worth at the budget.
-    let flood = burst + 50;
-    let started = std::time::Instant::now();
-    h.send((0..flood).map(|i| {
+    h.send((0..n).map(|i| {
         let mut a = signed.clone();
         a.contents.short_channel_id = scid(100, 10 + i, 0);
         raw(CHANNEL_ANNOUNCEMENT, &a)
     }));
+}
+
+/// A flooding peer is read no faster than its budget once its burst is spent, and every message
+/// it sent is read in the end. Waits on what was read, not on time: the unread part of a flood sits
+/// in the kernel's socket buffers, whose size differs by platform, and a slower machine only takes
+/// longer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flooding_peer_is_read_at_its_budget_and_loses_nothing() {
+    let dir = TempDir::new();
+    let (h, honest) = (Hostile::start().await, Hostile::start().await);
+    let node = FakeChain::at(200);
+    let peer = flooded(&dir, &h, &honest, &node).await;
+    // The burst and 50 more: four seconds' worth at the budget.
+    let flood = FLOOD_BURST + 50;
+    let started = std::time::Instant::now();
+    queue_forged(&h, flood);
     let read = || totals(&peer).channel_announcements;
-    wait_for("the burst", || read() >= u64::from(burst)).await;
-    // The other peer is read while the flood is held back, not after it.
+    wait_for("the whole flood", || read() == u64::from(flood)).await;
+    // Give or take one read of 4 KiB: up to nine announcements of 466 bytes, and one completed
+    // from the read before.
+    let least = f64::from(flood - FLOOD_BURST - 10) / FLOOD_RATE;
+    let took = started.elapsed().as_secs_f64();
+    assert!(took >= least, "{took} s, at least {least} s");
+    wait_for("both up", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
+    peer.shutdown().await.unwrap();
+}
+
+/// A peer held back by its budget does not hold back another: the other's channel arrives while
+/// the flood still has 400 s to go at the budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flooding_peer_does_not_hold_back_another() {
+    let dir = TempDir::new();
+    let (h, honest) = (Hostile::start().await, Hostile::start().await);
+    let node = FakeChain::at(200);
+    let peer = flooded(&dir, &h, &honest, &node).await;
+    let flood = FLOOD_BURST + 5_000;
+    queue_forged(&h, flood);
+    let read = || totals(&peer).channel_announcements;
+    wait_for("the burst", || read() >= u64::from(FLOOD_BURST)).await;
     let id = real(&node, 1, 40, 41);
     honest.send([raw(CHANNEL_ANNOUNCEMENT, &channel(id, 40, 41))]);
     wait_for("the other peer's channel", || {
         peer.read(|g| g.channel(id).is_some())
     })
     .await;
+    // The flood is held back from the end of its burst until hundreds of seconds later (its
+    // spending stays about 60 s ahead of the rate), so the other channel came in while it was.
     assert!(read() < u64::from(flood), "{}", read());
-    // Every one is read, the other peer's included: nothing was dropped.
-    wait_for("the whole flood", || read() == u64::from(flood) + 1).await;
-    // No faster than the budget allows since the first was sent, give or take one read of 4 KiB
-    // (eight announcements). A slower machine only takes longer.
-    let least = f64::from(flood - burst - 8) / rate;
-    let took = started.elapsed().as_secs_f64();
-    assert!(took >= least, "{took} s, at least {least} s");
+    let ahead = peer.gossip().ahead(&h.addr.node_id);
+    assert!(ahead > Duration::from_secs(30), "{ahead:?}");
     wait_for("both up", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
     peer.shutdown().await.unwrap();
 }

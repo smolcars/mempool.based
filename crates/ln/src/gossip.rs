@@ -652,12 +652,17 @@ impl Gossip {
 
     /// How long to leave a peer unread, so its gossip costs at most `checks_per_sec`.
     pub(crate) fn hold_off(&self, peer: &PublicKey) -> Duration {
+        self.ahead(peer).saturating_sub(CHECKS_AHEAD)
+    }
+
+    /// How far a peer's spending runs ahead of `checks_per_sec`: [`CHECKS_AHEAD`] or about that
+    /// once its burst is spent.
+    pub(crate) fn ahead(&self, peer: &PublicKey) -> Duration {
         let Ok(paid) = self.paid_off.lock() else {
             return Duration::ZERO;
         };
         paid.get(peer).map_or(Duration::ZERO, |at| {
             at.saturating_duration_since(Instant::now())
-                .saturating_sub(CHECKS_AHEAD)
         })
     }
 
