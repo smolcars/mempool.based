@@ -242,13 +242,13 @@ test("the header keeps a usable search and apart sections down to a zoomed phone
       document.body.append(probe);
       const w = probe.getBoundingClientRect().width;
       probe.remove();
-      return (
-        w <=
-        input.clientWidth -
-          Number.parseFloat(style.paddingLeft) -
-          Number.parseFloat(style.paddingRight) +
-          1
+      // From the box: Firefox gives an input's clientWidth without its padding, Chromium with.
+      const edges = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"] as const;
+      const room = edges.reduce(
+        (r, e) => r - Number.parseFloat(style[e]),
+        input.getBoundingClientRect().width,
       );
+      return w <= room + 1;
     });
     expect(fits, `placeholder at ${width} px`).toBe(true);
     const links = await page
