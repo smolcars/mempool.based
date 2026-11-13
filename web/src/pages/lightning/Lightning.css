@@ -77,8 +77,13 @@
   .ln-stat__value .amount {
     font-size: var(--text-lg);
   }
+  /* The figure whole; only the phrase under it wraps (the stat may be narrower than it). */
+  .ln-stat__value {
+    white-space: nowrap;
+  }
   .ln-stat__sub,
   .ln-stat__of {
+    white-space: normal;
     font-size: var(--text-sm);
     font-weight: var(--weight-regular);
     letter-spacing: 0;

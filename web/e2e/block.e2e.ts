@@ -68,7 +68,7 @@ test("the blocks list pages back and forward", async ({ page }) => {
   const headers = await page.getByRole("columnheader").allTextContents();
   const match = headers.indexOf("Match rate, %");
   if (!test.info().project.name.endsWith("-phone")) expect(match).toBeGreaterThanOrEqual(0);
-  if (match >= 0) {
+  if (match !== -1) {
     const cell = page.getByRole("table").getByRole("row").nth(1).getByRole("cell").nth(match);
     await expect(cell).toHaveText("–no audit");
     await expect(cell.locator(".visually-hidden")).toHaveText("no audit");

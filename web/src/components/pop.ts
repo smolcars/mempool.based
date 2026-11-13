@@ -1,5 +1,5 @@
 // The page's small pop-ups (an exact amount, the network menu): one open at a time, closed by a
-// press outside, Escape, and, where asked, a scroll. Not the browser's popover: while a top-layer
+// press outside, Escape, and, where asked, a scroll that carries its button away. Not the browser's popover: while a top-layer
 // element shows, iOS Safari repaints the band behind its toolbar and the page stops above it
 // (WebKit bug 302272).
 
@@ -26,19 +26,27 @@ export function openPop(
     close();
     inside()[0]?.focus();
   };
+  // A scroll or resize closes it once its button has moved: not a nudge, such as iOS Safari's
+  // toolbar settling as the pop-up opens.
+  const at = inside()[0]?.getBoundingClientRect();
+  const moved = () => {
+    const now = inside()[0]?.getBoundingClientRect();
+    if (at && now && Math.max(Math.abs(now.top - at.top), Math.abs(now.left - at.left)) > 16)
+      close();
+  };
   const close = () => {
     document.removeEventListener("pointerdown", press, true);
     document.removeEventListener("keydown", key);
-    window.removeEventListener("scroll", close, true);
-    window.removeEventListener("resize", close);
+    window.removeEventListener("scroll", moved, true);
+    window.removeEventListener("resize", moved);
     if (closeOpen === close) closeOpen = undefined;
     onClose();
   };
   document.addEventListener("pointerdown", press, true);
   document.addEventListener("keydown", key);
   if (options.scroll === true) {
-    window.addEventListener("scroll", close, { capture: true, passive: true });
-    window.addEventListener("resize", close, { passive: true });
+    window.addEventListener("scroll", moved, { capture: true, passive: true });
+    window.addEventListener("resize", moved, { passive: true });
   }
   closeOpen = close;
   return close;
