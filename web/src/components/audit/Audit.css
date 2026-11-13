@@ -190,9 +190,29 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+  /* The kinds' meanings are in sight beside their counts, but for a phone's button (below). */
+  .audit__says {
+    display: none;
+  }
   @media (max-width: 640px) {
     .audit__kinds {
       grid-template-columns: minmax(0, 1fr);
+    }
+    /* Six explanations took two screens before the transactions: the counts stay, the meanings
+       a tap away. */
+    .audit__kinds:not([data-says]) .audit-kinds__says {
+      display: none;
+    }
+    .audit__says {
+      display: inline-flex;
+      padding: 0;
+      border: 0;
+      background: none;
+      font: inherit;
+      font-size: var(--text-sm);
+    }
+    .audit__says[aria-expanded="true"]::before {
+      transform: rotate(45deg);
     }
     .audit-bars__row {
       grid-template-columns: 4rem minmax(0, 1fr);
