@@ -457,11 +457,13 @@ async fn app_node_channels(
     Ok(send(&v, "lightning_node_channels"))
 }
 
-/// A node's open channels and capacity at each UTC midnight since our history starts, and now.
+/// A node's open channels and capacity at each UTC midnight since our history starts, and now;
+/// with `changes`, also at each open and close in between.
 async fn node_points(
     index: &Index,
     store: &Store,
     id: [u8; 33],
+    changes: bool,
 ) -> Result<Vec<store_ln::NodePoint>, ApiError> {
     index.node(&id).ok_or(NO_NODE)?;
     let spans = store_ln::node_spans(store, id)
@@ -471,6 +473,7 @@ async fn node_points(
         &spans,
         index.start,
         store_ln::unix_now(),
+        changes,
     ))
 }
 
@@ -480,7 +483,7 @@ async fn app_node_history(
 ) -> Answer {
     let id = pubkey(&key)?;
     let (index, _, store) = graph(&ctx)?;
-    let points = node_points(&index, store, id).await?;
+    let points = node_points(&index, store, id, true).await?;
     let v = json!({
         "from": index.start,
         "points": points.iter().map(|p| json!({ "time": p.time, "channels": p.channels, "capacity": p.capacity })).collect::<Vec<_>>(),
@@ -943,7 +946,8 @@ async fn v1_node_statistics(
 ) -> Answer {
     let id = pubkey(&key)?;
     let (index, _, store) = graph(&ctx)?;
-    let points = node_points(&index, store, id).await?;
+    // The reference's points are daily: its shape, without the changes between.
+    let points = node_points(&index, store, id, false).await?;
     let v: Vec<V1NodePoint> = points
         .iter()
         .rev()

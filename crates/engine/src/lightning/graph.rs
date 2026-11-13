@@ -361,8 +361,9 @@ fn hex_prefix(id: &[u8; 33], len: usize) -> String {
 
 /// A node's open channels and their capacity at each UTC midnight from `start`, and at `now`,
 /// oldest first, from its stored channels. Before `start` the store does not know the channels
-/// that closed, so the series begins there.
-pub fn node_series(spans: &[Span], start: Option<u64>, now: u64) -> Vec<NodePoint> {
+/// that closed, so the series begins there. With `changes`, also at each block time after the
+/// first midnight where a channel opened or closed, so a chart can step where the change was.
+pub fn node_series(spans: &[Span], start: Option<u64>, now: u64, changes: bool) -> Vec<NodePoint> {
     let mut events: Vec<(u64, i64, i64)> = Vec::with_capacity(2 * spans.len());
     for s in spans {
         let cap = i64::try_from(s.capacity).unwrap_or(i64::MAX);
@@ -373,12 +374,24 @@ pub fn node_series(spans: &[Span], start: Option<u64>, now: u64) -> Vec<NodePoin
     }
     events.sort_unstable();
     let first = start.map_or(now, |s| s.div_ceil(DAY) * DAY);
-    let times = (0..)
+    let mut times: Vec<u64> = (0..)
         .map(|d| first + d * DAY)
         .take_while(|t| *t < now)
-        .chain([now]);
+        .chain([now])
+        .collect();
+    if changes {
+        times.extend(
+            events
+                .iter()
+                .map(|e| e.0)
+                .filter(|t| *t > first && *t < now),
+        );
+        times.sort_unstable();
+        times.dedup();
+    }
     let (mut next, mut channels, mut capacity) = (0, 0i64, 0i64);
     times
+        .into_iter()
         .map(|time| {
             while let Some(&(_, n, c)) = events.get(next).filter(|e| e.0 <= time) {
                 channels += n;

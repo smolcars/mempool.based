@@ -732,7 +732,7 @@ fn a_node_s_past_counts_what_was_open_at_each_midnight() {
             capacity: 1,
         },
     ];
-    let s = node_series(&spans, Some(DAY / 2), 3 * DAY + 5);
+    let s = node_series(&spans, Some(DAY / 2), 3 * DAY + 5, false);
     let got: Vec<_> = s.iter().map(|p| (p.time, p.channels, p.capacity)).collect();
     assert_eq!(
         got,
@@ -744,7 +744,22 @@ fn a_node_s_past_counts_what_was_open_at_each_midnight() {
         ]
     );
     // Before any statistics, the present only.
-    assert_eq!(node_series(&spans, None, 9 * DAY).len(), 1);
+    assert_eq!(node_series(&spans, None, 9 * DAY, false).len(), 1);
+    // With its changes: a step at each block time after the first midnight, the channel that
+    // opened and closed within a day included, which the midnights alone never show.
+    let s = node_series(&spans, Some(DAY / 2), 3 * DAY + 5, true);
+    let got: Vec<_> = s.iter().map(|p| (p.time, p.channels, p.capacity)).collect();
+    assert_eq!(
+        got,
+        [
+            (DAY, 1, 5),
+            (DAY + 10, 2, 12),
+            (2 * DAY, 1, 5),
+            (2 * DAY + 1, 2, 6),
+            (3 * DAY, 2, 6),
+            (3 * DAY + 5, 2, 6)
+        ]
+    );
 }
 
 #[tokio::test]
