@@ -1,6 +1,7 @@
-import { For, Show } from "solid-js";
+import { createSignal, flush, For, onCleanup, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Link } from "./Link";
+import { scrollCue } from "./scrollCue";
 import "./DataTable.css";
 
 export interface Column<T> {
@@ -9,8 +10,13 @@ export interface Column<T> {
   cell: (row: T, index: number) => JSX.Element;
   /** Right-aligned numeric column. */
   numeric?: boolean;
-  /** Dropped on phones. Mark the least important columns. */
+  /** Dropped on phones, and at step 1 wherever the table does not fit. The least important. */
   optional?: boolean;
+  /**
+   * The step, 1 first, at which the column is dropped while the table is wider than its panel.
+   * Never on the column that names a row or the one the list is sorted by.
+   */
+  drop?: number | undefined;
   /** A shorter header shown on phones ("Txs"); screen readers keep the full one. */
   short?: string;
 }
@@ -35,11 +41,46 @@ export interface DataTableProps<T> {
 /** A table with units in headers, right-aligned numbers and row rules. */
 export function DataTable<T>(props: DataTableProps<T>) {
   const cellClass = (c: Column<T>) =>
-    [c.numeric && "table__num", c.optional && "table__optional"].filter(Boolean).join(" ") ||
-    undefined;
+    [c.numeric && "table__num", c.optional && "table__optional", gone(c) && "table__gone"]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const linkColumn = () =>
+    Math.max(
+      0,
+      props.columns.findIndex((c) => c.optional !== true && c.drop === undefined),
+    );
+  // The step at which a column is dropped to fit: its `drop`, or 1 for an optional one; 0 never.
+  const step = (c: Column<T>) => c.drop ?? (c.optional === true ? 1 : 0);
+  const [dropped, setDropped] = createSignal(0);
+  const gone = (c: Column<T>) => step(c) > 0 && step(c) <= dropped();
+  /** Drops columns, least important first, until the table fits its panel or none are left. */
+  const fit = (scroller: HTMLElement) => {
+    const last = Math.max(0, ...props.columns.map(step));
+    let width = -1;
+    const refit = () => {
+      if (scroller.clientWidth === width) return;
+      width = scroller.clientWidth;
+      for (let d = 0; d <= last; d++) {
+        setDropped(d);
+        flush();
+        if (scroller.scrollWidth <= scroller.clientWidth + 1) break;
+      }
+    };
+    // Absent where there is no layout (tests): the phone's CSS still drops the optional columns.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(refit);
+    observer.observe(scroller);
+    onCleanup(() => observer.disconnect());
+  };
   return (
     <Show when={props.rows.length > 0 || props.empty === undefined} fallback={props.empty}>
-      <div class="table-scroll">
+      <div
+        class="table-scroll"
+        ref={(el) => {
+          fit(el);
+          scrollCue(el);
+        }}
+      >
         <table class={["table", { "table--rows": props.rowHref !== undefined }]}>
           <caption class={{ "visually-hidden": !props.showCaption, table__caption: true }}>
             {props.caption}
@@ -72,7 +113,8 @@ export function DataTable<T>(props: DataTableProps<T>) {
                     {(c, k) => (
                       <td class={cellClass(c)}>
                         {c.cell(row, i())}
-                        <Show when={k() === 0 && props.rowHref?.(row)}>
+                        {/* In a column that is never dropped: a dropped one's link takes no room. */}
+                        <Show when={k() === linkColumn() && props.rowHref?.(row)}>
                           {(href) => (
                             <Link
                               class="table__rowlink"

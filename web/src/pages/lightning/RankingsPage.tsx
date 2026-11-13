@@ -64,16 +64,18 @@ function Ranked(props: { network: Network; by: string }) {
   );
   // A function, so switching the ranking re-picks which columns a phone keeps.
   const columns = (): Column<RankedNode>[] => [
-    { header: "Rank", numeric: true, optional: true, cell: (_, i) => groupDigits(i + 1) },
-    ...nodeColumns(props.by === "channels" ? "channels" : "capacity"),
+    { header: "Rank", numeric: true, optional: true, drop: 2, cell: (_, i) => groupDigits(i + 1) },
+    ...nodeColumns(props.by === "channels" || props.by === "age" ? props.by : "capacity"),
     {
       header: "First seen",
       optional: props.by !== "age",
+      drop: props.by === "age" ? undefined : 3,
       cell: (n) => (typeof n.first_seen === "number" ? formatDay(n.first_seen) : "–"),
     },
     {
       header: "Last announced",
       optional: true,
+      drop: 1,
       cell: (n) => (typeof n.last_update === "number" ? <TimeAgo time={n.last_update} /> : "–"),
     },
   ];

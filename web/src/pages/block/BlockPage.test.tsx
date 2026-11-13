@@ -650,7 +650,7 @@ describe("BlocksPage", () => {
     await until(() => expect(row(2)).toContain("0.00000007"));
   });
 
-  it("gives each audited block its match rate, and nothing to a block without one", async () => {
+  it("gives each audited block its match rate, and a dash to a block without one", async () => {
     const rows = list(975_420);
     const table: typeof replies = {
       "/blocks": { body: rows },
@@ -673,7 +673,7 @@ describe("BlocksPage", () => {
     await until(() =>
       expect(text(el.querySelectorAll("tbody tr")[1] as Element)).toContain("1.09"),
     );
-    expect(cell(1)).toBe("");
+    expect(cell(1)).toBe("–no audit");
   });
 
   it("refuses a bad height", () => {

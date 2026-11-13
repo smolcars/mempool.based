@@ -307,9 +307,16 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
               ),
             },
             { header: "Mined", cell: (b) => <TimeAgo time={b.timestamp} /> },
-            { header: "Transactions", numeric: true, cell: (b) => groupDigits(b.tx_count) },
+            {
+              header: "Transactions",
+              short: "Txs",
+              numeric: true,
+              drop: 2,
+              cell: (b) => groupDigits(b.tx_count),
+            },
             {
               header: "Median fee rate, sat/vB",
+              short: "Median, sat/vB",
               numeric: true,
               cell: (b) =>
                 typeof b.extras.medianFee === "number" ? (
@@ -327,6 +334,7 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
             {
               header: "Reward, BTC",
               numeric: true,
+              drop: 3,
               cell: (b) => <Amount sats={b.extras.reward} unit={false} />,
             },
             { header: "Size", numeric: true, optional: true, cell: (b) => bytesText(b.size) },

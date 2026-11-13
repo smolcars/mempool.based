@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
+import { tablesFit, tapRow } from "./rows";
 
 // Regtest runs without Lightning, so the filled pages are drawn from answers a mainnet server
 // gave on 2026-11-12 (fixtures/lightning/app), served in place of this server's own.
@@ -263,4 +264,44 @@ test("History in the section's links lands on the overview's chart from any Ligh
       );
     }
   }
+});
+
+test.describe("Lightning's lists", () => {
+  // A tap opens a node or channel with no recorded answer, which the stand-in refuses with a 500.
+  test.use({ consoleErrorsAllowed: [/status of 500/] });
+  const pages = [
+    "/regtest/lightning",
+    "/regtest/lightning/rankings",
+    `/regtest/lightning/node/${ACINQ}`,
+    "/regtest/lightning/search?q=acinq",
+  ];
+
+  test("every row opens its item from anywhere on it, at a phone's width", async ({ page }) => {
+    await serve(page, mainnet());
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const path of pages) {
+      await page.goto(path);
+      const tables = page.locator("table.table--rows");
+      await expect(tables.first()).toBeVisible();
+      const count = await tables.count();
+      for (let i = 0; i < count; i++) {
+        if (i > 0) await page.goto(path);
+        await tapRow(page, page.locator("table.table--rows").nth(i), `${path}, table ${i + 1}`);
+      }
+    }
+  });
+
+  test("every table fits its panel or shows that it scrolls, at 320, 390 and 720 px", async ({
+    page,
+  }) => {
+    await serve(page, mainnet());
+    for (const width of [320, 390, 720]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const path of pages) {
+        await page.goto(path);
+        await expect(page.locator("table.table--rows tbody tr").first()).toBeVisible();
+        await tablesFit(page, `${path} at ${width} px`);
+      }
+    }
+  });
 });

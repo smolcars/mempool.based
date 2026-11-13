@@ -72,6 +72,10 @@
   .table__short {
     display: none;
   }
+  /* Dropped to fit the panel (DataTable's `drop`); the item's own page has every figure. */
+  .table .table__gone {
+    display: none;
+  }
   @media (max-width: 640px) {
     .table .table__optional {
       display: none;
@@ -99,6 +103,8 @@
     /* A header such as "Fee rate, sat/vB" wraps rather than widen its column past a phone's width. */
     .table th {
       white-space: normal;
+      overflow-wrap: normal;
+      hyphens: none;
     }
   }
 }

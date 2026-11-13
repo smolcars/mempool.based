@@ -14,7 +14,7 @@ import { formatSize, groupDigits, MISSING, NNBSP, truncateMiddle } from "../../l
 import { paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
-import { fullness, parseHeight, shownParam } from "../block/chain";
+import { parseHeight, shownParam } from "../block/chain";
 import { failed, ready, Skel } from "../block/parts";
 import "./BlocksPage.css";
 
@@ -70,6 +70,8 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Transactions",
     short: "Txs",
     numeric: true,
+    // The last to go, and only where even the phone's columns are too wide (320 px, wide faces).
+    drop: 6,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
   },
   {
@@ -83,11 +85,12 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       return f.fee_rate ? <FeeRate rate={f.fee_rate.median} unit={false} /> : "None";
     },
   },
-  // Blank for a block without an audit: most old blocks, and never an error.
+  // A dash for a block without an audit: most old blocks, and never an error.
   {
     header: "Match rate, %",
     numeric: true,
     optional: true,
+    drop: 4,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;
@@ -98,7 +101,10 @@ const columns = (factsOf: (id: string) => RowFacts) => [
           <span class="visually-hidden">%</span>
         </>
       ) : (
-        ""
+        <>
+          {MISSING}
+          <span class="visually-hidden">no audit</span>
+        </>
       );
     },
   },
@@ -106,15 +112,32 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Total fees, BTC",
     numeric: true,
     optional: true,
+    drop: 5,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;
       return f === "failed" ? MISSING : <Amount sats={f.fees} unit={false} />;
     },
   },
+  // Sizes carry their unit in the cell, as on the block page: they span B to MB (docs/DESIGN.md).
+  {
+    header: "Size",
+    numeric: true,
+    optional: true,
+    drop: 3,
+    cell: (b: Block | null) => (b ? formatSize(b.size, "B") : <Skel size="s" />),
+  },
+  {
+    header: "Weight",
+    numeric: true,
+    optional: true,
+    drop: 2,
+    cell: (b: Block | null) => (b ? formatSize(b.weight, "WU") : <Skel size="s" />),
+  },
   {
     header: "Hash",
     optional: true,
+    drop: 1,
     cell: (b: Block | null) =>
       b ? (
         <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
@@ -122,29 +145,6 @@ const columns = (factsOf: (id: string) => RowFacts) => [
         <span class="blocks-hash-skel">
           <Skel />
         </span>
-      ),
-  },
-  // Sizes carry their unit in the cell, as on the block page: they span B to MB (docs/DESIGN.md).
-  {
-    header: "Size",
-    numeric: true,
-    optional: true,
-    cell: (b: Block | null) => (b ? formatSize(b.size, "B") : <Skel size="s" />),
-  },
-  {
-    header: "Weight",
-    numeric: true,
-    optional: true,
-    cell: (b: Block | null) =>
-      b ? (
-        <span class="blocks-weight" title={`${Math.round(fullness(b.weight) * 100)}% of the limit`}>
-          <span class="blocks-weight__bar" aria-hidden="true">
-            <span class="blocks-weight__fill" style={{ "--fill": String(fullness(b.weight)) }} />
-          </span>
-          {formatSize(b.weight, "WU")}
-        </span>
-      ) : (
-        <Skel size="s" />
       ),
   },
 ];

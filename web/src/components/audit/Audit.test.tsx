@@ -84,7 +84,7 @@ describe("AuditSection", () => {
     expect(rows).toStrictEqual([
       "Transactions3 1003 150",
       "Virtual size998.00 kvB997.50 kvB",
-      "Fees0.01500000 BTC0.01498000 BTC",
+      "Fees, BTC0.01500000 BTC0.01498000 BTC",
     ]);
     expect(item(el, "Matched")).toContain("2 900 transactions, 950.00 kvB");
     expect(item(el, "Missing")).toContain("3 transactions, 1 200 vB");

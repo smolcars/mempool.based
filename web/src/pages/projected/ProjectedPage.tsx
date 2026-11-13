@@ -587,8 +587,11 @@ const ownRate = (tx: ProjectedTx) => (tx.vsize > 0 ? tx.fee / tx.vsize : 0);
 const columns = [
   {
     header: "Transaction",
+    // In a grid, so the column may be narrower than the whole ID and the ID is cut to fit it.
     cell: (tx: ProjectedTx) => (
-      <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" fit />
+      <span class="projected-txcell">
+        <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" fit />
+      </span>
     ),
   },
   {
@@ -613,6 +616,7 @@ const columns = [
     // Sizes keep their unit in the cell, as one column can span vB to kvB (docs/DESIGN.md).
     header: "Virtual size",
     numeric: true,
+    drop: 2,
     cell: (tx: ProjectedTx) => formatSize(tx.vsize),
   },
 ];

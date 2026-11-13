@@ -383,6 +383,10 @@
       background: var(--color-accent-soft);
     }
   }
+  .projected-txcell {
+    display: grid;
+    justify-items: start;
+  }
   .projected-rate {
     display: inline-flex;
     flex-wrap: wrap;

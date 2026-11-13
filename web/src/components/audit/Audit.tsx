@@ -72,9 +72,9 @@ function Body(props: { audit: AuditTotals; hash: string | undefined }) {
       mined: formatSize(a().actual.vsize),
     },
     {
-      label: "Fees",
-      expected: <Amount sats={a().expected.fees} />,
-      mined: <Amount sats={a().actual.fees} />,
+      label: "Fees, BTC",
+      expected: <Amount sats={a().expected.fees} unit={false} />,
+      mined: <Amount sats={a().actual.fees} unit={false} />,
     },
   ];
   type Row = ReturnType<typeof rows>[number];

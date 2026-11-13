@@ -215,12 +215,14 @@ export function nodeColumns(by: "capacity" | "channels" | "age"): Column<RankedN
       header: "Capacity, BTC",
       numeric: true,
       optional: by === "channels",
+      drop: by === "capacity" ? undefined : 4,
       cell: (n) => <Amount sats={n.capacity} unit={false} short />,
     },
     {
       header: "Channels",
       numeric: true,
       optional: by !== "channels",
+      drop: by === "channels" ? undefined : 4,
       cell: (n) => groupDigits(n.channels),
     },
   ];
