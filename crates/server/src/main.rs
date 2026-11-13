@@ -9,7 +9,7 @@ use logging::events::{
 use rbitcoin_space::config::EsploraEndpoint;
 use rbitcoin_space::{App, Config};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 /// How long exit waits for queued log lines; a blocked stdout must not hang shutdown.
 const LOG_FLUSH: Duration = Duration::from_secs(2);
@@ -44,7 +44,7 @@ async fn run() -> ExitCode {
     }
 
     started(&config, settings);
-    let listener = match TcpListener::bind(config.listen).await {
+    let listener = match rbitcoin_space::bind(config.listen) {
         Ok(listener) => listener,
         Err(e) => {
             logging::emit(&ListenFailed {
@@ -199,6 +199,7 @@ mod tests {
     use super::*;
     use rbitcoin_space::config::RequestLog;
     use rbitcoin_space::{Limits, WsLimits};
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn healthcheck_needs_a_server() {

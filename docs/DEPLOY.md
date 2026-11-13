@@ -30,6 +30,22 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 | Disk | About 250 MB for mainnet's store once the backfill is done, then about 150 MB a year ([the data directory](#the-data-directory)). The log is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)); the compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
 | Network | Nothing published but the node's P2P port and, through the proxy, 443 |
 
+### Many WebSockets
+
+Every open page holds one WebSocket. At the default `WS_MAX_SOCKETS` (1,024) the host needs nothing more than the compose file sets. For more sockets, raise `WS_MAX_SOCKETS` ([`CONFIG.md`](CONFIG.md#websocket)) and check each line below. Measured on Linux up to 20,000 sockets, every message delivered to every client ([`PERFORMANCE.md`](PERFORMANCE.md#on-linux)); what stopped it each time was one of these.
+
+| Limit | Needed | Check | When it is short |
+|---|---|---|---|
+| The server's open files | More than `WS_MAX_SOCKETS` + `WS_V1_MAX_SOCKETS` + `MAX_CONNECTIONS`, and about 100 for the node and the store. The compose file sets 65,536: Docker otherwise gives the daemon's default, as low as 1,024 on some hosts, too few even for the default caps | `grep 'open files' /proc/$(docker inspect -f '{{.State.Pid}}' $(docker compose ps -q server))/limits` (the image has no shell) | `accept_failed` with `Too many open files`. New visitors wait and time out, and the server's own new connections to the node fail too |
+| `WS_MAX_SOCKETS` | The sockets you expect, every network together | `ws_max_sockets` in the `server_starting` event | New sockets get `503`, counted in `requests_refused` with `server_sockets` |
+| `net.core.somaxconn` | 4,096, Linux's default since 5.4. The server asks for the host's maximum | `sysctl net.core.somaxconn` | After a restart every open page reconnects at once; past the listen queue a connection is retried after 1 s, then 2 s. Slower, nothing fails. `nstat -az TcpExtListenOverflows` counts them |
+| Local ports on the proxy's host | One per socket: each is a connection from the proxy to the server's one address and port. The default range, 32768 to 60999, allows 28,232, connections closed in the last minute included | `sysctl net.ipv4.ip_local_port_range` | The proxy cannot connect (`address not available` in its own log); visitors get `502`. Widen it: `sysctl -w net.ipv4.ip_local_port_range="1024 65535"`, and in `/etc/sysctl.d/` to keep it |
+| The proxy's open files | Two per socket | Its service's limit (for Caddy under systemd, `LimitNOFILE`) | The proxy's own errors |
+| Memory | 16 KB a socket on top of [the figures above](#the-host): about 5 KB in the server, 6 KB in the kernel, the rest for messages in flight. With 20,000 sockets the server used 128 MB | `docker stats` | |
+| CPU | Delivery is the server writing to each socket. With 20,000 sockets a new block reached the last client 54 ms (median) after the server started queueing it, on a quarter of a core on average; on one core instead of four, three times slower | `docker stats` | Updates arrive later. Nothing is dropped unless one client's own queue fills (`ws_clients_dropped`, `too_slow`) |
+
+Not measured: connection tracking, if the host's firewall tracks connections (`nf_conntrack_max`; a socket through the proxy and Docker's published port can take two entries); Docker's own proxy process for the published port, which carries every connection with the daemon's limits; and `net.ipv4.tcp_mem`, which the measuring VM did not expose. Its default on a host with a few GB is far above the socket buffers measured, 52 MB at most for 16,000 sockets.
+
 ## Run it beside the node
 
 ### Same host, with the compose file
@@ -299,6 +315,7 @@ docker compose logs --no-log-prefix server | jq -c 'select(.level != "info")'
 | `store_slow_write`, `store_read_timed_out`, `replacements_store_failed`, `mempool_history_skipped` with `store_failed` | The disk is slow or full, or the machine is overloaded: the read limit is wall-clock time, so a host that stalls for two seconds trips it even on a read that takes milliseconds ([`STORE.md`](STORE.md#using-it)) |
 | `proxy_header_ignored` | Behind a proxy: the server does not trust it, so every visitor shares one allowance ([client addresses](#client-addresses)) |
 | `connections_refused` | One address is holding many connections |
+| `accept_failed` | The server is out of file descriptors and not accepting anyone ([many WebSockets](#many-websockets)) |
 | `requests_refused` every minute | Something is being refused: one address flooding, or a proxy set up wrong. Its fields tell which ([`LOGGING.md`](LOGGING.md#refusals)) |
 | `log_events_dropped` | Request lines were dropped: `queue_full`, the output (a disk, a pipe) cannot keep up; `over_budget`, the site served more than the log's ceiling ([`LOGGING.md`](LOGGING.md#for-operators)) |
 
