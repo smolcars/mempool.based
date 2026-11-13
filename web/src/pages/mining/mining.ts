@@ -371,7 +371,10 @@ export function poolLayers(
     if (layer) layer.values[i] = (layer.values[i] ?? 0) + w.share;
     else rest[i] = (rest[i] ?? 0) + w.share;
   }
-  if (totals.size > named.length) layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
+  // Any pool in the weeks but not drawn: the table can name a pool the weeks do not hold.
+  if ([...totals.keys()].some((name) => !index.has(name))) {
+    layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
+  }
   return { x, layers };
 }
 

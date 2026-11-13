@@ -118,6 +118,17 @@ describe("pool layers", () => {
     expect(poolLayers(weeks).layers.map((l) => l.name)).toContain("Luxor");
   });
 
+  it("keeps the rest when the table names a pool the weeks do not hold", () => {
+    // Foundry mined only in the period's opening part-week, which the weekly answer leaves out.
+    const weeks = [week(1, "AntPool", 0.8), week(1, "Unknown", 0.2)];
+    const { layers } = poolLayers(weeks, ["Foundry USA", "AntPool", "Unknown"]);
+    expect(layers.map((l) => [l.name, l.values[0]])).toStrictEqual([
+      ["Foundry USA", 0],
+      ["AntPool", 0.8],
+      [OTHER_POOLS, 0.2],
+    ]);
+  });
+
   it("draws only the period's six largest coloured pools, so it agrees with the table", () => {
     const names = ["Luxor", "Foundry USA", "Ocean.xyz", "AntPool", "SecPool", "F2Pool", "ViaBTC"];
     const weeks = names.map((name, i) => week(1, name, (10 - i) / 100));
