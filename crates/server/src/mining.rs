@@ -930,8 +930,11 @@ async fn coverage(store: &Store, span: Span, r: &Range) -> Result<Coverage, stor
 struct Shared {
     recent: Mutex<HashMap<u32, Option<f64>>>,
     points: Mutex<HashMap<(u64, bool), Arc<NetworkPoints>>>,
-    weeks: Mutex<HashMap<(u32, u32), Arc<Vec<blocks::PoolWeek>>>>,
+    weeks: Mutex<HashMap<(u32, u32), Weeks>>,
 }
+
+/// Every pool's blocks per week over a range.
+type Weeks = Arc<Vec<blocks::PoolWeek>>;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -971,12 +974,7 @@ impl Shared {
         Ok(p)
     }
 
-    async fn pool_weeks(
-        &self,
-        store: &Store,
-        from: u32,
-        to: u32,
-    ) -> Result<Arc<Vec<blocks::PoolWeek>>, store::Error> {
+    async fn pool_weeks(&self, store: &Store, from: u32, to: u32) -> Result<Weeks, store::Error> {
         if let Some(w) = lock(&self.weeks).get(&(from, to)) {
             return Ok(Arc::clone(w));
         }
