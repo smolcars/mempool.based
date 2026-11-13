@@ -1963,28 +1963,39 @@ async fn totals_are_filled_for_rows_stored_before_them() {
         .await
         .unwrap();
     assert_eq!(row_counts(&store).await.unwrap().0, 2994);
-    // A new tip and a reorg land while the fill is half done.
-    let half = tokio::spawn({
-        let rows: Vec<Row> = (3000..3020).map(|h| random_row(&mut rng, 0, h)).collect();
-        let store = Arc::new(store);
-        let s = Arc::clone(&store);
-        async move {
-            write_rows(&s, db::REPLACE, rows).await;
-            store
-        }
-    });
-    let store = half.await.unwrap();
-    let filled = totals::fill_by(&store, 700).await.unwrap().unwrap();
-    assert_eq!((filled.heights, filled.writes), (3000, 5));
+    // Between the fill's writes: a new tip, a restart, a reorg across heights already filled and
+    // not yet, a later rating and a stale row's deletion.
+    assert_eq!(totals::fill_step(&store, 700).await.unwrap(), Some(700));
     write_rows(
         &store,
         db::REPLACE,
-        (2990..3010).map(|h| random_row(&mut rng, 1, h)).collect(),
+        (3000..3020).map(|h| random_row(&mut rng, 0, h)).collect(),
     )
     .await;
+    assert_eq!(totals::fill_step(&store, 700).await.unwrap(), Some(700));
+    store.close().await;
+    let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+    assert!(!totals_ready(&store).await.unwrap());
+    write_rows(
+        &store,
+        db::REPLACE,
+        (1500..1700).map(|h| random_row(&mut rng, 1, h)).collect(),
+    )
+    .await;
+    let rated = random_rates(&mut rng, 2);
+    store
+        .write(move |sql| {
+            db::rate_row(&mut sql.prepare(db::RATE)?, 100, &hash(0, 100), &rated)?;
+            db::delete_row(sql, 200, &hash(0, 200))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let filled = totals::fill_by(&store, 700).await.unwrap().unwrap();
+    assert_eq!((filled.heights, filled.writes), (1600, 3));
     assert!(totals_ready(&store).await.unwrap());
     assert_eq!(totals::fill_by(&store, 700).await.unwrap(), None);
     assert_totals_match(&store, &mut rng, "filled").await;
-    drop(store);
+    store.close().await;
     let _ = std::fs::remove_dir_all(&dir);
 }

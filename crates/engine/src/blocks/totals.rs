@@ -172,45 +172,52 @@ pub(super) async fn fill_by(store: &Store, chunk: u32) -> Result<Option<Filled>,
     let mut done = Filled::default();
     loop {
         let write = Instant::now();
-        let step = store
-            .write(move |sql| {
-                let below: Option<u32> = sql
-                    .prepare("SELECT below FROM totals_pending WHERE id = 0")?
-                    .query_row([], |r| r.get(0))
-                    .optional()?;
-                let Some(below) = below else {
-                    return Ok(None);
-                };
-                let lo = below.saturating_sub(chunk);
-                if let Some(hi) = below.checked_sub(1) {
-                    sql.prepare(
-                        "INSERT INTO totals_dirty (kind, key) \
-                         SELECT DISTINCT k.kind, CASE k.kind WHEN 0 THEN b.time / 86400 \
-                         WHEN 7 THEN (b.time - 345600) / 604800 ELSE b.height / k.kind END \
-                         FROM blocks b CROSS JOIN (SELECT 0 AS kind UNION ALL SELECT 7 \
-                         UNION ALL SELECT 18 UNION ALL SELECT 36 UNION ALL SELECT 72 \
-                         UNION ALL SELECT 144 UNION ALL SELECT 216 UNION ALL SELECT 1008) k \
-                         WHERE b.height BETWEEN ?1 AND ?2",
-                    )?
-                    .execute(params![lo, hi])?;
-                    settle(sql)?;
-                }
-                if lo == 0 {
-                    sql.prepare("DELETE FROM totals_pending")?.execute([])?;
-                } else {
-                    sql.prepare("UPDATE totals_pending SET below = ?1 WHERE id = 0")?
-                        .execute(params![lo])?;
-                }
-                Ok(Some(below - lo))
-            })
-            .await?;
-        let Some(heights) = step else { break };
+        let Some(heights) = fill_step(store, chunk).await? else {
+            break;
+        };
         done.longest = done.longest.max(write.elapsed());
         done.heights += u64::from(heights);
         done.writes += 1;
     }
     done.elapsed = started.elapsed();
     Ok((done.writes > 0).then_some(done))
+}
+
+/// Totals the next `chunk` heights still pending, in one write: the heights it went over, or
+/// `None` when nothing is pending.
+pub(super) async fn fill_step(store: &Store, chunk: u32) -> Result<Option<u32>, Error> {
+    store
+        .write(move |sql| {
+            let below: Option<u32> = sql
+                .prepare("SELECT below FROM totals_pending WHERE id = 0")?
+                .query_row([], |r| r.get(0))
+                .optional()?;
+            let Some(below) = below else {
+                return Ok(None);
+            };
+            let lo = below.saturating_sub(chunk);
+            if let Some(hi) = below.checked_sub(1) {
+                sql.prepare(
+                    "INSERT INTO totals_dirty (kind, key) \
+                     SELECT DISTINCT k.kind, CASE k.kind WHEN 0 THEN b.time / 86400 \
+                     WHEN 7 THEN (b.time - 345600) / 604800 ELSE b.height / k.kind END \
+                     FROM blocks b CROSS JOIN (SELECT 0 AS kind UNION ALL SELECT 7 \
+                     UNION ALL SELECT 18 UNION ALL SELECT 36 UNION ALL SELECT 72 \
+                     UNION ALL SELECT 144 UNION ALL SELECT 216 UNION ALL SELECT 1008) k \
+                     WHERE b.height BETWEEN ?1 AND ?2",
+                )?
+                .execute(params![lo, hi])?;
+                settle(sql)?;
+            }
+            if lo == 0 {
+                sql.prepare("DELETE FROM totals_pending")?.execute([])?;
+            } else {
+                sql.prepare("UPDATE totals_pending SET below = ?1 WHERE id = 0")?
+                    .execute(params![lo])?;
+            }
+            Ok(Some(below - lo))
+        })
+        .await
 }
 
 /// `true` once [`fill_totals`] has finished. For tests and tools.
