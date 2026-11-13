@@ -22,6 +22,7 @@ mod source;
 pub mod stats;
 #[cfg(test)]
 mod tests;
+mod totals;
 
 use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction, TxOut};
 use node::rpc::model::BlockTotals;
@@ -36,11 +37,13 @@ pub use db::{
 pub use follow::{Followed, Reorgs, follow};
 pub use listing::Lister;
 pub use mining::{
-    PoolCount, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before, first_since,
-    pool_counts, pool_weeks, reattribute, retargets, row_counts, span, top, work,
+    PoolCount, PoolWeek, Reattributed, Retarget, Span, WEEK, WEEK_OFFSET, Work, at_or_before,
+    first_since, pool_counts, pool_weeks, reattribute, retargets, row_counts, span, top, work,
 };
 pub use source::{Header, NodeSource, Source};
 pub use stats::{Facts, Miner, Rates};
+pub(crate) use totals::settle;
+pub use totals::{FILL, Filled, fill_totals, totals_ready};
 
 /// The newest blocks [`follow`] owns: it checks their rows against the node on every new tip.
 /// The backfill writes only below them, so a reorg up to this deep never races it.

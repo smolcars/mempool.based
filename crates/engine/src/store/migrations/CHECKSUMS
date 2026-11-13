@@ -9,3 +9,4 @@
 0007_lightning_lookups.sql 594ba5acf5affba1
 0008_replacement_blocks.sql 6967bd3b563a25d5
 0009_chain.sql 34409c3150d4ba9c
+0010_block_totals.sql 0a116875cae21259

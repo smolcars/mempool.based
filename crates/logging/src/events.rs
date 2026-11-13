@@ -974,6 +974,20 @@ pub struct PoolsReattributed {
 }
 event!(PoolsReattributed, "pools_reattributed", Info, keep);
 
+/// The block table's running totals were filled for the rows stored before they existed, once,
+/// on the first start after the upgrade that added them. Reads scan the table until then.
+#[derive(Debug, Serialize)]
+pub struct BlockTotalsFilled {
+    pub network: &'static str,
+    /// Heights the fill went over.
+    pub heights: u64,
+    pub writes: u64,
+    pub duration_ms: f64,
+    /// The longest single write, waiting for the writer included.
+    pub longest_write_ms: f64,
+}
+event!(BlockTotalsFilled, "block_totals_filled", Info, keep);
+
 /// The mining answers were recomputed because the block table changed: once a block per
 /// network, and at most once a minute while the backfill adds rows.
 #[derive(Debug, Serialize)]
@@ -1941,6 +1955,13 @@ mod tests {
                 rows: 7850,
                 changed: 7790,
                 duration_ms: 80.5,
+            }),
+            both(&BlockTotalsFilled {
+                network: n,
+                heights: 975_672,
+                writes: 98,
+                duration_ms: 6_400.0,
+                longest_write_ms: 140.0,
             }),
             both(&MiningRefreshed {
                 network: n,

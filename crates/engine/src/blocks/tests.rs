@@ -1246,7 +1246,6 @@ async fn retargets_work_and_times() {
 async fn mining_benchmark() {
     use std::time::{Instant, SystemTime};
     const ROWS: u32 = 975_000;
-    const YEAR: u32 = 52_560;
     let (dir, store) = match std::env::var_os("MINING_BENCH_DIR") {
         Some(d) => {
             let d = PathBuf::from(d);
@@ -1263,71 +1262,13 @@ async fn mining_benchmark() {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let list = crate::mining::pools::list();
-    // Twenty pools by their first tag, the first taking the most blocks; every 50th unknown.
-    let tags: Vec<Vec<u8>> = list.all()[1..]
-        .iter()
-        .filter_map(|p| p.tags.first())
-        .take(20)
-        .map(|t| t.as_bytes().to_vec())
-        .collect();
     let started = Instant::now();
-    for chunk in (0..ROWS).collect::<Vec<_>>().chunks(10_000) {
-        let tags = tags.clone();
-        let rows: Vec<Row> = chunk
-            .iter()
-            .map(|&h| {
-                let mut tag = vec![3, h as u8, (h >> 8) as u8, (h >> 16) as u8];
-                if h % 50 != 0 {
-                    let pick = (h.wrapping_mul(2_654_435_761) >> 16) % 210;
-                    // 20 + 19 + … : pool i gets a share falling with i.
-                    let mut i = 0usize;
-                    let mut acc = 0u32;
-                    while i < 19 && acc + 20 - i as u32 <= pick {
-                        acc += 20 - i as u32;
-                        i += 1;
-                    }
-                    tag.extend_from_slice(&tags[i]);
-                }
-                tag.extend((0..30).map(|i| (h ^ i) as u8));
-                let pay = vec![(
-                    312_500_000,
-                    vec![0x00, 0x14].into_iter().chain([h as u8; 20]).collect(),
-                )];
-                let mut hd = header(0, h, 0);
-                hd.timestamp = now - 300 - u64::from(ROWS - 1 - h) * 600 + u64::from(h % 7) * 60;
-                hd.tx_count = 1 + h % 5000;
-                hd.size = 1_500_000 + u64::from(h % 100_000);
-                hd.weight = 3_990_000 + u64::from(h % 9000);
-                hd.difficulty =
-                    1.5e14 * (f64::from(h / 2016 + 1) / f64::from(ROWS / 2016 + 1)).powi(3);
-                let totals = BlockTotals {
-                    totalfee: Amount::from_sat(u64::from(h) * 37 % 9_000_000),
-                    subsidy: Amount::from_sat(312_500_000),
-                    total_weight: 3_989_000,
-                };
-                let mut row = Row::new(&hd, &totals, &coinbase(&tag, &pay));
-                if h >= ROWS - YEAR {
-                    row.rates = Some(Rated::from(&mock_facts(h, row.hash)));
-                }
-                row
-            })
-            .collect();
-        store
-            .write(move |sql| {
-                let mut s = sql.prepare(db::INSERT_NEW)?;
-                for r in &rows {
-                    db::write_row(&mut s, r)?;
-                }
-                Ok(())
-            })
-            .await
-            .unwrap();
-    }
+    fill_mainnet_like(&store, ROWS, now).await;
     println!(
         "filled {ROWS} rows, attributing each, in {:?}",
         started.elapsed()
     );
+    let list = crate::mining::pools::list();
     let ms = |s: Instant| s.elapsed().as_secs_f64() * 1000.0;
     for _ in 0..3 {
         let s = Instant::now();
@@ -1378,4 +1319,683 @@ async fn mining_benchmark() {
         ms(s)
     );
     drop(dir);
+}
+
+/// Writes `rows` mainnet-like rows ending at `now`, the last year rated, mined by the list's
+/// pools in a skewed share, in writes of 10,000.
+async fn fill_mainnet_like(store: &Store, rows: u32, now: u64) {
+    const YEAR: u32 = 52_560;
+    let list = crate::mining::pools::list();
+    // Twenty pools by their first tag, the first taking the most blocks; every 50th unknown.
+    let tags: Vec<Vec<u8>> = list.all()[1..]
+        .iter()
+        .filter_map(|p| p.tags.first())
+        .take(20)
+        .map(|t| t.as_bytes().to_vec())
+        .collect();
+    for chunk in (0..rows).collect::<Vec<_>>().chunks(10_000) {
+        let tags = tags.clone();
+        let batch: Vec<Row> = chunk
+            .iter()
+            .map(|&h| {
+                let mut tag = vec![3, h as u8, (h >> 8) as u8, (h >> 16) as u8];
+                if h % 50 != 0 {
+                    let pick = (h.wrapping_mul(2_654_435_761) >> 16) % 210;
+                    // 20 + 19 + … : pool i gets a share falling with i.
+                    let mut i = 0usize;
+                    let mut acc = 0u32;
+                    while i < 19 && acc + 20 - i as u32 <= pick {
+                        acc += 20 - i as u32;
+                        i += 1;
+                    }
+                    tag.extend_from_slice(&tags[i]);
+                }
+                tag.extend((0..30).map(|i| (h ^ i) as u8));
+                let pay = vec![(
+                    312_500_000,
+                    vec![0x00, 0x14].into_iter().chain([h as u8; 20]).collect(),
+                )];
+                let mut hd = header(0, h, 0);
+                hd.timestamp = now - 300 - u64::from(rows - 1 - h) * 600 + u64::from(h % 7) * 60;
+                hd.tx_count = 1 + h % 5000;
+                hd.size = 1_500_000 + u64::from(h % 100_000);
+                hd.weight = 3_990_000 + u64::from(h % 9000);
+                hd.difficulty =
+                    1.5e14 * (f64::from(h / 2016 + 1) / f64::from(rows / 2016 + 1)).powi(3);
+                let totals = BlockTotals {
+                    totalfee: Amount::from_sat(u64::from(h) * 37 % 9_000_000),
+                    subsidy: Amount::from_sat(312_500_000),
+                    total_weight: 3_989_000,
+                };
+                let mut row = Row::new(&hd, &totals, &coinbase(&tag, &pay));
+                if h >= rows.saturating_sub(YEAR) {
+                    row.rates = Some(Rated::from(&mock_facts(h, row.hash)));
+                }
+                row
+            })
+            .collect();
+        store
+            .write(move |sql| {
+                let mut s = sql.prepare(db::INSERT_NEW)?;
+                for r in &batch {
+                    db::write_row(&mut s, r)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// Times every read that runs on a schedule or per block, on the store in
+/// `$TABLE_BENCH_DIR/$TABLE_BENCH_NET.sqlite` (a copy of a real one, or filled with
+/// `$TABLE_BENCH_ROWS` mainnet-like rows when empty), alone or, with `TABLE_BENCH_WRITER=1`,
+/// while a writer commits 10,000-row writes back to back. Run with
+/// `TABLE_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture table_reads_benchmark`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "reads a store of mainnet's size; a benchmark, not a test"]
+#[allow(clippy::print_stdout)] // A benchmark's report.
+async fn table_reads_benchmark() {
+    use std::time::{Instant, SystemTime};
+    let dir = PathBuf::from(std::env::var_os("TABLE_BENCH_DIR").expect("TABLE_BENCH_DIR"));
+    let net = std::env::var("TABLE_BENCH_NET").unwrap_or_else(|_| "regtest".into());
+    let store = Arc::new(Store::open(&dir, &net, StoreOptions::default()).unwrap());
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    if top(&store).await.unwrap().is_none() {
+        let rows: u32 = std::env::var("TABLE_BENCH_ROWS").map_or(975_000, |r| r.parse().unwrap());
+        let s = Instant::now();
+        fill_mainnet_like(&store, rows, now).await;
+        println!("filled {rows} rows in {:?}", s.elapsed());
+    }
+    let writer = std::env::var_os("TABLE_BENCH_WRITER").map(|_| {
+        let store = Arc::clone(&store);
+        tokio::spawn(async move {
+            loop {
+                store
+                    .write(|sql| {
+                        sql.prepare("CREATE TABLE IF NOT EXISTS bench_load (x BLOB)")?
+                            .execute([])?;
+                        sql.prepare("DELETE FROM bench_load")?.execute([])?;
+                        let mut s =
+                            sql.prepare("INSERT INTO bench_load VALUES (randomblob(300))")?;
+                        for _ in 0..10_000 {
+                            s.execute([])?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+            }
+        })
+    });
+    if !totals_ready(&store).await.unwrap() {
+        // What a reader meets meanwhile: the scan, while the fill writes.
+        let tip = top(&store).await.unwrap().unwrap().0;
+        let fill = tokio::spawn({
+            let store = Arc::clone(&store);
+            async move { fill_totals(&store).await.unwrap().unwrap() }
+        });
+        while !fill.is_finished() {
+            let s = Instant::now();
+            pool_counts(&store, 0, tip).await.unwrap();
+            println!(
+                "during the fill, pool_counts all: {:.1} ms",
+                s.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        let f = fill.await.unwrap();
+        println!(
+            "filled the totals: {} heights in {} writes, {:?}, the longest write {:?}",
+            f.heights, f.writes, f.elapsed, f.longest
+        );
+    }
+    let tip = top(&store).await.unwrap().unwrap().0;
+    let tip_time = by_height(&store, tip).await.unwrap().unwrap().time;
+    let back = |days: u64| tip_time - days * 86_400;
+    let since = |t: u64| {
+        let store = Arc::clone(&store);
+        async move { first_since(&store, 0, t).await.unwrap().unwrap_or(tip) }
+    };
+    let (y1, y2, y3, m6) = (
+        since(back(365)).await,
+        since(back(730)).await,
+        since(back(1095)).await,
+        since(back(180)).await,
+    );
+    macro_rules! time {
+        ($label:expr, $e:expr) => {{
+            let mut t = Vec::new();
+            for _ in 0..5 {
+                let s = Instant::now();
+                std::hint::black_box($e);
+                t.push(s.elapsed().as_secs_f64() * 1000.0);
+            }
+            let first = t[0];
+            t.sort_by(f64::total_cmp);
+            println!(
+                "{:<34} first {:>8.2} ms  median {:>8.2} ms  max {:>8.2} ms",
+                $label, first, t[2], t[4]
+            );
+        }};
+    }
+    let node = Mock::new(tip + 1);
+    time!("span", span(&store).await.unwrap());
+    time!("row_counts", row_counts(&store).await.unwrap());
+    time!(
+        "backfill pass on a new tip",
+        backfill::totals_step(&store, &node, tip - ZONE, &Reorgs::default())
+            .await
+            .unwrap()
+    );
+    time!(
+        "pool_counts all",
+        pool_counts(&store, 0, tip).await.unwrap()
+    );
+    time!(
+        "pool_counts 3y",
+        pool_counts(&store, y3, tip).await.unwrap()
+    );
+    time!(
+        "pool_counts week",
+        pool_counts(&store, tip - 1007, tip).await.unwrap()
+    );
+    time!("pool_weeks all", pool_weeks(&store, 0, tip).await.unwrap());
+    time!("pool_weeks 3y", pool_weeks(&store, y3, tip).await.unwrap());
+    time!(
+        "periods day all",
+        periods(&store, 0, tip, Period::Day).await.unwrap()
+    );
+    time!(
+        "periods day 3y",
+        periods(&store, y3, tip, Period::Day).await.unwrap()
+    );
+    time!(
+        "periods 1008 all",
+        periods(&store, 0, tip, Period::Blocks(1008)).await.unwrap()
+    );
+    time!(
+        "periods 216 3y",
+        periods(&store, y3, tip, Period::Blocks(216)).await.unwrap()
+    );
+    time!(
+        "periods 144 2y",
+        periods(&store, y2, tip, Period::Blocks(144)).await.unwrap()
+    );
+    time!(
+        "periods 72 1y",
+        periods(&store, y1, tip, Period::Blocks(72)).await.unwrap()
+    );
+    time!(
+        "periods 36 6m",
+        periods(&store, m6, tip, Period::Blocks(36)).await.unwrap()
+    );
+    time!(
+        "first_since 3y",
+        first_since(&store, 0, back(1095)).await.unwrap()
+    );
+    time!("retargets all", retargets(&store, 0, 0, tip).await.unwrap());
+    time!("work 1008", work(&store, tip - 1008, tip).await.unwrap());
+    time!(
+        "audit pool_health all",
+        crate::audit::pool_health(&store, 0, tip).await.unwrap()
+    );
+    // A new block, written as `follow` writes it (its totals settled in the same write), then
+    // rated, then removed again.
+    let row = by_height(&store, tip).await.unwrap().unwrap();
+    let mut next = row.clone();
+    next.height = tip + 1;
+    next.hash = hash(9, tip + 1);
+    next.time += 600;
+    time!("a new block's write", {
+        write_rows(&store, db::REPLACE, vec![next.clone()]).await;
+    });
+    let rated = next.rates.unwrap_or(Rated {
+        fee_rate: None,
+        fee_bands: [0; 10],
+    });
+    time!("rating it", {
+        store
+            .write(move |sql| {
+                Ok(db::rate_row(
+                    &mut sql.prepare(db::RATE)?,
+                    tip + 1,
+                    &next.hash,
+                    &rated,
+                )?)
+            })
+            .await
+            .unwrap();
+    });
+    store
+        .write(move |sql| {
+            sql.prepare("DELETE FROM blocks WHERE height > ?1")?
+                .execute(crate::store::params![tip])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    if let Some(w) = writer {
+        w.abort();
+    }
+}
+
+// The running totals (`totals.rs`).
+
+use crate::store::OptionalExtension;
+use db::get;
+
+/// A xorshift generator: the same sequence for a seed, with no dependency.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+}
+
+/// A block at `height` on branch `branch` with everything the totals sum drawn at random: a time
+/// that may run before its parent's, an empty block now and then, one of a few pools or none,
+/// a distinct difficulty, and fee rates or not.
+fn random_row(rng: &mut Rng, branch: u8, height: u32) -> Row {
+    const TAGS: [&[u8]; 4] = [b"Foundry USA Pool", b"/AntPool/", b"/ViaBTC/", b"nobody"];
+    let mut hd = header(branch, height, branch);
+    hd.timestamp = 1_700_000_000 + u64::from(height) * 600 + rng.below(14_400) - 7_200;
+    hd.tx_count = if rng.below(8) == 0 {
+        1
+    } else {
+        1 + rng.below(3000) as u32
+    };
+    hd.size = rng.below(2_000_000);
+    hd.weight = rng.below(4_000_000);
+    hd.difficulty = 1e10 * (1.0 + rng.below(1 << 40) as f64 / (1u64 << 40) as f64);
+    let totals = BlockTotals {
+        totalfee: Amount::from_sat(rng.below(50_000_000)),
+        subsidy: Amount::from_sat(312_500_000),
+        total_weight: 3_000_000,
+    };
+    let tag = TAGS[rng.below(4) as usize];
+    let mut row = Row::new(
+        &hd,
+        &totals,
+        &coinbase(tag, &[(312_500_000 + rng.below(1000), vec![0x51])]),
+    );
+    if rng.below(2) == 0 {
+        row.rates = Some(random_rates(rng, hd.tx_count));
+    }
+    row
+}
+
+fn random_rates(rng: &mut Rng, tx_count: u32) -> Rated {
+    let mut r: [f64; 7] = std::array::from_fn(|_| rng.below(1 << 30) as f64 / 1e6);
+    r.sort_by(f64::total_cmp);
+    Rated {
+        fee_rate: (tx_count > 1).then_some(Rates {
+            min: r[0],
+            p10: r[1],
+            p25: r[2],
+            median: r[3],
+            p75: r[4],
+            p90: r[5],
+            max: r[6],
+        }),
+        fee_bands: std::array::from_fn(|_| rng.below(100_000)),
+    }
+}
+
+async fn write_rows(store: &Store, stmt: &'static str, rows: Vec<Row>) {
+    store
+        .write(move |sql| {
+            let mut s = sql.prepare(stmt)?;
+            for r in &rows {
+                db::write_row(&mut s, r)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+/// Every total against a scan of the rows: the stored buckets one by one, and each read over
+/// ranges drawn from `rng`.
+async fn assert_totals_match(store: &Store, rng: &mut Rng, step: &str) {
+    let seed = rng.next();
+    let step = step.to_owned();
+    store
+        .read(crate::store::Read::Blocks, move |sql| {
+            let mut rng = Rng(seed | 1);
+            sql.prepare("BEGIN")?.execute([])?;
+            let dirty: i64 = sql
+                .prepare("SELECT count(*) FROM totals_dirty")?
+                .query_row([], |r| r.get(0))?;
+            assert_eq!(dirty, 0, "{step}: dirty buckets committed");
+            // Every stored bucket is a scan's, and every scan's bucket is stored.
+            for kind in [0, 18, 36, 72, 144, 216, 1008] {
+                let mut stmt = sql.prepare(
+                    "SELECT key, blocks, first_height, last_height, first_time, last_time, \
+                     tx_count, size, weight, fees, subsidy, reward, difficulty, rated, fee_min, \
+                     fee_p10, fee_p25, fee_median, fee_p75, fee_p90, fee_max FROM block_totals \
+                     WHERE kind = ?1 ORDER BY key",
+                )?;
+                let stored: Vec<Bucket> = stmt
+                    .query_map(crate::store::params![kind], db::read_bucket)?
+                    .collect::<Result<_, _>>()?;
+                let scanned = db::periods_scan(sql, 0, u32::MAX, kind)?;
+                assert_eq!(stored, scanned, "{step}: kind {kind}");
+            }
+            for (kind, grouped) in [(1008, "height / 1008"), (7, "(time - 345600) / 604800")] {
+                let stored: Vec<(i64, i64, i64, i64, i64)> = sql
+                    .prepare(
+                        "SELECT key, pool, blocks, empty, reward FROM pool_totals \
+                         WHERE kind = ?1 ORDER BY key, pool",
+                    )?
+                    .query_map(crate::store::params![kind], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                let scan = if grouped.starts_with('h') {
+                    "SELECT height / 1008 AS k, pool, count(*), sum(tx_count = 1), sum(reward) \
+                     FROM blocks GROUP BY k, pool ORDER BY k, pool"
+                } else {
+                    "SELECT (time - 345600) / 604800 AS k, pool, count(*), sum(tx_count = 1), \
+                     sum(reward) FROM blocks GROUP BY k, pool ORDER BY k, pool"
+                };
+                let scanned: Vec<(i64, i64, i64, i64, i64)> = sql
+                    .prepare(scan)?
+                    .query_map([], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                assert_eq!(stored, scanned, "{step}: pools by {grouped}");
+            }
+            let (max, times): (Option<u32>, Option<(i64, i64)>) = sql
+                .prepare("SELECT max(height), min(time), max(time) FROM blocks")?
+                .query_row([], |r| {
+                    let t: Option<i64> = r.get(1)?;
+                    Ok((r.get(0)?, t.map(|t| (t, r.get(2).unwrap_or(t)))))
+                })?;
+            let Some(max) = max else { return Ok(()) };
+            let heights: Vec<u32> = sql
+                .prepare("SELECT height FROM blocks ORDER BY height")?
+                .query_map([], |r| get(r, 0))?
+                .collect::<Result<_, _>>()?;
+            let present: std::collections::HashSet<u32> = heights.iter().copied().collect();
+            assert_eq!(
+                totals::counts(sql)?.map(|c| c.0),
+                Some(heights.len() as u64),
+                "{step}: row count"
+            );
+            let mut ranges = vec![(0, u32::MAX)];
+            for _ in 0..2 {
+                let a = rng.below(u64::from(max) + 2) as u32;
+                let b = a + rng.below(u64::from(max) + 2 - u64::from(a)) as u32;
+                ranges.push((a, b));
+            }
+            for &(a, b) in &ranges {
+                let kind = [18, 36, 72, 144, 216][rng.below(5) as usize];
+                for kind in [0, 1008, kind] {
+                    assert_eq!(
+                        totals::periods(sql, a, b, kind)?,
+                        Some(db::periods_scan(sql, a, b, kind)?),
+                        "{step}: periods by {kind} over {a}..={b}"
+                    );
+                }
+                assert_eq!(
+                    totals::pool_counts(sql, a, b)?,
+                    Some(mining::pool_counts_scan(sql, a, b)?),
+                    "{step}: pool counts over {a}..={b}"
+                );
+                assert_eq!(
+                    totals::pool_weeks(sql, a, b)?,
+                    Some(mining::pool_weeks_scan(sql, a, b)?),
+                    "{step}: pool weeks over {a}..={b}"
+                );
+                if let Some((lo, hi)) = times {
+                    let t = lo - 86_400 + rng.below((hi - lo + 2 * 86_400) as u64) as i64;
+                    assert_eq!(
+                        totals::first_since(sql, a, t as u64)?,
+                        Some(mining::first_since_scan(sql, a, t, i64::MAX)?),
+                        "{step}: first since {t} from {a}"
+                    );
+                }
+                // Every height above what `below_full` returns has a row.
+                let hi = b.min(max + 5);
+                let top = totals::below_full(sql, hi)?.unwrap();
+                let from = top.map_or(0, |t| t + 1);
+                assert!(
+                    (from..=hi).all(|h| present.contains(&h)),
+                    "{step}: heights {from}..={hi} skipped but not all stored"
+                );
+            }
+            // `full_from`: every height from it to the top is stored.
+            let full = totals::full_from(sql, max)?.unwrap();
+            assert!(
+                (full..=max).all(|h| present.contains(&h)),
+                "{step}: full from {full}"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+/// A long random run of what happens to the block table: new tips, old blocks backfilled out of
+/// order, blocks rated later, reorgs that remove and replace rows, stale rows deleted, pools
+/// re-identified, restarts. After every step each total equals a scan of the rows.
+#[tokio::test]
+async fn totals_equal_a_scan_through_every_kind_of_change() {
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-totals-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+    // `TOTALS_STEPS` and `TOTALS_SEED` run a longer or another sequence by hand.
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+    let mut rng = Rng(env("TOTALS_SEED").unwrap_or(0x5eed_1234_abcd_ef01) | 1);
+    let steps = env("TOTALS_STEPS").unwrap_or(100);
+    let mut tip = 0u32;
+    let mut branch = 0u8;
+    // Old blocks, newest first and with gaps, as a backfill leaves them.
+    let old: Vec<Row> = (0..2400)
+        .filter(|h| h % 97 != 5)
+        .map(|h| random_row(&mut rng, 0, h))
+        .collect();
+    write_rows(&store, db::INSERT_NEW, old).await;
+    tip = tip.max(2399);
+    assert_totals_match(&store, &mut rng, "start").await;
+    for step in 0..steps {
+        let what = rng.below(8);
+        let label = format!("step {step} ({what})");
+        match what {
+            // New blocks on the tip, written as follow writes them.
+            0 | 1 => {
+                let n = 1 + rng.below(30) as u32;
+                let rows = (tip + 1..=tip + n)
+                    .map(|h| random_row(&mut rng, branch, h))
+                    .collect();
+                write_rows(&store, db::REPLACE, rows).await;
+                tip += n;
+            }
+            // The backfill fills old heights, or skips existing ones.
+            2 => {
+                let lo = rng.below(u64::from(tip)) as u32;
+                let rows = (lo..(lo + 60).min(tip))
+                    .map(|h| random_row(&mut rng, branch, h))
+                    .collect();
+                write_rows(&store, db::INSERT_NEW, rows).await;
+            }
+            // Rows rated after they were written.
+            3 => {
+                let picks: Vec<(u32, Rated)> = (0..20)
+                    .map(|_| {
+                        let h = rng.below(u64::from(tip) + 1) as u32;
+                        (h, random_rates(&mut rng, 2))
+                    })
+                    .collect();
+                store
+                    .write(move |sql| {
+                        let mut s = sql.prepare(db::RATE)?;
+                        for (h, rated) in &picks {
+                            let hash: Option<[u8; 32]> = sql
+                                .prepare("SELECT hash FROM blocks WHERE height = ?1")?
+                                .query_row(crate::store::params![h], |r| r.get(0))
+                                .optional()?;
+                            if let Some(hash) = hash {
+                                db::rate_row(&mut s, *h, &BlockHash::from_byte_array(hash), rated)?;
+                            }
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+            }
+            // A reorg: the rows above a fork go, and a branch replaces them, maybe shorter.
+            4 => {
+                let depth = 1 + rng.below(150) as u32;
+                let fork = tip.saturating_sub(depth);
+                branch = branch.wrapping_add(1);
+                let len = depth.saturating_sub(rng.below(3) as u32);
+                let rows: Vec<Row> = (fork + 1..=fork + len)
+                    .map(|h| random_row(&mut rng, branch, h))
+                    .collect();
+                store
+                    .write(move |sql| {
+                        sql.prepare("DELETE FROM blocks WHERE height > ?1")?
+                            .execute(crate::store::params![fork + len])?;
+                        let mut s = sql.prepare(db::REPLACE)?;
+                        for r in &rows {
+                            db::write_row(&mut s, r)?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                tip = fork + len;
+            }
+            // The backfill deletes a stale row.
+            5 => {
+                let h = rng.below(u64::from(tip)) as u32;
+                store
+                    .write(move |sql| {
+                        let hash: Option<[u8; 32]> = sql
+                            .prepare("SELECT hash FROM blocks WHERE height = ?1")?
+                            .query_row(crate::store::params![h], |r| r.get(0))
+                            .optional()?;
+                        if let Some(hash) = hash {
+                            db::delete_row(sql, h, &BlockHash::from_byte_array(hash))?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+            }
+            // A new pool list names some blocks' pools differently, as `reattribute` writes it.
+            6 => {
+                let lo = rng.below(u64::from(tip)) as u32;
+                let pool = rng.below(150) as u16;
+                store
+                    .write(move |sql| {
+                        let rows: Vec<(u32, Vec<u8>)> = sql
+                            .prepare(
+                                "SELECT height, hash FROM blocks WHERE height BETWEEN ?1 AND ?2",
+                            )?
+                            .query_map(crate::store::params![lo, lo + 400], |r| {
+                                Ok((get(r, 0)?, r.get(1)?))
+                            })?
+                            .collect::<Result<_, _>>()?;
+                        let mut s = sql.prepare(
+                            "UPDATE blocks SET pool = ?1 WHERE height = ?2 AND hash = ?3",
+                        )?;
+                        for (h, hash) in rows.iter().step_by(3) {
+                            s.execute(crate::store::params![pool, h, hash])?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+            }
+            // A restart.
+            _ => {
+                store.close().await;
+                store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+            }
+        }
+        assert_totals_match(&store, &mut rng, &label).await;
+    }
+    store.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A table filled before the totals existed is totalled afterwards, a chunk at a time, while
+/// other writes go on; reads scan until then, and then the totals equal a scan.
+#[tokio::test]
+async fn totals_are_filled_for_rows_stored_before_them() {
+    let dir =
+        std::env::temp_dir().join(format!("rbitcoin-space-totals-fill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let before = &crate::store::MIGRATIONS[..9];
+    assert_eq!(before.last().unwrap().0, "0009_chain.sql");
+    let store = Store::open_with(&dir, "regtest", StoreOptions::default(), before).unwrap();
+    let mut rng = Rng(0x0fed_cba9_8765_4321);
+    let rows: Vec<Row> = (0..3000)
+        .filter(|h| h % 501 != 7)
+        .map(|h| random_row(&mut rng, 0, h))
+        .collect();
+    write_rows(&store, db::INSERT_NEW, rows).await;
+    store.close().await;
+
+    let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+    assert!(!totals_ready(&store).await.unwrap());
+    // Until the fill is done, every read scans, and says so by having no totals to give.
+    store
+        .read(crate::store::Read::Blocks, |sql| {
+            assert_eq!(totals::periods(sql, 0, 2999, 0)?, None);
+            assert_eq!(totals::counts(sql)?, None);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(row_counts(&store).await.unwrap().0, 2994);
+    // Between the fill's writes: a new tip, a restart, a reorg across heights already filled and
+    // not yet, a later rating and a stale row's deletion.
+    assert_eq!(totals::fill_step(&store, 700).await.unwrap(), Some(700));
+    write_rows(
+        &store,
+        db::REPLACE,
+        (3000..3020).map(|h| random_row(&mut rng, 0, h)).collect(),
+    )
+    .await;
+    assert_eq!(totals::fill_step(&store, 700).await.unwrap(), Some(700));
+    store.close().await;
+    let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+    assert!(!totals_ready(&store).await.unwrap());
+    write_rows(
+        &store,
+        db::REPLACE,
+        (1500..1700).map(|h| random_row(&mut rng, 1, h)).collect(),
+    )
+    .await;
+    let rated = random_rates(&mut rng, 2);
+    store
+        .write(move |sql| {
+            db::rate_row(&mut sql.prepare(db::RATE)?, 100, &hash(0, 100), &rated)?;
+            db::delete_row(sql, 200, &hash(0, 200))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let filled = totals::fill_by(&store, 700).await.unwrap().unwrap();
+    assert_eq!((filled.heights, filled.writes), (1600, 3));
+    assert!(totals_ready(&store).await.unwrap());
+    assert_eq!(totals::fill_by(&store, 700).await.unwrap(), None);
+    assert_totals_match(&store, &mut rng, "filled").await;
+    store.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
 }
