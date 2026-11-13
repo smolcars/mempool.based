@@ -217,6 +217,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/blocks/summary", get(summary::batch))
         .route("/app/tx/{txid}/relatives", get(relatives::route))
         .route("/app/tx/{txid}/replacements", get(replacements::route))
+        .route("/app/fees/score", get(ws::fees::score::route))
         .merge(statistics::app_routes())
         .merge(api_v1::routes())
         .merge(audits::routes())

@@ -49,3 +49,8 @@ indexing_slicing = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
 dbg_macro = "deny"
+
+# secp256k1's C library compiled at -O0 made signature checks most of the Lightning tests' time.
+# Optimised it builds once into the cache and checks signatures about twenty times faster.
+[profile.dev.package.secp256k1-sys]
+opt-level = 3

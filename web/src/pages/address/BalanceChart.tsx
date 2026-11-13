@@ -22,6 +22,14 @@ import { settled } from "./parts";
 
 const Chart = lazy(() => import("../../components/chart/Chart"));
 
+/**
+ * The API's answers may be a second old (`max-age=1`), so the totals can count a block whose
+ * transactions the chart's own answer, from a moment earlier, lacks. The page stops catching up
+ * once the totals change, so the chart asks again by itself, past that second, a few times.
+ */
+const FOLLOW_MS = 1100;
+const FOLLOW_TRIES = 3;
+
 /** Plot height in px. `.address-balance__slot` holds it with the readout and caption: keep both. */
 const HEIGHT = 200;
 
@@ -62,6 +70,9 @@ export function BalanceChart(props: {
   let started = false;
   let busy = false;
   let again = false;
+  let behind = 0;
+  let behindTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(behindTimer));
   /**
    * The newest page joined to what is loaded; when they do not meet (more new transactions than a
    * page holds), that page alone, anchored: two requests at most, never the whole history again.
@@ -86,6 +97,8 @@ export function BalanceChart(props: {
     if (again) {
       again = false;
       void work();
+    } else {
+      follow();
     }
   };
   const refresh = () => {
@@ -97,6 +110,21 @@ export function BalanceChart(props: {
 
   const failure = () => (props.stats.state === "errored" ? refusal(props.stats.error) : undefined);
   const count = () => settled(props.stats)?.chain_stats.tx_count;
+  /** While the chart and the totals disagree on the confirmed count, asks again ({@link FOLLOW_MS}). */
+  const follow = () => {
+    clearTimeout(behindTimer);
+    const n = untrack(count);
+    if (history === undefined || n === undefined || n === history.total) {
+      behind = 0;
+    } else if (behind < FOLLOW_TRIES) {
+      behind += 1;
+      behindTimer = setTimeout(refresh, FOLLOW_MS);
+    }
+  };
+  createEffect(count, () => {
+    behind = 0;
+    if (!busy) follow();
+  });
   const statsLoading = () => props.stats.state === "unresolved" || props.stats.state === "pending";
   // Its pages are most of an address page's requests, against a per-client allowance: they wait
   // until the chart is about to be seen.

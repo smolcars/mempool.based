@@ -1969,7 +1969,7 @@ async fn totals_are_filled_for_rows_stored_before_them() {
         .filter(|h| h % 501 != 7)
         .map(|h| random_row(&mut rng, 0, h))
         .collect();
-    // The insert as a store at 0009 ran it, before the lowest band's split columns (0011): the
+    // The insert as a store at 0009 ran it, before the lowest band's split columns (0012): the
     // split's two parameters stay numbered, unused.
     let insert_0009: &'static str = Box::leak(
         db::INSERT_NEW

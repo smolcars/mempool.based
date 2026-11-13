@@ -847,10 +847,12 @@ async fn samples_each_minute_skips_stale_late_and_syncing_minutes_and_rolls_up()
     };
 
     // The first minute was not watched whole; the second is written and rolls up the old rows.
+    // Both wait for the engines: a first minute they were not live for makes the second owed too.
     let first = NOW + MINUTE;
-    to_minute(&clock, || true).await;
+    let live = || count() == 1 && tracker.node_info().is_some() && !stale();
+    to_minute(&clock, live).await;
     assert_eq!(next().await, skipped(first, Skip::Syncing));
-    to_minute(&clock, || count() == 1 && tracker.node_info().is_some()).await;
+    to_minute(&clock, live).await;
     let rolled = Rolled {
         minutes: 3,
         hours: 0,

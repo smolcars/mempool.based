@@ -250,6 +250,38 @@ When neither is available (the node's estimates are older than 90 s or never cam
 
 **Answered from memory.** A task per network recomputes the recommendation once per `WS_MEMPOOL_INTERVAL_MS` (2 s) from the latest projection, and the projected blocks once per new projection; a request reads the result. The only node calls are the task's `/fee-estimates` and `getmempoolinfo` (for the node's minimum now), at most once per 30 s, and only while the node's estimates are what is served and a fee route was asked in the last ten minutes (or the `fees` topic has a subscriber). After a quiet spell the first request is therefore a `503` with `Retry-After: 1`, and the answer follows within a few seconds.
 
+#### The score kept
+
+`GET /app/fees/score?window=24h|1w|1m|all` (per network prefix; `all` without the parameter) says how our own recommendations fared against the blocks that followed them, over the samples taken in the window: what the server records and how it scores it are in [`MEMPOOL.md`](MEMPOOL.md#the-score-the-server-keeps). Any other parameter, value, or a repeated one is `400`. It is answered from memory, rebuilt after every 30 s sample, so it costs a request nothing; with the mempool engine off it is `503 the mempool engine is off on this server`, and in the moment after start `503 not ready yet; retry`.
+
+```json
+{
+  "window": "1w", "from": 1794577621, "to": 1794580127, "min_blocks": 30,
+  "levels": [
+    { "name": "high", "blocks": 1, "scored": 62, "outcomes": 31, "enough": true,
+      "met": 0.4194, "interval": [0.2605, 0.5948],
+      "overpay": { "mean": 4.12, "median": 2.0 }, "shortfall": 0.613,
+      "left_out": { "outage": 0, "unfinished": 1, "no_clearing": 0 } },
+    { "name": "no_rush", "blocks": 144, "scored": 0, "outcomes": 0, "enough": false,
+      "met": null, "interval": null, "overpay": null, "shortfall": null,
+      "left_out": { "outage": 0, "unfinished": 63, "no_clearing": 0 } }
+  ],
+  "not_ours": { "node": 10, "nothing": 1 }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `from`, `to` | Unix seconds: the oldest sample in the window (none: `null`) and the moment of the answer |
+| `levels[].blocks` | The level's horizon in blocks |
+| `scored` | Samples whose horizon finished and was judged |
+| `outcomes` | Distinct blocks that decided them. Samples waiting for one block share its fate, so this, not `scored`, is how much evidence there is |
+| `enough` | `outcomes` is at least `min_blocks` (30). When it is not, `met`, `interval`, `overpay` and `shortfall` are `null`: no percentage from a handful of blocks |
+| `met`, `interval` | The share met, and its 95% interval, as fractions |
+| `overpay`, `shortfall` | sat/vB: the mean and median paid above what sufficed when met, the mean short of it when missed |
+| `left_out` | Samples not judged: the horizon reached into an `outage`, is `unfinished`, or had `no_clearing` rate |
+| `not_ours` | Samples in the window when the node's estimates, or nothing, were served instead of ours |
+
 #### Differences from the reference
 
 Shapes observed on the reference backend; values side by side in [`MEMPOOL.md`](MEMPOOL.md#against-the-node-and-the-reference).
@@ -817,7 +849,7 @@ Values and their differences from the reference:
 - **Feature names** follow BOLT 9 (`gossip-queries-ex`, `route-blinding`, `dual-fund`, `quiesce`, `onion-messages` where the reference says `unknown`); implementation-specific bits the reference names (31 `amp`, 2023 `script-enforced-lease`) are `unknown` here.
 - **Errors** are our `{"error": …}` model; the reference answers some with plain text (`Channel not found`).
 
-**Cost.** Measured on mainnet (36,223 channels, 13,639 nodes), release build, a client on the same machine, three requests each: every route answered in 0.3 to 0.9 ms, first and repeated alike, except the three that read a node's rows from the store (its closed channels, `/history` and `/statistics`, 1.5 to 2.6 ms for ACINQ's 1,807 channels). The largest answers are the 100-node rankings (25 KB) and the overview (7 KB). A test builds a graph of mainnet's size and holds every route under 250 ms in a debug build on a CI runner (`crates/server/tests/lightning.rs`).
+**Cost.** Measured on mainnet (36,223 channels, 13,639 nodes), release build, a client on the same machine, three requests each: every route answered in 0.3 to 0.9 ms, first and repeated alike, except the three that read a node's rows from the store (its closed channels, `/history` and `/statistics`, 1.5 to 2.6 ms for ACINQ's 1,807 channels). The largest answers are the 100-node rankings (25 KB) and the overview (7 KB). A test builds a graph of mainnet's size and checks every route answers it without the node (`crates/server/tests/lightning.rs`); an ignored one beside it holds each under 250 ms in a debug build, on a machine with nothing else running.
 
 ## Using it from the frontend
 

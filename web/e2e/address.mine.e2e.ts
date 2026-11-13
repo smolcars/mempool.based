@@ -4,6 +4,9 @@ import { chain, expect, test } from "./fixtures";
 /** P2WSH of OP_TRUE: the harness's miner script (docs/REGTEST.md), spent with the witness [OP_TRUE]. */
 const MINER_SCRIPT = "00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260";
 type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
+interface Stats {
+  chain_stats: { tx_count: number };
+}
 const le = (n: bigint, bytes: number) =>
   Array.from({ length: bytes }, (_, i) =>
     ((n >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, "0"),
@@ -73,7 +76,28 @@ test("the balance chart steps with each block and follows a new payment", async 
   await expect(figures.nth(1)).toContainText("107");
 
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  // Until the totals count the block, the chart is answered from before it, as an answer up to a
+  // second old (`max-age=1`) can be while the totals' is already new. The page stops catching up
+  // once the totals change, so the chart must see it is behind them and ask again by itself.
+  const totals = `/regtest/api/address/${chain.addresses.p2sh}`;
+  const summary = `**${totals}/txs/summary`;
+  const counted = (await (await page.request.get(totals)).json()) as Stats;
+  const stale = await (await page.request.get(`${totals}/txs/summary`)).text();
+  await page.route(summary, (route) =>
+    route.fulfill({ contentType: "application/json", body: stale }),
+  );
+  // A body the browser dropped (an answer a newer request replaced) is not the one awaited.
+  const newTotals = page.waitForResponse(
+    async (r) =>
+      new URL(r.url()).pathname === totals &&
+      (await r.json().then(
+        (b: Stats) => b.chain_stats.tx_count > counted.chain_stats.tx_count,
+        () => false,
+      )),
+  );
   await block(await pay(rpc, chain.addresses.p2sh, 20_000_000n));
+  await newTotals;
+  await page.unroute(summary);
   await expect(chart).toHaveAttribute("aria-valuemax", "3");
   await expect
     .poll(balances)

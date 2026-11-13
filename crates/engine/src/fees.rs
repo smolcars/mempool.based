@@ -11,6 +11,9 @@ use node::esplora::ChainTip;
 
 use crate::projected::Projection;
 
+pub mod db;
+pub mod score;
+
 /// Virtual bytes a block holds for transactions: 4,000,000 weight units less the 8,000 a
 /// template keeps for the coinbase, as the projected blocks pack them.
 pub const BLOCK_VSIZE: u64 = 3_992_000 / 4;
