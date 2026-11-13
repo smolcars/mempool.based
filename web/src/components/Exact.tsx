@@ -1,4 +1,4 @@
-import { createSignal, flush, onCleanup } from "solid-js";
+import { createSignal, createUniqueId, flush, onCleanup } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { openPop } from "./pop";
 import "./Exact.css";
@@ -24,6 +24,7 @@ export function Exact(props: {
   /** The figure already says it to a screen reader: the pop-up is for the eyes only. */
   decorative?: boolean;
 }) {
+  const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
   let button: HTMLButtonElement | undefined;
   let pop: HTMLElement | undefined;
@@ -64,12 +65,14 @@ export function Exact(props: {
         class={props.class}
         title={props.title}
         aria-expanded={open() ? "true" : "false"}
+        aria-controls={id}
         onClick={() => (close ? close() : show())}
       >
         {props.figure}
       </button>
       <span
         ref={pop}
+        id={id}
         class="exact"
         hidden={!open()}
         aria-hidden={props.decorative === true ? "true" : undefined}
