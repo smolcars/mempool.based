@@ -39,7 +39,7 @@ A third connection the same day (about three minutes, `want ["stats","live-2h-ch
 | `{"track-rbf":"all"\|"fullRbf"}` | Recent replacement trees, then updates | Engine | skipped | — | ref | Answered `track-rbf-error` |
 | `{"track-rbf-summary":true}` | Short list of recent replacements | Engine | skipped | — | ref | Answered `track-rbf-summary-error` |
 | `{"track-mempool":true}` | Every mempool change: added, removed, mined, replaced, with a sequence | Engine (MP1) | skipped | — | ref | Every transaction to every client: answered `track-mempool-error` |
-| `{"track-mempool-txids":true}` | Same changes as txids only | Engine | skipped | — | ref | Answered `track-mempool-txids-error`. A bounded form is proposed in the findings below |
+| `{"track-mempool-txids":true}` | Same changes as txids only | Engine | skipped | — | ref | Answered `track-mempool-txids-error` |
 | `{"track-accelerations":true}` | Accelerator state | — | skipped | — | ref | Out of scope; answered `track-accelerations-error` |
 | `{"track-asset":…}` | Liquid asset | — | skipped | — | ref | Out of scope; no answer |
 | `{"track-donation":…}` | Donation status for mempool.space's sponsor page | — | skipped | — | ref | Not ours; no answer |

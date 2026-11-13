@@ -23,27 +23,11 @@ rbitcoin already keeps the transaction index, address index, cluster mempool and
 
 ## Run it
 
-You need a Linux host with Docker and its Compose plugin, on amd64 or arm64, with room for rbitcoin's chain. The compose file runs rbitcoin v0.9.2 and the explorer beside it:
-
-```sh
-VERSION=0.1.0                     # the newest release
-git clone --depth 1 --branch "v$VERSION" https://github.com/smolcars/rbitcoin-space.git
-cd rbitcoin-space/deploy
-cp .env.example .env && chmod 600 .env
-pass=$(openssl rand -hex 32)
-sed -i.bak "s/^MAINNET_RPC_PASSWORD=.*/MAINNET_RPC_PASSWORD=$pass/" .env && rm .env.bak
-echo "SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space:$VERSION" >> .env
-touch rpc.cookie && chmod 600 rpc.cookie
-printf 'rbitcoin-space:%s' "$pass" > rpc.cookie
-sudo chown 10001:10001 rpc.cookie
-docker compose up -d
-```
-
-The explorer is then at `http://127.0.0.1:8080` on that host, while the node syncs. Before anyone else uses it, put it behind a reverse proxy with TLS: [`docs/DEPLOY.md`](docs/DEPLOY.md) is the operator's guide for that and for everything after, from the first backfill to upgrades.
+You need a Linux host with Docker and its Compose plugin, on amd64 or arm64, with room for rbitcoin's chain. [`deploy/compose.yml`](deploy/compose.yml) runs rbitcoin v0.9.2 and the explorer beside it: [`docs/DEPLOY.md`](docs/DEPLOY.md#same-host-with-the-compose-file) has the commands to start both from a release, and is the operator's guide for everything after, from TLS and the first backfill to upgrades. The explorer is then at `http://127.0.0.1:8080` on that host while the node syncs; put it behind a reverse proxy with TLS before anyone else uses it. To try it first, the same compose file runs a private regtest chain ([`docs/DEPLOY.md`](docs/DEPLOY.md#try-it-on-regtest-first)).
 
 ## Develop
 
-Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup), [bun](https://bun.sh), and for a node of your own Docker with Compose and `python3`.
+Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup), [bun](https://bun.sh), and for the private regtest node Docker with Compose v2.23 or later and `python3`.
 
 ```sh
 # A private regtest node with a known chain (docs/REGTEST.md), and a .env pointing at it.
@@ -81,6 +65,7 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 | [`docs/WS.md`](docs/WS.md) | The WebSocket protocol at `/app/ws`: messages, topics, limits and close codes |
 | [`docs/CONFIG.md`](docs/CONFIG.md) | Every environment variable, its default and what it protects against |
 | [`docs/CI.md`](docs/CI.md) | CI speed budget and testing layers |
+| [`docs/REGTEST.md`](docs/REGTEST.md) | The private regtest node for development and tests: its commands and the known chain |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | How fast the server and the site are against the budgets, how that was measured, and how they compare |
 | [`docs/STORE.md`](docs/STORE.md) | The SQLite store: migrations, writes, reads, backup |
 | [`docs/LOGGING.md`](docs/LOGGING.md) | Structured logging: the event catalogue and its rules |

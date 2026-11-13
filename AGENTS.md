@@ -48,7 +48,9 @@ UI work follows [`docs/DESIGN.md`](docs/DESIGN.md) and uses the `frontend-design
 |---|---|
 | `crates/` | Rust workspace: the server and its libraries |
 | `web/` | Solid frontend |
+| `deploy/` | The compose files and `.env.example` for running the release image ([`docs/DEPLOY.md`](docs/DEPLOY.md)) |
 | `dev/` | Local development tooling, including the regtest harness |
-| `design/` | Static design prototypes |
+| `design/` | The design tokens, logo and font the frontend builds with, and the static prototype |
 | `fixtures/` | Recorded public chain data for tests |
+| `assets/` | The project's icon, for the README |
 | `docs/` | Plans, architecture and rules |
