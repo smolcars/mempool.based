@@ -4,13 +4,15 @@
 use super::{
     DAY, Flow, HOUR, Interval, KEEP_HOURS, KEEP_MINUTES, Level, MINUTE, Point, Series, Totals,
 };
+use crate::projected::{Bands, STORED_BANDS};
 use crate::store::{Error, Read, Sql, SqlError, Store, params};
 
 /// The value columns, in the order [`read`] and the inserts use them.
 macro_rules! columns {
     () => {
         "samples, count, vsize, fees, min_fee, band0, band1, band2, band3, band4, band5, band6, \
-         band7, band8, band9, in_count, in_vsize, out_count, out_vsize, mined_count, mined_vsize"
+         band7, band8, band9, in_count, in_vsize, out_count, out_vsize, mined_count, mined_vsize, \
+         band0_12_15, band0_15_20"
     };
 }
 
@@ -19,7 +21,9 @@ macro_rules! sums {
         "sum(samples), sum(count), sum(vsize), sum(fees), sum(min_fee), sum(band0), sum(band1), \
          sum(band2), sum(band3), sum(band4), sum(band5), sum(band6), sum(band7), sum(band8), \
          sum(band9), sum(in_count), sum(in_vsize), sum(out_count), sum(out_vsize), \
-         sum(mined_count), sum(mined_vsize)"
+         sum(mined_count), sum(mined_vsize), \
+         CASE WHEN count(band0_12_15) = count(*) THEN sum(band0_12_15) END, \
+         CASE WHEN count(band0_15_20) = count(*) THEN sum(band0_15_20) END"
     };
 }
 
@@ -27,11 +31,12 @@ const INSERT: &str = concat!(
     "INSERT OR IGNORE INTO mempool_history (level, time, ",
     columns!(),
     ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ",
-    "?19, ?20, ?21, ?22, ?23)"
+    "?19, ?20, ?21, ?22, ?23, ?24, ?25)"
 );
 
 /// Adds the rows of level ?1 older than ?4 into level ?2 rows of ?3 seconds, merging with any
-/// already there, so totals are kept whatever was rolled before.
+/// already there, so totals are kept whatever was rolled before. A split band is NULL in the sum
+/// unless every row summed knew it: `sums!` and `NULL + x` both see to that.
 const ROLL: &str = concat!(
     "INSERT INTO mempool_history (level, time, ",
     columns!(),
@@ -49,7 +54,9 @@ const ROLL: &str = concat!(
     "in_count = in_count + excluded.in_count, in_vsize = in_vsize + excluded.in_vsize, ",
     "out_count = out_count + excluded.out_count, out_vsize = out_vsize + excluded.out_vsize, ",
     "mined_count = mined_count + excluded.mined_count, ",
-    "mined_vsize = mined_vsize + excluded.mined_vsize"
+    "mined_vsize = mined_vsize + excluded.mined_vsize, ",
+    "band0_12_15 = band0_12_15 + excluded.band0_12_15, ",
+    "band0_15_20 = band0_15_20 + excluded.band0_15_20"
 );
 
 /// Rows moved by one roll-up.
@@ -64,7 +71,7 @@ fn insert_row(sql: &Sql, level: Level, p: &Point) -> Result<usize, Error> {
     let (t, f) = (&p.sums, &p.sums.flow);
     let values = [p.time, p.samples, t.count, t.vsize, t.fees, t.min_fee]
         .into_iter()
-        .chain(t.bands)
+        .chain(t.bands.stored)
         .chain([
             f.in_count,
             f.in_vsize,
@@ -73,9 +80,13 @@ fn insert_row(sql: &Sql, level: Level, p: &Point) -> Result<usize, Error> {
             f.mined_count,
             f.mined_vsize,
         ])
-        .map(int);
+        .map(|v| Some(int(v)))
+        .chain(match t.bands.split {
+            Some(s) => s.map(|v| Some(int(v))),
+            None => [None; 2],
+        });
     Ok(sql.prepare(INSERT)?.execute(rusqlite::params_from_iter(
-        std::iter::once(level as i64).chain(values),
+        std::iter::once(Some(level as i64)).chain(values),
     ))?)
 }
 
@@ -154,10 +165,15 @@ fn get(r: &rusqlite::Row, i: usize) -> Result<u64, SqlError> {
 
 /// A row of `time, ` followed by [`columns!`] or [`sums!`].
 fn read(r: &rusqlite::Row) -> Result<Point, SqlError> {
-    let mut bands = [0; crate::projected::BANDS];
-    for (i, b) in bands.iter_mut().enumerate() {
+    let mut stored = [0; STORED_BANDS];
+    for (i, b) in stored.iter_mut().enumerate() {
         *b = get(r, 6 + i)?;
     }
+    // Both or neither: a row stored before the split, or summed with one, has neither.
+    let split = match (r.get::<_, Option<i64>>(22)?, r.get::<_, Option<i64>>(23)?) {
+        (Some(_), Some(_)) => Some([get(r, 22)?, get(r, 23)?]),
+        _ => None,
+    };
     Ok(Point {
         time: get(r, 0)?,
         samples: get(r, 1)?,
@@ -166,7 +182,7 @@ fn read(r: &rusqlite::Row) -> Result<Point, SqlError> {
             vsize: get(r, 3)?,
             fees: get(r, 4)?,
             min_fee: get(r, 5)?,
-            bands,
+            bands: Bands { stored, split },
             flow: Flow {
                 in_count: get(r, 16)?,
                 in_vsize: get(r, 17)?,

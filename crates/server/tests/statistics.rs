@@ -60,7 +60,11 @@ fn point(time: u64, samples: u64) -> Point {
             vsize: bands.iter().sum(),
             fees: 9_000_000 * samples,
             min_fee: 100 * samples,
-            bands,
+            // Stored before the lowest band was split, so it is served as the ten bands.
+            bands: engine::projected::Bands {
+                stored: bands,
+                split: None,
+            },
             flow: Flow {
                 in_count: 120 * samples,
                 in_vsize: 45_000 * samples,

@@ -16,9 +16,10 @@
 mod model;
 mod projector;
 
+pub(crate) use model::BAND_EDGES;
 pub use model::{
-    BANDS, BlockSummary, Delta, Group, GroupChunk, Placed, Position, ProjectedBlock, Projection,
-    band,
+    BANDS, Bands, BlockSummary, Delta, Group, GroupChunk, Placed, Position, ProjectedBlock,
+    Projection, STORED_BANDS, band,
 };
 pub use projector::{ClusterSource, Config, Event, Expected, Projector, Subscription, UpdateStats};
 

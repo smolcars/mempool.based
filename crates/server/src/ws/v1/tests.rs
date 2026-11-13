@@ -752,9 +752,9 @@ fn sample(time: u64, in_vsize: u64) -> engine::history::Point {
         min_fee: 100,
         ..Default::default()
     };
-    sums.bands[0] = 33_000_000;
-    sums.bands[4] = 900_000;
-    sums.bands[9] = 45_214;
+    sums.bands.stored[0] = 33_000_000;
+    sums.bands.stored[4] = 900_000;
+    sums.bands.stored[9] = 45_214;
     sums.flow.in_vsize = in_vsize;
     engine::history::Point {
         time,

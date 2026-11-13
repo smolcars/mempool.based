@@ -10,16 +10,86 @@ use node::esplora::ChainTip;
 use node::rpc::model::Cluster;
 
 /// Fee bands, as in `docs/DESIGN.md` "Fee scale".
-pub const BANDS: usize = 10;
+pub const BANDS: usize = 12;
 
-/// Lower bounds of bands 2 to 10 in hundredths of a sat/vB.
-const BAND_EDGES: [u64; BANDS - 1] = [20, 30, 50, 100, 150, 200, 300, 500, 1000];
+/// Lower bounds of bands 2 to 12 in hundredths of a sat/vB.
+pub(crate) const BAND_EDGES: [u64; BANDS - 1] = [12, 15, 20, 30, 50, 100, 150, 200, 300, 500, 1000];
 
-/// The band a rate in sat per 1,000 vB falls in, 0 to 9. The rate is first rounded to the two
+/// The band a rate in sat per 1,000 vB falls in, 0 to 11. The rate is first rounded to the two
 /// decimals it prints with, so the color never disagrees with the number next to it.
 pub fn band(rate: u32) -> usize {
     let printed = (u64::from(rate) + 5) / 10;
     BAND_EDGES.iter().filter(|e| printed >= **e).count()
+}
+
+/// Bands the store first had: the lowest holds everything under 0.2 sat/vB.
+pub const STORED_BANDS: usize = 10;
+
+/// Virtual size per fee band as the store holds it (`docs/STORE.md`): the ten stored bands and,
+/// when it was recorded, the split of the lowest at 0.12 and 0.15 sat/vB. Serialized as the 12
+/// bands when the split is known and as the ten when it is not, cheapest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bands {
+    /// The first is everything under 0.2 sat/vB.
+    pub stored: [u64; STORED_BANDS],
+    /// The parts of `stored[0]` in [0.12, 0.15) and [0.15, 0.2). `None` for data recorded
+    /// before the split, which is never guessed at.
+    pub split: Option<[u64; 2]>,
+}
+
+/// Nothing, split: the sum of no rows knows its split.
+impl Default for Bands {
+    fn default() -> Self {
+        Self {
+            stored: [0; STORED_BANDS],
+            split: Some([0; 2]),
+        }
+    }
+}
+
+impl Bands {
+    /// From the 12 bands, cheapest first.
+    pub fn new(b: [u64; BANDS]) -> Self {
+        let [b0, b1, b2, rest @ ..] = b;
+        let mut stored = [0; STORED_BANDS];
+        stored[0] = b0 + b1 + b2;
+        stored[1..].copy_from_slice(&rest);
+        Self {
+            stored,
+            split: Some([b1, b2]),
+        }
+    }
+
+    /// The 12 bands when the split is known, else the ten.
+    pub fn list(&self) -> Vec<u64> {
+        let [b0, rest @ ..] = self.stored;
+        match self.split {
+            Some([b1, b2]) => [b0.saturating_sub(b1).saturating_sub(b2), b1, b2]
+                .into_iter()
+                .chain(rest)
+                .collect(),
+            None => self.stored.to_vec(),
+        }
+    }
+
+    /// Adds `o` band by band. The sum knows its split only if both did.
+    pub fn add(&mut self, o: &Self) {
+        for (a, b) in self.stored.iter_mut().zip(o.stored) {
+            *a = a.saturating_add(b);
+        }
+        self.split = match (self.split, o.split) {
+            (Some([a1, a2]), Some([b1, b2])) => {
+                Some([a1.saturating_add(b1), a2.saturating_add(b2)])
+            }
+            _ => None,
+        };
+    }
+}
+
+impl serde::Serialize for Bands {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.list())
+    }
 }
 
 /// The node's chunk rate: sat per 1,000 vB, rounded down, on sigop-adjusted vbytes.
