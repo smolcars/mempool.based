@@ -168,15 +168,22 @@ const MAINNET_PEERS: &[&str] = &[
     "03cde60a6323f7122d5178255766e38114b4722ede08f7c9e0c5df9b912cc201d6@34.65.85.39:9745",
 ];
 
-/// The default peers for `network`: a fixed list on mainnet, none elsewhere.
+/// Peers dialled by default on the default signet; how they were chosen is in `docs/LIGHTNING.md`.
+const SIGNET_PEERS: &[&str] = &[
+    // lndus1-signet.dev.zaphq.io
+    "0244bb7ba2392ab2d493ad04ad4afcd482ca44a2bfe5b42bcc830bfe00e5b08082@34.138.100.228:9735",
+    // lndeu1-signet.dev.zaphq.io
+    "03adf6efe5346d455172c750a655b07fb85be4f50f5b555f9f91a853a6b448c3bf@34.74.81.232:9735",
+];
+
+/// The default peers for `network`: fixed lists on mainnet and signet, none elsewhere.
 pub fn default_peers(network: Network) -> Vec<PeerAddr> {
-    if network != Network::Bitcoin {
-        return Vec::new();
-    }
-    MAINNET_PEERS
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect()
+    let list = match network {
+        Network::Bitcoin => MAINNET_PEERS,
+        Network::Signet => SIGNET_PEERS,
+        _ => &[],
+    };
+    list.iter().filter_map(|s| s.parse().ok()).collect()
 }
 
 /// Settings. [`Config::new`] fills in the defaults.

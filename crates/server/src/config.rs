@@ -122,7 +122,7 @@ pub struct NetworkConfig {
 /// `<DATA_DIR>/lightning/<network>/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LightningConfig {
-    /// `{NET}_LIGHTNING_PEERS`: whom to dial, in order of preference. Mainnet has defaults.
+    /// `{NET}_LIGHTNING_PEERS`: whom to dial, in order of preference. Mainnet and signet have defaults.
     pub peers: Vec<ln::PeerAddr>,
     /// `{NET}_LIGHTNING_MAX_PEERS`: connections kept open at once.
     pub max_peers: usize,
@@ -719,7 +719,7 @@ fn lightning_config(
     if peers.is_empty() || peers.len() > MAX_LIGHTNING_PEERS {
         return Err(format!(
             "{p}_LIGHTNING_PEERS must list 1 to 64 peers as <pubkey>@<ip>:<port>, comma-separated \
-             (only mainnet has defaults)"
+             (only mainnet and signet have defaults)"
         ));
     }
     let max_peers = positive(var, &format!("{p}_LIGHTNING_MAX_PEERS"), d.max_peers)?;
@@ -849,13 +849,30 @@ mod tests {
         assert!(parse(&v).unwrap_err().contains("SIGNET_MEMPOOL_ENABLED"));
     }
 
+    /// `signet()` moved to another network's prefix, plus `extra`.
+    fn renamed(net: &str, extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        signet()
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(|(k, v)| (k.replace("SIGNET", net), v.to_owned()))
+            .collect()
+    }
+
+    fn parse_owned(v: &[(String, String)]) -> Result<Config, String> {
+        parse(
+            &v.iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
     #[test]
     fn lightning_is_off_unless_switched_on_and_needs_a_data_dir_and_peers() {
         assert_eq!(parse(&signet()).unwrap().networks[0].lightning, None);
         let peer = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let mut v = signet();
         v.push(("SIGNET_LIGHTNING_ENABLED", "true"));
-        assert!(parse(&v).unwrap_err().contains("SIGNET_LIGHTNING_PEERS"));
+        assert!(parse(&v).unwrap_err().contains("DATA_DIR"));
         let peers = format!("{peer}@203.0.113.1:9735, {peer}@[2001:db8::1]:9735");
         let mut with_peers = v.clone();
         with_peers.push(("SIGNET_LIGHTNING_PEERS", &peers));
@@ -865,7 +882,9 @@ mod tests {
             .lightning
             .clone()
             .unwrap();
+        // An explicit list replaces the defaults entirely.
         assert_eq!(l.peers.len(), 2);
+        assert!(l.peers.iter().all(|p| p.node_id.to_string() == peer));
         assert_eq!((l.max_peers, l.max_channels), (3, 100_000));
         for bad in [
             ("SIGNET_LIGHTNING_ENABLED", "yes"),
@@ -879,18 +898,28 @@ mod tests {
             v.push(bad);
             assert!(parse(&v).unwrap_err().contains(bad.0), "{bad:?}");
         }
-        // Mainnet dials its default peers when none are named.
-        let mainnet: Vec<(String, &str)> = signet()
-            .into_iter()
-            .map(|(k, v)| (k.replace("SIGNET", "MAINNET"), v))
-            .chain([
-                ("MAINNET_LIGHTNING_ENABLED".to_owned(), "true"),
-                ("DATA_DIR".to_owned(), "/var/lib/x"),
-            ])
-            .collect();
-        let refs: Vec<(&str, &str)> = mainnet.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-        let l = parse(&refs).unwrap().networks[0].lightning.clone().unwrap();
-        assert_eq!(l.peers, ln::default_peers(ln::Network::Bitcoin));
+        // Mainnet and signet dial their default peers when none are named; testnet4 and regtest
+        // have none and refuse to start.
+        let on = [
+            ("SIGNET_LIGHTNING_ENABLED", "true"),
+            ("DATA_DIR", "/var/lib/x"),
+        ];
+        for (net, defaults) in [
+            ("MAINNET", ln::default_peers(ln::Network::Bitcoin)),
+            ("SIGNET", ln::default_peers(ln::Network::Signet)),
+        ] {
+            let c = parse_owned(&renamed(net, &on)).unwrap();
+            let l = c.networks[0].lightning.clone().unwrap();
+            assert!(!defaults.is_empty());
+            assert_eq!(l.peers, defaults, "{net}");
+        }
+        for net in ["TESTNET4", "REGTEST"] {
+            let e = parse_owned(&renamed(net, &on)).unwrap_err();
+            assert!(
+                e.contains(&format!("{net}_LIGHTNING_PEERS must list 1 to 64 peers")),
+                "{e}"
+            );
+        }
     }
 
     #[test]

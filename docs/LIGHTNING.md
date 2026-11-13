@@ -60,7 +60,16 @@ Default mainnet peers, all `<pubkey>@<ip>:9735`-style clearnet addresses:
 | Bitstamp | Exchange |
 | NiceHash | Exchange |
 
-They were picked from the live graph on 2026-11-12: the best-connected nodes that announce a clearnet address and are run by companies that have operated Lightning nodes for years, with the address in the list matching the node's own announcement. Several nodes picked from memory (Kraken, River, Wallet of Satoshi, Boltz) were unreachable at their old addresses and were dropped. Only the first three are dialled while they stay up. An operator replaces the list with `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). On other networks there are no defaults, and the server will not start Lightning there without a list.
+They were picked from the live graph on 2026-11-12: the best-connected nodes that announce a clearnet address and are run by companies that have operated Lightning nodes for years, with the address in the list matching the node's own announcement. Several nodes picked from memory (Kraken, River, Wallet of Satoshi, Boltz) were unreachable at their old addresses and were dropped. Only the first three are dialled while they stay up. An operator replaces the list with `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). Signet has its own defaults (below); on testnet4 and regtest there are none, and the server will not start Lightning there without a list.
+
+Default signet peers:
+
+| Node | Why |
+|---|---|
+| `lndus1-signet.dev.zaphq.io` | Among the best-connected nodes on the default signet; answers from a clearnet address |
+| `lndeu1-signet.dev.zaphq.io` | The same operator's second node, on another address |
+
+They are two nodes of one operator, chosen by the project's owner on 2026-11-13, when both were among the best-connected on the default signet and accepted connections. Test-network nodes come and go: when these stop answering, `lightning_peer_unreachable` repeats for them ([`LOGGING.md`](LOGGING.md#lightning)), and an operator sets `SIGNET_LIGHTNING_PEERS` to nodes that answer ([Finding peers](#test-networks)); the setting replaces both.
 
 **Tor-only nodes are out of reach:** the peer makes plain TCP connections and does not use Tor.
 
@@ -470,9 +479,11 @@ cargo test -p ln -- --ignored --nocapture hostile::regtest          # needs dev/
 
 ## Test networks
 
-Signet and testnet4 run the same code as mainnet: the network decides only the chain hash, which every gossip message and peer must carry, and that mainnet alone has default peers.
+Signet and testnet4 run the same code as mainnet: the network decides only the chain hash, which every gossip message and peer must carry, and the default peers: mainnet and signet have them ([Peers](#peers)), testnet4 and regtest do not.
 
-**What is needed:** `{NET}_LIGHTNING_ENABLED=true`, `DATA_DIR`, the network's node configured as for its blocks, and `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). Without a peer list the server does not start: `config_invalid` with `SIGNET_LIGHTNING_PEERS must list 1 to 64 peers as <pubkey>@<ip>:<port>, comma-separated (only mainnet has defaults)`.
+**What is needed:** `{NET}_LIGHTNING_ENABLED=true`, `DATA_DIR`, the network's node configured as for its blocks, and, on testnet4 and regtest, `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). Without a peer list the server does not start there: `config_invalid` with `TESTNET4_LIGHTNING_PEERS must list 1 to 64 peers as <pubkey>@<ip>:<port>, comma-separated (only mainnet and signet have defaults)`. Signet needs no list: the default peers are dialled.
+
+**A custom signet needs its own list.** The signet defaults are nodes of the default signet, and the server cannot tell a custom signet from it: every signet shares one genesis block, so the chain hash in gossip and in a peer's `init` is the same, and the server does not read the node's signet challenge. On a custom signet, set `SIGNET_LIGHTNING_PEERS` to that network's nodes. Left on the defaults, it would connect to them and refuse their channels, whose funding outputs its node does not have.
 
 **Finding peers.** Any public Lightning node of that network that announces a clearnet address and answers from your host; your own node on that network is the best one. Public explorers' node rankings for the network list candidates; take the address the node announces itself, and check that a TCP connection to it opens. List four or five: three are kept connected, and an unreachable one gives its slot to the next ([Peers](#peers)).
 

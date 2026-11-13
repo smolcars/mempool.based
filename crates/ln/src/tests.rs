@@ -859,11 +859,21 @@ fn peer_addresses_parse() {
             .parse::<PeerAddr>()
             .is_err()
     );
-    assert_eq!(
-        default_peers(Network::Bitcoin).len(),
-        crate::MAINNET_PEERS.len()
-    );
-    assert!(default_peers(Network::Signet).is_empty());
+    // Every default parses, so a typo cannot reach a release by being silently dropped.
+    for (network, list) in [
+        (Network::Bitcoin, crate::MAINNET_PEERS),
+        (Network::Signet, crate::SIGNET_PEERS),
+    ] {
+        assert!(!list.is_empty());
+        assert_eq!(default_peers(network).len(), list.len(), "{network:?}");
+        for s in list {
+            let p: PeerAddr = s.parse().unwrap();
+            assert_eq!(p.to_string(), *s, "a 33-byte key, a literal IP and a port");
+            assert_ne!(p.addr.port(), 0, "{s}");
+        }
+    }
+    assert!(default_peers(Network::Testnet4).is_empty());
+    assert!(default_peers(Network::Regtest).is_empty());
 }
 
 // A fake remote node: LDK's own peer manager serving a graph, which can also be told to send us
