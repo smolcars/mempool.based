@@ -1569,7 +1569,10 @@ async fn table_reads_benchmark() {
     });
     let rated = next.rates.unwrap_or(Rated {
         fee_rate: None,
-        fee_bands: [0; 10],
+        fee_bands: crate::projected::Bands {
+            stored: [0; 10],
+            split: None,
+        },
     });
     time!("rating it", {
         store
@@ -1663,7 +1666,10 @@ fn random_rates(rng: &mut Rng, tx_count: u32) -> Rated {
             p90: r[5],
             max: r[6],
         }),
-        fee_bands: std::array::from_fn(|_| rng.below(100_000)),
+        fee_bands: crate::projected::Bands {
+            stored: std::array::from_fn(|_| rng.below(100_000)),
+            split: None,
+        },
     }
 }
 
@@ -1963,7 +1969,15 @@ async fn totals_are_filled_for_rows_stored_before_them() {
         .filter(|h| h % 501 != 7)
         .map(|h| random_row(&mut rng, 0, h))
         .collect();
-    write_rows(&store, db::INSERT_NEW, rows).await;
+    // The insert as a store at 0009 ran it, before the lowest band's split columns (0011): the
+    // split's two parameters stay numbered, unused.
+    let insert_0009: &'static str = Box::leak(
+        db::INSERT_NEW
+            .replace(", band0_12_15, band0_15_20", "")
+            .replace("?32, ?33, ?34)", "?34)")
+            .into_boxed_str(),
+    );
+    write_rows(&store, insert_0009, rows).await;
     store.close().await;
 
     let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
