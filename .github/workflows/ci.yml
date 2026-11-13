@@ -12,8 +12,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  # Cancel superseded PR runs; let every master run finish so it saves caches.
+  # A PR's newer push cancels its older run. Master runs queue and run one at a time, so none is
+  # cancelled, even pending, and each restores the cache the one before it saved (docs/CI.md).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  queue: ${{ github.event_name == 'pull_request' && 'single' || 'max' }}
 
 jobs:
   changes:
