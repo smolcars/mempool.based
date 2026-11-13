@@ -346,16 +346,20 @@ impl Hostile {
                             Ok(0) | Err(_) => break,
                             Ok(n) => n,
                         };
-                        let ms = p2.trickle_ms.load(Ordering::Relaxed);
-                        let step = if ms == 0 { n } else { 1 };
-                        for chunk in buf[..n].chunks(step) {
+                        // The mode is read again for every byte, so a switch applies at once.
+                        let mut rest = &buf[..n];
+                        while !rest.is_empty() {
+                            let ms = p2.trickle_ms.load(Ordering::Relaxed);
+                            let step = if ms == 0 { rest.len() } else { 1 };
                             if ms > 0 {
                                 tokio::time::sleep(Duration::from_millis(ms)).await;
                             }
+                            let (chunk, tail) = rest.split_at(step);
                             if our_w.write_all(chunk).await.is_err() {
                                 return;
                             }
                             fwd.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                            rest = tail;
                         }
                     }
                 });
@@ -743,13 +747,17 @@ async fn slow_and_flapping_peers_are_dropped_and_backed_off() {
     assert!(up(&peer, honest.addr));
 
     // A peer that drops every connection right after the handshake is dialled again with a
-    // doubling delay: 50 ms, 100 ms, 200 ms... so a few times in three seconds, not hundreds.
+    // doubling delay: 50 ms, 100 ms, 200 ms... (on from the failures above), so a few times in
+    // three seconds, not hundreds.
     h.proxy.trickle_ms.store(0, Ordering::Relaxed);
     h.script.refuse.store(true, Ordering::Relaxed);
-    let before = h.proxy.accepted.load(Ordering::Relaxed);
+    let accepted = || h.proxy.accepted.load(Ordering::Relaxed);
+    let before = accepted();
+    wait_for("dialled again", || accepted() > before).await;
+    let before = accepted();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let dials = h.proxy.accepted.load(Ordering::Relaxed) - before;
-    assert!((1..=8).contains(&dials), "{dials}");
+    let dials = accepted() - before;
+    assert!(dials <= 8, "{dials}");
     assert!(up(&peer, honest.addr));
     peer.shutdown().await.unwrap();
 }
