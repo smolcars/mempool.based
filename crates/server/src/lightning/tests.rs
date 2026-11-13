@@ -499,3 +499,87 @@ async fn records_sent_while_the_node_was_on_another_chain_are_never_stored() {
     scids.sort_unstable();
     assert_eq!(scids, [A, D]);
 }
+
+/// [`Scripted`], whose memory, read once during a hold, sends one more record before the gate
+/// reopens: the race between the consumer's discard and the end of the hold.
+struct ReopenOnRead<'a> {
+    peer: &'a Scripted,
+    store: &'a Store,
+    late: Mutex<Option<History>>,
+}
+
+impl HistorySource for ReopenOnRead<'_> {
+    fn recent(&self, after: u64) -> Vec<Record> {
+        let kept = self.peer.recent(after);
+        if self.store.gate() == engine::store::Gate::Held
+            && let Some(h) = self.late.lock().unwrap().take()
+        {
+            self.peer.send(&h);
+            self.store.set_gate(engine::store::Gate::Open);
+        }
+        kept
+    }
+
+    fn open(&self) -> (u64, Vec<Opened>) {
+        self.peer.open()
+    }
+}
+
+#[tokio::test]
+async fn a_record_sent_as_the_hold_ends_is_never_stored() {
+    let t = temp();
+    let store = Arc::new(
+        Store::open(
+            &t.dir.join("gated"),
+            "regtest",
+            Options {
+                genesis: Some([1; 32]),
+                ..Options::default()
+            },
+        )
+        .unwrap(),
+    );
+    store.set_gate(engine::store::Gate::Open);
+    let (peer, mut rx) = Scripted::new(100, 100);
+    let src = ReopenOnRead {
+        peer: &peer,
+        store: &store,
+        late: Mutex::new(Some(History::Opened(opened(C, 1)))),
+    };
+    let l = lightning();
+    let wait = || tokio::time::sleep(Duration::from_millis(50));
+    let mut p = Pending::default();
+    tokio::join!(
+        consume(&src, &mut rx, &mut p, &store, &l, "regtest"),
+        async {
+            peer.send(&History::Opened(opened(A, 1)));
+            wait().await;
+            // The writer is busy, so the next write passes the gate and queues; the node is found
+            // on another chain before the writer reaches it, which rejects it while still held.
+            let (go, stop) = std::sync::mpsc::channel::<()>();
+            let busy = tokio::spawn({
+                let s = Arc::clone(&store);
+                async move {
+                    s.write(move |_| {
+                        stop.recv().ok();
+                        Ok(())
+                    })
+                    .await
+                }
+            });
+            wait().await;
+            peer.send(&History::Opened(opened(B, 1)));
+            wait().await;
+            store.set_gate(engine::store::Gate::Held);
+            go.send(()).unwrap();
+            busy.await.unwrap().unwrap();
+            wait().await;
+            peer.send(&History::Opened(opened(D, 1)));
+            wait().await;
+            peer.close();
+        }
+    );
+    let mut scids: Vec<u64> = rows(&store).await.iter().map(|c| c.open.scid).collect();
+    scids.sort_unstable();
+    assert_eq!(scids, [A, D]);
+}

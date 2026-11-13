@@ -582,6 +582,8 @@ pub(crate) async fn consume(
             // The node was found on another chain since these were taken: they and what the
             // peer sent meanwhile are never written, and the records after them are taken anew.
             Err(store::Error::Held) => {
+                // Read first: a reopening while this runs must leave what it takes stale too.
+                let now = store.generation();
                 let mut dropped = p.changes.len();
                 p.changes.clear();
                 loop {
@@ -601,7 +603,7 @@ pub(crate) async fn consume(
                 if let Some(last) = src.recent(p.seq).last() {
                     p.seq = p.seq.max(last.seq);
                 }
-                p.generation = store.generation();
+                p.generation = now;
                 logging::emit(&LightningHistoryFailed {
                     network,
                     error: "held",
