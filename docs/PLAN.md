@@ -8,7 +8,7 @@ Six milestones. Each ends with something a person can open in a browser and chec
 |---|---|---|
 | Node coupling | Sidecar beside a stock rbitcoin v0.9.2 | Ships separately from the node; a web-facing bug cannot take the node down |
 | Backend | Rust, tokio, axum | Same stack as rbitcoin; fast and one binary |
-| Frontend | Solid 2.0 (moving from 1.9; 2.0 is a pre-release, chosen knowingly), TypeScript, Vite, static build | Small bundles, fine-grained updates, no Node at runtime |
+| Frontend | Solid 2.0 (a pre-release, chosen knowingly), TypeScript, Vite, static build | Small bundles, fine-grained updates, no Node at runtime |
 | Storage | SQLite, one file per network | Data is small, one writer and many readers, no database server to run |
 | Lightning | Gossip-only LDK inside the server | An explorer needs the public graph, not channels or funds |
 | Compatibility | Esplora as rbitcoin serves it; mempool.space-shaped endpoints where cheap | Being a drop-in is welcome but never a reason to be worse on rbitcoin |

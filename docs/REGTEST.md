@@ -146,11 +146,13 @@ Measured 2026-11-11 with the v0.9.1 image, on an Apple Silicon Mac (Docker in a 
 | `up` on an empty volume, until RPC, Esplora and Electrum answer | 0.6–1.1 s | 0.6 s |
 | `scenario`, including the reset | 6.2 s | not timed; same chain |
 
-`docker pull` itself was not timed: on the measuring machine the Docker daemon's pull from ghcr.io stalled behind a local proxy while a direct download of the same blobs took half a second. The image was loaded with `docker load` instead. E1 should record the pull time on a GitHub runner.
+`docker pull` itself was not timed: on the measuring machine the Docker daemon's pull from ghcr.io stalled behind a local proxy while a direct download of the same blobs took half a second. The image was loaded with `docker load` instead.
 
-## Recommendation for CI
+## In CI
 
-- **Use Compose through `regtest.py`, not a GitHub service container.** A service container cannot pass arguments to the image's entrypoint, and this node needs its flags. Services also start before checkout, so `compose.yml` would not exist yet.
-- **Do not cache the image.** It is 10 MB, pinned by digest, and served from ghcr.io next to GitHub's runners. Restoring an `actions/cache` tarball and running `docker load` would cost about as much as the pull. Revisit only if a measured pull takes more than a few seconds; then cache `docker save` output keyed on the digest.
-- **Start it in parallel with the build.** Run `dev/regtest/regtest.py scenario &` at the start of the e2e job, build the server and frontend, then `wait` and `eval` the output of `regtest.py env`. The harness should add about 10 seconds of wall clock and none on the critical path.
-- **Tests that need a different chain** call `reset`, `mine`, `send`, `rbf` and `cpfp` themselves. Each instance is separate, so test jobs can run their own in parallel with `REGTEST_PROJECT`.
+The browser tests' `e2e` job runs this harness through [`web/scripts/e2e.sh`](../web/scripts/e2e.sh) ([`CI.md`](CI.md#how-it-stays-fast)):
+
+- **Through Compose and `regtest.py`, not a GitHub service container.** A service container cannot pass arguments to the image's entrypoint, and this node needs its flags. Services also start before checkout, so `compose.yml` would not exist yet.
+- **The image is pulled, not cached.** It is 10 MB, pinned by digest, and served from ghcr.io next to GitHub's runners; restoring a cached `docker save` would cost about as much as the pull.
+- **In parallel with the build.** The script starts `scenario` in the background, builds the server and frontend, then waits for it and `eval`s the output of `env`, so the node is off the critical path.
+- **One instance per run,** named `e2e-` and the script's process id with `REGTEST_PROJECT`, so runs on one machine never share a node. Tests that change the chain are the `*.mine.e2e.ts` files: they mine and pay through the node's RPC with helpers in [`web/e2e/regtest.ts`](../web/e2e/regtest.ts) that build transactions the harness's way, and the hostile test runs `hostile`.

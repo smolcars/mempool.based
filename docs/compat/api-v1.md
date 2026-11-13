@@ -40,7 +40,7 @@ rbitcoin serves none of these; this project is that surface ([`RBITCOIN.md`](../
 | `POST /v1/prevouts` | Prevout and unconfirmed flag for a list of outpoints | rbitcoin `GET /tx/:txid/out/:vout`, and `GET /tx/:txid` for unconfirmed ones | served | M5 | ref | At most 100 outpoints in a 16 KiB body; at most two reads per distinct outpoint, under the batch routes' cost limit. An output without an address has no `scriptpubkey_address`, where the reference wrote `""` ([`API.md`](../API.md#prevouts)) |
 | `POST /v1/psbt/addparents` | A PSBT with its parents' data filled in | rbitcoin Esplora `/tx/:txid/hex` | planned | M5 | ref | Not served (404). Route exists on the reference: its handler refused an invalid PSBT. PSBT parsing is untrusted input |
 | `POST /v1/tx/push` | Broadcast through the `/v1` prefix | rbitcoin `POST /tx` | different | — | — | Not served (404); use `POST /api/tx`. Not confirmed on the reference: a malformed body fails JSON parsing before routing there, and a valid one would broadcast |
-| `POST /v1/txs/package` | Package submit through the `/v1` prefix | rbitcoin `POST /txs/package` | planned | M5 | ref | Not served (404), and neither is `POST /api/txs/package` ([`esplora.md`](esplora.md#transactions)): a second write path, which waits on the owner. Route exists on the reference |
+| `POST /v1/txs/package` | Package submit through the `/v1` prefix | rbitcoin `POST /txs/package` | skipped | — | ref | Not served (404), and neither is `POST /api/txs/package` ([`esplora.md`](esplora.md#transactions)): a second write path, which the owner decided on 2026-11-13 not to add for now. Route exists on the reference |
 
 ## Blocks
 

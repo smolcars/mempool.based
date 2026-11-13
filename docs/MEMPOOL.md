@@ -1,6 +1,6 @@
 # Mempool tracking
 
-rbitcoin v0.9.1 has no mempool push, so `engine::mempool` polls the node, keeps its own copy of the mempool in memory and publishes the changes. Projected blocks, the live feed, fee recommendations, transaction tracking and the mempool charts are built on what it emits.
+rbitcoin v0.9.2 has no mempool push, so `engine::mempool` polls the node, keeps its own copy of the mempool in memory and publishes the changes. Projected blocks, the live feed, fee recommendations, transaction tracking and the mempool charts are built on what it emits.
 
 Measurements below are from a synced mainnet node on a private network, 2026-11-12, with about 55,000 transactions in its mempool. RPC and Esplora costs that other parts of the project rely on are in [`RBITCOIN.md`](RBITCOIN.md).
 
