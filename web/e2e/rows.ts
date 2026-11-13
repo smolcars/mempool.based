@@ -102,3 +102,44 @@ export async function amountsIntact(page: Page, label: string) {
   });
   expect(faults, label).toStrictEqual([]);
 }
+
+/**
+ * Every exact-amount control on the page, opened one after another: its pop-up wholly on screen,
+ * its text not cut, nothing else on the page moved by it, and Escape closing it.
+ */
+export async function exactsInside(page: Page, label: string) {
+  const controls = page.locator("main button[popovertarget]");
+  const where = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("main :is(dt, dd, td, th, button, h1, h2)")]
+        .filter((e) => !e.closest(".exact"))
+        .map((e) => {
+          const r = e.getBoundingClientRect();
+          return `${Math.round(r.left)},${Math.round(r.top)}`;
+        }),
+    );
+  for (let i = 0; i < (await controls.count()); i++) {
+    const control = controls.nth(i);
+    await control.scrollIntoViewIfNeeded();
+    const before = await where();
+    await control.click();
+    const pop = page.locator(".exact[data-placed]");
+    await expect(pop, `${label}: control ${i} opens`).toHaveCount(1);
+    const fault = await pop.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const w = document.documentElement.clientWidth;
+      const h = document.documentElement.clientHeight;
+      if (r.left < 0 || r.top < 0 || r.right > w || r.bottom > h) {
+        return `off screen at ${Math.round(r.left)}–${Math.round(r.right)} × ${Math.round(r.top)}–${Math.round(r.bottom)} in ${w} × ${h}`;
+      }
+      return el.scrollWidth > el.clientWidth + 1 ? "its text is cut" : "";
+    });
+    expect(fault, `${label}: "${await control.textContent()}"`).toBe("");
+    expect(
+      await where(),
+      `${label}: opening "${await control.textContent()}" moved the page`,
+    ).toEqual(before);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".exact:popover-open")).toHaveCount(0);
+  }
+}

@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import type { Page, Route } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
-import { amountsIntact } from "./rows";
+import { amountsIntact, exactsInside } from "./rows";
 
 /** 21 million BTC to the satoshi, a 13-digit sat amount, the largest msat limit, fine rates. */
 const ALL_BTC = 2_099_999_997_690_000;
@@ -137,6 +137,36 @@ test("amounts at their longest stay whole at 320 and 390 px, in both schemes", a
         );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
+      // Each exact amount opens whole and on screen, whatever column it is in, moving nothing.
+      if (/lightning|address/.test(path)) await exactsInside(page, `${path} at ${width} px`);
     }
   }
+});
+
+// One exact amount open at a time, and a tap elsewhere or a scroll closes it (Safari never
+// focused the button, so closing on blur left them open, two at once).
+test("an exact amount closes on a tap elsewhere, on scrolling, and when another opens", async ({
+  page,
+}) => {
+  await lightning(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/regtest/lightning/channel/811984x2037x0");
+  const controls = page.locator("main button[popovertarget]");
+  await expect(controls.first()).toBeVisible();
+  const open = page.locator(".exact:popover-open");
+  await controls.nth(1).click();
+  await expect(open).toHaveCount(1);
+  await controls.nth(0).click();
+  await expect(open).toHaveCount(1);
+  await expect(controls.nth(0)).toHaveAttribute("aria-expanded", "true");
+  await expect(controls.nth(1)).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(open).toHaveCount(0);
+  await controls.nth(0).click();
+  await expect(open).toHaveCount(1);
+  // The scroll a finger makes fires the same event; WebKit's test driver does not wheel the page.
+  await page.evaluate(() => {
+    window.scrollBy(0, 120);
+  });
+  await expect(open).toHaveCount(0);
 });

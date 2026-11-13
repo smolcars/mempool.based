@@ -1,0 +1,29 @@
+@layer components {
+  /* An exact value over the page (Exact.tsx): the browser's popover, placed by the script above its
+     figure and kept unseen until it is placed, so it never shows where the browser first puts it. */
+  .exact {
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 2px var(--space-2);
+    border: 0;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-pop);
+    color: var(--color-text);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: normal;
+    white-space: nowrap;
+    /* A copy button's "Copied" note may stand outside it. */
+    overflow: visible;
+  }
+  .exact:popover-open {
+    display: flex;
+    position: fixed;
+    inset: var(--y, 0) auto auto var(--x, 0);
+  }
+  .exact:popover-open:not([data-placed]) {
+    visibility: hidden;
+  }
+}

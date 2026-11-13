@@ -189,7 +189,7 @@ test("a total reads in magnitude, on one line on a phone, and opens to the exact
     }
   }
   const balance = box(page, "Balance");
-  const exact = balance.locator(".address-total__exact");
+  const exact = balance.locator(".exact");
   await expect(exact).toBeHidden();
   await expect(balance.locator(".address-total")).toHaveAttribute("title", "1.49000000 BTC");
   await balance.getByRole("button", { name: /show the exact amount/ }).click();

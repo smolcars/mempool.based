@@ -563,20 +563,6 @@
     text-decoration-thickness: 1px;
     text-underline-offset: 0.2em;
   }
-  .ln-msat-wrap {
-    position: relative;
-  }
-  .ln-msat__exact {
-    position: absolute;
-    bottom: calc(100% + 4px);
-    left: 0;
-    z-index: 2;
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-m);
-    background: var(--color-surface-raised);
-    box-shadow: var(--shadow-pop);
-    white-space: nowrap;
-  }
   .ln-range {
     display: flex;
     flex-wrap: wrap;
