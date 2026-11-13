@@ -179,7 +179,7 @@ fn net(node: &FakeChain, config: &Config, replay: Replay) -> Net {
 impl Net {
     async fn at(&self, height: u32) {
         let w = &self.g.watch;
-        for _ in 0..500 {
+        for _ in 0..HANG.as_millis() / 20 {
             let s = w.status();
             if s.height == Some(height) && s.caught_up {
                 return;

@@ -729,7 +729,7 @@ async fn protocol_abuse_costs_one_connection_and_never_another_peer() {
     };
     h.send((0..5000).map(|_| raw(PING, &ping)));
     let mut events = peer.events();
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(HANG, async {
         loop {
             if let Ok(Event::PeerDisconnected { peer, .. }) = events.recv().await
                 && peer == h.addr
@@ -772,15 +772,28 @@ async fn slow_and_flapping_peers_are_dropped_and_backed_off() {
     h.proxy.trickle_ms.store(300, Ordering::Relaxed);
     let peer = ours(&dir, vec![honest.addr, h.addr], &node);
     wait_for("the honest peer", || up(&peer, honest.addr)).await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    // Dropped at the second timer tick and dialled again, however long that takes here.
+    wait_for("dropped and dialled again", || {
+        h.proxy.accepted.load(Ordering::Relaxed) >= 2
+    })
+    .await;
     assert_eq!(h.script.connections.load(Ordering::Relaxed), 0);
-    assert!(h.proxy.accepted.load(Ordering::Relaxed) >= 2);
+    // Each such connection counts as a failure, which doubles the next delay (`peer::backoff`).
+    let failures = |peer: &Peer| {
+        status(peer)
+            .peers
+            .iter()
+            .find(|p| p.peer == h.addr)
+            .map_or(0, |p| p.failures)
+    };
+    wait_for("its failure counted", || failures(&peer) >= 1).await;
     assert!(up(&peer, honest.addr));
 
     // A peer that drops every connection right after the handshake is dialled again with a
     // doubling delay: 50 ms, 100 ms, 200 ms... (on from the failures above), so a few times in
     // three seconds, not hundreds.
     h.proxy.trickle_ms.store(0, Ordering::Relaxed);
+    let failed = failures(&peer);
     h.script.refuse.store(true, Ordering::Relaxed);
     let accepted = || h.proxy.accepted.load(Ordering::Relaxed);
     let before = accepted();
@@ -789,6 +802,8 @@ async fn slow_and_flapping_peers_are_dropped_and_backed_off() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     let dials = accepted() - before;
     assert!(dials <= 8, "{dials}");
+    // The refused connections counted as failures.
+    wait_for("refusals counted", || failures(&peer) > failed).await;
     assert!(up(&peer, honest.addr));
     peer.shutdown().await.unwrap();
 }
@@ -851,7 +866,7 @@ async fn synced_despite(invent: bool, list: bool) {
     let synced = |peer: &Peer| {
         let status = peer.status();
         async move {
-            tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::time::timeout(HANG, async {
                 while !status.borrow().synced {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
@@ -971,9 +986,14 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
                 peer.gossip().lookup.waiting() >= ids.len() - 1
             })
             .await;
-            // Past a tick after its batch ended: the one it left out was asked of the honest
-            // peer at once, the rest are still the hostile peer's.
-            tokio::time::sleep(Duration::from_millis(1500)).await;
+            // The one it left out is asked of the honest peer at once.
+            wait_for("the left-out one asked", || {
+                honest.script.scid_queries.load(Ordering::Relaxed) == 1
+            })
+            .await;
+            // A tick later the rest are still the hostile peer's: the node is down, so they cannot
+            // settle. The wait only gives a wrong hand-over the chance to show.
+            tokio::time::sleep(Duration::from_millis(1100)).await;
             assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 1);
             assert_eq!(peer.gossip().range_pending(), ids.len());
             node.0.down.store(false, Ordering::Relaxed);
