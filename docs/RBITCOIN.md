@@ -140,7 +140,7 @@ Not required. Each would make this project faster or simpler, and is recorded he
 
 | Wish | Why |
 |---|---|
-| A mempool event stream (added, removed with reason, sequence number) | Removes the polling lag of up to one interval and the 260 ms diff |
+| A mempool event stream (added, removed with reason, sequence number) | Removes the polling lag of up to one interval and the 260 ms diff, and gives fee recommendations their arrivals at the second rather than at the next poll ([`MEMPOOL.md`](MEMPOOL.md#against-the-blocks-that-followed)) |
 | `/internal/*` over an authenticated TCP listener | Bulk fetches when the server is not on the node's host |
 | Sub-sat precision in `getblockstats` percentiles | We could stop recomputing them |
 | A compact per-block transaction listing (txid, fee, weight and value for each transaction) | Delivered upstream by [rbitcoin PR 1578](https://github.com/rbitcoin-org/rbitcoin/pull/1578), in no release yet, as `GET /block/:hash/txs/summary`, and used where the node has it ([above](#listing-a-blocks-transactions)). A year of fee-rate backfill went from about 550 GB read to about 17 GB, measured ([`STORE.md`](STORE.md#backfill)) |
