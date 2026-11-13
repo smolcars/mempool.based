@@ -54,6 +54,9 @@ services:
     ports:
       - ${HTTP_PUBLISH:-127.0.0.1:8080}:8080
     depends_on: [node]
+    # One descriptor per open socket; Docker's default soft limit can be 1,024 (docs/DEPLOY.md).
+    ulimits:
+      nofile: 65536
 
 secrets:
   rpc-cookie:

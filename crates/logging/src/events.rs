@@ -184,6 +184,15 @@ pub struct ConnectionsRefused {
 }
 event!(ConnectionsRefused, "connections_refused", Warn);
 
+/// Accepting a connection failed, usually because the process is out of file descriptors: new
+/// clients wait in the listen queue until one closes. Written at a total of 1, 2, 4, 8…
+#[derive(Debug, Serialize)]
+pub struct AcceptFailed {
+    pub error: String,
+    pub total: u64,
+}
+event!(AcceptFailed, "accept_failed", Warn);
+
 /// Requests that named a client address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded` but came
 /// from a peer outside `TRUSTED_PROXIES`, so the header was ignored and the peer counted as the
 /// client: a proxy in front that is not trusted puts every visitor in one allowance. Written at a
@@ -1607,6 +1616,10 @@ mod tests {
                 node_chain: "main",
             }),
             both(&ConnectionsRefused { total: 8 }),
+            both(&AcceptFailed {
+                error: "Too many open files (os error 24)".into(),
+                total: 2,
+            }),
             both(&ProxyHeaderIgnored {
                 header: "x-real-ip",
                 peer: Some("172.18.0.1".into()),

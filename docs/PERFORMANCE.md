@@ -1,6 +1,6 @@
 # Performance
 
-How fast the server and the site are, how that was measured, how they compare with the stock mempool backend and with mempool.space, and where we miss a budget. The budgets themselves are in [`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets). Measured on 2026-11-12 from `master` at `b58df2b`, release build; the regtest page loads again the same day after [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done). The scripts are in [`dev/perf/`](../dev/perf/) and [`dev/load/`](../dev/load/), and [How to reproduce](#how-to-reproduce) gives one command for each table.
+How fast the server and the site are, how that was measured, how they compare with the stock mempool backend and with mempool.space, and where we miss a budget. The budgets themselves are in [`ARCHITECTURE.md`](ARCHITECTURE.md#performance-budgets). Measured on 2026-11-12 from `master` at `b58df2b`, release build; the regtest page loads again the same day after [task 4](#4-shorten-the-pages-request-chain-on-slow-networks-done). The scripts are in [`dev/perf/`](../dev/perf/) and [`dev/load/`](../dev/load/), and [How to reproduce](#how-to-reproduce) gives one command for each table. Everything above [On Linux](#on-linux) was measured on macOS; that section is the server on Linux, measured on 2026-11-12 and 13.
 
 ## Summary
 
@@ -19,7 +19,7 @@ How fast the server and the site are, how that was measured, how they compare wi
 The three results that matter most:
 
 1. **Answers from memory hold up; answers that touch the store or the node did not stay under 10 ms with many clients.** One process served 70,000 requests a second from memory at 100 concurrent clients with server time under 0.5 ms at p99. Routes that read the store (`/api/v1/blocks`, a block's summary) cost 8 ms of server time at 100 clients and 46 ms at 1,000, almost all of it building and serializing the same answer again for every request ([proposed task 2](#2-build-store-answers-once-per-tip)). Since then those answers, and a buried block's immutable ones, are kept in memory until they can change: 0.01 ms median at every load, and 80,000 to 130,000 requests a second at 1,000 clients where 11,000 to 28,000 were answered before ([Answers kept in memory](#answers-kept-in-memory)).
-2. **Up to 8,000 sockets every update reached every reader: a block within 57 ms of being queued, mempool and projected-block updates within 69 and 83 ms of their first reader. At 10,000 on this machine delivery broke down, and the cause is not pinned.** The server still queued each block to all 10,000 sockets in 2.3 to 5.8 ms on under a sixth of a core, but in both 10,000-socket runs many readers had not received messages by the end of the run (one block reached only 2 of 9,962). Kernel network buffers climbed from 10,900 to 80,000 of 89,450 in use with both ends of 20,000 connections on one machine, so buffer pressure is the likely cause; a delay in the server's per-socket writers is not ruled out ([proposed task 5](#5-find-what-stops-websocket-delivery-past-8000-sockets)).
+2. **On Linux every update reached every reader at every step up to 20,000 sockets, the most measured; the stall seen past 8,000 belongs to the macOS host.** A block reached its last reader 54 ms (median) after it was queued with 20,000 sockets, on a quarter of a core. What stops a Linux deployment first is a limit an operator sets: `WS_MAX_SOCKETS`, then the process's open-file limit, at which the server stopped accepting without a word in the log (it now logs `accept_failed`). The server also asked the kernel for a listen queue of 128 whatever the host allowed, so a burst of 10,000 connections overflowed it 12,000 to 18,000 times; it now asks for the host's maximum ([On Linux](#on-linux), [proposed task 5](#5-find-what-stops-websocket-delivery-past-8000-sockets)).
 3. **A single client that floods the API costs us about 28 µs of CPU and one log line per refusal.** The limits work: the flood's 103,000 to 126,000 requests a second were refused in 0.005 ms of server time each, and ordinary clients beside it were never refused. But that is 3.4 to 3.8 cores, and the log grew by 772 to 911 MB in 30 s ([proposed task 3](#3-count-refusals-instead-of-logging-each)).
 
 ## Where we miss, and what to do
@@ -74,6 +74,8 @@ No budget miss had a fix small and clear enough to make in this change: the one 
 - **Evidence.** Up to 8,000 sockets every message reached every reader (57 ms for the last reader of a block). At 10,000, on this Mac with the clients on the same machine, many readers had not received messages by the end of each run, whether one client process held the sockets or two held 5,000 each, while the server queued each block to all of them in 2.3 to 5.8 ms. Kernel network buffers went from 10,900 in use at 8,000 sockets to 80,000 of 89,450 at 10,000, past macOS's 80% pressure threshold; but the count of buffer requests denied did not move, and nothing measured the server's per-socket writers, so a delay there is not ruled out. Connection storms also overflow the listen backlog (`kern.ipc.somaxconn` 128 on macOS): 37 to 354 of 10,000 connections opened 200 at a time were reset.
 - **Expected gain.** Knowing whether the server or the host limits a deployment, and the kernel settings an operator needs for thousands of sockets.
 - **Touches.** A run with the clients on another machine; a measure of how far each socket's writer lags behind its queue (a field on an existing event, [`LOGGING.md`](LOGGING.md)); then [`DEPLOY.md`](DEPLOY.md). Not measured on Linux, where the defaults differ.
+- **Done since (PF5), on Linux** ([On Linux](#on-linux)). No stall up to 20,000 sockets: every message of every run reached every reader, whether the load generator ran as one process beside the server, one process in a network namespace of its own or four. The server's writers did not lag: a block's last reader at 20,000 sockets was 54 ms (median) after the block was queued, and one runtime worker instead of four made that 126 ms, so delivery is the server's CPU writing to each socket and scales with cores. What stops a deployment first is a limit: `WS_MAX_SOCKETS` (`503`, logged in `requests_refused`), then the open-file limit, where the server stopped accepting and logged nothing, while its own connections to the node failed too (a mempool refresh took 13.9 s); it now logs `accept_failed`. On the client side, one source address reaches one server port at most 28,232 times at Linux's default port range, connections in `TIME_WAIT` included, which a reverse proxy in front meets too. And the server asked for a listen queue of 128 whatever the host allowed (tokio's `bind` does), so 10,000 sockets opened at once overflowed it 12,178 and 18,453 times; it now asks for the host's maximum: 0 and 212 overflows, every socket open in 0.3 and 1.2 s instead of 2.8 and 3.3 s. Host settings are in [`DEPLOY.md`](DEPLOY.md#many-websockets).
+- **The macOS stall was not measured again.** The same server and load generator deliver everything on Linux, so it is a property of that host: both ends of 20,000 connections on one machine, with macOS's network buffers 89% in use. The load generator made it worse there: it read no socket until every socket had opened, so messages piled up in kernel buffers while the slower ones connected (33 MB in one Linux run whose connections took three minutes). It now reads each socket from the moment it opens.
 
 ## The machine and the method
 
@@ -223,6 +225,92 @@ Store-backed answers are computed once per write to the tables they read, and a 
 - **Not changed:** the `node` class (0.3 to 0.4 ms median at one client, as before), and the newest 100 blocks' immutable answers, still one node call per request.
 - **Noise.** The `immutable` class at 100 clients answered fewer requests after than before (79,700 against 88,400), with a p99 of 3.2 ms where the other kept routes had under 0.5: one run each on a shared machine, not a slower path.
 
+## On Linux
+
+The server will run on Linux, so the WebSocket steps and the HTTP profile were run again there. **Linux in a VM on shared hardware:** the Docker engine on this Mac runs a real Linux kernel (7.2) in a VM, and the measurements ran in containers limited to 4 CPUs and 8 GB while other builders used the machine. Read the ratios and the ceilings, not the absolute speeds. Build: `cargo build --release --locked` in the `rust:1.99.1-bookworm` image, from `master` at `5679035` with this change's load generator; the listen-queue, `accept_failed` and HTTP figures from the change itself, rebased on `ea2e67e`.
+
+### The method
+
+One container for the server (`--cpus 4 --memory 8g`), the regtest node sharing its network namespace, so [`regtest.py`](../dev/regtest/regtest.py) and [`activity.py`](../dev/perf/activity.py) reach it on its fixed ports, and a second container for load from a network namespace of its own:
+
+```sh
+docker network create pfnet
+docker run -d --name srv --network pfnet --cpus 4 --memory 8g -v build:/build -v "$PWD":/src:ro rust:1.99.1-bookworm sleep infinity
+docker run -d --name node --network container:srv --cpus 1 --memory 1g -v "$PWD/cookie":/run/rpc.cookie:ro \
+  ghcr.io/rbitcoin-org/rbitcoin:0.9.2 --network=regtest --no-seeds --no-listen --sh-index --max-tip-age=1000000000 \
+  --rpc-listen=0.0.0.0:18443 --rpc-cookie-file=/run/rpc.cookie --rpc-cookie-perms=all \
+  --electrum-listen=0.0.0.0:50001 --esplora-listen=0.0.0.0:3000          # cookie: regtest:regtest
+docker run -d --name load --network pfnet --pid container:srv --cpus 4 --memory 4g -v build:/build:ro rust:1.99.1-bookworm sleep infinity
+```
+
+In `srv`: build into `/build`; run `regtest.py scenario` and `activity.py prepare --outputs 30000` from a Python wrapper that sets `regtest._ports` to `{rpc: 18443, esplora: 3000, electrum: 50001}` and replaces `cmd_reset` with `wait_ready` (the scripts otherwise ask `docker compose` for the ports); start the server as [`server.sh`](../dev/perf/server.sh) does, with `LISTEN_ADDR=0.0.0.0:0`, `TRUSTED_PROXIES=127.0.0.1,<the network's prefix>` and `WS_MAX_SOCKETS` raised; then `activity.py flow --rate 20 --block-every 15`. Each WebSocket step is one `load ws` run of 60 or 75 s (`--block-every 10 --drain 10` or `15`, as `bench.sh`), sockets subscribed as the home page is, one in ten also to `projected-txs:0`. Beside it, every 2 s: `/proc/net/sockstat`, the server's resident memory, threads and descriptors, and `ss -tn` summed by side (the bytes waiting in the server's send queues and in the clients' receive queues); `nstat` before and after for listen-queue overflows. The HTTP profile is `bench.sh`'s `http` phase, run in `srv`. Every container was removed afterwards.
+
+### The WebSocket
+
+One load process beside the server, one fresh server for the steps up to 24,000, five blocks or more per step, 20 transactions a second. Every message of every step up to 20,000 reached every reader (checked from the recorded counts, about 167 distinct messages a step). "Queued" is the server's `fanout_ms`; reader times as the load generator saw them; CPU in shares of one core.
+
+| Sockets | Block queued to all, ms | Block, queued → last reader, ms (median / max) | Mempool update, first → last reader, ms (median / max) | Server CPU, mean / busiest second | Server RSS MB, start → peak | Kernel socket buffers at the peak, both ends |
+|---|---|---|---|---|---|---|
+| 2,000 | 0.3–2.1 | 9.6 / 17 | 6.0 / 42 | 2.6% / 100% | 16 → 30 | 3 MB |
+| 4,000 | 0.8–5.5 | 11 / 22 | 10 / 22 | 5.2% / 99% | 31 → 40 | 15 MB |
+| 8,000 | 1.8–6.2 | 24 / 37 | 21 / 66 | 10% / 100% | 40 → 62 | 4 MB |
+| 10,000 | 3.2–18 | 26 / 67 | 26 / 50 | 13% / 99% | 62 → 77 | 17 MB |
+| 12,000 | 3.0–8.7 | 33 / 35 | 31 / 234 | 16% / 99% | 78 → 86 | 4 MB |
+| 16,000 | 5.5–22 | 58 / 138 | 51 / 123 | 22% / 196% | 85 → 105 | 8 MB |
+| 20,000 | 5.4–17 | 54 / 88 | 58 / 130 | 26% / 198% | 105 → 128 | 6 MB |
+| 24,000 asked, `WS_MAX_SOCKETS` 20,000 | 6.4–18 | 70 / 81 | 61 / 155 | 28% / 194% | 128 → 138 | 15 MB |
+
+The busiest second is the connections opening. The last row opened 20,000 and refused 4,000 with `503`, logged as one `requests_refused` with `server_sockets` (4,000). Against macOS, where 8,000 sockets gave 57 ms and 10,000 stalled: 20,000 here with all delivered.
+
+**What was ruled out**, each by changing one thing (16,000 sockets, fresh servers with this change, 60 s runs):
+
+| Changed | Block, queued → last reader, ms (median / max) | Mempool, ms (median / max) | Every message to every reader |
+|---|---|---|---|
+| Load generator: one process beside the server | 45 / 197 | 43 / 183 | yes |
+| One process in a network namespace of its own | 43 / 80 | 46 / 76 | yes |
+| Four processes of 4,000, own namespace | 47 / 53 | 52 / 122 | yes |
+| One process, own namespace, four runtime workers (the default here) | 44 / 45 | 47 / 96 | yes |
+| The same with one worker (`TOKIO_WORKER_THREADS=1`) | 126 / 142 | 186 / 227 | yes |
+| 10,000 readers and 50 sockets that never read | 26 / 26 | 35 / 53 | yes |
+
+- **The load generator** moves only the slowest reader (197 ms to 53 ms when split); it used 0.1 to 0.2 of a core at most. Not the ceiling.
+- **The server's fan-out** puts one shared, already-encoded frame on each socket's queue: queueing a block to 20,000 sockets took 5 to 17 ms, under the topics' lock and never across a write. Writing is each socket's own task, and the time to the last reader is CPU: one worker is three times slower than four. Nothing is serialised per socket.
+- **Kernel socket memory** (`/proc/net/sockstat`) peaked at 17 MB in the steps above and 52 MB with four client processes, both ends together, and the clients' receive queues were empty at nearly every sample. `net.ipv4.tcp_mem` is not exposed on this VM's kernel, so its pressure threshold could not be read or reached; a Linux host with a few GB has a default far above these figures.
+- **Slow clients** did not slow anyone.
+- **The listen queue.** tokio's `bind` asks for a queue of 128 (`ss -ltn` showed 128 while `net.core.somaxconn` was 4,096), and a client retries a dropped handshake after 1 s, then 2 s. 10,000 sockets opened at once, before and after this change, which asks for 65,535 and gets the host's maximum: 12,178 and 18,453 overflows (`TcpExtListenOverflows`), every socket open after 2.8 and 3.3 s, connection p99 2.7 and 3.0 s; after, 0 and 212 overflows, 0.3 and 1.2 s, p99 0.17 and 1.0 s. Nothing failed on Linux either way, unlike macOS, which resets.
+- **The open-file limit** (20,480 in these containers, `ulimit -n`), with `WS_MAX_SOCKETS` at 40,000 and 24,000 sockets asked for: 20,453 opened and the rest timed out after 10 s each. The server's descriptors stayed at 20,480, connections waited in the listen queue (24,963 overflows) and its own new connections to the node failed too: a mempool refresh took 13.9 s. Nothing in the log said why; this change adds `accept_failed` (`Too many open files (os error 24)`, at a total of 1, 2, 4, 8…), checked with a limit of 1,100 and 1,500 sockets.
+- **Ephemeral ports.** Four load processes, started 15 s after a run of 16,000 from the same address to the same server port, opened 2,623 to 3,329 of their 4,000 each; the rest failed with `address not available`. The 16,000 earlier connections were in `TIME_WAIT` and the default range, 32768 to 60999, has 28,232 ports for one source address and one server address and port. A minute later the same run opened all 16,000. A reverse proxy on the server's host meets the same limit, once per socket.
+- **Memory per socket.** The server's resident memory grew by 4.1 to 5.2 KB a socket on fresh servers (18 to 22 MB at start, 64 to 65 MB at 10,000; 22 to 105 MB at 16,000). The kernel's slab memory, which the VM counts for every container together, grew by about 5.7 KB per connection end (301 to 485 MB with both ends of 16,000 in one namespace). Socket buffers in flight came on top: at most 52 MB for 16,000 sockets, both ends together.
+
+### The HTTP profile
+
+`bench.sh`'s `http` phase in `srv`, once, on a quiet machine (load average 4 to 9), against the release build of this change. The server and the load generator share the container's 4 CPUs, where on macOS they shared 10 with other builders; at 1,000 clients the server used 2.4 to 2.7 cores and the generator the rest. The node class asks for the `p2sh` address instead of `p2wpkh`, which the activity script had paid 50,000 times and which the server rightly refuses as too large (`history_too_large`). Server time, p50 / p99 ms:
+
+| Route | 1 client | 100 | 1,000 | macOS, 1,000 ([Answers kept in memory](#answers-kept-in-memory)) |
+|---|---|---|---|---|
+| `/api/v1/difficulty-adjustment` | 0.004 / 0.017 | 0.005 / 0.10 | 0.005 / 0.30 | 0.01 / 0.27 |
+| `/api/v1/fees/mempool-blocks` | 0.004 / 0.016 | 0.005 / 0.08 | 0.004 / 0.48 | 0.01 / 0.46–0.80 (first pass) |
+| `/api/blocks/tip/height` | 0.003 / 0.014 | 0.004 / 0.08 | 0.004 / 3.3 | 0.01 / 1.5–6.5 (first pass) |
+| `/app/block/:hash/summary` | 0.003 / 0.09 | 0.004 / 0.12 | 0.004 / 1.4 | 0.01 / 0.26 |
+| `/api/v1/blocks` | 0.003 / 0.005 | 0.007 / 0.26 | 0.004 / 3.6 | 0.01 / 4.7 |
+| `/api/v1/block/:hash` | 0.002 / 0.005 | 0.007 / 0.24 | 0.004 / 4.5 | 0.01 / 1.6 |
+| `/api/v1/mining/pools/1w` | 0.003 / 0.007 | 0.008 / 0.35 | 0.005 / 5.6 | 0.01 / 0.62–0.74 (first pass) |
+| `/api/v1/statistics/24h` | 0.003 / 0.006 | 0.006 / 0.19 | 0.004 / 0.31 | 0.01 / 0.69–0.90 (first pass) |
+| `/api/block/:hash`, a buried block | 0.004 / 0.007 | 0.005 / 0.06 | 0.005 / **10.7** | 0.01 / 0.34 |
+| `/api/tx/:txid` (node) | 0.08 / 0.17 | 0.52 / 3.6 | 9.5 / 56 | 7.5–14 / 37–73 (first pass) |
+| `/api/block/:hash/txs` (node) | 0.11 / 0.25 | 0.53 / 3.9 | 9.9 / 41 | 7.5–14 / 39–64 (first pass) |
+| `/api/tx/:txid/outspends` (node) | 0.06 / 0.17 | 0.49 / 5.4 | 11 / 88 | 7.2–14 / 33–66 (first pass) |
+| `/api/address/:address` (node, cost-limited) | 0.06 / 0.15 | 0.49 / 3.2 | 10 / 49 | 9.9–16 / 41–81 (first pass) |
+
+| Class, answered per second (refused) | 1 client | 100 | 1,000 | Linux ÷ macOS, by column |
+|---|---|---|---|---|
+| memory | 51,431 | 235,949 | 212,132 (0.1%) | 1.6, 1.9, 1.7 |
+| immutable | 42,407 | 248,218 | 203,527 (0%) | 1.5, 3.1, 1.6 |
+| store | 71,450 | 198,672 | 190,165 (0%) | 2.3, 1.7, 2.4 |
+| node | 9,863 | 121,554 | 23,099 (83%) | 6.2–7.0, 2.4–2.9, 0.9–1.6 (first pass) |
+
+**Against the budget** (cached or immutable answer, server time, 10 ms at p99): every answer kept in memory passes at every load but one. **Miss:** a buried block's `/api/block/:hash` at 1,000 clients, p99 10.7 ms (0.34 on macOS); its median is 0.005 ms, so the tail is waiting for a core with 1,000 connections on 4 CPUs shared with the load generator, not work, but it is over the line. The node routes have no budget; at 1,000 clients 83% of node requests got `503` from `MAX_CONCURRENT_REQUESTS` (256), as designed, as on macOS. Nothing was tuned for this run. Linux answered 1.5 to 3 times as many requests a second on 4 cores as macOS did on 10, on a quieter machine.
+
 ## The site in a browser
 
 Each page is loaded cold (a fresh browser context) in headless Chromium 156 at 1280×800, five times on regtest and three on mainnet, by [`pages.mjs`](../dev/perf/pages.mjs). "Data shown" is when the page's main content shows its data (the stats and projected blocks on the home page, a known value on the others); "JS run" is Chromium's `ScriptDuration`. The slow-phone profile is Lighthouse's Slow 4G as DevTools applies it (562.5 ms per request, 1.47 Mbps down, 675 kbps up) with the CPU slowed 4×. WebGL runs on the machine's GPU through ANGLE's Metal backend; without flags headless Chromium draws it in software.
@@ -353,7 +441,7 @@ How far the comparison can be trusted:
 ## What was not measured
 
 - A quiet machine: every server number carries the noise of other builds.
-- Linux, a server whose clients are on other machines, and TLS or HTTP/2 through a proxy.
+- Linux on real hardware: [On Linux](#on-linux) is a VM on this shared machine. A server whose clients are on other machines (the closest is a client in another network namespace of the same VM), and TLS or HTTP/2 through a proxy.
 - The reference backend under load, or on this machine: see above.
 - A mid-range laptop's GPU, or a real phone. The slow-phone profile slows the CPU and the network only.
 - The `/api/v1/ws` socket, the Lightning pages, and Firefox or Safari.
@@ -370,5 +458,7 @@ From the repository root, after `cargo build --release --locked -p rbitcoin-spac
 | Store readers, 4 against 10 | Set `readers: 10` in the store `Options` in `crates/server/src/blocks.rs`, build into another target directory (`CARGO_TARGET_DIR=DIR cargo build --release --locked -p rbitcoin-space -p load`), then run `CARGO_TARGET_DIR=DIR dev/perf/bench.sh OUT http` and compare the `store` steps with an unchanged build's |
 | Mainnet footprint and paced timings (reads `.env`) | `dev/perf/mainnet.sh OUT MINUTES [REFERENCE_URL]` |
 | Another site's pages | `cd web && node ../dev/perf/pages.mjs reference https://SITE --runs 2 --tx TXID --address ADDRESS` |
+
+The Linux runs have their own method, with the commands, in [On Linux](#on-linux).
 
 `bench.sh` and `browser.sh` start their own regtest node (`REGTEST_PROJECT`, default `perf-` and their process id), stop what they started by its process id and remove the node when they end; set `REGTEST_IMAGE` where the pinned image cannot be pulled ([`REGTEST.md`](REGTEST.md)). `server.sh` on its own only starts a server against a node already running: it prints `ADDR PID`; stop the server with `kill PID` and the node with `dev/regtest/regtest.py down`. The load generator is `dev/load` (`cargo run --release -p load -- http|ws …`); its options are in its header.

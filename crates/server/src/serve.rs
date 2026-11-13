@@ -97,11 +97,11 @@ pub async fn serve(
     let open = Arc::new(Semaphore::new(limits.max_connections));
     let (stop, stopped) = watch::channel(());
     let mut shutdown = pin!(shutdown);
-    let mut refused = 0u64;
+    let (mut refused, mut failed) = (0u64, 0u64);
     loop {
         let accepted = tokio::select! {
             () = &mut shutdown => break,
-            accepted = accept(&listener, &open) => accepted,
+            accepted = accept(&listener, &open, &mut failed) => accepted,
         };
         let Some((stream, peer, permit)) = accepted else {
             continue;
@@ -163,15 +163,23 @@ pub async fn serve(
     let _ = tokio::time::timeout(limits.request_timeout, open.acquire_many(all)).await;
 }
 
-/// Waits for a free connection slot, then for a connection.
+/// Waits for a free connection slot, then for a connection. `failed` counts failed accepts.
 async fn accept(
     listener: &TcpListener,
     open: &Arc<Semaphore>,
+    failed: &mut u64,
 ) -> Option<(TcpStream, SocketAddr, OwnedSemaphorePermit)> {
     let permit = Arc::clone(open).acquire_owned().await.ok()?;
     match listener.accept().await {
         Ok((stream, peer)) => Some((stream, peer, permit)),
-        Err(_) => {
+        Err(e) => {
+            *failed += 1;
+            if failed.is_power_of_two() {
+                logging::emit(&logging::events::AcceptFailed {
+                    error: e.to_string(),
+                    total: *failed,
+                });
+            }
             // Usually out of file descriptors: back off instead of spinning on the error.
             tokio::time::sleep(Duration::from_millis(50)).await;
             None
