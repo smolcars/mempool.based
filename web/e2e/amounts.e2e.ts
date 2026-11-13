@@ -46,6 +46,7 @@ async function lightning(page: Page) {
   const answers: Record<string, unknown> = {
     status: recorded("status"),
     [`nodes/${ACINQ}`]: node,
+    [`nodes/${ACINQ}/history`]: recorded("node-acinq-history"),
     "channels/811984x2037x0": channel,
   };
   await page.route(/\/regtest\/app\/lightning\//, async (route) => {

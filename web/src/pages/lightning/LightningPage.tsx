@@ -3,7 +3,7 @@
 import { useLocation, useSearchParams } from "@solidjs/router";
 import { createEffect, createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
-import { formatMoment, formatSi } from "../../components/chart/scale";
+import { formatMoment } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
 import { More } from "../../components/More";
@@ -15,6 +15,7 @@ import { formatBtc, groupDigits } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import {
+  btcAxis,
   coverageSentence,
   dataFrom,
   INTERVALS,
@@ -224,11 +225,6 @@ const nodeKinds = (s: Stats): string =>
  * Whole BTC on the right axis, three significant digits below 100. No unit: the axis has 58 px,
  * which "3 600 BTC" overruns; the readout and the figures say BTC.
  */
-const btcAxis = (sats: number): string => {
-  const btc = sats / 1e8;
-  return btc >= 100 ? groupDigits(btc) : formatSi(btc, "");
-};
-
 function History(props: { network: Network }) {
   const [search] = useSearchParams();
   const interval = createMemo(() => parseInterval(search["interval"]));

@@ -65,7 +65,7 @@ mempool.space puts these under `/graphs`. Ours are hand-drawn SVG (W10) on `/min
 |---|---|---|---|---|---|---|
 | Lightning dashboard `/lightning` | Network totals, top nodes, recent channels, charts | Lightning store | served | M4 | ref | Also the newest closes. The reference runs with Lightning off, so only its page shell was checked |
 | Node `/lightning/node/:pubkey` | Alias, sockets, features, capacity, channels | Lightning store | served | M4 | — | No location data |
-| Node: fee histogram and history | A node's fee rates and its capacity and channels over time | Lightning store | planned | M4 | — | Not built. Served as `GET /api/v1/lightning/nodes/:pubkey/fees/histogram` and `/statistics` |
+| Node: fee histogram and history | A node's fee rates and its capacity and channels over time | Lightning store | served | M4 | — | On the node page, from `/app/lightning/nodes/:key` (its `fees`) and `/nodes/:key/history`, the same data as `/api/v1/lightning/nodes/:pubkey/fees/histogram` and `/statistics`. The history starts at this server's first record of the graph |
 | Channel `/lightning/channel/:id` | Both policies, capacity, funding and closing transactions | Lightning store; Esplora | served | M4 | — | The funding transaction appears once the server has looked it up ([`LIGHTNING.md`](../LIGHTNING.md#funding-transactions)) |
 | Rankings `/lightning/nodes/rankings` | Top nodes by liquidity and connectivity, oldest nodes | Lightning store | served | M4 | ref | `/lightning/rankings?by=capacity\|channels\|age` |
 | Country, ISP and group pages | Nodes by location, hosting provider or curated group | — | skipped | — | — | Needs GeoIP or ASN data, or another project's curation |

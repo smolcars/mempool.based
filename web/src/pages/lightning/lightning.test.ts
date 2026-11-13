@@ -4,6 +4,8 @@ import {
   msatShort,
   coverageSentence,
   cut,
+  feeRows,
+  feeSentence,
   dataFrom,
   isChannelDetail,
   isChannelId,
@@ -130,5 +132,61 @@ describe("msatShort", () => {
     expect(msatShort(958_366_000)).toBe("958\u202F366 sats");
     expect(msatShort(18_958_366_000)).toBe("0.190 BTC");
     expect(msatShort(2_100_000_000_000_000_000)).toBe("21\u202F000\u202F000 BTC");
+  });
+});
+
+describe("a node's fee rates", () => {
+  const fees = acinq().fees;
+
+  it("gathers the server's buckets into rows, cheapest first, no policy last", () => {
+    const rows = feeRows(fees);
+    expect(rows.map((r) => r.label.replaceAll("\u202F", " "))).toStrictEqual([
+      "0",
+      "1–9",
+      "10–49",
+      "50–99",
+      "100–199",
+      "200–499",
+      "500–999",
+      "1 000–1 999",
+      "2 000–4 999",
+      "No policy",
+    ]);
+    const at = (label: string) => rows.find((r) => r.label.replaceAll("\u202F", " ") === label);
+    expect(at("200–499")?.outgoing).toStrictEqual({ count: 266, capacity: 6_377_292_455 });
+    expect(at("No policy")?.incoming.count).toBe(78);
+    // Empty rows between held ones stay, so the scale is even; none past the dearest.
+    expect(at("10–49")?.outgoing.count).toBe(0);
+    // Every channel is in one row each way.
+    const sum = (way: "outgoing" | "incoming") => rows.reduce((n, r) => n + r[way].count, 0);
+    expect(sum("outgoing")).toBe(fees.outgoing.reduce((n, b) => n + b.count, 0));
+    expect(sum("incoming")).toBe(fees.incoming.reduce((n, b) => n + b.count, 0));
+  });
+
+  it("puts the dearest rates in one open row", () => {
+    const rows = feeRows({
+      outgoing: [{ bucket: 4_294_967_000, count: 1, capacity: 10 }],
+      incoming: [{ bucket: 10_000, count: 2, capacity: 20 }],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.label.replaceAll("\u202F", " ")).toBe("10 000+");
+    expect(rows[0]?.outgoing.count).toBe(1);
+  });
+
+  it("says what the node charges and is charged, by the median channel", () => {
+    expect(feeSentence(feeRows(fees)).replaceAll("\u202F", " ")).toBe(
+      "It charges a median of 2 000–4 999 ppm to forward; its peers charge a median of 2 000–4 999 ppm towards it.",
+    );
+  });
+
+  it("drops the median for one channel, and says when a way has no fee set", () => {
+    const one = feeRows({
+      outgoing: [{ bucket: 100, count: 1, capacity: 10 }],
+      incoming: [{ bucket: null, count: 1, capacity: 10 }],
+    });
+    expect(one.map((r) => r.label)).toStrictEqual(["100–199", "No policy"]);
+    expect(feeSentence(one)).toBe(
+      "It charges 100–199 ppm to forward; its peer has set none towards it.",
+    );
   });
 });
