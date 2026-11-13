@@ -6,7 +6,7 @@ A fast block explorer for [rbitcoin](https://github.com/rbitcoin-org/rbitcoin): 
 
 This project was called mempool.based until 2026-11-12, when its repository moved from `smolcars/mempool.based` to [`smolcars/rbitcoin-space`](https://github.com/smolcars/rbitcoin-space).
 
-> **Status: early development.** The explorer for confirmed data works on mainnet, signet and testnet4: live blocks, block, transaction and address pages, and search. The live mempool, mining history and Lightning are being built. Progress is tracked in [`docs/TODO.md`](docs/TODO.md).
+> **Status: approaching its first release, `v0.1.0`.** On mainnet, signet and testnet4 it serves live blocks, the live mempool with projected blocks and fee recommendations, block, transaction and address pages, replacements, mining history with pools and block audits, and the Lightning graph. What is left, and why, is in [`docs/COMPAT.md`](docs/COMPAT.md#what-is-left).
 
 ## What it is
 
@@ -43,12 +43,18 @@ The explorer is then at `http://127.0.0.1:8080` on that host, while the node syn
 
 ## Develop
 
-Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup) and [bun](https://bun.sh).
+Needs Rust (the toolchain in `rust-toolchain.toml` installs itself through rustup), [bun](https://bun.sh), and for a node of your own Docker with Compose and `python3`.
 
 ```sh
-# Build the frontend, then run the server on it
+# A private regtest node with a known chain (docs/REGTEST.md), and a .env pointing at it.
+# For a node of your own, fill in the MAINNET_ lines of .env.example instead (docs/CONFIG.md).
+dev/regtest/regtest.py scenario > /dev/null
+grep -v '^MAINNET_' .env.example > .env && dev/regtest/regtest.py env >> .env
+
+# Build the frontend, then run the server on it, at http://127.0.0.1:8080/regtest/
 (cd web && bun install && bun run build)
-cargo run -p rbitcoin-space          # LISTEN_ADDR and WEB_DIR are read from the environment
+set -a && . ./.env && set +a         # the server reads the environment, never .env itself
+cargo run -p rbitcoin-space
 
 # Frontend with hot reload, proxying the server above
 (cd web && bun run dev)
