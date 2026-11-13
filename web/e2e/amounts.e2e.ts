@@ -105,28 +105,34 @@ const PAGES = [
   "/regtest/mining",
 ];
 
-// Both schemes on each load: the figures' layout is the same, and each load costs a page.
-test("amounts at their longest stay whole at 320 and 390 px, in both schemes", async ({ page }) => {
-  await lightning(page);
-  await esplora(page);
-  await stubRetargets(page);
-  for (const width of [320, 390]) {
+/** Opens a page with every figure in, in the wide faces a Linux machine falls back to. */
+async function load(page: Page, path: string) {
+  await page.goto(path);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // Every figure in: nothing still loading.
+  await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
+    timeout: 15_000,
+  });
+  // CI's runner once broke a line a Mac's fonts kept whole.
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+    root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+  });
+}
+
+// A test to a width and to a kind of check: four that run side by side, not one long one that
+// held the browser job for 16 s on CI's runner.
+for (const width of [320, 390]) {
+  // Both schemes on each load: the figures' layout is the same, and each load costs a page.
+  test(`amounts at their longest stay whole at ${width} px, in both schemes`, async ({ page }) => {
+    await lightning(page);
+    await esplora(page);
+    await stubRetargets(page);
     await page.setViewportSize({ width, height: 900 });
     for (const path of PAGES) {
       await page.emulateMedia({ colorScheme: "light" });
-      await page.goto(path);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      // Every figure in: nothing still loading.
-      await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
-        timeout: 15_000,
-      });
-      // In the wide faces a Linux machine falls back to: CI's runner once broke a line a Mac's
-      // fonts kept whole.
-      await page.evaluate(() => {
-        const root = document.documentElement.style;
-        root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
-        root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
-      });
+      await load(page, path);
       for (const colorScheme of ["light", "dark"] as const) {
         await page.emulateMedia({ colorScheme });
         await page.evaluate(
@@ -137,11 +143,20 @@ test("amounts at their longest stay whole at 320 and 390 px, in both schemes", a
         );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
-      // Each exact amount opens whole and on screen, whatever column it is in, moving nothing.
-      if (/lightning|address/.test(path)) await exactsInside(page, `${path} at ${width} px`);
     }
-  }
-});
+  });
+
+  // Each exact amount opens whole and on screen, whatever column it is in, moving nothing.
+  test(`every exact amount opens whole and on screen at ${width} px`, async ({ page }) => {
+    await lightning(page);
+    await esplora(page);
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of PAGES.filter((p) => /lightning|address/.test(p))) {
+      await load(page, path);
+      await exactsInside(page, `${path} at ${width} px`);
+    }
+  });
+}
 
 // One exact amount open at a time, and a tap elsewhere or a scroll closes it (Safari never
 // focused the button, so closing on blur left them open, two at once).

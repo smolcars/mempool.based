@@ -259,12 +259,13 @@ test.describe("the join between ten and twelve bands", () => {
     };
   }
 
-  for (const width of [390, 1440]) {
-    test(`at ${width} px the filled layers meet the total at every x, across the join both ways`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width, height: 900 });
-      for (const unsplitFirst of [true, false]) {
+  // A test to a width and a direction, so they run side by side.
+  for (const width of [390, 1440])
+    for (const unsplitFirst of [true, false]) {
+      test(`at ${width} px the filled layers meet the total at every x, ${unsplitFirst ? "ten then twelve" : "twelve then ten"}`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 900 });
         for (const interval of ["2h", "24h", "1w", "all"] as const) {
           await page.unrouteAll();
           await page.route(new RegExp(`/regtest/app/mempool/history/${interval}$`), (route) =>
@@ -339,9 +340,8 @@ test.describe("the join between ten and twelve bands", () => {
           expect(worst, `${label}: stack against the total`).toBeLessThan(2);
           expect(slant, `${label}: the unsplit layer up to its join`).toBeLessThan(2);
         }
-      }
-    });
-  }
+      });
+    }
 });
 
 /** A point on screen inside one of the size chart's bands: where a pointer or finger finds one. */
