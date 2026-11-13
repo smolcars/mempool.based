@@ -33,6 +33,7 @@ mod gossip;
 mod log;
 mod pace;
 mod peer;
+mod socket;
 mod store;
 
 #[cfg(test)]
@@ -217,6 +218,11 @@ pub struct Config {
     pub max_pending: usize,
     /// Announcements held because their funding output is not yet six blocks deep.
     pub max_early: usize,
+    /// Signature checks one peer's gossip may cost a second, on average: a channel announcement
+    /// counts four, an update or node announcement one. A peer may run 30 s ahead (an initial
+    /// dump fits); past that it is not read until it is back within the rate, so it cannot keep a
+    /// core busy.
+    pub checks_per_sec: u32,
     /// Lookup results kept, found or not, so a channel announced again is not looked up again.
     pub cache_entries: usize,
     /// How long a lookup result is kept.
@@ -245,6 +251,7 @@ impl Config {
             log_per_second: 20,
             lookup_interval: Duration::from_millis(250),
             max_pending: 5_000,
+            checks_per_sec: 5_000,
             max_early: 1_000,
             cache_entries: 100_000,
             cache_ttl: Duration::from_secs(3600),

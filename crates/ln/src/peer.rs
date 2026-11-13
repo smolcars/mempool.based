@@ -10,7 +10,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lightning::ln::peer_handler::{ErroringMessageHandler, IgnoringMessageHandler, PeerManager};
 use lightning::sign::{EntropySource, KeysManager, NodeSigner, Recipient};
 use lightning::util::ser::Writeable;
-use lightning_net_tokio::SocketDescriptor;
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -20,14 +19,15 @@ use crate::closes::{self, Opened};
 use crate::gossip::{Gossip, Graph, Replay};
 use crate::log::LogSink;
 use crate::pace::Pace;
+use crate::socket::{self, Socket};
 use crate::store::{self, GraphLoad};
 use crate::{
     Change, Closes, Config, Event, PeerAddr, PeerStatus, PublicKey, ReadOnlyNetworkGraph, Record,
     Stats, Status, Totals, Validation,
 };
 
-type Pm = PeerManager<
-    SocketDescriptor,
+pub(crate) type Pm = PeerManager<
+    Socket,
     ErroringMessageHandler,
     Arc<Gossip>,
     IgnoringMessageHandler,
@@ -312,14 +312,11 @@ fn dial(
     peer: PeerAddr,
     done: mpsc::UnboundedSender<usize>,
 ) -> JoinHandle<()> {
-    let pm = Arc::clone(&shared.pm);
+    let shared = Arc::clone(shared);
     let timeout = shared.config.connect_timeout;
     tokio::spawn(async move {
-        if let Ok(Ok(stream)) = tokio::time::timeout(timeout, TcpStream::connect(peer.addr)).await
-            && let Ok(stream) = stream.into_std()
-        {
-            // Resolves when the connection ends, whether or not the handshake completed.
-            lightning_net_tokio::setup_outbound(pm, peer.node_id, stream).await;
+        if let Ok(Ok(stream)) = tokio::time::timeout(timeout, TcpStream::connect(peer.addr)).await {
+            socket::run(&shared.pm, &shared.gossip, peer.node_id, stream).await;
         }
         let _ = done.send(i);
     })

@@ -60,6 +60,11 @@ pub(crate) const MAX_NODE_ADDRESSES: usize = 8;
 /// checks now and four when its lookup resolves.
 const REPLAY_PER_TICK: usize = 2000;
 
+/// How far ahead of [`Config::checks_per_sec`] a peer may run before it is not read: an initial
+/// dump is one burst (mainnet's, 34,000 channels with their updates in 20 s, is about 220,000
+/// checks), a flood is sustained.
+const CHECKS_AHEAD: Duration = Duration::from_secs(30);
+
 /// Channel ids per `query_short_channel_ids`: 16 KB of ids, well inside a 65 KB message.
 const SCID_BATCH: usize = 2000;
 /// A batch with no end marker for this long is given up, and what it still owes is asked of
@@ -270,6 +275,11 @@ pub(crate) struct Gossip {
     /// When a channel new to the graph last arrived; the sync-settled signal reads it.
     pub(crate) last_new_channel: Mutex<Instant>,
     range: Mutex<RangeSync>,
+    checks_per_sec: u32,
+    /// Per peer that has connected (configured peers only, so bounded): when the signature checks
+    /// its gossip cost are paid off at `checks_per_sec`. It is read only while that is at most
+    /// [`CHECKS_AHEAD`] away. Kept across reconnections, so a reconnection buys nothing.
+    paid_off: Mutex<HashMap<PublicKey, Instant>>,
     /// Held from the ceiling check to the insert, so concurrent peers cannot overshoot it.
     admission: Mutex<()>,
     /// Messages of our own for the peer manager to send.
@@ -313,6 +323,8 @@ impl Gossip {
             at_ceiling: AtomicBool::new(false),
             last_new_channel: Mutex::new(Instant::now()),
             range: Mutex::new(RangeSync::default()),
+            checks_per_sec: config.checks_per_sec.max(1),
+            paid_off: Mutex::new(HashMap::new()),
             admission: Mutex::new(()),
             outbox: Mutex::new(Vec::new()),
             changes,
@@ -624,6 +636,27 @@ impl Gossip {
             None => return false,
         }
         true
+    }
+
+    /// Charges a peer for the signature checks a message of its costs.
+    fn charge(&self, peer: Option<PublicKey>, checks: u32) {
+        let (Some(peer), Ok(mut paid)) = (peer, self.paid_off.lock()) else {
+            return;
+        };
+        let now = Instant::now();
+        let at = paid.entry(peer).or_insert(now);
+        *at = (*at).max(now) + Duration::from_secs(u64::from(checks)) / self.checks_per_sec;
+    }
+
+    /// How long to leave a peer unread, so its gossip costs at most `checks_per_sec`.
+    pub(crate) fn hold_off(&self, peer: &PublicKey) -> Duration {
+        let Ok(paid) = self.paid_off.lock() else {
+            return Duration::ZERO;
+        };
+        paid.get(peer).map_or(Duration::ZERO, |at| {
+            at.saturating_duration_since(Instant::now())
+                .saturating_sub(CHECKS_AHEAD)
+        })
     }
 
     pub(crate) fn at_ceiling(&self) -> bool {
@@ -938,6 +971,7 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &NodeAnnouncement,
     ) -> Result<bool, LightningError> {
+        self.charge(their_node_id, 1);
         let bytes = msg.serialized_length();
         self.count(&self.counters.node_announcements, bytes);
         // An oversized one is kept trimmed and unsigned, so its signature is checked here.
@@ -979,6 +1013,8 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
     ) -> Result<bool, LightningError> {
+        // Four signatures: both nodes' and both funding keys'.
+        self.charge(their_node_id, 4);
         self.admit(
             &self.counters.channel_announcements,
             msg.serialized_length(),
@@ -998,6 +1034,7 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &ChannelUpdate,
     ) -> Result<bool, LightningError> {
+        self.charge(their_node_id, 1);
         self.admit(&self.counters.channel_updates, msg.serialized_length())?;
         if self.hold_update(msg) {
             self.counters.held.fetch_add(1, Ordering::Relaxed);
