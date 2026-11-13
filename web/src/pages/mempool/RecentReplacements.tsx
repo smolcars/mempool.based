@@ -22,6 +22,8 @@ const rateText = (r: number | null | undefined) =>
 const COLUMNS: Column<Story | null>[] = [
   {
     header: "Replacement",
+    // On a phone its header, not its id, would set the column's width and push the status out.
+    short: "Tx",
     cell: (s) =>
       s ? (
         <Hash value={s.id} href={paths.tx(s.id)} copy={false} fit />
@@ -35,10 +37,12 @@ const COLUMNS: Column<Story | null>[] = [
     numeric: true,
     cell: (s) =>
       s ? (
-        <span>
-          <span class="num">{rateText(s.versions[0]?.tx.rate)}</span>
-          <span aria-hidden="true"> → </span>
-          <span class="visually-hidden"> to </span>
+        <span class="rbf-recent__rates">
+          <span class="rbf-recent__rate">
+            <span class="num">{rateText(s.versions[0]?.tx.rate)}</span>
+            <span aria-hidden="true"> →</span>
+            <span class="visually-hidden"> to</span>
+          </span>{" "}
           <span class="num">{rateText(s.versions.at(-1)?.tx.rate)}</span>
         </span>
       ) : (

@@ -306,9 +306,11 @@
       height: 1rem;
       background: var(--color-line-strong);
     }
+    /* "did not signal" goes under its rate when the row is short of room, not past the status. */
     .rbf-v__rate {
       flex-direction: row;
-      gap: var(--space-2);
+      flex-wrap: wrap;
+      gap: 0 var(--space-2);
     }
     /* Room above and below for the targets of the versions on either side. */
     .rbf-story__fold {

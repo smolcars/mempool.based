@@ -3,7 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
 import { AUDIT } from "../src/components/audit/fakes";
 import { ACINQ, mainnet, ONE, recorded, serve } from "./lightning-answers";
-import { tablesFit, tapRow } from "./rows";
+import { tablesFit, tapRow, wideFaces } from "./rows";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
 
@@ -281,87 +281,101 @@ test("tables that open on a tap fit their panel or show that they scroll, at 320
   }
 });
 
-// A chart's figures are its precise text alternative: on a phone they are read whole, with no
-// sideways scroll. A node's history once put its capacity past a 320 px phone's edge, and its fee
-// figures scrolled; the mining page's block health did too. Here each must fit outright.
-test("a chart's figures fit a phone whole: a node's history and fees, and the mining page's", async ({
-  page,
-}) => {
-  // The largest node's figures, with a change between its midnights: the widest a time and a
-  // capacity get.
-  const acinq = recorded("node-acinq-history") as { from: number; points: object[] };
-  const [midnight, now] = acinq.points;
-  await serve(page, {
-    ...mainnet(),
-    [`nodes/${ACINQ}/history`]: {
-      ...acinq,
-      points: [midnight, { time: 1_794_550_123, channels: 1805, capacity: 27_655_420_454 }, now],
-    },
-  });
-  // Mainnet-sized fee rates: regtest's blocks pay almost nothing.
-  await page.route(/\/regtest\/api\/v1\/mining\/blocks\/fee-rates\//, (route) =>
-    route.fulfill({
-      json: Array.from({ length: 20 }, (_, i) => ({
-        avgHeight: 975_000 + i * 10,
-        timestamp: 1_794_000_000 + i * 6000,
-        avgFee_0: 0.1,
-        avgFee_10: 12.25,
-        avgFee_25: 25.5,
-        avgFee_50: 101.5,
-        avgFee_75: 210.25,
-        avgFee_90: 1250.5,
-        avgFee_100: 4000,
-      })),
-    }),
-  );
-  /** Every visible figures table in `sections` is no wider than its box, every header inside. */
-  const whole = async (sections: string[], label: string) => {
-    let seen = 0;
-    for (const name of sections) {
-      const section = page.locator("section", {
-        has: page.getByRole("heading", { name, exact: true }),
-      });
-      for (const details of await section.locator(".chart__figures").all()) {
-        if (!(await details.locator("> summary").isVisible())) continue;
-        await details.locator("> summary").click();
-        await expect(details.locator("table").first()).toBeVisible();
+// A chart's figures are its precise text alternative, read whole at every width the page takes,
+// with no sideways scroll. A node's history once put its capacity past a 320 px phone's edge; its
+// fee figures, side by side in a half-page panel, cut both capacity columns at 1440 px; the mining
+// page's block health and fee rates scrolled on a phone. Each table is held to its own box, in the
+// faces the site was built with and in wider ones.
+const FIGURES_WIDTHS = [320, 390, 720, 1024, 1280, 1440];
+for (const width of FIGURES_WIDTHS) {
+  test(`a chart's figures fit whole at ${width} px: a node's history and fees, and the mining page's`, async ({
+    page,
+  }) => {
+    // The largest node's figures, with a change between its midnights: the widest a time and a
+    // capacity get.
+    const acinq = recorded("node-acinq-history") as { from: number; points: object[] };
+    const [midnight, now] = acinq.points;
+    await serve(page, {
+      ...mainnet(),
+      [`nodes/${ACINQ}/history`]: {
+        ...acinq,
+        points: [midnight, { time: 1_794_550_123, channels: 1805, capacity: 27_655_420_454 }, now],
+      },
+    });
+    // Mainnet-sized fee rates: regtest's blocks pay almost nothing.
+    await page.route(/\/regtest\/api\/v1\/mining\/blocks\/fee-rates\//, (route) =>
+      route.fulfill({
+        json: Array.from({ length: 20 }, (_, i) => ({
+          avgHeight: 975_000 + i * 10,
+          timestamp: 1_794_000_000 + i * 6000,
+          avgFee_0: 0.1,
+          avgFee_10: 12.25,
+          avgFee_25: 25.5,
+          avgFee_50: 101.5,
+          avgFee_75: 210.25,
+          avgFee_90: 1250.5,
+          avgFee_100: 4000,
+        })),
+      }),
+    );
+    const section = (name: string) =>
+      page.locator("section", { has: page.getByRole("heading", { name, exact: true }) });
+    /** Opens the figures of `names`. */
+    const open = async (names: string[]) => {
+      for (const name of names) {
+        for (const details of await section(name).locator(".chart__figures").all()) {
+          if (!(await details.locator("> summary").isVisible())) continue;
+          await details.locator("> summary").click();
+          await expect(details.locator("table").first()).toBeVisible();
+        }
       }
-      const tables = section.locator(".chart__table table");
-      for (const t of await tables.all()) {
-        seen += 1;
-        const fit = await t.evaluate((el) => {
-          const box = (el.closest(".chart__table") as HTMLElement).getBoundingClientRect();
-          return {
-            over: el.scrollWidth - (el.closest(".chart__table") as HTMLElement).clientWidth,
-            out: [...el.querySelectorAll("th, td")]
-              .filter((c) => c.getClientRects().length > 0)
-              .filter((c) => c.getBoundingClientRect().right > box.right + 0.5)
-              .map((c) => c.textContent),
-          };
-        });
-        expect(fit, `${label}: ${name}`).toStrictEqual({ over: 0, out: [] });
+    };
+    /** Each open figures table in `names` is no wider than its own box, every cell inside it. */
+    const whole = async (names: string[], label: string) => {
+      let seen = 0;
+      for (const name of names) {
+        for (const t of await section(name).locator(".chart__table table").all()) {
+          seen += 1;
+          const fit = await t.evaluate((el) => {
+            const scroll = el.closest(".table-scroll") as HTMLElement;
+            const region = (el.closest(".chart__table") as HTMLElement).getBoundingClientRect();
+            const box = scroll.getBoundingClientRect();
+            const right = Math.min(box.right, region.right) + 0.5;
+            return {
+              over: Math.max(0, Math.round(el.getBoundingClientRect().width - box.width)),
+              fades: "moreEnd" in scroll.dataset,
+              out: [...el.querySelectorAll("th, td")]
+                .filter((c) => c.getClientRects().length > 0)
+                .filter((c) => c.getBoundingClientRect().right > right)
+                .map((c) => c.textContent),
+            };
+          });
+          expect(fit, `${label}: ${name}`).toStrictEqual({ over: 0, fades: false, out: [] });
+        }
       }
-    }
-    expect(seen, `${label}: figures to measure`).toBeGreaterThan(0);
-  };
-  for (const width of [320, 390]) {
-    await page.setViewportSize({ width, height: 800 });
+      expect(seen, `${label}: figures to measure`).toBeGreaterThan(0);
+    };
+    /** In the site's own faces, then in wider ones, the page as it is. */
+    const bothFaces = async (names: string[], label: string) => {
+      await whole(names, label);
+      await wideFaces(page);
+      await whole(names, `${label} in wide faces`);
+    };
+    await page.setViewportSize({ width, height: 900 });
     for (const node of [ACINQ, ONE]) {
       await page.goto(`/regtest/lightning/node/${node}`);
       await expect(page.getByRole("slider")).toBeVisible();
-      for (const name of ["Over time", "Fee rates"]) {
-        await whole([name], `${node.slice(0, 8)} at ${width} px`);
-      }
+      await open(["Over time", "Fee rates"]);
+      await bothFaces(["Over time", "Fee rates"], `${node.slice(0, 8)} at ${width} px`);
     }
     await page.goto("/regtest/mining?period=all");
     await expect(page.locator("main table a").first()).toBeVisible({ timeout: 30_000 });
     // Regtest draws what it can of them: its hashrate means nothing, and its blocks are few.
     await expect(page.locator(".chart__figures > summary").first()).toBeVisible();
     // Every view of the block figures; fee rates as wide as mainnet's, two ranges and a median.
-    const blocks = page.locator("section", {
-      has: page.getByRole("heading", { name: "Blocks over time", exact: true }),
-    });
+    const blocks = section("Blocks over time");
     for (const view of ["Fees", "Rewards", "Fee rates", "Size"]) {
+      await page.goto("/regtest/mining?period=all");
       await blocks.getByRole("button", { name: view, exact: true }).click();
       await expect(blocks.getByRole("button", { name: view, exact: true })).toHaveAttribute(
         "aria-pressed",
@@ -369,12 +383,12 @@ test("a chart's figures fit a phone whole: a node's history and fees, and the mi
       );
       await expect(blocks.getByRole("slider")).toBeVisible({ timeout: 30_000 });
       // The page's other figures once, beside the first view's (regtest may have none of them).
-      await whole(
+      const names =
         view === "Fees"
           ? ["Hashrate and difficulty", "Block health", "Blocks over time"]
-          : ["Blocks over time"],
-        `/mining's ${view} at ${width} px`,
-      );
+          : ["Blocks over time"];
+      await open(names);
+      await bothFaces(names, `/mining's ${view} at ${width} px`);
     }
-  }
-});
+  });
+}

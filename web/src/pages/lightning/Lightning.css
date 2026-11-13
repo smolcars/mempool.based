@@ -521,16 +521,16 @@
   .ln-fees .chart__caption {
     margin-top: var(--space-3);
   }
-  /* The figures: one table each way, captioned with the chart's words and its key, side by side
-     where the bars are, one over the other on a phone. */
+  /* The figures: one table each way, captioned with the chart's words and its key. Side by side
+     only where both fit whole at their own width, whatever the font; otherwise one over the other.
+     The room decides, not the viewport: a half-page panel on a wide screen stacks them too. */
   .ln-fees__figures {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-5) var(--space-6);
   }
-  @container (min-width: 30rem) {
-    .ln-fees__figures {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
+  .ln-fees__table {
+    flex: 1 1 auto;
   }
   .ln-fees__table .table__caption {
     color: var(--color-text);

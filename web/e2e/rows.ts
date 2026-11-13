@@ -250,3 +250,44 @@ export async function copyNotesClear(page: Page, label: string) {
   expect(faults, label).toStrictEqual([]);
   expect(checked, `${label}: copy controls checked`).toBeGreaterThan(0);
 }
+
+/** Wider fallback faces, as a Linux machine without the system fonts this was built on draws. */
+export async function wideFaces(page: Page) {
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+    root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+  });
+}
+
+/**
+ * Every table under `scope` shows each row whole: no text reaches past the table's box or fades
+ * at its edge, and the table does not scroll. An id cut in the middle is the one thing shortened.
+ */
+export async function rowsWhole(page: Page, scope: string, label: string) {
+  await expect(async () => {
+    const faults = await page.evaluate((sel) => {
+      const out: string[] = [];
+      for (const scroll of document.querySelectorAll<HTMLElement>(`${sel} .table-scroll`)) {
+        if (scroll.getClientRects().length === 0) continue;
+        const name = scroll.querySelector("caption")?.textContent ?? "";
+        if ("moreEnd" in scroll.dataset) out.push(`${name}: fades at its edge`);
+        const box = scroll.getBoundingClientRect();
+        for (const el of scroll.querySelectorAll<HTMLElement>("tbody td *")) {
+          if (el.getClientRects().length === 0 || el.closest(".visually-hidden")) continue;
+          const own = [...el.childNodes].some(
+            (n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "",
+          );
+          if (!own) continue;
+          const r = el.getBoundingClientRect();
+          const text = (el.textContent ?? "").trim();
+          if (r.right > box.right + 0.5 || r.left < box.left - 0.5) {
+            out.push(`${name}: "${text}" reaches past the edge`);
+          }
+        }
+      }
+      return out;
+    }, scope);
+    expect(faults, label).toStrictEqual([]);
+  }).toPass({ timeout: 3000 });
+}
