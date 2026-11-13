@@ -1,11 +1,19 @@
 # How CI runs the Rust tests (docs/CI.md "The Rust tests"). Locally: `cargo nextest run`.
 [profile.default]
-# Most slow tests wait on a socket or a timer, not the CPU, so more run at once than there are
-# cores. Each test is its own process, so the test binaries no longer run one after another.
-test-threads = 8
-# A test past 10 s is reported as slow; past 30 s it is stopped and fails. Nothing in the suite
-# comes near that: a test that does belongs behind `#[ignore]` with its command beside it.
+# Each test is its own process, so the test binaries no longer run one after another. Most slow
+# tests wait on a socket or a timer, not the CPU, so four times as many run as there are cores.
+test-threads = 16
+# A test past 10 s is reported as slow; past 30 s it is stopped and fails. A test that needs that
+# long belongs behind `#[ignore]` with its command beside it.
 slow-timeout = { period = "10s", terminate-after = 3 }
+
+# The tests that keep a core busy take a core's share of the slots, so they never crowd each
+# other or starve the waiting tests' timers.
+[[profile.default.overrides]]
+filter = '''
+test(/random|never_read|slow_reader|mainnet_s_size|totals_equal|requests_leaving_together/)
+'''
+threads-required = 4
 
 [profile.ci]
 fail-fast = false

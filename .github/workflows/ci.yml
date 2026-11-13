@@ -92,6 +92,7 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        id: cache
         with:
           save-if: ${{ github.ref == 'refs/heads/master' || github.head_ref == 't3/ci-budget' }} # TEMP: measure warm
           # Its key leaves out Cargo.toml's [profile] sections: change this when one changes.
@@ -117,6 +118,8 @@ jobs:
         run: python3 -I .github/slowest.py target/nextest/ci/junit.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Within the job's limit
         run: .github/job-limit.sh
+        env:
+          WARM: ${{ steps.cache.outputs.cache-hit }}
 
   web:
     needs: changes
@@ -146,6 +149,8 @@ jobs:
       - run: bun run size
       - name: Within the job's limit
         run: ../.github/job-limit.sh
+        env:
+          WARM: true
 
   # The server and frontend built from the PR, against rbitcoin on regtest, in headless Chromium.
   # scripts/e2e.sh starts the node and the browser download first and builds meanwhile, so neither
@@ -168,6 +173,7 @@ jobs:
       - run: rustup toolchain install
       # Only the server binary's build, so this cache is smaller than the rust job's.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        id: cache
         with:
           save-if: ${{ github.ref == 'refs/heads/master' || github.head_ref == 't3/ci-budget' }} # TEMP: measure warm
           # Its key leaves out Cargo.toml's [profile] sections: change this when one changes.
@@ -188,6 +194,8 @@ jobs:
         run: python3 -I .github/slowest.py "$RUNNER_TEMP/e2e-junit.xml" >> "$GITHUB_STEP_SUMMARY"
       - name: Within the job's limit
         run: .github/job-limit.sh
+        env:
+          WARM: ${{ steps.cache.outputs.cache-hit }}
 
   # The image's frontend stage alone: it catches a Dockerfile that no longer builds the frontend,
   # without the Rust stage, which the post-merge Image workflow builds.
