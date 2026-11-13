@@ -29,12 +29,13 @@
 // A command-line proof program: its printed output is its purpose.
 #![allow(clippy::print_stdout)]
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
+use engine::fees::score::{self, Block, Tally};
 use engine::fees::{self, Depth, Inflow, LEVELS, Recommender};
 use engine::mempool::{Config as TrackerConfig, NodeSource, Tracker};
 use engine::projected::{Config, Projection, Projector};
@@ -84,22 +85,6 @@ fn reference(base: &str) -> Option<[u32; 5]> {
         *slot = (v[key].as_f64()? * 1000.0).round() as u32;
     }
     Some(r)
-}
-
-/// The rate that sufficed to get into a block: the 1st percentile by vsize of the effective
-/// rates of its transactions we held, so one prioritised or out-of-band transaction does not
-/// set it. `None` when we held none of them (an empty block): no rate sufficed.
-fn clearing(rates: &mut [(u32, u64)]) -> Option<u32> {
-    rates.sort_unstable();
-    let total: u64 = rates.iter().map(|(_, v)| v).sum();
-    let mut below = 0;
-    rates
-        .iter()
-        .find(|(_, v)| {
-            below += v;
-            below * 100 >= total
-        })
-        .map(|(r, _)| *r)
 }
 
 #[tokio::main]
@@ -267,12 +252,6 @@ async fn blocks(
     from_height: u32,
     new: node::esplora::ChainTip,
 ) -> Vec<Value> {
-    let rates: HashMap<Txid, (u32, u64)> = before
-        .blocks
-        .iter()
-        .flat_map(|b| b.txs.iter())
-        .map(|(t, p)| (*t, (p.rate, u64::from(p.vsize))))
-        .collect();
     let first = if new.height > from_height {
         from_height + 1
     } else {
@@ -286,12 +265,8 @@ async fn blocks(
         let Ok(txids) = esplora.block_txids(hash.value).await else {
             continue;
         };
-        let mut held: Vec<(u32, u64)> = txids
-            .value
-            .iter()
-            .skip(1)
-            .filter_map(|t| rates.get(t).copied())
-            .collect();
+        let in_block: HashSet<Txid> = txids.value.iter().skip(1).copied().collect();
+        let mut held = score::held(before, |t| in_block.contains(t));
         let min = held.iter().map(|(r, _)| *r).min();
         out.push(json!({
             "block": height,
@@ -299,7 +274,7 @@ async fn blocks(
             "txs": txids.value.len().saturating_sub(1),
             "held": held.len(),
             "min": min,
-            "clearing": clearing(&mut held),
+            "clearing": score::clearing(&mut held),
         }));
     }
     out
@@ -596,65 +571,11 @@ fn trim(lines: &[Value], path: &str) {
     );
 }
 
-/// A recorded block: when we saw it, and the rate that sufficed to get in, if any.
-struct Block {
-    t: u64,
-    clearing: Option<u32>,
-}
-
-/// One source's tally at one level.
-#[derive(Default)]
-struct Tally {
-    met: usize,
-    total: usize,
-    /// Overpay when met and shortfall when missed, sat/vB.
-    over: Vec<f64>,
-    short: Vec<f64>,
-    /// No block of the horizon has a clearing rate (all held none of our transactions).
-    unscored: usize,
-    /// Per block that ended the wait: (met, total). Samples waiting for the same block share
-    /// its fate, so the confidence interval is clustered on it.
-    groups: BTreeMap<usize, (usize, usize)>,
-    /// (met, total) when the `N`-th block came within `N` × 10 minutes, and when it did not.
-    faster: (usize, usize),
-    slower: (usize, usize),
-}
-
-impl Tally {
-    fn pct(met: usize, total: usize) -> String {
-        if total == 0 {
-            return "-".into();
-        }
-        format!("{:.1}% of {total}", met as f64 * 100.0 / total as f64)
+fn pct(met: usize, total: usize) -> String {
+    if total == 0 {
+        return "-".into();
     }
-
-    /// The 95% interval of the met share: the wider of one clustered on the block each sample
-    /// waited for, and Wilson's for as many outcomes as blocks, so a share all met (or all
-    /// missed) over a few blocks is never shown as certain.
-    fn interval(&self) -> (f64, f64) {
-        let (n, g) = (self.total as f64, self.groups.len() as f64);
-        let p = self.met as f64 / n;
-        if g < 2.0 {
-            return (f64::NAN, f64::NAN);
-        }
-        let ss: f64 = self
-            .groups
-            .values()
-            .map(|&(m, t)| (m as f64 - p * t as f64).powi(2))
-            .sum();
-        let half = 1.96 * (g / (g - 1.0) * ss).sqrt() / n;
-        let z2 = 1.96f64.powi(2);
-        let centre = (p + z2 / (2.0 * g)) / (1.0 + z2 / g);
-        let wilson = (p * (1.0 - p) / g + z2 / (4.0 * g * g)).sqrt() * 1.96 / (1.0 + z2 / g);
-        (
-            (p - half).min(centre - wilson).max(0.0),
-            (p + half).max(centre + wilson).min(1.0),
-        )
-    }
-}
-
-fn mean(v: &[f64]) -> f64 {
-    v.iter().sum::<f64>() / v.len() as f64
+    format!("{:.1}% of {total}", met as f64 * 100.0 / total as f64)
 }
 
 /// Three decimals, or `-` when there was nothing to average.
@@ -666,18 +587,6 @@ fn num(x: f64) -> String {
     }
 }
 
-/// Spans whose outcome means nothing: a gap between two recorded blocks longer than `max_gap`
-/// (the recorder's node lost the network; on a live chain a two-hour gap comes about once in
-/// 450 years), and the [`fees::INFLOW_MINUTES`] after it, while the method's arrivals still
-/// hold the quiet and the mempool refills.
-fn outages(blocks: &[Block], max_gap: u64) -> Vec<(u64, u64)> {
-    blocks
-        .windows(2)
-        .filter(|w| w[1].t - w[0].t > max_gap)
-        .map(|w| (w[0].t, w[1].t + fees::INFLOW_MINUTES as u64 * 60))
-        .collect()
-}
-
 /// Scores every sample's levels, for each of `sources`, against the blocks that came after it.
 /// Samples are those where ours was served (the others are the node's estimates under our
 /// name), less those whose horizon reaches into an outage.
@@ -686,6 +595,7 @@ fn score(lines: &[Value], sources: &[&str]) {
         .iter()
         .filter(|v| v.get("block").is_some())
         .map(|v| Block {
+            height: v["block"].as_u64().unwrap() as u32,
             t: v["t"].as_u64().unwrap(),
             clearing: v["clearing"].as_u64().map(|c| c as u32),
         })
@@ -697,7 +607,7 @@ fn score(lines: &[Value], sources: &[&str]) {
         .filter(|v| v.get("bottoms").is_some() && !v["ours"].is_null())
         .filter(|v| (from..to).contains(&v["t"].as_u64().unwrap()))
         .collect();
-    let out = outages(&blocks, env_secs("MAX_GAP_SECS", 7200));
+    let out = score::outages(&blocks, env_secs("MAX_GAP_SECS", 7200));
     println!(
         "\n{} samples with our own answer, {} blocks ({} without a clearing rate)",
         samples.len(),
@@ -732,58 +642,22 @@ fn score(lines: &[Value], sources: &[&str]) {
             let mut left_out = 0;
             for source in sources {
                 let mut tally = Tally::default();
-                left_out = 0;
                 for s in &samples {
                     if with_ref && s["reference"].is_null() {
                         continue;
                     }
-                    let t = s["t"].as_u64().unwrap();
-                    let first = blocks.partition_point(|b| b.t <= t);
-                    let Some(after) = blocks.get(first..first + n) else {
-                        continue;
-                    };
-                    let end = after[n - 1].t;
                     // A fit on the samples before `TO` must not see the blocks after it.
-                    if end >= to {
-                        continue;
-                    }
-                    if out.iter().any(|(from, to)| t < *to && end > *from) {
-                        left_out += 1;
-                        continue;
-                    }
-                    let Some(rate) = s[*source][i].as_u64() else {
-                        continue;
-                    };
-                    // The cheapest rate that got into one of the next `n` blocks: one step above
-                    // a block's clearing rate.
-                    let Some(need) = after
-                        .iter()
-                        .filter_map(|b| b.clearing)
-                        .map(|c| u64::from(c) + 1)
-                        .min()
-                    else {
-                        tally.unscored += 1;
-                        continue;
-                    };
-                    let ok = rate >= need;
-                    tally.total += 1;
-                    tally.met += usize::from(ok);
-                    let g = tally.groups.entry(first).or_default();
-                    g.0 += usize::from(ok);
-                    g.1 += 1;
-                    let pace = if end - t <= n as u64 * 600 {
-                        &mut tally.faster
-                    } else {
-                        &mut tally.slower
-                    };
-                    pace.0 += usize::from(ok);
-                    pace.1 += 1;
-                    if ok {
-                        tally.over.push((rate - need) as f64 / 1000.0);
-                    } else {
-                        tally.short.push((need - rate) as f64 / 1000.0);
-                    }
+                    let rate = s[*source][i].as_u64().map(|r| r as u32);
+                    tally.count(score::outcome(
+                        s["t"].as_u64().unwrap(),
+                        rate,
+                        n,
+                        &blocks,
+                        &out,
+                        to,
+                    ));
                 }
+                left_out = tally.left_out;
                 if tally.total == 0 {
                     if tally.unscored > 0 {
                         println!(
@@ -793,7 +667,6 @@ fn score(lines: &[Value], sources: &[&str]) {
                     }
                     continue;
                 }
-                tally.over.sort_by(f64::total_cmp);
                 let (lo, hi) = tally.interval();
                 println!(
                     "{source:<12} {:<7} {:>5} {:>5.1}% {:>6.1}% - {:>5.1}% {:>6} {:>8} {:>8} {:>8} {:>5} {:>16} {:>16}",
@@ -803,16 +676,12 @@ fn score(lines: &[Value], sources: &[&str]) {
                     lo * 100.0,
                     hi * 100.0,
                     tally.groups.len(),
-                    num(mean(&tally.over)),
-                    num(tally
-                        .over
-                        .get(tally.over.len() / 2)
-                        .copied()
-                        .unwrap_or(f64::NAN)),
-                    num(mean(&tally.short)),
+                    num(tally.mean_over()),
+                    num(tally.median_over()),
+                    num(tally.mean_short()),
                     tally.unscored,
-                    Tally::pct(tally.faster.0, tally.faster.1),
-                    Tally::pct(tally.slower.0, tally.slower.1),
+                    pct(tally.faster.0, tally.faster.1),
+                    pct(tally.slower.0, tally.slower.1),
                 );
             }
             println!(

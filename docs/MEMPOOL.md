@@ -357,6 +357,8 @@ The mempool totals' `min_fee_rate` is the node's `mempoolminfee` from the tracke
 | Method | `crates/engine/src/fees.rs` | Depth, arrivals, the search, smoothing, the node's fallback. Pure: no I/O, no clock |
 | In the server | `crates/server/src/ws/fees.rs` | Feeds it from the tracker and projector, falls back, publishes, holds the answers |
 | Proof | `crates/engine/examples/fee_watch.rs` | Records our answers, the node's and the reference's against a live node, and scores each against the blocks that follow |
+| The score | `crates/engine/src/fees/score.rs`, `crates/engine/src/fees/db.rs` | The clearing rate, the scorer (shared with `fee_watch`) and the record the server keeps. Pure but for `db.rs` |
+| The score in the server | `crates/server/src/ws/fees/score.rs` | Records what was served and every block, stores it, serves `/app/fees/score`, logs `fees_score` |
 
 ### Levels
 
@@ -518,6 +520,31 @@ At 90% the next block pays about what the reference pays (1.110 against 1.092 on
 **Against the targets.** The aim was every level met at least 85% of the time, at least as often as the reference, for less overpay than the reference. On the three hours, 3 and 6 blocks were met more than 97% of the time. The 3-block level paid less than the reference (0.578 against 0.694). The 6-block level paid more on this run (0.437 against 0.213, from 17 reference samples), as much as the reference paid over the 24 hours (0.442). The next block met 83% overall and 67% on the report half, so its 85% is not shown. Its overpay matches the reference's, and at the moments the reference was asked it was met as often in the report half and more often over the whole run. The evidence is 13 blocks: enough to show the direction, not to pin a percentage.
 
 **Why the cost comes in jumps.** On these days the mempool held two populations: a sea of about 20 MvB at 0.12 sat/vB and below, and a stream at 1 to 3 sat/vB arriving at about a block every ten minutes, with almost nothing between. A level either sits one step above the sea or above the stream. Moving from one to the other costs about 0.9 sat/vB, so the 6-block level's overpay is near zero when it can stay at the sea and near a sat/vB when it cannot. The reference's answers between the two (0.2 to 0.5) are met when the stream is slow and missed when it is not.
+
+### The score the server keeps
+
+The recordings above needed a recorder of their own, with its own tracker polling the node. A server with the mempool engine on has everything they used: the answer it serves, the projection each block is judged against, and the block. So it keeps the same score of itself, for as long as it runs, on every network, at no node cost. The earlier runs' tables are in [Against the blocks that followed](#against-the-blocks-that-followed); this is how the evidence keeps growing.
+
+**What is recorded** (`crates/server/src/ws/fees/score.rs`, one task per network, started with the engines):
+
+- **Every 30 s, what was served:** our four levels when ours was served, or only which stood in: the node's estimates (warming up, or the projection stale) or nothing. 30 s is what the recordings used, so the scores compare; samples waiting for the same block share its fate, so more would add rows, not evidence. The answer is read from the fee task's own (`Fees::current`), so the task that refreshes it every 2 s is not touched.
+- **Every block, its clearing rate**, defined as `fee_watch` defines it and by the same code (`fees::score::held` and `clearing`): the 1st percentile by vsize of the effective rates the last projection on its parent gave the block's transactions. The block's transactions come from the tracker's own window of recent blocks, which every tracker delta carries (`Delta::blocks`), so nothing is asked of the node. Blocks are recorded as `fee_watch` records them: every height from the old tip to the new one, the new tip alone after a reorg (its row replaces the old block's), each seen at the time the projection moved. A block the window does not hold, or that came while the server was down, has no clearing rate. At start, the blocks since the highest one stored are recorded that way, up to 144 of them, so samples taken before a restart are judged against the right heights.
+
+**What it costs.** No node request: a test on a mock node that counts every call (`the_fee_score_asks_the_node_nothing_and_survives_a_restart`) samples some fifty times with the counts of block, transaction and cluster requests unchanged, and a block costs exactly the one fetch the tracker makes anyway. The fee task is not changed; on regtest, two servers on one node under the same load refreshed in the same time with the score kept and without (means of 213 to 692 µs against 228 to 716 µs, debug build). Scoring a full month of samples, every window and level, takes about 32 ms on a blocking thread every 30 s. Storage is about 65 KB a day on mainnet ([`STORE.md`](STORE.md#fee_samples-and-fee_blocks)).
+
+**What the score is.** `fees::score::Record::report` scores each sample's levels with the scorer the recordings used (`fees::score::outcome`, `Tally`): met when the level paid at least one step above the clearing rate of one of the next `N` blocks after it was given; overpay over the cheapest such rate when met, shortfall when missed; a 95% interval that is the wider of one clustered on the block each sample waited for and Wilson's for as many outcomes as blocks. Left out and counted, as the recordings left them out:
+
+- **Outages:** a gap between recorded blocks over two hours, and the 30 minutes after it. Downtime of the server counts the same way: the blocks recorded at its restart end the gap.
+- **Unfinished horizons:** the `N`-th block has not come yet. The day-long level needs 144 blocks after its sample.
+- **No clearing rate** anywhere in the horizon.
+
+**A block with room reads as a miss for the minimum.** A block's clearing rate is the cheapest that got in, not the cheapest that would have: a block that took the whole mempool clears at its cheapest transaction, and an answer at the node's minimum, which would have been mined too, counts as short by the gap. On mainnet blocks are full and this does not arise; on regtest, where `generatetodescriptor` mines everything, it is every sample. It is the recordings' definition, kept so the scores compare.
+
+**Not enough evidence is said plainly.** Under 30 distinct blocks deciding a level's samples, the route and the log give no share: the interval would be wider than 13 points either side of 85%. Telling 83% from 87% for the next block, the question the three-hour run left open, takes about 400 blocks for an interval no wider than 4 points either side (scaled from the 24-hour run's interval, 62.8–81.0% from 121 blocks), about three days of our own answers on mainnet, and about 800 blocks, under a week, to tell them apart with an 80% chance.
+
+**Proof against the earlier evidence.** `fixtures/fees/replay.json` replayed, each answer and block written through the store and read back, scores 14 of 17, 15 of 15 and 8 of 9, the shares the scorer of 2026-11-13 gives that file (`fees::score::tests`). `fee_watch` now scores with the library's code; its `RESCORE` output on recorded files is unchanged.
+
+**Read it** at `/app/fees/score` ([`API.md`](API.md#the-score-kept)), and in the `fees_score` line logged once a day per network at midnight UTC for the day before ([`LOGGING.md`](LOGGING.md#the-live-mempool)).
 
 ### Against the node and the reference
 

@@ -949,6 +949,47 @@ pub struct FeesFallbackEnded {
 }
 event!(FeesFallbackEnded, "fees_fallback_ended", Info, keep);
 
+/// Once a day per network, at midnight UTC: how the fee recommendations served over the day
+/// before fared against the blocks that followed (docs/MEMPOOL.md, "The score the server keeps").
+#[derive(Debug, Serialize)]
+pub struct FeesScore {
+    pub network: &'static str,
+    /// Unix seconds: the start of the day scored.
+    pub day: u64,
+    pub levels: Vec<FeesScoreLevel>,
+    /// Samples of the day when the node's estimates, or nothing, were served instead of ours.
+    pub not_ours: usize,
+    /// Writes to the store dropped or failed since the last line: samples kept in memory only.
+    pub unsaved: u64,
+}
+event!(FeesScore, "fees_score", Info, keep);
+
+/// One level of a [`FeesScore`]. The share met and the overpay are left out when fewer than
+/// `min_blocks` blocks decided the level's samples.
+#[derive(Debug, Serialize)]
+pub struct FeesScoreLevel {
+    /// `high`, `medium`, `low` or `no_rush`. Not `level`: that names the line's level.
+    pub name: &'static str,
+    pub scored: usize,
+    /// Distinct blocks that decided them: the number of outcomes.
+    pub blocks: usize,
+    pub min_blocks: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub met_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub met_low_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub met_high_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overpay_sat_vb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortfall_sat_vb: Option<f64>,
+    /// Left out: the horizon reached into an outage, has not finished, or had no clearing rate.
+    pub outage: usize,
+    pub unfinished: usize,
+    pub no_clearing: usize,
+}
+
 /// A reader of the tracker's or the projector's change stream fell behind and started over
 /// from a snapshot. At a total of 1, 2, 4, 8… per network and source.
 #[derive(Debug, Serialize)]
@@ -1928,6 +1969,42 @@ mod tests {
             both(&FeesFallbackEnded {
                 network: n,
                 duration_ms: 12_000,
+            }),
+            both(&FeesScore {
+                network: n,
+                day: 1_763_078_400,
+                levels: vec![
+                    FeesScoreLevel {
+                        name: "high",
+                        scored: 2_225,
+                        blocks: 121,
+                        min_blocks: 30,
+                        met_pct: Some(84.6),
+                        met_low_pct: Some(77.1),
+                        met_high_pct: Some(90.2),
+                        overpay_sat_vb: Some(1.11),
+                        shortfall_sat_vb: Some(0.84),
+                        outage: 0,
+                        unfinished: 2,
+                        no_clearing: 0,
+                    },
+                    FeesScoreLevel {
+                        name: "no_rush",
+                        scored: 0,
+                        blocks: 0,
+                        min_blocks: 30,
+                        met_pct: None,
+                        met_low_pct: None,
+                        met_high_pct: None,
+                        overpay_sat_vb: None,
+                        shortfall_sat_vb: None,
+                        outage: 0,
+                        unfinished: 2_880,
+                        no_clearing: 0,
+                    },
+                ],
+                not_ours: 10,
+                unsaved: 0,
             }),
             both(&MempoolBlock {
                 network: n,

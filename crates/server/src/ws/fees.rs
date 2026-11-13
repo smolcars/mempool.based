@@ -23,6 +23,8 @@ use tokio::time::Instant;
 use super::{Frame, Snapshot, Topic};
 use crate::NetworkContext;
 
+pub(crate) mod score;
+
 /// How often the node's estimates are asked for while they are served.
 const NODE_EVERY: Duration = Duration::from_secs(30);
 /// The longest the task waits on the node for its estimates; arrivals queue meanwhile.
@@ -94,6 +96,8 @@ pub struct Fees {
     blocks: watch::Sender<Option<Blocks>>,
     /// Unix seconds of the last request for a recommendation.
     wanted: AtomicU64,
+    /// How the answers fared: `score`.
+    pub(crate) score: score::Scores,
 }
 
 impl Fees {
