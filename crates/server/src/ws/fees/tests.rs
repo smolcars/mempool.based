@@ -46,7 +46,11 @@ fn context(mempool: bool, node: Option<&str>) -> Arc<NetworkContext> {
     let mut config = Config::from_vars(|k| vars.get(k).cloned()).unwrap();
     config.ws.mempool_interval = Duration::from_millis(20);
     let sockets = Sockets::new(&config.ws, Duration::from_secs(1));
-    Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap())
+    Arc::new(
+        NetworkContext::new(&config.networks[0], &config, &sockets)
+            .unwrap()
+            .with_open_store(),
+    )
 }
 
 /// Serves the `/api/v1` routes for `ctx` on port 0.

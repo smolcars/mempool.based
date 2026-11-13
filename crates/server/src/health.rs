@@ -13,8 +13,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
+use engine::store::{Gate, OptionalExtension, Read, Store, params};
 use logging::events::{
     AddressIndexOff, AddressIndexOn, RpcAuthFailed, RpcReachable, RpcUnreachable, RpcWrongNetwork,
+    StoreChainUnverified, StoreWrongChain,
 };
 use node::electrum::Event as ElectrumEvent;
 use node::esplora::{Error as EsploraError, ScriptHash, ScriptRef};
@@ -26,6 +30,9 @@ use crate::NetworkContext;
 
 /// Time between two RPC checks of one network.
 pub const CHECK_EVERY: Duration = Duration::from_secs(30);
+/// A block this deep in the node's chain is taken as settled: an older store's row there that
+/// the node does not have was written for another chain, not left by a reorg.
+const SETTLED: u32 = 100;
 
 /// What the last RPC check found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,60 +83,176 @@ impl NodeCheck {
 /// Checks the network's RPC now and every [`CHECK_EVERY`], forever. Logs a refused password each
 /// time it starts being refused, a node on another chain each time it is found, an unreachable node at the 1st, 2nd, 4th… failure in a row, and
 /// the first answer and each recovery. Never stops the server: the node may simply be down.
+///
+/// It also keeps the store's gate: writes wait until a check has found the node on this
+/// network's chain and the file's rows on it too, and are held whenever the node is found on
+/// another chain. An unreachable node or a refused password changes nothing: the chain is
+/// what it last was.
 pub async fn watch(ctx: Arc<NetworkContext>) {
-    let network = ctx.config.network.name();
-    let mut failures = 0u32;
+    let mut checks = Checks::default();
     loop {
-        let was = ctx.node.get().0;
-        let now = match ctx.rpc.blockchain_info().await {
-            Ok(info) if info.chain != ctx.config.network.rpc_chain() => {
-                if was != Rpc::WrongNetwork {
-                    let node_chain: String = info.chain.chars().take(16).collect();
-                    logging::emit(&RpcWrongNetwork {
-                        network,
-                        node_chain: &node_chain,
-                    });
-                }
-                Rpc::WrongNetwork
-            }
-            Ok(info) => {
-                if was != Rpc::Ok {
-                    logging::emit(&RpcReachable {
-                        network,
-                        height: info.blocks,
-                        failures,
-                    });
-                }
-                failures = 0;
-                Rpc::Ok
-            }
-            Err(RpcError::Auth) => {
-                if was != Rpc::AuthFailed {
-                    logging::emit(&RpcAuthFailed { network });
-                }
-                Rpc::AuthFailed
-            }
-            Err(e) => {
-                let error = match e {
-                    RpcError::Timeout => "timeout",
-                    RpcError::Busy => "busy",
-                    RpcError::Decode(_) => "decode",
-                    _ => "unavailable",
-                };
-                failures = failures.saturating_add(1);
-                if failures.is_power_of_two() {
-                    logging::emit(&RpcUnreachable {
-                        network,
-                        error,
-                        failures,
-                    });
-                }
-                Rpc::Unreachable(error)
-            }
-        };
-        ctx.node.set(now);
+        check(&ctx, &mut checks).await;
         tokio::time::sleep(CHECK_EVERY).await;
     }
+}
+
+/// What [`check`] carries from one check to the next.
+#[derive(Debug, Default)]
+struct Checks {
+    /// Unreachable checks in a row.
+    failures: u32,
+    /// `store_chain_unverified` was written.
+    unverified: bool,
+}
+
+/// One RPC check of [`watch`].
+async fn check(ctx: &NetworkContext, checks: &mut Checks) {
+    let network = ctx.config.network.name();
+    let store = ctx.blocks.as_ref().map(|t| &t.store);
+    let was = ctx.node.get().0;
+    let now = match ctx.rpc.blockchain_info().await {
+        Ok(info) if info.chain != ctx.config.network.rpc_chain() => {
+            if was != Rpc::WrongNetwork {
+                let node_chain: String = info.chain.chars().take(16).collect();
+                logging::emit(&RpcWrongNetwork {
+                    network,
+                    node_chain: &node_chain,
+                });
+            }
+            if let Some(s) = store {
+                s.set_gate(Gate::Held);
+            }
+            Rpc::WrongNetwork
+        }
+        Ok(info) => {
+            if was != Rpc::Ok {
+                logging::emit(&RpcReachable {
+                    network,
+                    height: info.blocks,
+                    failures: checks.failures,
+                });
+            }
+            checks.failures = 0;
+            if let Some(s) = store {
+                confirm(ctx, s, info.blocks, &mut checks.unverified).await;
+            }
+            Rpc::Ok
+        }
+        Err(RpcError::Auth) => {
+            if was != Rpc::AuthFailed {
+                logging::emit(&RpcAuthFailed { network });
+            }
+            Rpc::AuthFailed
+        }
+        Err(e) => {
+            let error = match e {
+                RpcError::Timeout => "timeout",
+                RpcError::Busy => "busy",
+                RpcError::Decode(_) => "decode",
+                _ => "unavailable",
+            };
+            checks.failures = checks.failures.saturating_add(1);
+            if checks.failures.is_power_of_two() {
+                logging::emit(&RpcUnreachable {
+                    network,
+                    error,
+                    failures: checks.failures,
+                });
+            }
+            Rpc::Unreachable(error)
+        }
+    };
+    ctx.node.set(now);
+}
+
+/// Opens the store's gate for a node found on the right chain, once the rows of a file from
+/// before files recorded their chain are found on it too. Rows that are not refuse the file.
+async fn confirm(ctx: &NetworkContext, store: &Store, tip: u32, unverified: &mut bool) {
+    if store.gate() == Gate::Refused {
+        return;
+    }
+    if store.unstamped() {
+        let network = ctx.config.network.name();
+        match older_rows(ctx, store, tip).await {
+            Some(Older::Same) => {
+                if store.stamp().await.is_err() {
+                    return;
+                }
+            }
+            Some(Older::Other(height)) => {
+                logging::emit(&StoreWrongChain { network, height });
+                store.set_gate(Gate::Refused);
+                return;
+            }
+            Some(Older::Unsettled(height)) => {
+                if !std::mem::replace(unverified, true) {
+                    logging::emit(&StoreChainUnverified {
+                        network,
+                        height,
+                        node_height: tip,
+                    });
+                }
+                return;
+            }
+            // The node or the store failed: the next check tries again.
+            None => return,
+        }
+    }
+    store.set_gate(Gate::Open);
+}
+
+/// What an older file's block rows say about its chain.
+#[derive(Debug, PartialEq, Eq)]
+enum Older {
+    /// Its lowest and highest settled rows are on the node's chain, or it has none.
+    Same,
+    /// The row at this height is not.
+    Other(u32),
+    /// No row is settled yet; the lowest is at this height.
+    Unsettled(u32),
+}
+
+/// Checks the lowest and the highest of an older file's rows that lie [`SETTLED`] blocks or more
+/// below the node's tip against the node. Rows are written newest first and replaced on a
+/// reorg, so rows from another chain show at one end: the lowest when another node's
+/// backfill ran, the highest when its tip was followed. `None` when the store or node failed.
+async fn older_rows(ctx: &NetworkContext, store: &Store, tip: u32) -> Option<Older> {
+    let floor = tip.saturating_sub(SETTLED);
+    let (lowest, ends) = store
+        .read(Read::Chain, move |sql| {
+            let lowest: Option<u32> = sql
+                .prepare("SELECT min(height) FROM blocks")?
+                .query_row([], |r| r.get(0))?;
+            let end = |sql_text: &'static str| -> Result<Option<(u32, Vec<u8>)>, _> {
+                sql.prepare(sql_text)?
+                    .query_row(params![floor], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .optional()
+                    .map_err(engine::store::Error::from)
+            };
+            let low =
+                end("SELECT height, hash FROM blocks WHERE height <= ?1 ORDER BY height LIMIT 1")?;
+            let high = end(
+                "SELECT height, hash FROM blocks WHERE height <= ?1 ORDER BY height DESC LIMIT 1",
+            )?;
+            Ok((lowest, [low, high]))
+        })
+        .await
+        .ok()?;
+    let Some(lowest) = lowest else {
+        return Some(Older::Same);
+    };
+    if tip < SETTLED || ends.iter().all(Option::is_none) {
+        return Some(Older::Unsettled(lowest));
+    }
+    for (height, hash) in ends.into_iter().flatten() {
+        let hash = BlockHash::from_slice(&hash).ok()?;
+        match ctx.rpc.block_header(hash).await {
+            Ok(h) if h.height == height && h.confirmations > 0 => {}
+            Ok(_) | Err(RpcError::Rpc { code: -5, .. }) => return Some(Older::Other(height)),
+            Err(_) => return None,
+        }
+    }
+    Some(Older::Same)
 }
 
 /// Whether the node has its address index, as last asked: `unknown`, `on` or `off`.
@@ -209,7 +332,12 @@ fn store(ctx: &NetworkContext) -> (&'static str, Option<u64>) {
     match &ctx.blocks {
         Some(t) => {
             let h = t.store.write_health();
-            let state = if h.failures > 0 { "failing" } else { "ok" };
+            let state = match t.store.gate() {
+                Gate::Refused => "wrong_chain",
+                Gate::Waiting | Gate::Held => "waiting",
+                Gate::Open if h.failures > 0 => "failing",
+                Gate::Open => "ok",
+            };
             (state, h.last_ok.map(|t| t.elapsed().as_secs()))
         }
         None if ctx.data_dir => ("open_failed", None),
@@ -263,4 +391,218 @@ pub fn readyz(networks: &[Arc<NetworkContext>]) -> Response {
         "networks": out,
     });
     (status, Json(body)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
+
+    use axum::routing::post;
+    use engine::store::Error as StoreError;
+    use serde_json::Value;
+
+    use super::*;
+
+    /// A node whose chain, reachability and blocks a test changes as it goes.
+    #[derive(Default)]
+    struct Node {
+        chain: Mutex<&'static str>,
+        down: AtomicBool,
+        /// Blocks on its chain: hash as printed, and height.
+        blocks: Mutex<HashMap<String, u32>>,
+    }
+
+    async fn node(n: Arc<Node>, chain: &'static str) -> u16 {
+        *n.chain.lock().unwrap() = chain;
+        let app = axum::Router::new().route(
+            "/",
+            post(move |Json(req): Json<Value>| {
+                let n = Arc::clone(&n);
+                async move {
+                    if n.down.load(Ordering::SeqCst) {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    let result = match req["method"].as_str() {
+                        Some("getblockchaininfo") => json!({
+                            "chain": *n.chain.lock().unwrap(), "blocks": 500, "headers": 500,
+                            "bestblockhash": "00".repeat(32), "bits": "207fffff", "target": "00",
+                            "difficulty": 1.0, "time": 1, "mediantime": 1,
+                            "verificationprogress": 1.0, "initialblockdownload": false,
+                            "chainwork": "00", "size_on_disk": 1, "pruned": false
+                        }),
+                        Some("getblockheader") => {
+                            let hash = req["params"][0].as_str().unwrap_or_default().to_owned();
+                            let Some(height) = n.blocks.lock().unwrap().get(&hash).copied() else {
+                                return Json(json!({"id": 0, "result": null,
+                                    "error": {"code": -5, "message": "Block not found"}}))
+                                .into_response();
+                            };
+                            json!({
+                                "hash": hash, "confirmations": 501 - height, "height": height,
+                                "version": 1, "merkleroot": "00".repeat(32), "time": 1,
+                                "mediantime": 1, "nonce": 0, "bits": "207fffff", "target": "00",
+                                "difficulty": 1.0, "chainwork": "00", "nTx": 1
+                            })
+                        }
+                        _ => Value::Null,
+                    };
+                    Json(json!({"id": 0, "error": null, "result": result})).into_response()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        port
+    }
+
+    /// Regtest on the mock node at `port`, with a store in `dir` and its gate as the server's.
+    fn context(port: u16, dir: &std::path::Path) -> Arc<NetworkContext> {
+        let vars: HashMap<&str, String> = [
+            ("REGTEST_RPC_HOST", "127.0.0.1".to_owned()),
+            ("REGTEST_RPC_PORT", port.to_string()),
+            ("REGTEST_RPC_USER", "u".to_owned()),
+            ("REGTEST_RPC_PASSWORD", "p".to_owned()),
+            ("REGTEST_ESPLORA_URL", "http://127.0.0.1:1".to_owned()),
+            ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1".to_owned()),
+            ("DATA_DIR", dir.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let config = crate::Config::from_vars(|k| vars.get(k).cloned()).unwrap();
+        let sockets = crate::ws::Sockets::new(&config.ws, Duration::from_secs(1));
+        Arc::new(NetworkContext::new(&config.networks[0], &config, &sockets).unwrap())
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("rbitcoin-space-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn store(ctx: &NetworkContext) -> Arc<Store> {
+        Arc::clone(&ctx.blocks.as_ref().unwrap().store)
+    }
+
+    async fn pending(store: &Arc<Store>) -> tokio::task::JoinHandle<Result<(), StoreError>> {
+        let s = Arc::clone(store);
+        let task = tokio::spawn(async move { s.write(|_| Ok(())).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!task.is_finished());
+        task
+    }
+
+    #[tokio::test]
+    async fn writers_wait_for_the_first_check_and_stop_while_the_node_is_elsewhere() {
+        let n = Arc::new(Node::default());
+        n.down.store(true, Ordering::SeqCst);
+        let dir = temp("moves");
+        let ctx = context(node(Arc::clone(&n), "regtest").await, &dir);
+        let s = store(&ctx);
+        let mut checks = Checks::default();
+
+        // Unreachable at start: a write waits, through any number of checks.
+        let waiting = pending(&s).await;
+        check(&ctx, &mut checks).await;
+        assert_eq!(s.gate(), Gate::Waiting);
+        // The node answers on regtest: the write lands.
+        n.down.store(false, Ordering::SeqCst);
+        check(&ctx, &mut checks).await;
+        waiting.await.unwrap().unwrap();
+
+        // Unreachable after being right changes nothing.
+        n.down.store(true, Ordering::SeqCst);
+        check(&ctx, &mut checks).await;
+        s.write(|_| Ok(())).await.unwrap();
+
+        // Repointed at mainnet: writes wait, and the ones begun meanwhile never land.
+        n.down.store(false, Ordering::SeqCst);
+        *n.chain.lock().unwrap() = "main";
+        check(&ctx, &mut checks).await;
+        assert_eq!(s.gate(), Gate::Held);
+        let held = pending(&s).await;
+        check(&ctx, &mut checks).await;
+        assert!(!held.is_finished());
+        *n.chain.lock().unwrap() = "regtest";
+        check(&ctx, &mut checks).await;
+        assert!(matches!(held.await.unwrap(), Err(StoreError::Held)));
+        s.write(|_| Ok(())).await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file from before `chain`: block rows at these heights and hashes, and no chain row.
+    async fn older_file(dir: &std::path::Path, rows: &[(u32, BlockHash)]) {
+        let old = Store::open(dir, "regtest", engine::store::Options::default()).unwrap();
+        let rows = rows.to_vec();
+        old.write(move |sql| {
+            sql.prepare("DELETE FROM chain")?.execute([])?;
+            for (height, hash) in &rows {
+                sql.prepare(
+                    "INSERT INTO blocks (height, hash, time, tx_count, size, weight, \
+                     paying_weight, fees, subsidy, reward, difficulty, coinbase_tag, payouts) \
+                     VALUES (?1, ?2, 0, 1, 1, 4, 0, 0, 0, 0, 1.0, x'', x'')",
+                )?
+                .execute(params![height, hash.to_byte_array().to_vec()])?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        old.close().await;
+    }
+
+    fn hash(n: u8) -> BlockHash {
+        BlockHash::from_byte_array([n; 32])
+    }
+
+    #[tokio::test]
+    async fn an_older_file_is_checked_against_the_node_before_it_is_written() {
+        // Rows at 10 and 300 the node has, and 450 too new to be settled: recorded and opened.
+        let n = Arc::new(Node::default());
+        let port = node(Arc::clone(&n), "regtest").await;
+        n.blocks
+            .lock()
+            .unwrap()
+            .extend([(hash(1).to_string(), 10), (hash(2).to_string(), 300)]);
+        let dir = temp("same");
+        older_file(&dir, &[(10, hash(1)), (300, hash(2)), (450, hash(3))]).await;
+        let ctx = context(port, &dir);
+        let s = store(&ctx);
+        assert!(s.unstamped());
+        check(&ctx, &mut Checks::default()).await;
+        assert_eq!(s.gate(), Gate::Open);
+        assert!(!s.unstamped());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The lowest row is another chain's (another node's backfill reached it): refused.
+        let dir = temp("low");
+        older_file(&dir, &[(10, hash(9)), (300, hash(2))]).await;
+        let ctx = context(port, &dir);
+        let s = store(&ctx);
+        check(&ctx, &mut Checks::default()).await;
+        assert_eq!(s.gate(), Gate::Refused);
+        assert!(matches!(s.write(|_| Ok(())).await, Err(StoreError::Held)));
+        assert!(s.unstamped());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The highest settled row is (another node's tip was followed): refused.
+        let dir = temp("high");
+        older_file(&dir, &[(10, hash(1)), (300, hash(8))]).await;
+        let ctx = context(port, &dir);
+        check(&ctx, &mut Checks::default()).await;
+        assert_eq!(store(&ctx).gate(), Gate::Refused);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Only rows the node cannot settle yet: writes keep waiting.
+        let dir = temp("unsettled");
+        older_file(&dir, &[(450, hash(3))]).await;
+        let ctx = context(port, &dir);
+        check(&ctx, &mut Checks::default()).await;
+        assert_eq!(store(&ctx).gate(), Gate::Waiting);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

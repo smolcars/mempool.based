@@ -292,11 +292,14 @@ async fn readiness_reports_the_store_without_its_details() {
         "{text}"
     );
 
-    // One that opens: `ok`, and no write yet.
+    // One that opens: `ok` once the node is found on regtest, which lets the writers in.
     vars.insert("DATA_DIR".into(), dir.join("data").display().to_string());
     let addr = serve(&vars).await;
     let (_, n) = readyz_when(&addr, |n| n["store"] == "ok").await;
-    assert_eq!(n["store_written_secs_ago"], Value::Null);
+    assert!(
+        n["store_written_secs_ago"].as_u64().is_none_or(|s| s < 10),
+        "{n}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

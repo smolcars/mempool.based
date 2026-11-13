@@ -1260,3 +1260,158 @@ async fn the_version_is_none_while_a_write_to_the_table_is_open() {
         .unwrap();
     assert_eq!(seen, 1);
 }
+
+fn for_chain(genesis: u8) -> Options {
+    Options {
+        genesis: Some([genesis; 32]),
+        ..Options::default()
+    }
+}
+
+async fn block_rows(store: &Store) -> i64 {
+    store
+        .read(Read::Blocks, |sql| {
+            Ok(sql
+                .prepare("SELECT count(*) FROM blocks")?
+                .query_row([], |r| r.get(0))?)
+        })
+        .await
+        .unwrap()
+}
+
+/// A write of one block row at `height`, as a writer would make it.
+async fn write_row(store: &Store, height: i64) -> Result<(), Error> {
+    store
+        .write(move |sql| {
+            sql.prepare(
+                "INSERT INTO blocks (height, hash, time, tx_count, size, weight, paying_weight, \
+                 fees, subsidy, reward, difficulty, coinbase_tag, payouts) \
+                 VALUES (?1, ?2, 0, 1, 1, 4, 0, 0, 0, 0, 1.0, x'', x'')",
+            )?
+            .execute(params![height, height.to_le_bytes().to_vec()])?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
+async fn writes_wait_for_the_node_and_none_carried_from_another_chain_lands() {
+    let dir = TempDir::new();
+    let store = Arc::new(Store::open(&dir.0, "regtest", for_chain(1)).unwrap());
+    assert_eq!(store.gate(), Gate::Waiting);
+    // Not confirmed yet: the write waits, and commits once the gate opens.
+    let waiting = tokio::spawn({
+        let s = Arc::clone(&store);
+        async move { write_row(&s, 1).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiting.is_finished());
+    assert_eq!(block_rows(&store).await, 0);
+    store.set_gate(Gate::Open);
+    waiting.await.unwrap().unwrap();
+    assert_eq!(block_rows(&store).await, 1);
+
+    // Found on another chain: writes wait, and those begun meanwhile fail once it is right again.
+    store.set_gate(Gate::Held);
+    let held = tokio::spawn({
+        let s = Arc::clone(&store);
+        async move { write_row(&s, 2).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!held.is_finished());
+    store.set_gate(Gate::Open);
+    assert!(matches!(held.await.unwrap(), Err(Error::Held)));
+    write_row(&store, 3).await.unwrap();
+    assert_eq!(block_rows(&store).await, 2);
+
+    // A write waiting at start that sees the node found on another chain fails too.
+    let other = TempDir::new();
+    let gate = Arc::new(Store::open(&other.0, "regtest", for_chain(1)).unwrap());
+    let early = tokio::spawn({
+        let s = Arc::clone(&gate);
+        async move { write_row(&s, 1).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    gate.set_gate(Gate::Held);
+    gate.set_gate(Gate::Open);
+    assert!(matches!(early.await.unwrap(), Err(Error::Held)));
+
+    // Refused is final, and fails at once.
+    gate.set_gate(Gate::Refused);
+    gate.set_gate(Gate::Open);
+    assert_eq!(gate.gate(), Gate::Refused);
+    assert!(matches!(write_row(&gate, 4).await, Err(Error::Held)));
+    assert!(matches!(gate.try_write(|_| Ok(())).await, Err(Error::Held)));
+}
+
+#[tokio::test]
+async fn a_write_queued_before_the_gate_closes_does_not_commit_after() {
+    let dir = TempDir::new();
+    let store = Arc::new(Store::open(&dir.0, "regtest", for_chain(1)).unwrap());
+    store.set_gate(Gate::Open);
+    // Hold the writer so the next write is queued, then close the gate before it runs.
+    let (go, wait) = std_mpsc::channel::<()>();
+    let busy = tokio::spawn({
+        let s = Arc::clone(&store);
+        async move {
+            s.write(move |_| {
+                wait.recv().ok();
+                Ok(())
+            })
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let queued = tokio::spawn({
+        let s = Arc::clone(&store);
+        async move { write_row(&s, 1).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    store.set_gate(Gate::Held);
+    go.send(()).unwrap();
+    busy.await.unwrap().unwrap();
+    assert!(matches!(queued.await.unwrap(), Err(Error::Held)));
+    assert_eq!(block_rows(&store).await, 0);
+}
+
+#[tokio::test]
+async fn a_file_records_its_chain_and_refuses_another() {
+    let dir = TempDir::new();
+    let store = Store::open(&dir.0, "regtest", for_chain(1)).unwrap();
+    assert!(!store.unstamped());
+    store.close().await;
+    // The same chain opens; another is refused, naming the file's chain, and the file is left alone.
+    Store::open(&dir.0, "regtest", for_chain(1))
+        .unwrap()
+        .close()
+        .await;
+    let e = Store::open(&dir.0, "regtest", for_chain(2)).err().unwrap();
+    assert!(matches!(e, OpenError::WrongChain { .. }));
+    assert!(e.to_string().contains(&"01".repeat(32)), "{e}");
+    let again = Store::open(&dir.0, "regtest", for_chain(1)).unwrap();
+    assert_eq!(again.gate(), Gate::Waiting);
+}
+
+#[tokio::test]
+async fn rows_from_before_the_chain_was_recorded_wait_for_a_check() {
+    let dir = TempDir::new();
+    // A file from before the `chain` table: rows, and no chain recorded.
+    let old = Store::open(&dir.0, "regtest", Options::default()).unwrap();
+    write_row(&old, 7).await.unwrap();
+    old.write(|sql| Ok(sql.prepare("DELETE FROM chain")?.execute([]).map(drop)?))
+        .await
+        .unwrap();
+    old.close().await;
+    let store = Store::open(&dir.0, "regtest", for_chain(1)).unwrap();
+    assert!(store.unstamped());
+    // Any other chain opens it too until it is stamped: the rows are what tell.
+    store.stamp().await.unwrap();
+    assert!(!store.unstamped());
+    store.close().await;
+    assert!(Store::open(&dir.0, "regtest", for_chain(2)).is_err());
+    assert!(
+        !Store::open(&dir.0, "regtest", for_chain(1))
+            .unwrap()
+            .unstamped()
+    );
+}
