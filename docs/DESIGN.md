@@ -166,7 +166,7 @@ Weights: `--weight-regular` 400 for text, `--weight-medium` 500 for labels that 
 | Any figure | `font-variant-numeric: tabular-nums slashed-zero` (class `num`) | |
 | Grouping | Narrow no-break space (U+202F) every three digits, so numbers never wrap | `975 411`, `3 341 tx` |
 | BTC, exact | Eight decimals where accounting needs them (a transaction, an address, a block's fees). Trailing zeros in the muted colour at the same weight, so the number reads as one. Hover shows sats | `0.03500000`, with `00000` dimmed |
-| BTC, summary | Magnitude first (`formatBtcShort`, `Amount short`): whole bitcoins from 1 000, two decimals from 1, three significant digits below. The exact amount and sats in the title | `2 793 BTC`, `3.15 BTC`, `0.0225 BTC` |
+| BTC, summary | Magnitude first (`formatBtcShort`, `Amount short`): whole bitcoins from 1 000, two decimals from 1, three significant digits below. The exact amount and sats in the title. An address's balance, received and sent are summaries too: each figure is a button whose title is the exact amount, and a tap or key opens it on a line below with a copy button that copies it to the satoshi | `2 793 BTC`, `3.15 BTC`, `0.0225 BTC` |
 | sats | Grouped integer | `167 sats` |
 | Fee rate | Two decimals under 10, one under 100, none above. A recommendation is rounded up at the same precision (`formatFeeRateUp`), never shown with more | `0.80 sat/vB` |
 | Size | One quantity, one unit family, everywhere: serialized size in B, kB, MB; virtual size in vB, kvB, MvB; weight in WU, kWU, MWU. The base unit under 10 000, then k or M (powers of 1 000) with two decimals (`formatSize`). A block's **size** is its serialized size; its virtual size is always written in vB units or labelled "virtual". The same block reads the same string on every page | `209 vB`, `1.69 MB`, `998.52 kvB`, `3.99 MWU` |
@@ -183,7 +183,7 @@ An output is **Spent** (or **Being spent**, while the spending transaction is un
 - **In lists:** first eight and last eight characters with a middle ellipsis (`a3f9c2e1…7b0d44e9`), in the monospace cut. The full value is in the `title` and in the copy button.
 - **As a page subject** (block hash, txid, address): the full value in groups of eight at one contrast, wrapping cleanly at any width. A copy button sits at the end.
 - **Addresses** in the flow diagram: whole, wrapping, where the cards have room; seven and five characters on a phone.
-- **Copy button:** a 28 px drawn button in a 44 px target that takes only its room, kept clear of the link beside it. "Copied" shows beside it, over the value it copied, where no scrolling table can clip it. On press it turns positive, pops once and its label reads "Copied" for 1.4 s, only when the value was copied. When the browser copied nothing, its icon turns to a cross in the negative color, "Not copied" shows above it and "Could not copy" is announced, for 3 s.
+- **Copy button:** a 28 px drawn button in a 44 px target that takes only its room, kept clear of the link beside it. "Copied" shows beside it, over the value it copied, where no scrolling table can clip it. On press it turns positive, pops once, and the word "Copied" shows beside it, at a readable size, while its label reads "Copied" for screen readers, for 1.4 s, only when the value was copied. When the browser copied nothing, its icon turns to a cross in the negative color, "Not copied" shows above it and "Could not copy" is announced, for 3 s.
 
 ### Time
 
@@ -324,7 +324,7 @@ Decided while building it, where the rest of this document left it open. The pag
 | Summary | The transaction page's answer: Status, Fee, Amount and Block (or First seen), four label-value pairs in a panel. On a phone, status and fee share a row and the amount has one of its own, so thousands of bitcoin in eight decimals fit 320 px in any face |
 | Table | Units in headers, bare numbers in cells, numeric columns right-aligned in the monospace, a gutter on both sides of every column, row rules. Phones drop the least important columns and may show a shorter header (`short`). A list's row is one target: a tap anywhere on it opens its item, the cells' own links and buttons staying on top and the row link hidden from the keyboard and screen readers. Identifiers in a list take as much of their column as it allows, cut in the middle only when they must |
 | More | The second reading layer: a disclosure ("How these figures are made", "How this changes", "Why") holding methodology and longer notes, under the one sentence that stays visible |
-| Lightning nav | Lightning's own way around: Overview and Rankings in one short row above the title, and on a node or channel a "←" link back to the list the reader came from |
+| Lightning nav | Lightning's own way around: Overview, Rankings and History (the overview's chart, by an anchor) in one short row above the title, and on a node or channel a "←" link back to the list the reader came from, a search's results included |
 | Packed map | Rectangles sized by vsize and coloured by fee band, the dearest at top left, one clean block on the floor of the frame ([The transaction grid](#the-transaction-grid)). Tooltip on hover, click opens the transaction, rows in the table below ring their rectangle. Comes with a caption and the fee key; the table is its text alternative |
 | Flow diagram | Inputs on the left, outputs on the right, ribbons as thick as the value they carry, meeting at a bar that is the transaction. The fee leaves as its own ribbon in its fee colour |
 | Status badge | Pill with icon and word: Confirmed (check), Unconfirmed (dashed circle), Replaced, Dropped and Removed (cross) |
@@ -357,7 +357,7 @@ Decided while building it, where the rest of this document left it open. The pag
 
 The fee to pay is the first panel after the blocks, so a phone shows it on its first screen. The difficulty bar is neutral (never a fee colour); its mark is where the period would be at one block every ten minutes. Changes read as an arrow and a word ("Down 7.05%"). On a network that never retargets (regtest) the section says so instead.
 
-Phones: one column, in the order fees, mempool, difficulty, latest transactions; the strip scrolls sideways; stats in two columns.
+Wide screens: the fee answer and the difficulty stacked beside the mempool, about its height, and the latest transactions across the width below. Phones: one column, in the order fees, mempool, latest transactions, difficulty; the strip scrolls sideways; stats in two columns.
 
 ### Block
 
@@ -439,7 +439,7 @@ Decided while building it, where the layout above left it open:
 - **Summaries in magnitude.** Rewards read `2 793 BTC`, the exact amount in the title; the pool table's estimate of how a pool's hashrate is made sits behind "How these figures are made".
 - **Hashrate needs a week.** Each daily point averages the 7 days before it, so the 24-hour view draws the last week and says why.
 - **Coverage is drawn, not hidden.** Where the server has not stored the start of the period yet, the chart keeps the whole period's width and hatches the part with no data ("No data stored"), and a note above says "Data from 22 Sep 2026 onward". The same hatch is the note's swatch. A period with nothing stored says so and offers all of history.
-- **One readout, no tooltip.** Above each plot a line at a fixed height shows the point under the pointer (the latest otherwise): its time and every figure with its key. It never covers the data, works the same for touch and keys, and never moves the page.
+- **One readout, no tooltip.** Above each plot a line at a fixed height shows the point under the pointer (the latest otherwise): its time and every figure with its key. It never covers the data, works the same for touch and keys, and never moves the page. On a phone a stacked fee chart reads out its totals only, and the one band under the finger; every band is in the figures table.
 - **The second level is a switch,** not more charts: fees, rewards, fee rates and size share one chart slot under "Blocks over time", so the page stays one screen of figures and one of charts.
 - **Unknown is a pool.** It is ranked like any other, its page exists, and its row says it is the blocks no tag or address on the list names.
 - **Test networks say what their figures mean.** Signet's blocks come from a few signers the list does not name; testnet4's minimum-difficulty rule makes its hashrate swing; regtest has no pools, a meaningless hashrate and no retargets. A note under the title says so, and figures that mean nothing there say "Not meaningful on regtest".
@@ -466,7 +466,7 @@ Over the last 24 hours, 2 983 vB/s arrived, blocks took …: it filled by …
 - **Opens on what is recorded, and says so in its choices.** With no period in the address, a view whose records begin inside it starts where they do, under one line ("Everything recorded, since …"), and the period choices gain "Recorded", marked as the current one: a period's name always means its whole width, so choosing "24 h" shows the whole day, the time before the records hatched ("No data stored"). The same holds on the Lightning overview. The fee key is not repeated under the chart: its readout names every band, and on a phone only the bands holding anything at that point.
 - **A few missing minutes are bridged.** Up to five missing steps are drawn across rather than as thin stripes that look like faults; a longer pause in recording breaks the line, and the figures table lists only what was stored.
 - **A phone's time axis names its ends:** too narrow for ticks a reader can place, a chart labels its first and last moment instead ("9 Nov", "12 Nov"; "12 Nov 11:14", "20:35").
-- **Eleven intervals** wrap into two even rows on a phone.
+- **The intervals are one row** on a phone, scrolling sideways with their far edge faded and the chosen one in sight, so the chart and its time axis are on the first screen. The coverage is one short line ("Recorded from 12 Nov 2026, 11:14 UTC: 49% of the period.").
 
 ### Lightning (not in the prototype)
 
