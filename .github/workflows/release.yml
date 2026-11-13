@@ -193,10 +193,12 @@ jobs:
     needs: join
     # A push of a tag, never a manual run: a dispatch on a tag ref is a dry run too.
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    # One publisher at a time across every tag, so two releases cannot both move latest.
+    # One publisher at a time across every tag, so two releases cannot both move latest. Queued,
+    # because by default a third tag's publish would cancel the second's while it waits.
     concurrency:
       group: release-publish
       cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
