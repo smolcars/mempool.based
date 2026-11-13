@@ -17,7 +17,8 @@
 //!   samples scored.
 //! - `REPLAY=fees.jsonl` replays a run recorded with `INPUTS=1` through the method at several
 //!   tunings and scores each beside what was served, with the same `FROM` and `TO`;
-//!   `REPLAY_OUT=path` writes the replayed samples, without their depth.
+//!   `REPLAY_OUT=path` writes the replayed samples, without their depth. With `TRIM=path` it
+//!   writes the regression fixture instead (`fixtures/fees/README.md`).
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -104,7 +105,11 @@ fn clearing(rates: &mut [(u32, u64)]) -> Option<u32> {
 async fn main() {
     if let Ok(path) = std::env::var("REPLAY") {
         let text = std::fs::read_to_string(path).unwrap();
-        replay(text.lines().map(|l| serde_json::from_str(l).unwrap()));
+        let lines = text.lines().map(|l| serde_json::from_str(l).unwrap());
+        match std::env::var("TRIM") {
+            Ok(out) => trim(&lines.collect::<Vec<Value>>(), &out),
+            Err(_) => replay(lines),
+        }
         return;
     }
     if let Ok(path) = std::env::var("RESCORE") {
@@ -353,7 +358,7 @@ fn record_fixture(path: &str, p: &Projection, floor: u32, arrivals: &VecDeque<(u
 /// The tunings a replay compares: the confidence on block times, and the busiest minutes left
 /// out of the arrivals (a quarter, one, none).
 fn tunings() -> Vec<(String, fees::Tuning)> {
-    let left_out: [(&str, fn(usize) -> usize); 3] = [
+    let left_out: [(&str, fees::LeftOut); 3] = [
         ("quarter", |n| if n >= 5 { (n / 4).max(1) } else { 0 }),
         ("one", |n| usize::from(n >= 5)),
         ("none", |_| 0),
@@ -434,6 +439,117 @@ fn replay(lines: impl Iterator<Item = Value>) {
     let mut sources = vec!["ours", "node", "reference"];
     sources.extend(tunings.iter().map(|(n, _)| n.as_str()));
     score(&out, &sources);
+}
+
+/// `(rate, vsize)` pairs.
+type Pairs = Vec<(u64, u64)>;
+
+/// A rate above 0.2 sat/vB to two significant figures, rounded down; below it, as it is: the
+/// mempool's floor and its cheap end, where one step decides, stay exact.
+fn coarse(rate: u64) -> u64 {
+    if rate <= 200 {
+        return rate;
+    }
+    let mut p = 1;
+    while rate / p >= 100 {
+        p *= 10;
+    }
+    rate / p * p
+}
+
+/// Writes the regression fixture for `crates/engine/src/fees/tests.rs` from a recording made with
+/// `INPUTS=1`: one sample every `TRIM_EVERY` (180) s between `FROM` and `TO` where ours was
+/// served, each with its depth down to six blocks (below that no level it scores can fit), the
+/// arrivals by minute from 31 minutes before the first, and the blocks up to the sixth after the
+/// last. Every rate is [`coarse`], blocks' clearing rates too, so the fixture is consistent.
+fn trim(lines: &[Value], path: &str) {
+    let (from, to, every) = (
+        env_secs("FROM", 0),
+        env_secs("TO", u64::MAX),
+        env_secs("TRIM_EVERY", 180),
+    );
+    // The replay's inflow counts minutes from the first line that reaches it.
+    let anchor = lines
+        .iter()
+        .find_map(|v| {
+            v["arrived"]
+                .as_u64()
+                .or(v.get("depth").and(v["t"].as_u64()))
+        })
+        .unwrap();
+    // (time, floor, depth)
+    let mut samples: Vec<(u64, u64, Pairs)> = Vec::new();
+    for v in lines {
+        let t = v["t"].as_u64().unwrap_or(0);
+        if v.get("depth").is_none()
+            || v["ours"].is_null()
+            || !(from..to).contains(&t)
+            || samples.last().is_some_and(|s| t < s.0 + every)
+        {
+            continue;
+        }
+        let mut depth: Vec<(u64, u64)> = Vec::new();
+        let mut total = 0;
+        for p in v["depth"].as_array().unwrap() {
+            let (rate, vsize) = (coarse(p[0].as_u64().unwrap()), p[1].as_u64().unwrap());
+            match depth.last_mut() {
+                Some(last) if last.0 == rate => last.1 += vsize,
+                _ => depth.push((rate, vsize)),
+            }
+            total += vsize;
+            if total >= 6 * fees::BLOCK_VSIZE {
+                break;
+            }
+        }
+        samples.push((t, v["floor"].as_u64().unwrap(), depth));
+    }
+    let (first, last) = (samples[0].0, samples.last().unwrap().0);
+    // Arrivals under every sample's six-block cut cannot move a level it scores.
+    let cut = samples
+        .iter()
+        .filter_map(|s| s.2.last())
+        .map(|p| p.0)
+        .min()
+        .unwrap();
+    let start = anchor + first.saturating_sub(anchor + 31 * 60) / 60 * 60;
+    let mut minutes: Vec<BTreeMap<u64, u64>> =
+        vec![BTreeMap::new(); ((last - start) / 60 + 1) as usize];
+    for v in lines {
+        if let Some(t) = v["gap"].as_u64() {
+            assert!(!(start..last).contains(&t), "arrivals were missed at {t}");
+        }
+        let Some(t) = v["arrived"].as_u64().filter(|t| (start..last).contains(t)) else {
+            continue;
+        };
+        for tx in v["txs"].as_array().unwrap() {
+            let rate = coarse(tx[0].as_u64().unwrap());
+            if rate >= cut {
+                *minutes[((t - start) / 60) as usize]
+                    .entry(rate)
+                    .or_default() += tx[1].as_u64().unwrap();
+            }
+        }
+    }
+    let mut blocks: Vec<(u64, Option<u64>)> = lines
+        .iter()
+        .filter(|v| v.get("block").is_some() && v["t"].as_u64().unwrap() > first)
+        .map(|v| (v["t"].as_u64().unwrap(), v["clearing"].as_u64().map(coarse)))
+        .collect();
+    blocks.sort_unstable();
+    blocks.truncate(blocks.partition_point(|b| b.0 <= last) + 6);
+    let minutes: Vec<Vec<(u64, u64)>> = minutes
+        .into_iter()
+        .map(|m| m.into_iter().collect())
+        .collect();
+    let v = json!({ "start": start, "minutes": minutes, "samples": samples, "blocks": blocks });
+    std::fs::write(path, format!("{v}\n")).unwrap();
+    println!(
+        "{} samples, {} minutes, {} blocks, {} bytes",
+        samples.len(),
+        minutes.len(),
+        blocks.len(),
+        v.to_string().len()
+    );
 }
 
 /// A recorded block: when we saw it, and the rate that sufficed to get in, if any.
@@ -617,14 +733,21 @@ fn score(lines: &[Value], sources: &[&str]) {
                     hi * 100.0,
                     tally.groups.len(),
                     mean(&tally.over),
-                    tally.over.get(tally.over.len() / 2).copied().unwrap_or(f64::NAN),
+                    tally
+                        .over
+                        .get(tally.over.len() / 2)
+                        .copied()
+                        .unwrap_or(f64::NAN),
                     mean(&tally.short),
                     tally.unscored,
                     Tally::pct(tally.faster.0, tally.faster.1),
                     Tally::pct(tally.slower.0, tally.slower.1),
                 );
             }
-            println!("{:<12} {:<7} {left_out:>5} samples left out (outage)", "", level.name);
+            println!(
+                "{:<12} {:<7} {left_out:>5} samples left out (outage)",
+                "", level.name
+            );
         }
     }
     println!(

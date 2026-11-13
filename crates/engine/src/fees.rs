@@ -61,9 +61,12 @@ pub struct Tuning {
     /// Arrivals are counted up to the time by which a level's `N`-th block has come with this
     /// probability ([`arrival_secs`]).
     pub confidence: f64,
-    /// How many of the busiest minutes are left out of the arrivals, given how many were watched.
-    pub busiest_left_out: fn(usize) -> usize,
+    /// How many of the busiest minutes are left out of the arrivals.
+    pub busiest_left_out: LeftOut,
 }
+
+/// Of this many minutes watched, how many of the busiest to leave out.
+pub type LeftOut = fn(usize) -> usize;
 
 /// The tuning served.
 pub const TUNING: Tuning = Tuning {
