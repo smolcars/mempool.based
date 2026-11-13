@@ -151,7 +151,8 @@ for (const width of [320, 390]) {
     await lightning(page);
     await esplora(page);
     await page.setViewportSize({ width, height: 900 });
-    for (const path of PAGES.filter((p) => /lightning|address/.test(p))) {
+    // The pages that have them: a channel's terms and an address's totals (a node page has none).
+    for (const path of PAGES.filter((p) => /channel|address/.test(p))) {
       await load(page, path);
       await exactsInside(page, `${path} at ${width} px`);
     }
