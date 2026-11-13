@@ -130,33 +130,83 @@ test("the pools caption follows the period through every switch", async ({ page 
   }
 });
 
-// Colours once followed rank, so F2Pool was gold one day and lavender the next week.
-test("a pool keeps its colour at every period and in both share graphics", async ({ page }) => {
-  // Regtest has no pools: each period answers with the same pools in a different order.
+// Colours once followed rank, so F2Pool was gold one day and lavender the next week; then a fixed
+// six left a bigger pool in the grey. Now each period draws its own six largest, each in its own.
+test("the share graphics draw each period's six largest pools, each in its own colour throughout", async ({
+  page,
+}) => {
+  // Regtest has no pools: each period answers with eight in its own order.
   const orders: Record<string, string[]> = {
-    "24h": ["F2Pool", "AntPool", "Luxor", "Foundry USA", "SpiderPool"],
-    "1w": ["AntPool", "Foundry USA", "F2Pool", "SpiderPool", "Luxor"],
-    "1m": ["Foundry USA", "SpiderPool", "AntPool", "Luxor", "F2Pool"],
-    "1y": ["Luxor", "F2Pool", "Foundry USA", "AntPool", "SpiderPool"],
-    all: ["SpiderPool", "Luxor", "AntPool", "F2Pool", "Foundry USA"],
+    "24h": [
+      "F2Pool",
+      "AntPool",
+      "Luxor",
+      "Foundry USA",
+      "SpiderPool",
+      "ViaBTC",
+      "MARA Pool",
+      "Ocean.xyz",
+    ],
+    "1w": [
+      "AntPool",
+      "Foundry USA",
+      "F2Pool",
+      "SpiderPool",
+      "MARA Pool",
+      "ViaBTC",
+      "Luxor",
+      "SecPool",
+    ],
+    "1m": [
+      "Foundry USA",
+      "SpiderPool",
+      "AntPool",
+      "Luxor",
+      "F2Pool",
+      "Ocean.xyz",
+      "ViaBTC",
+      "MARA Pool",
+    ],
+    "1y": [
+      "Luxor",
+      "F2Pool",
+      "Foundry USA",
+      "AntPool",
+      "SpiderPool",
+      "SecPool",
+      "MARA Pool",
+      "ViaBTC",
+    ],
+    all: [
+      "Foundry USA",
+      "AntPool",
+      "F2Pool",
+      "ViaBTC",
+      "Poolin",
+      "BTC.com",
+      "Binance Pool",
+      "Luxor",
+    ],
   };
   const period = (url: string) => /\/(24h|1w|1m|1y|all)$/.exec(url)?.[1] ?? "1w";
+  const count = (i: number) => 80 - i * 9;
   await page.route(/\/api\/v1\/mining\/pools\/\w+$/, (route) => {
     const names = orders[period(route.request().url())] ?? [];
     const pools = names.map((name, i) => ({
       poolId: i + 1,
       name,
       link: "",
-      blockCount: 50 - i * 10,
+      blockCount: count(i),
       rank: i + 1,
       emptyBlocks: 0,
-      slug: name.toLowerCase().replaceAll(" ", ""),
+      slug: name.toLowerCase().replaceAll(/[ .]/g, ""),
       avgMatchRate: null,
       avgFeeDelta: null,
       poolUniqueId: i + 1,
     }));
+    const blockCount = names.reduce((sum, _, i) => sum + count(i), 0);
     return route.fulfill({
-      json: { pools, blockCount: 150, lastEstimatedHashrate: 1e18, lastEstimatedHashrate1w: 1e18 },
+      json: { pools, blockCount, lastEstimatedHashrate: 1e18, lastEstimatedHashrate1w: 1e18 },
     });
   });
   await page.route(/\/api\/v1\/mining\/hashrate\/pools\/\w+$/, (route) => {
@@ -165,7 +215,7 @@ test("a pool keeps its colour at every period and in both share graphics", async
       names.map((poolName, i) => ({
         timestamp,
         avgHashrate: 1e18,
-        share: (50 - i * 10) / 150,
+        share: count(i) / 500,
         poolName,
       })),
     );
@@ -175,12 +225,12 @@ test("a pool keeps its colour at every period and in both share graphics", async
   for (const id of ["24h", "1w", "1m", "1y", "all"]) {
     await page.goto(`/regtest/mining?period=${id}`);
     const pools = page.getByRole("region", { name: "Pools" });
-    // A day and a week show one bar; longer periods the weekly chart, read out beside it.
+    // A day and a week show one bar; longer periods the weekly chart, read out above it.
     const keys =
       id === "24h" || id === "1w"
         ? pools.locator(".mining-period-shares__key li")
         : pools.locator(".chart__value");
-    await expect(keys.filter({ hasText: "Foundry USA" })).toBeVisible({ timeout: 30_000 });
+    await expect(keys.first()).toBeVisible({ timeout: 30_000 });
     const swatches = await keys.evaluateAll((items) =>
       items.map((li) => {
         const swatch = li.querySelector(".mining-period-shares__swatch, .chart__key");
@@ -188,14 +238,21 @@ test("a pool keeps its colour at every period and in both share graphics", async
         return [name ?? "", swatch ? getComputedStyle(swatch).backgroundColor : ""] as const;
       }),
     );
+    // The pools drawn on their own are the table's first six, in its order.
+    const table = pools.getByRole("table", { name: /^Pools ranked by blocks found/ });
+    const top = (await table.locator("tbody tr").allInnerTexts())
+      .slice(0, 6)
+      .map((row) => (orders[id] ?? []).find((n) => row.includes(n)) ?? "");
+    const drawn = swatches.map(([name]) => name).filter((name) => name !== "Other pools");
+    expect(drawn, `pools drawn at ${id}`).toStrictEqual(top);
+    expect(swatches.at(-1)?.[0], `the rest at ${id}`).toBe("Other pools");
     for (const [name, colour] of swatches) {
       expect(colour, `${name} at ${id}`).not.toBe("");
       expect(colour, `${name} at ${id}`).toBe(seen.get(name) ?? colour);
       seen.set(name, colour);
     }
   }
-  // Luxor has no colour of its own: it is counted with the other pools, in their grey.
-  expect([...seen.keys()]).not.toContain("Luxor");
-  expect(seen.get("Other pools")).toBeDefined();
+  // Every pool drawn has a colour no other pool has, and "Other pools" its own grey.
   expect(new Set(seen.values()).size).toBe(seen.size);
+  expect([...seen.keys()]).toContain("Poolin");
 });

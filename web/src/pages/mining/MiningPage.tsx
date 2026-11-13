@@ -33,6 +33,7 @@ import {
   OTHER_POOLS,
   poolColour,
   poolLayers,
+  SHARES_DRAWN,
   type Ranked,
   type Ranking,
   REWARD_MAX,
@@ -414,17 +415,20 @@ function answeredPeriod(a: { path: string } | undefined): Period | undefined {
 }
 
 /**
- * The period's share of blocks as one bar: each coloured pool found in the period, biggest first,
- * in its own colour (`COLOURED_POOLS`), then every other pool as one grey part, each named beside
- * it.
+ * The period's share of blocks as one bar: its six largest pools that have a colour, biggest
+ * first, each in its own (`COLOURED_POOLS`), then every other pool as one grey part, each named
+ * beside it.
  */
 function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => number }) {
   const parts = () => {
-    const coloured = props.pools
-      .filter((p) => poolColour(p.name) > 0)
-      .map((p) => ({ name: p.name, share: props.share(p), pool: poolColour(p.name) }));
+    const drawn = props.pools.filter((p) => poolColour(p.name) > 0).slice(0, SHARES_DRAWN);
+    const coloured = drawn.map((p) => ({
+      name: p.name,
+      share: props.share(p),
+      pool: poolColour(p.name),
+    }));
     const rest = props.pools
-      .filter((p) => poolColour(p.name) === 0)
+      .filter((p) => !drawn.includes(p))
       .reduce((sum, p) => sum + props.share(p), 0);
     return rest > 0 ? [...coloured, { name: OTHER_POOLS, share: rest, pool: 0 }] : coloured;
   };

@@ -91,11 +91,18 @@ describe("pool layers", () => {
     ];
     const { x, layers } = poolLayers(weeks);
     expect(x).toStrictEqual([1, 2]);
-    expect(layers.map((l) => l.name)).toStrictEqual(["AntPool", "F2Pool", OTHER_POOLS]);
+    expect(layers.map((l) => l.name)).toStrictEqual(["AntPool", "F2Pool", "Luxor", OTHER_POOLS]);
     expect(layers[0]?.values).toStrictEqual([0.4, 0.5]);
-    expect(layers[2]?.values[1]).toBeCloseTo(0.4);
-    // A pool's colour is its own, whatever its rank: AntPool is 2 and F2Pool 3 here and everywhere.
-    expect(layers.map((l) => l.pool)).toStrictEqual([2, 3, 0]);
+    expect(layers[3]?.values[1]).toBeCloseTo(0.1);
+    // A pool's colour is its own, whatever its rank: AntPool is 2, F2Pool 3, Luxor 7, everywhere.
+    expect(layers.map((l) => l.pool)).toStrictEqual([2, 3, 7, 0]);
+  });
+  it("draws only the period's six largest coloured pools, so it agrees with the table", () => {
+    const names = ["Luxor", "Foundry USA", "Ocean.xyz", "AntPool", "SecPool", "F2Pool", "ViaBTC"];
+    const weeks = names.map((name, i) => week(1, name, (10 - i) / 100));
+    const { layers } = poolLayers(weeks);
+    expect(layers.map((l) => l.name)).toStrictEqual([...names.slice(0, 6), OTHER_POOLS]);
+    expect(layers.at(-1)?.values[0]).toBeCloseTo(0.04);
   });
   it("leaves out the grey layer when every pool has a colour", () => {
     const { layers } = poolLayers([week(1, "ViaBTC", 0.7), week(1, "Foundry USA", 0.3)]);

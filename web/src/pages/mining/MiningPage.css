@@ -235,6 +235,24 @@
   .mining-period-shares__part--6 {
     background: var(--pool-6);
   }
+  .mining-period-shares__part--7 {
+    background: var(--pool-7);
+  }
+  .mining-period-shares__part--8 {
+    background: var(--pool-8);
+  }
+  .mining-period-shares__part--9 {
+    background: var(--pool-9);
+  }
+  .mining-period-shares__part--10 {
+    background: var(--pool-10);
+  }
+  .mining-period-shares__part--11 {
+    background: var(--pool-11);
+  }
+  .mining-period-shares__part--12 {
+    background: var(--pool-12);
+  }
   /* Each name with its share beside it, wrapping as a row of entries: a wide panel spaces the
      entries, never a name from its figure. */
   .mining-period-shares__key {

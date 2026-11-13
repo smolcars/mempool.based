@@ -77,6 +77,12 @@
   --pool-4: #3a7a5a;
   --pool-5: #a24f2e;
   --pool-6: #5563a8;
+  --pool-7: #6b6e1f;
+  --pool-8: #10787a;
+  --pool-9: #9f495c;
+  --pool-10: #673b1e;
+  --pool-11: #205564;
+  --pool-12: #967f0e;
   --pool-other: #7d868b;
 
   /* Networks */
@@ -186,6 +192,12 @@
     --pool-4: #74bb94;
     --pool-5: #e0906d;
     --pool-6: #97a3e6;
+    --pool-7: #acb165;
+    --pool-8: #63bcbd;
+    --pool-9: #e38a9a;
+    --pool-10: #ad7859;
+    --pool-11: #5290a3;
+    --pool-12: #e2ca6a;
     --pool-other: #6f797f;
     --network-mainnet: #e6eaed;
     --network-signet: #4fc3d9;
@@ -224,6 +236,12 @@
   --pool-4: #74bb94;
   --pool-5: #e0906d;
   --pool-6: #97a3e6;
+  --pool-7: #acb165;
+  --pool-8: #63bcbd;
+  --pool-9: #e38a9a;
+  --pool-10: #ad7859;
+  --pool-11: #5290a3;
+  --pool-12: #e2ca6a;
   --pool-other: #6f797f;
   --network-mainnet: #e6eaed;
   --network-signet: #4fc3d9;
