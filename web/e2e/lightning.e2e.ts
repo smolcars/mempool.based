@@ -142,7 +142,8 @@ test("a transaction page links the channel its transaction opened", async ({ pag
   ).toHaveAttribute("href", `/regtest/lightning/channel/${overview.opened[0]?.id ?? ""}`);
 });
 
-for (const width of [320, 360]) {
+// The narrowest phone, strictly: 390 and 720 px are in "Lightning's lists" below.
+for (const width of [320]) {
   test(`every Lightning table fits at ${width} px`, async ({ page }) => {
     await serve(page, mainnet());
     await page.setViewportSize({ width, height: 800 });

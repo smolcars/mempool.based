@@ -102,32 +102,37 @@ const PAGES = [
   "/regtest/mining/pool/unknown",
 ];
 
-for (const colorScheme of ["light", "dark"] as const) {
-  test(`amounts at their longest stay whole at 320 and 390 px, ${colorScheme}`, async ({
-    page,
-  }) => {
-    await page.emulateMedia({ colorScheme });
-    await lightning(page);
-    await esplora(page);
-    for (const width of [320, 390]) {
-      await page.setViewportSize({ width, height: 900 });
-      for (const path of PAGES) {
-        await page.goto(path);
-        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-        // Every figure in: nothing still loading.
-        await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
-          timeout: 15_000,
-        });
-        // In the wide faces a Linux machine falls back to: CI's runner once broke a line a Mac's
-        // fonts kept whole.
-        await page.evaluate(() => {
-          const root = document.documentElement.style;
-          root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
-          root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
-        });
-        await page.waitForTimeout(300);
+// Both schemes on each load: the figures' layout is the same, and each load costs a page.
+test("amounts at their longest stay whole at 320 and 390 px, in both schemes", async ({ page }) => {
+  await lightning(page);
+  await esplora(page);
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of PAGES) {
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      // Every figure in: nothing still loading.
+      await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
+        timeout: 15_000,
+      });
+      // In the wide faces a Linux machine falls back to: CI's runner once broke a line a Mac's
+      // fonts kept whole.
+      await page.evaluate(() => {
+        const root = document.documentElement.style;
+        root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+        root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+      });
+      for (const colorScheme of ["light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
         await amountsIntact(page, `${path} at ${width} px, ${colorScheme}`);
       }
     }
-  });
-}
+  }
+});

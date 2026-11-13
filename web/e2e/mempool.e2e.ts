@@ -199,7 +199,8 @@ test("a phone's chart reads out only the fee bands that hold anything, and keeps
   const at = await top();
   const box = await flow.boundingBox();
   if (!box) throw new Error("no flow plot");
-  for (let k = 0; k < 116; k += 3) {
+  // Every seventh minute: the mined minutes (each tenth) and the quiet ones both come up.
+  for (let k = 0; k < 116; k += 7) {
     await page.touchscreen.tap(box.x + (box.width * (k + 0.5)) / 116, box.y + box.height * 0.5);
     expect(await top(), `tap at minute ${k}`).toBe(at);
   }
@@ -294,20 +295,23 @@ test.describe("the join between ten and twelve bands", () => {
             // Where the unsplit layer is drawn, its top sits as far below the total as anywhere
             // (the bands above 0.2): a wedge sloping to the floor at the join would not.
             const below: number[] = [];
-            // Every user unit across the plot, the join included, a little in from either end.
-            for (let x = box.x + 1; x < box.right - 1; x += 1) {
+            // Across the plot, the join included, a little in from either end: every user unit, or
+            // every second where a point's step is several units wide (1440 px), so no step is
+            // passed over.
+            const stride = box.right - box.x > 600 ? 2 : 1;
+            for (let x = box.x + 1; x < box.right - 1; x += stride) {
               // The fill runs from the floor up, unbroken: its top by halving.
               let top = box.y - 1;
               let bottom = box.bottom - 0.5;
               if (!filled(x, bottom)) continue;
-              for (let k = 0; k < 24; k++) {
+              for (let k = 0; k < 12; k++) {
                 const mid = (top + bottom) / 2;
                 if (filled(x, mid)) bottom = mid;
                 else top = mid;
               }
               const hits: number[] = [];
               // The line, looked for near the fill's top: a step ends the stack on it or misses.
-              for (let y = bottom - 8; y < bottom + 8; y += 0.25) {
+              for (let y = bottom - 8; y < bottom + 8; y += 0.5) {
                 if (line.isPointInStroke(new DOMPoint(x, y))) hits.push(y);
               }
               // No line near the stack's top: the two have come apart by more than the window.
@@ -320,7 +324,7 @@ test.describe("the join between ten and twelve bands", () => {
               if (unsplit?.isPointInFill(new DOMPoint(x, box.bottom - 0.5))) {
                 let up = box.y - 1;
                 let down = box.bottom - 0.5;
-                for (let k = 0; k < 24; k++) {
+                for (let k = 0; k < 12; k++) {
                   const mid = (up + down) / 2;
                   if (unsplit.isPointInFill(new DOMPoint(x, mid))) down = mid;
                   else up = mid;

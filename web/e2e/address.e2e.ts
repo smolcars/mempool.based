@@ -209,11 +209,21 @@ test.describe("an address page's requests", () => {
       const path = new URL(r.url()).pathname;
       if (path.startsWith("/regtest/api/address/")) asked.push(path);
     });
+    // The address topic's first message: the status a refetch would follow.
+    const topic = `"address:${chain.addresses.p2tr.toLowerCase()}"`;
+    let heard = false;
+    page.on("websocket", (ws) =>
+      ws.on("framereceived", ({ payload }) => {
+        if (typeof payload === "string" && payload.includes(topic)) heard = true;
+      }),
+    );
     await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
     await expect(page.getByText("Live", { exact: true })).toBeVisible();
     await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(3);
-    // The first status starts the watch; the page has just asked, so it does not ask again.
-    await page.waitForTimeout(1500);
+    // The first status starts the watch; the page has just asked, so it does not ask again. A
+    // moment after it is heard is long enough for a request it set off to go out.
+    await expect.poll(() => heard).toBe(true);
+    await page.waitForTimeout(300);
     const totals = asked.filter((p) => p === `/regtest/api/address/${chain.addresses.p2tr}`);
     expect(totals).toHaveLength(1);
   });
