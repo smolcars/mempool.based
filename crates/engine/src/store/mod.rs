@@ -65,6 +65,13 @@ impl Versions {
         }
     }
 
+    /// Whether the write in progress has changed `table`.
+    fn marked(&self, table: Table) -> bool {
+        self.0
+            .get(table as usize)
+            .is_some_and(|v| v.load(Ordering::SeqCst) % 2 == 1)
+    }
+
     /// Ends every open mark, once the write is committed or rolled back.
     fn settle(&self) {
         for v in &self.0 {
@@ -403,7 +410,7 @@ impl Store {
         Self::open_with(dir, network, options, MIGRATIONS)
     }
 
-    fn open_with(
+    pub(crate) fn open_with(
         dir: &Path,
         network: &str,
         options: Options,
@@ -444,6 +451,9 @@ impl Store {
         // Keeps the WAL from staying huge after a bulk insert that readers held open.
         conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
         conn.pragma_update(None, "foreign_keys", true)?;
+        // Delete triggers also fire for the rows `INSERT OR REPLACE` removes: the block table's
+        // totals must hear of every row that leaves it.
+        conn.pragma_update(None, "recursive_triggers", true)?;
         let check: String = conn
             .pragma_query_value(None, "quick_check", |r| r.get(0))
             .map_err(corrupt)?;
@@ -813,10 +823,16 @@ where
             let t = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             sealed.store(true, Ordering::Relaxed);
             let value = catch_unwind(AssertUnwindSafe(|| {
-                f(&Sql {
+                let sql = Sql {
                     conn: &t,
                     deadline: None,
-                })
+                };
+                let value = f(&sql)?;
+                // The block table's totals follow its rows in the same transaction.
+                if versions.marked(Table::Blocks) {
+                    crate::blocks::settle(&sql)?;
+                }
+                Ok(value)
             }));
             sealed.store(false, Ordering::Relaxed);
             // Dropping `t` without committing rolls back, on an error and on a panic alike.

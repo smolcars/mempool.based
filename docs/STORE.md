@@ -5,7 +5,7 @@ One SQLite file per network, `<DATA_DIR>/<network>.sqlite`, for the little data 
 ## Rules
 
 1. **Store only what we derive or observe.** Never a copy of something the node can answer.
-2. **One writer.** Every write goes through `Store::write` to the single writer thread. Nothing else holds a read-write connection. The store owns each write's transaction: `BEGIN`, `COMMIT`, `ROLLBACK` and savepoint statements in a write are refused by an authorizer, and a commit hook turns any other commit from inside it (an autocommit after `INSERT OR ROLLBACK` ended the transaction) into a rollback. The write then fails and leaves nothing behind.
+2. **One writer.** Every write goes through `Store::write` to the single writer thread. Nothing else holds a read-write connection. The store owns each write's transaction: `BEGIN`, `COMMIT`, `ROLLBACK` and savepoint statements in a write are refused by an authorizer, and a commit hook turns any other commit from inside it (an autocommit after `INSERT OR ROLLBACK` ended the transaction) into a rollback. The write then fails and leaves nothing behind. Before a write that changed `blocks` commits, the store brings the block table's [totals](#totals) up to date in the same transaction.
 3. **Readers cannot write.** `Store::read` runs on read-only connections that also have `query_only` set.
 4. **SQL is a `&'static str`.** `Sql::prepare` takes only a string literal (or `concat!` of literals), so a query cannot be built from request data with `format!`. Values are bound as parameters with `params![…]` ([`SECURITY.md`](SECURITY.md) rule 12). A variable-length list is one parameter: a JSON array read with `json_each(?1)`, not a generated `IN (?, ?, …)`.
 5. **A shipped migration never changes.** Fix it with a new one.
@@ -75,6 +75,9 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`ln_channels`](#ln_channels) | `0006_lightning.sql`, `0007_lightning_lookups.sql` (`open_txid` and the lookup indexes) | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
 | [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
 | [`chain`](#chain) | `0009_chain.sql` | One row: the genesis hash of the chain the file was written for | Yes: written again by the check below |
+| [`block_totals`, `pool_totals`](#totals) | `0010_block_totals.sql` | The block table's running totals: per day and per block series point, and per pool per 1,008 heights and per week | Yes: recomputed from `blocks` |
+| `totals_dirty` | `0010_block_totals.sql` | The buckets a write has touched; always empty once it commits | Yes |
+| `totals_pending` | `0010_block_totals.sql` | One row while rows from before the totals are still being totalled ([Filling](#filling-the-totals)) | Yes |
 
 ### Fee bands
 
@@ -175,9 +178,9 @@ Two tiers, one step of each in turn:
 
 **Gentle by construction.** The backfill and `follow` share their own RPC client with one slot, so they never hold one of the four slots the mempool tracker and the summary routes share, and the node sees at most one RPC call from them at a time. Their Esplora requests are small (ten headers, one txid, a block listing of about 0.3 MB) and each task makes one at a time, so at most two are in flight. After each step the backfill waits so that it keeps that call busy for at most `BACKFILL_BUSY_PERCENT` of the time (50 by default). A failure of any kind, the node's 503 (`busy`) included, pauses it for 5 s, doubling up to 5 minutes, and is logged at the 1st, 2nd, 4th, 8th… in a row.
 
-**Resumable.** The table is the progress. Each pass starts at the tip and reads the table 10,000 heights at a time looking for missing rows (about 100 reads, well under a second, for a full table), so a restart or a pause (`BACKFILL_ENABLED=false`, then `true`) costs those reads and nothing else. The tip is checked every minute, and a new one restarts the pass from the top, so new blocks below the zone are filled first.
+**Resumable.** The table is the progress. Each pass starts at the tip and looks for missing rows: it skips every 1,008-height bucket whose [totals](#totals) count 1,008 rows, and reads the rest 10,000 heights at a time. On a full mainnet table a pass reads about 970 bucket counts, 0.05 to 3 ms (it read every height, 98 ms, before the totals). So a restart or a pause (`BACKFILL_ENABLED=false`, then `true`) costs that and nothing else. The tip is checked every minute, and a new one restarts the pass from the top, so new blocks below the zone are filled first.
 
-**Observable.** `block_backfill_progress` every minute ([`LOGGING.md`](LOGGING.md)), and the same numbers in `BlockTable::progress` for a status page.
+**Observable.** `block_backfill_progress` every minute while steps write rows, and once when a pass completes ([`LOGGING.md`](LOGGING.md)); once everything is done it stops, since only `follow` changes the table then. The same numbers are in `BlockTable::progress` for a status page. The row counts in it are sums of the [totals](#totals), 0.06 ms; before the totals they were two counts over the table (11 ms on mainnet's, and a timeout on a stalled machine), taken every minute forever.
 
 **Cost on mainnet,** measured with `cargo run --release -p engine --example blocks_probe` over a private network, paced at 50%, on bounded ranges of each era. Time per block is the node calls' wall time including the round trips; at 50% busy, wall time is twice that. The totals and the `getblock` rows were measured against a synced rbitcoin v0.9.2; the listing route's rows on 2026-11-12 against a build of rbitcoin's `master` with it, while the node also served another server's full backfill (1,000 consecutive blocks below the tip, 100 in each older era). In the same hour, 50 consecutive recent blocks through `getblock` (`LISTING=getblock`) took 1.3 s and 10.3 MB each.
 
@@ -237,26 +240,53 @@ Unfiltered `getblockstats` took about 1 s per recent block (its UTXO statistics)
 | `by_height(store, h)`, `by_hash(store, hash)`, `by_hashes(store, hashes)` | `Row`: every column, `rates: Option<Rated>` for completeness, `Row::facts()` in the block facts route's shape | 0.04 to 0.15 ms |
 | `page(store, below, limit)` | Up to `limit` (at most 1,000) rows below a height, newest first; missing heights skipped | 0.1 to 0.3 ms for 15 or 100 rows, at the top or deep in history |
 | `heights_between(store, from, to)` | The heights timestamped in a period, through the `time` index | 1.7 to 2.6 ms for a year |
-| `periods(store, from, to, Period::Day \| Period::Blocks(n))` | One `Bucket` per UTC day or per `n` heights, oldest first: block count, first and last height and time, sums of transactions, size, weight, fees, subsidy and reward, mean difficulty, and mean fee-rate percentiles over the rated blocks | 31 to 42 ms for a year by day; 0.5 to 0.8 s for all of history in 2,016-block buckets |
+| `periods(store, from, to, Period::Day \| Period::Blocks(n))` | One `Bucket` per UTC day or per `n` heights, oldest first: block count, first and last height and time, sums of transactions, size, weight, fees, subsidy and reward, mean difficulty, and mean fee-rate percentiles over the rated blocks. By day or by 18, 36, 72, 144, 216 or 1,008 heights over 2,016 heights or more, from the [totals](#totals) | By day: 0.8 ms for three years, 4 ms for all of history (were 89 and 568 ms). By 1,008: 0.6 ms for all of history (was 573 ms). By 216 for three years 0.6 ms (was 87). Other `n` scan the rows: 0.5 to 0.8 s for all of history in 2,016-block buckets |
 
 For the mining routes, `crates/engine/src/blocks/mining.rs` (and `pool_page` in `db.rs`):
 
 | Call | Returns | 975,000 rows |
 |---|---|---|
-| `span(store)` | The tip and the lowest height from which every row up to it is stored | 64 ms (walks down to the first gap) |
-| `row_counts(store)` | Rows, and rated rows | |
-| `pool_counts(store, from, to)` | Blocks, empty blocks and reward per pool over a range, most blocks first | 0.2 ms for a week; 0.2 s for all of history |
-| `pool_weeks(store, from, to)` | Blocks per pool per week from Monday 00:00 UTC | 0.24 s for all of history |
+| `span(store)` | The tip and the lowest height from which every row up to it is stored: skips the full 1,008-height buckets, then walks rows to the first gap | 0.08 ms (was 93 ms: it walked every row) |
+| `row_counts(store)` | Rows, and rated rows: a sum of the 1,008-height buckets | 0.06 ms (was 11 ms) |
+| `pool_counts(store, from, to)` | Blocks, empty blocks and reward per pool over a range, most blocks first: whole 1,008-height buckets from the totals, the ends from the rows | 0.15 ms for a week; 2.2 ms for all of history (was 228 ms) |
+| `pool_weeks(store, from, to)` | Blocks per pool per week from Monday 00:00 UTC: whole weeks from the totals | 3 ms for all of history (was 260 ms) |
 | `pool_page(store, pool, from, below, limit)` | One pool's rows below a height, newest first | 0.2 ms for 100 |
 | `retargets(store, floor, from, to)` | Each retarget's time and difficulty, with the period before's when that is stored at the floor or above | 0.9 ms for all of history |
 | `work(store, from, to)` | Difficulty summed over a range and its first and last time: a hashrate estimate's inputs | |
-| `at_or_before(store, floor, time)`, `first_since(store, floor, time)` | The newest block stamped at or before a time, and the lowest height stamped at or after one, at the floor height or above, through the `time` index | 0.4 ms; 1 ms for a week back, 27 ms for a year |
+| `at_or_before(store, floor, time)`, `first_since(store, floor, time)` | The newest block stamped at or before a time, through the `time` index; the lowest height stamped at or after one, from the rest of that day in the `time` index and the later days' totals; both at the floor height or above | 0.4 ms; `first_since` 0.1 ms for three years back (was 3.3 ms, and grew with the period) |
 | `top(store)` | The highest row's height and hash | |
 | `reattribute(store, pools)` | Redoes the `pool` column if the list changed (above) | 1.8 s for every row |
 
 Measured with `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark`, which writes 975,000 rows attributed as they go in 9 s (attribution adds about 2 µs a row).
 
 Measured on the machine and load described under [Measurements](#measurements) with `cargo test --release -p engine -- --ignored --nocapture read_benchmark`: 975,000 realistic rows written in 7 s, 295 MB.
+
+The figures with a "was" were measured on 2026-11-13 on a copy of a synced mainnet store (975,672 rows, 547 MB), before and after the totals, with `TABLE_BENCH_DIR=<dir> TABLE_BENCH_NET=mainnet cargo test --release -p engine -- --ignored --nocapture table_reads_benchmark` (median of five; load average 8 to 13 before, 30 to 50 after, from other builds). How each scales is in [`PERFORMANCE.md`](PERFORMANCE.md#6-reads-that-grew-with-the-block-table-done).
+
+#### Totals
+
+A read over all of history used to scan every row: a few hundred milliseconds each on a full mainnet table, run again on every new block for every answer the mining routes keep, so a busy machine pushed them past the store's 2 s read limit. The totals keep, per bucket, what those scans compute, so the reads add up a few thousand buckets instead. Code: `crates/engine/src/blocks/totals.rs`.
+
+| Table | Bucket (`kind`, `key`) | Holds | Rows on mainnet |
+|---|---|---|---|
+| `block_totals` | a UTC day (0, `time / 86400`), or `n` heights (`n`, `height / n`) for the block series' points past a month: 18, 36, 72, 144, 216 and 1,008 | Exactly the row `periods` computes for the bucket: block count, first and last height and time, the sums, mean difficulty, rated blocks and mean fee-rate percentiles | 113,637 |
+| `pool_totals` | 1,008 heights (1008, `height / 1008`), or a week from Monday 00:00 UTC (7, `(time - 345600) / 604800`) | Per pool with a block in it: blocks, empty blocks, reward | 29,904 |
+
+About 16 MB on mainnet with the index `block_totals_reach` (`kind`, `last_height`), which finds the buckets that reach a height range.
+
+**How they stay true.** A bucket is never adjusted by a difference: it is recomputed from its rows by the very statement the scan runs (`periods`' own SQL, and the pool scans' aggregates), so a stored bucket is bit for bit what the scan gives, the mean of floating-point values included. Three triggers on `blocks` (insert, delete, update) record in `totals_dirty` each bucket the old and the new row fall in. Before any write that changed `blocks` commits, the store calls `blocks::settle`, which recomputes each recorded bucket once (deleting it when it has no rows left) and empties `totals_dirty`, in the same transaction. So every writer is covered without knowing of the totals: `follow`'s replacements and deletions above a fork, the backfill's inserts and stale-row deletions, a rating's update, `reattribute`'s pool changes, a test's raw SQL. `INSERT OR REPLACE` removes the row it replaces without firing delete triggers unless `recursive_triggers` is on, so the writer turns it on ([Pragmas](#pragmas)). Readers see a row and its buckets change in the same commit.
+
+**How a read uses them.** Only over 2,016 heights or more; a shorter range is scanned, as its rows are about as few as its buckets. A stored bucket is used when every one of its rows lies in the range (its first and last height say so); a bucket at either end of the range is computed from the rows in range by the scan, so the answer is always the scan's. A read takes one snapshot (`BEGIN`) for its buckets and its ends.
+
+**Cost of keeping them.** A new block's write, its buckets settled, took 0.9 ms (median of five; 13 ms while another writer committed 10,000-row writes back to back), and rating it 0.8 ms. A backfill batch of 50 rows touches a few buckets of each kind.
+
+**Proved exact** by `totals_equal_a_scan_through_every_kind_of_change`: from a table backfilled with gaps, 30 random steps (in CI; each kind of change at least once) of new tips, old blocks backfilled out of order, blocks rated later, reorgs that delete and replace rows (some leaving the chain shorter), stale rows deleted, pools re-identified as `reattribute` writes them, and restarts, with rows whose times run out of order, empty blocks, a few pools and distinct difficulties and fee rates. After every step, every stored bucket equals the scan's, every bucket the scan gives is stored, `totals_dirty` is empty, and each read (`periods` by day, 1,008 and another kept size, `pool_counts`, `pool_weeks`, `first_since`, the row count, and the bounds the backfill and `span` skip by) equals the scan over the whole table and over random ranges. `TOTALS_STEPS` and `TOTALS_SEED` run it longer: 100 steps, and 1,500 steps on three other seeds, passed too.
+
+##### Filling the totals
+
+Migration `0010` creates the tables and triggers but does not fill them: on a full mainnet table that is seven grouped passes over 547 MB, 8 s in one transaction measured with the `sqlite3` tool, holding the writer the whole time. It writes `totals_pending` instead, with the height below which rows are not totalled yet. The server then fills them in the background (`blocks::fill_totals`, from the mining task), newest first, 10,000 heights a write: each write marks every bucket those rows touch and settles them. Rows written meanwhile are totalled by the triggers as usual, and a bucket recomputed twice is still exact. When the last chunk is done the row goes and `block_totals_filled` is logged ([`LOGGING.md`](LOGGING.md)); a failure is logged as `mining_failed` (`task`: `totals`) and retried, and a restart resumes from the row.
+
+On the mainnet copy: 98 writes, 4.6 s in all, the longest write 61 ms; 1,000,000 generated rows took 100 writes, 4.6 s, the longest 70 ms. **Until it is done every read scans as before**: each read checks `totals_pending` in its snapshot, so a half-filled table is never summed. Meanwhile `pool_counts` over all of history took 258 to 309 ms, as before the change. A new file has no rows, so it starts with the totals ready.
 
 ### audits
 
@@ -445,6 +475,7 @@ The Lightning network's totals over time: channels, nodes, capacity, fee policie
 | writer | `synchronous=FULL` | The WAL is fsynced at every commit, so a write that `write` acknowledged survives a crash and a power cut. The tests prove the crash half (a child process is killed mid-transaction); power loss rests on SQLite's documented `FULL` guarantee and a disk that honours fsync. With one writer and batched writes this costs little; `NORMAL` would lose the last commits on power loss |
 | writer | `journal_size_limit=64 MiB` | The WAL is truncated back to this after a checkpoint, so one bulk insert does not leave a huge file behind |
 | writer | `foreign_keys=ON` | SQLite ignores `REFERENCES` without it |
+| writer | `recursive_triggers=ON` | Delete triggers fire for the rows `INSERT OR REPLACE` removes, so the block table's [totals](#totals) hear of every row that leaves |
 | every | `busy_timeout=5 s` | Only another process takes locks (a backup with the `sqlite3` tool); wait for it instead of failing |
 | readers | `query_only=ON`, opened `SQLITE_OPEN_READ_ONLY` | Two independent guards against a write from a request handler |
 

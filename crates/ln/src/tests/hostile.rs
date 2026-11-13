@@ -43,6 +43,26 @@ impl Writeable for Raw {
     }
 }
 
+fn end_marker() -> Raw {
+    let end = ReplyShortChannelIdsEnd {
+        chain_hash: chain(),
+        full_information: true,
+    };
+    raw(REPLY_SHORT_CHANNEL_IDS_END, &end)
+}
+
+/// A whole channel list in one reply.
+fn listing(ids: &[u64]) -> Raw {
+    let reply = ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: ids.to_vec(),
+    };
+    raw(REPLY_CHANNEL_RANGE, &reply)
+}
+
 fn raw<T: Writeable>(ty: u16, msg: &T) -> Raw {
     Raw {
         ty,
@@ -56,6 +76,7 @@ const CHANNEL_ANNOUNCEMENT: u16 = 256;
 const NODE_ANNOUNCEMENT: u16 = 257;
 const CHANNEL_UPDATE: u16 = 258;
 const QUERY_SHORT_CHANNEL_IDS: u16 = 261;
+const REPLY_SHORT_CHANNEL_IDS_END: u16 = 262;
 const QUERY_CHANNEL_RANGE: u16 = 263;
 const REPLY_CHANNEL_RANGE: u16 = 264;
 
@@ -84,6 +105,9 @@ struct Script {
     scid_queries: AtomicUsize,
     range_replies: AtomicUsize,
     range_reply_ids: AtomicUsize,
+    /// How it answers `query_short_channel_ids`: `None`, never; else each asked id's messages
+    /// from the map (none for an id it lacks), then the end marker.
+    answers: Mutex<Option<HashMap<u64, Vec<Raw>>>>,
 }
 
 impl BaseMessageHandler for Script {
@@ -172,9 +196,16 @@ impl RoutingMessageHandler for Script {
     fn handle_query_short_channel_ids(
         &self,
         _: PublicKey,
-        _: QueryShortChannelIds,
+        q: QueryShortChannelIds,
     ) -> Result<(), LightningError> {
         self.scid_queries.fetch_add(1, Ordering::Relaxed);
+        if let Some(answers) = &*self.answers.lock().unwrap() {
+            let mut queue = self.queue.lock().unwrap();
+            for id in q.short_channel_ids {
+                queue.extend(answers.get(&id).into_iter().flatten().cloned());
+            }
+            queue.push_back(end_marker());
+        }
         Ok(())
     }
     fn processing_queue_high(&self) -> bool {
@@ -850,6 +881,121 @@ async fn synced_despite(invent: bool, list: bool) {
     peer.shutdown().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_lists_and_ends_without_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::End).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_lists_and_never_answers_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::Silent).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_a_peer_answers_with_false_announcements_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::FalseScript).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn false_announcements_refused_after_the_batch_ended_are_asked_of_another() {
+    withheld_then_asked_elsewhere(Withhold::FalseScriptLate).await;
+}
+
+enum Withhold {
+    /// The end marker, without the channels.
+    End,
+    /// Nothing, until the batch times out.
+    Silent,
+    /// For each channel an announcement signed with keys of its own, which the funding output
+    /// does not pay, then the end marker.
+    FalseScript,
+    /// The same, as its answer to the query, but for one channel nothing, while the node does
+    /// not answer: they are still being checked when the batch ends, and refused only after. The
+    /// batch is counted once, not again when they are refused.
+    FalseScriptLate,
+}
+
+/// A hostile peer and an honest one list the same real channels. The hostile one lists first, so
+/// it is asked for them, and withholds them ([`Withhold`]). The honest peer is then asked, and
+/// every channel arrives.
+async fn withheld_then_asked_elsewhere(how: Withhold) {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let honest = Hostile::start().await;
+    let node = FakeChain::at(200);
+    let ids: Vec<u64> = (0..50).map(|i| real(&node, i, 1, 2)).collect();
+    let answers = ids
+        .iter()
+        .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 1, 2))]))
+        .collect();
+    *honest.script.answers.lock().unwrap() = Some(answers);
+    let late = matches!(how, Withhold::FalseScriptLate);
+    if late {
+        let false_ones = ids
+            .iter()
+            .skip(1)
+            .map(|id| (*id, vec![raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))]))
+            .collect();
+        *h.script.answers.lock().unwrap() = Some(false_ones);
+    }
+    let peer = ours(&dir, vec![h.addr, honest.addr], &node);
+    wait_for("both lists asked for", || {
+        h.script.range_queries.load(Ordering::Relaxed) == 1
+            && honest.script.range_queries.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    // Its answers wait for a node that does not answer.
+    node.0.down.store(late, Ordering::Relaxed);
+    h.send([listing(&ids)]);
+    wait_for("the hostile peer asked", || {
+        h.script.scid_queries.load(Ordering::Relaxed) == 1
+    })
+    .await;
+    honest.send([listing(&ids)]);
+    wait_for("the honest list read", || {
+        peer.gossip().range_pending() == ids.len()
+    })
+    .await;
+    match how {
+        Withhold::End => h.send([end_marker()]),
+        Withhold::Silent => {}
+        Withhold::FalseScript => {
+            h.send(
+                ids.iter()
+                    .map(|id| raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))),
+            );
+            h.send([end_marker()]);
+        }
+        Withhold::FalseScriptLate => {
+            wait_for("its answers held", || {
+                peer.gossip().lookup.waiting() >= ids.len() - 1
+            })
+            .await;
+            // Past a tick after its batch ended: the one it left out was asked of the honest
+            // peer at once, the rest are still the hostile peer's.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), 1);
+            assert_eq!(peer.gossip().range_pending(), ids.len());
+            node.0.down.store(false, Ordering::Relaxed);
+        }
+    }
+    let started = std::time::Instant::now();
+    wait_for("every withheld channel", || {
+        peer.read(|g| ids.iter().all(|id| g.channel(*id).is_some()))
+    })
+    .await;
+    println!("withheld channels arrived {:?} after", started.elapsed());
+    let asked = if late { 2 } else { 1 };
+    assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), asked);
+    assert_eq!(h.script.scid_queries.load(Ordering::Relaxed), 1);
+    assert_eq!(totals(&peer).withheld, 1);
+    wait_for("both still up", || {
+        up(&peer, h.addr) && up(&peer, honest.addr)
+    })
+    .await;
+    peer.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_lookup_that_never_ends_cannot_hold_the_replay_open() {
     let id = scid(100, 1, 0);
@@ -870,6 +1016,85 @@ async fn a_lookup_that_never_ends_cannot_hold_the_replay_open() {
     assert_eq!(g.lookup.waiting(), 1);
     g.replay_tick(config.max_pending);
     assert!(!g.replaying(), "every stored channel was answered");
+}
+
+/// Our peer with a budget of 100 checks a second: 12.5 forged announcements (eight checks each)
+/// after a burst of 60 s of them, 750. Dials the hostile peer `h` and the honest one.
+async fn flooded(dir: &TempDir, h: &Hostile, honest: &Hostile, node: &FakeChain) -> Peer {
+    let mut config = Config::new(NET, dir.0.clone());
+    config.max_peers = 2;
+    config.peers = vec![h.addr, honest.addr];
+    config.backoff_min = Duration::from_millis(50);
+    config.lookup_interval = Duration::from_millis(20);
+    config.checks_per_sec = 100;
+    let peer = Peer::start(config, node.clone()).unwrap().0;
+    wait_for("connected", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
+    peer
+}
+
+const FLOOD_BURST: u32 = 750;
+const FLOOD_RATE: f64 = 12.5;
+
+/// `n` forged announcements, queued at once.
+fn queue_forged(h: &Hostile, n: u32) {
+    let signed = channel(scid(100, 1, 0), 1, 2);
+    h.send((0..n).map(|i| {
+        let mut a = signed.clone();
+        a.contents.short_channel_id = scid(100, 10 + i, 0);
+        raw(CHANNEL_ANNOUNCEMENT, &a)
+    }));
+}
+
+/// A flooding peer is read no faster than its budget once its burst is spent, and every message
+/// it sent is read in the end. Waits on what was read, not on time: the unread part of a flood sits
+/// in the kernel's socket buffers, whose size differs by platform, and a slower machine only takes
+/// longer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flooding_peer_is_read_at_its_budget_and_loses_nothing() {
+    let dir = TempDir::new();
+    let (h, honest) = (Hostile::start().await, Hostile::start().await);
+    let node = FakeChain::at(200);
+    let peer = flooded(&dir, &h, &honest, &node).await;
+    // The burst and 50 more: four seconds' worth at the budget.
+    let flood = FLOOD_BURST + 50;
+    let started = std::time::Instant::now();
+    queue_forged(&h, flood);
+    let read = || totals(&peer).channel_announcements;
+    wait_for("the whole flood", || read() == u64::from(flood)).await;
+    // Give or take one read of 4 KiB: up to nine announcements of 466 bytes, and one completed
+    // from the read before.
+    let least = f64::from(flood - FLOOD_BURST - 10) / FLOOD_RATE;
+    let took = started.elapsed().as_secs_f64();
+    assert!(took >= least, "{took} s, at least {least} s");
+    wait_for("both up", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
+    peer.shutdown().await.unwrap();
+}
+
+/// A peer held back by its budget does not hold back another: the other's channel arrives while
+/// the flood still has 400 s to go at the budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flooding_peer_does_not_hold_back_another() {
+    let dir = TempDir::new();
+    let (h, honest) = (Hostile::start().await, Hostile::start().await);
+    let node = FakeChain::at(200);
+    let peer = flooded(&dir, &h, &honest, &node).await;
+    let flood = FLOOD_BURST + 5_000;
+    queue_forged(&h, flood);
+    let read = || totals(&peer).channel_announcements;
+    wait_for("the burst", || read() >= u64::from(FLOOD_BURST)).await;
+    let id = real(&node, 1, 40, 41);
+    honest.send([raw(CHANNEL_ANNOUNCEMENT, &channel(id, 40, 41))]);
+    wait_for("the other peer's channel", || {
+        peer.read(|g| g.channel(id).is_some())
+    })
+    .await;
+    // The flood is held back from the end of its burst until hundreds of seconds later (its
+    // spending stays about 60 s ahead of the rate), so the other channel came in while it was.
+    assert!(read() < u64::from(flood), "{}", read());
+    let ahead = peer.gossip().ahead(&h.addr.node_id);
+    assert!(ahead > Duration::from_secs(30), "{ahead:?}");
+    wait_for("both up", || up(&peer, h.addr) && up(&peer, honest.addr)).await;
+    peer.shutdown().await.unwrap();
 }
 
 // Floods, at the production settings. Each prints what it measured and lasts under two minutes.
@@ -986,26 +1211,142 @@ async fn flood_one_announcement_repeated() {
     peer.shutdown().await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "flood: run with --release --ignored"]
-async fn flood_bad_signatures() {
+/// This process's CPU time so far, in seconds (`ps`; the hostile peer's own share included).
+fn cpu_secs() -> f64 {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "time=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .split(':')
+        .fold(0.0, |acc, part| {
+            acc * 60.0 + part.parse::<f64>().unwrap_or(0.0)
+        })
+}
+
+/// Forged announcements as fast as we read them for 40 s, with a budget of `checks_per_sec`.
+/// Returns the announcements read a second and the cores this process used, from 10 s to 40 s
+/// (past the budget's burst).
+async fn forged_flood(checks_per_sec: u32) -> (f64, f64) {
     let dir = TempDir::new();
     let h = Hostile::start().await;
     let node = FakeChain::at(200);
-    let peer = ours_default(&dir, vec![h.addr], &node);
+    let mut config = Config::new(NET, dir.0.clone());
+    config.max_peers = 1;
+    config.peers = vec![h.addr];
+    config.checks_per_sec = checks_per_sec;
+    let peer = Peer::start(config, node.clone()).unwrap().0;
     wait_for("connected", || up(&peer, h.addr)).await;
-    let rss0 = rss_mb();
-    let started = std::time::Instant::now();
     let signed = channel(scid(100, 1, 0), 1, 2);
-    feed(&h, &peer, 30, move |i| {
+    let flood = feed(&h, &peer, 40, move |i| {
         let mut a = signed.clone();
         a.contents.short_channel_id = scid(100, 10 + i, 0);
         raw(CHANNEL_ANNOUNCEMENT, &a)
-    })
-    .await;
-    report("forged signatures, 30 s", &peer, &node, started, rss0);
+    });
+    let probe = async {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let (t0, c0, m0) = (
+            std::time::Instant::now(),
+            cpu_secs(),
+            totals(&peer).messages(),
+        );
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let secs = t0.elapsed().as_secs_f64();
+        let read = (totals(&peer).messages() - m0) as f64 / secs;
+        (read, (cpu_secs() - c0) / secs)
+    };
+    let (_, (read, cores)) = tokio::join!(flood, probe);
     assert_eq!(outputs_asked(&node), 0);
+    assert!(up(&peer, h.addr));
     peer.shutdown().await.unwrap();
+    (read, cores)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_bad_signatures() {
+    let (read0, cores0) = forged_flood(u32::MAX).await;
+    println!("forged signatures, no budget: {read0:.0} read a second, {cores0:.2} cores");
+    let (read, cores) = forged_flood(Config::new(NET, PathBuf::new()).checks_per_sec).await;
+    println!("forged signatures, the default budget: {read:.0} read a second, {cores:.2} cores");
+    // Eight checks each: 625 a second on average at the default 5,000. Over a window it can be
+    // more, while the peer catches up on reads a busy machine delayed.
+    assert!(read < 1_000.0, "{read}");
+}
+
+/// A peer sending a whole graph at once: `channels` real channels, each with its announcement
+/// and both updates, then their nodes' announcements. Returns how long until every channel is
+/// in the graph, with a budget of `checks_per_sec`.
+async fn honest_dump(msgs: &[Raw], ids: &[u64], node: &FakeChain, checks_per_sec: u32) -> f64 {
+    let dir = TempDir::new();
+    let h = Hostile::start().await;
+    let mut config = Config::new(NET, dir.0.clone());
+    config.max_peers = 1;
+    config.peers = vec![h.addr];
+    config.checks_per_sec = checks_per_sec;
+    // Lookups as fast as the fake answers, so gossip is what takes the time.
+    config.lookup_interval = Duration::from_millis(1);
+    let peer = Peer::start(config, node.clone()).unwrap().0;
+    wait_for("connected", || up(&peer, h.addr)).await;
+    let started = std::time::Instant::now();
+    h.send(msgs.iter().cloned());
+    while peer.read(|g| g.channels().len()) < ids.len() {
+        assert!(
+            started.elapsed() < Duration::from_secs(50),
+            "{}",
+            status(&peer).channels
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let took = started.elapsed().as_secs_f64();
+    peer.shutdown().await.unwrap();
+    took
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "flood: run with --release --ignored"]
+async fn flood_an_honest_full_sync() {
+    // Mainnet's first 20 s: 34,000 channels.
+    let node = FakeChain::at(200);
+    let ids: Vec<u64> = (0..34_000u32)
+        .map(|i| real(&node, i, 1 + (i % 100) as u8, 101 + (i / 100 % 50) as u8))
+        .collect();
+    let pairs: Vec<(u64, u8, u8)> = ids
+        .iter()
+        .zip(0u32..)
+        .map(|(id, i)| (*id, 1 + (i % 100) as u8, 101 + (i / 100 % 50) as u8))
+        .collect();
+    let msgs = tokio::task::spawn_blocking(move || {
+        let mut msgs = Vec::new();
+        for (id, a, b) in pairs {
+            let ann = channel(id, a, b);
+            let first = if id_of(a) == ann.contents.node_id_1 {
+                a
+            } else {
+                b
+            };
+            let second = if first == a { b } else { a };
+            msgs.push(raw(CHANNEL_ANNOUNCEMENT, &ann));
+            msgs.push(raw(CHANNEL_UPDATE, &update(id, first, 0)));
+            msgs.push(raw(CHANNEL_UPDATE, &update(id, second, 1)));
+        }
+        msgs.extend((1..=150).map(|n| raw(NODE_ANNOUNCEMENT, &super::node(n, "honest", 0))));
+        msgs
+    })
+    .await
+    .unwrap();
+    let none = honest_dump(&msgs, &ids, &node, u32::MAX).await;
+    println!(
+        "{} messages, no budget: every channel in {none:.1} s",
+        msgs.len()
+    );
+    let default = Config::new(NET, PathBuf::new()).checks_per_sec;
+    let with = honest_dump(&msgs, &ids, &node, default).await;
+    println!(
+        "{} messages, the default budget: every channel in {with:.1} s",
+        msgs.len()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1299,4 +1640,104 @@ fn a_peer_list_counts_its_batch_in_flight_against_the_cap() {
         .unwrap();
     // Five ids and the open list, not ten.
     assert_eq!(h.gossip.range_pending(), 5 + 1);
+}
+
+/// A peer that withholds two batches loses its turn: what another peer listed is asked of that
+/// peer, and it is asked only for what nobody else listed.
+#[test]
+fn a_peer_that_keeps_withholding_loses_its_turn() {
+    withholding_loses_its_turn(false);
+}
+
+#[test]
+fn what_a_peer_handed_over_comes_back_if_the_other_peer_leaves() {
+    withholding_loses_its_turn(true);
+}
+
+fn withholding_loses_its_turn(leaves: bool) {
+    let h = handler(100_000);
+    let pk = |n| key(n).public_key(&Secp256k1::new());
+    let (bad, good) = (pk(7), pk(8));
+    let mut features = InitFeatures::empty();
+    features.set_gossip_queries_optional();
+    let init = Init {
+        features,
+        networks: None,
+        remote_network_address: None,
+    };
+    let list = |ids: Vec<u64>| ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: ids,
+    };
+    let end = || ReplyShortChannelIdsEnd {
+        chain_hash: chain(),
+        full_information: true,
+    };
+    let queries = || -> Vec<(PublicKey, Vec<u64>)> {
+        h.gossip
+            .get_and_clear_pending_msg_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                MessageSendEvent::SendShortIdsQuery { node_id, msg } => {
+                    Some((node_id, msg.short_channel_ids))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    h.gossip.peer_connected(bad, &init, false).unwrap();
+    h.gossip.peer_connected(good, &init, false).unwrap();
+    // Four batches both listed, and one channel only the withholding peer listed.
+    let shared: Vec<u64> = (1..=8000).collect();
+    let mut only_bad = shared.clone();
+    only_bad.push(9000);
+    h.gossip
+        .handle_reply_channel_range(bad, list(only_bad))
+        .unwrap();
+    h.gossip
+        .handle_reply_channel_range(good, list(shared))
+        .unwrap();
+    assert_eq!(queries(), [(bad, (1..=2000).collect())]);
+    // Withheld once: the batch goes to the other peer, and the next is asked of this one.
+    h.gossip
+        .handle_reply_short_channel_ids_end(bad, end())
+        .unwrap();
+    let mut q = queries();
+    q.sort();
+    assert_eq!(
+        q,
+        [(bad, (2001..=4000).collect()), (good, (1..=2000).collect())]
+    );
+    // Withheld twice: it loses its turn. Everything else it was to be asked, the other peer
+    // listed, so it goes there; it is asked only for the channel nobody else listed.
+    h.gossip
+        .handle_reply_short_channel_ids_end(bad, end())
+        .unwrap();
+    assert_eq!(queries(), [(bad, vec![9000])]);
+    assert_eq!(crate::peer::totals(&h.gossip).withheld, 2);
+    if leaves {
+        // What it handed over and was never asked comes back to it once the other peer leaves.
+        h.gossip.peer_disconnected(good);
+        h.gossip
+            .handle_reply_short_channel_ids_end(bad, end())
+            .unwrap();
+        assert_eq!(queries(), [(bad, (4001..=6000).collect())]);
+        return;
+    }
+    // The other peer is asked for every shared channel, each once.
+    let mut asked = Vec::new();
+    for _ in 0..4 {
+        h.gossip
+            .handle_reply_short_channel_ids_end(good, end())
+            .unwrap();
+        for (peer, ids) in queries() {
+            assert_eq!(peer, good);
+            asked.extend(ids);
+        }
+    }
+    asked.sort_unstable();
+    assert_eq!(asked, (2001..=8000).collect::<Vec<u64>>());
 }

@@ -60,10 +60,19 @@ pub(crate) const MAX_NODE_ADDRESSES: usize = 8;
 /// checks now and four when its lookup resolves.
 const REPLAY_PER_TICK: usize = 2000;
 
+/// How far ahead of [`Config::checks_per_sec`] a peer may run before it is not read: an initial
+/// dump is one burst (mainnet's, 34,000 channels with their updates and nodes in 20 s, is about
+/// 350,000 checks), a flood is sustained.
+const CHECKS_AHEAD: Duration = Duration::from_secs(60);
+
 /// Channel ids per `query_short_channel_ids`: 16 KB of ids, well inside a 65 KB message.
 const SCID_BATCH: usize = 2000;
-/// A batch with no answer for this long is given up; its channels return at the next range sync.
-const BATCH_TIMEOUT: Duration = Duration::from_secs(120);
+/// A batch with no end marker for this long is given up, and what it still owes is asked of
+/// another peer that listed it. Tests wait less.
+const BATCH_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 120 });
+/// Batches a peer may withhold (end, or time out, with channels it listed still owed) before it
+/// loses its turn: from then on it is asked only for channels no other connected peer listed.
+const MAX_WITHHELD: u32 = 2;
 /// A channel list whose replies stop for this long, short of the queried range, counts as done.
 const LISTING_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -84,21 +93,65 @@ struct RangeSync {
 struct PeerRange {
     /// While the peer's channel list is still arriving: when its last reply (or the query) came.
     listing: Option<Instant>,
+    /// Every channel id it listed that we wanted, and whether it was asked of this peer. An id is
+    /// asked of a peer at most once a connection. Holds `wanted` and the batch in flight, and is
+    /// capped at the ceiling.
+    listed: HashMap<u64, bool>,
     /// Channel ids this peer has and we lack, not yet requested.
     wanted: VecDeque<u64>,
-    /// The batch requested and not yet answered, and when it was sent.
+    /// The batch requested, and when. It ends at its end marker or [`BATCH_TIMEOUT`], not when
+    /// everything arrived: a late end marker would end the next one.
     in_flight: Option<(Vec<u64>, Instant)>,
+    /// Per ended batch, its ids still being checked (the peer answers for them until they
+    /// settle), and whether the batch was already counted as withheld.
+    checking: Vec<(Vec<u64>, bool)>,
+    /// Batches that left channels it listed neither in the graph nor being checked.
+    withheld: u32,
+}
+
+impl PeerRange {
+    fn demoted(&self) -> bool {
+        self.withheld >= MAX_WITHHELD
+    }
 }
 
 impl RangeSync {
-    /// Forgets a peer's sync. What it still owed is freed for the next range reply to claim.
-    fn finish_batch(&mut self, peer: &PublicKey) {
-        if let Some(p) = self.peers.get_mut(peer)
-            && let Some((batch, _)) = p.in_flight.take()
-        {
-            for scid in batch {
+    /// Lets go of ids asked of or wanted from `from`, each with whether it is still missing from
+    /// the graph: those are offered to another peer ([`Self::reoffer`]), the rest are done.
+    fn release(&mut self, from: &PublicKey, ids: Vec<(u64, bool)>) {
+        for (scid, missing) in ids {
+            if missing {
+                self.reoffer(from, scid);
+            } else {
                 self.queued.remove(&scid);
             }
+        }
+    }
+
+    /// Asks for a channel `from` did not deliver of another connected peer that listed it and was
+    /// not asked for it yet, ahead of that peer's own; else frees it for the next range reply.
+    fn reoffer(&mut self, from: &PublicKey, scid: u64) {
+        match self.taker(from, scid) {
+            Some(to) => self.hand(&to, scid),
+            None => {
+                self.queued.remove(&scid);
+            }
+        }
+    }
+
+    /// Another peer that listed `scid` and was not asked for it, one that kept its turn first.
+    fn taker(&self, from: &PublicKey, scid: u64) -> Option<PublicKey> {
+        self.peers
+            .iter()
+            .filter(|(id, p)| *id != from && p.listed.get(&scid) == Some(&false))
+            .min_by_key(|(_, p)| p.demoted())
+            .map(|(id, _)| *id)
+    }
+
+    fn hand(&mut self, to: &PublicKey, scid: u64) {
+        if let Some(p) = self.peers.get_mut(to) {
+            p.listed.insert(scid, true);
+            p.wanted.push_front(scid);
         }
     }
 }
@@ -205,6 +258,8 @@ pub(crate) struct Counters {
     pub(crate) oversize: AtomicU64,
     /// Refused by us: the graph is at its ceiling.
     pub(crate) over_ceiling: AtomicU64,
+    /// Requested batches a peer ended, or let time out, without channels it had listed.
+    pub(crate) withheld: AtomicU64,
 }
 
 pub(crate) struct Gossip {
@@ -223,6 +278,11 @@ pub(crate) struct Gossip {
     /// When a channel new to the graph last arrived; the sync-settled signal reads it.
     pub(crate) last_new_channel: Mutex<Instant>,
     range: Mutex<RangeSync>,
+    checks_per_sec: u32,
+    /// Per peer that has connected (configured peers only, so bounded): when the signature checks
+    /// its gossip cost are paid off at `checks_per_sec`. It is read only while that is at most
+    /// [`CHECKS_AHEAD`] away. Kept across reconnections, so a reconnection buys nothing.
+    paid_off: Mutex<HashMap<PublicKey, Instant>>,
     /// Held from the ceiling check to the insert, so concurrent peers cannot overshoot it.
     admission: Mutex<()>,
     /// Messages of our own for the peer manager to send.
@@ -266,6 +326,8 @@ impl Gossip {
             at_ceiling: AtomicBool::new(false),
             last_new_channel: Mutex::new(Instant::now()),
             range: Mutex::new(RangeSync::default()),
+            checks_per_sec: config.checks_per_sec.max(1),
+            paid_off: Mutex::new(HashMap::new()),
             admission: Mutex::new(()),
             outbox: Mutex::new(Vec::new()),
             changes,
@@ -545,13 +607,14 @@ impl Gossip {
     }
 
     /// Keeps a node announcement for a stored node not yet in the graph, if it is newer. It is
-    /// applied unsigned later, so its signature is checked here.
+    /// applied unsigned later, so its signature is checked here; a bad one is refused here, so
+    /// LDK does not check it a second time.
     /// `trimmed` is an oversized announcement already checked and cut down.
     fn hold_node(
         &self,
         msg: &NodeAnnouncement,
         trimmed: Option<&UnsignedNodeAnnouncement>,
-    ) -> bool {
+    ) -> Result<bool, LightningError> {
         let stored = |r: &Replay| r.nodes.contains_key(&msg.contents.node_id);
         if !self.replay.lock().is_ok_and(|r| stored(&r))
             || self
@@ -559,20 +622,48 @@ impl Gossip {
                 .read_only()
                 .node(&msg.contents.node_id)
                 .is_some()
-            || (trimmed.is_none() && verify_node_announcement(msg, &self.secp).is_err())
         {
-            return false;
+            return Ok(false);
+        }
+        if trimmed.is_none() {
+            verify_node_announcement(msg, &self.secp)?;
         }
         let contents = trimmed.unwrap_or(&msg.contents);
         let Ok(mut r) = self.replay.lock() else {
-            return false;
+            return Ok(false);
         };
         match r.nodes.get_mut(&msg.contents.node_id) {
             Some(s) if s.timestamp < contents.timestamp => *s = contents.clone(),
             Some(_) => {}
-            None => return false,
+            None => return Ok(false),
         }
-        true
+        Ok(true)
+    }
+
+    /// Charges a peer for the signature checks a message of its costs.
+    fn charge(&self, peer: Option<PublicKey>, checks: u32) {
+        let (Some(peer), Ok(mut paid)) = (peer, self.paid_off.lock()) else {
+            return;
+        };
+        let now = Instant::now();
+        let at = paid.entry(peer).or_insert(now);
+        *at = (*at).max(now) + Duration::from_secs(u64::from(checks)) / self.checks_per_sec;
+    }
+
+    /// How long to leave a peer unread, so its gossip costs at most `checks_per_sec`.
+    pub(crate) fn hold_off(&self, peer: &PublicKey) -> Duration {
+        self.ahead(peer).saturating_sub(CHECKS_AHEAD)
+    }
+
+    /// How far a peer's spending runs ahead of `checks_per_sec`: [`CHECKS_AHEAD`] or about that
+    /// once its burst is spent.
+    pub(crate) fn ahead(&self, peer: &PublicKey) -> Duration {
+        let Ok(paid) = self.paid_off.lock() else {
+            return Duration::ZERO;
+        };
+        paid.get(peer).map_or(Duration::ZERO, |at| {
+            at.saturating_duration_since(Instant::now())
+        })
     }
 
     pub(crate) fn at_ceiling(&self) -> bool {
@@ -659,7 +750,7 @@ impl Gossip {
         })
     }
 
-    /// Moves on from batches that fully arrived without their end marker, or timed out.
+    /// Ends lists whose replies stopped, and batches whose end marker never came.
     pub(crate) fn range_tick(&self) {
         let Ok(mut r) = self.range.lock() else { return };
         for p in r.peers.values_mut() {
@@ -667,49 +758,118 @@ impl Gossip {
                 p.listing = None;
             }
         }
+        let peers: Vec<PublicKey> = r.peers.keys().copied().collect();
+        for peer in peers {
+            let Some(p) = r.peers.get_mut(&peer) else {
+                continue;
+            };
+            let mut batches = std::mem::take(&mut p.checking);
+            if p.in_flight
+                .as_ref()
+                .is_some_and(|(_, sent)| sent.elapsed() >= BATCH_TIMEOUT)
+                && let Some((batch, _)) = p.in_flight.take()
+            {
+                batches.push((batch, false));
+            }
+            for (ids, counted) in batches {
+                self.judge(&mut r, peer, ids, counted);
+            }
+        }
+        self.next_batches(&mut r);
+    }
+
+    /// Judges ids asked of a peer once its batch ended (its end marker, or [`BATCH_TIMEOUT`]):
+    /// those in the graph are done; those neither in it nor being checked (never sent, or sent and
+    /// refused) are withheld and offered to another peer; the rest stay with the peer in
+    /// `checking`, judged again each tick until their lookups settle. So the peer has its next
+    /// turn at once, and a channel refused after the batch ended is still asked elsewhere. A batch
+    /// counts as withheld once (`counted`: it already did).
+    fn judge(&self, r: &mut RangeSync, peer: PublicKey, ids: Vec<u64>, counted: bool) {
         let graph = self.graph().read_only();
-        let done: Vec<PublicKey> = r
-            .peers
-            .iter()
-            .filter(|(_, p)| {
-                p.in_flight.as_ref().is_some_and(|(batch, sent)| {
-                    sent.elapsed() >= BATCH_TIMEOUT
-                        || batch.iter().all(|scid| complete(&graph, *scid))
-                })
+        // `None`: still being checked.
+        let verdicts: Vec<(u64, Option<bool>)> = ids
+            .into_iter()
+            .map(|id| match graph.channel(id) {
+                Some(_) => (id, Some(false)),
+                None if self.lookup.holds(id) => (id, None),
+                None => (id, Some(true)),
             })
-            .map(|(id, _)| *id)
             .collect();
+        // Read last, under the graph's lock: an answer that left the queue after its `holds`
+        // check counts as resolving until LDK has put its channel in the graph.
+        let resolving = self.lookup.resolving() > 0;
         drop(graph);
-        for peer in done {
-            r.finish_batch(&peer);
-            self.next_batch(&mut r, peer);
+        let (mut release, mut wait) = (Vec::new(), Vec::new());
+        for (id, verdict) in verdicts {
+            match verdict {
+                Some(true) if resolving => wait.push(id),
+                Some(missing) => release.push((id, missing)),
+                None => wait.push(id),
+            }
+        }
+        let withheld = !counted && release.iter().any(|(_, missing)| *missing);
+        if let Some(p) = r.peers.get_mut(&peer) {
+            if !wait.is_empty() {
+                p.checking.push((wait, counted || withheld));
+            }
+            if withheld {
+                p.withheld += 1;
+                self.counters.withheld.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        r.release(&peer, release);
+    }
+
+    /// Requests every idle peer's next batch. Peers that lost their turn go first, so what they
+    /// hand over is asked in the same pass.
+    fn next_batches(&self, r: &mut RangeSync) {
+        let mut ids: Vec<(bool, PublicKey)> =
+            r.peers.iter().map(|(id, p)| (!p.demoted(), *id)).collect();
+        ids.sort_unstable();
+        for (_, id) in ids {
+            self.next_batch(r, id);
         }
     }
 
-    /// Requests the peer's next batch of missing channels, unless one is in flight.
+    /// Requests the peer's next batch of missing channels, unless one is in flight. A peer that
+    /// lost its turn hands each channel another peer listed to that peer instead.
     fn next_batch(&self, r: &mut RangeSync, peer: PublicKey) {
-        let RangeSync { peers, queued, .. } = r;
-        let Some(p) = peers.get_mut(&peer) else {
-            return;
-        };
-        if p.in_flight.is_some() {
-            return;
-        }
         let graph = self.graph().read_only();
         let mut batch = Vec::new();
-        while batch.len() < SCID_BATCH
-            && let Some(scid) = p.wanted.pop_front()
-        {
-            if !complete(&graph, scid) {
-                batch.push(scid);
+        loop {
+            let Some(p) = r.peers.get_mut(&peer) else {
+                return;
+            };
+            if p.in_flight.is_some() || batch.len() >= SCID_BATCH {
+                break;
+            }
+            let demoted = p.demoted();
+            let Some(scid) = p.wanted.pop_front() else {
+                break;
+            };
+            if complete(&graph, scid) {
+                r.queued.remove(&scid);
+            } else if let Some(to) = r
+                .taker(&peer, scid)
+                .filter(|to| demoted && r.peers.get(to).is_some_and(|p| !p.demoted()))
+            {
+                r.hand(&to, scid);
+                // Not asked of it after all: it may still be, should the other peer leave.
+                if let Some(p) = r.peers.get_mut(&peer) {
+                    p.listed.insert(scid, false);
+                }
             } else {
-                queued.remove(&scid);
+                batch.push(scid);
             }
         }
         drop(graph);
+        let Some(p) = r.peers.get_mut(&peer) else {
+            return;
+        };
         if batch.is_empty() {
             return;
         }
+        batch.sort_unstable();
         p.in_flight = Some((batch.clone(), Instant::now()));
         self.send(MessageSendEvent::SendShortIdsQuery {
             node_id: peer,
@@ -772,14 +932,22 @@ impl BaseMessageHandler for Gossip {
 
     fn peer_disconnected(&self, their_node_id: PublicKey) {
         self.sync.peer_disconnected(their_node_id);
-        // What it still owed is freed; another peer's next range reply can claim it.
-        if let Ok(mut r) = self.range.lock() {
-            r.finish_batch(&their_node_id);
-            if let Some(p) = r.peers.remove(&their_node_id) {
-                for scid in p.wanted {
-                    r.queued.remove(&scid);
-                }
-            }
+        // What it still owed or was to be asked goes to another peer that listed it, or is freed
+        // for the next range reply to claim.
+        if let Ok(mut r) = self.range.lock()
+            && let Some(p) = r.peers.remove(&their_node_id)
+        {
+            let graph = self.graph().read_only();
+            let asked = p.in_flight.map(|(ids, _)| ids).unwrap_or_default();
+            let ids = asked
+                .into_iter()
+                .chain(p.checking.into_iter().flat_map(|(ids, _)| ids))
+                .map(|id| (id, graph.channel(id).is_none()))
+                .chain(p.wanted.into_iter().map(|id| (id, true)))
+                .collect();
+            drop(graph);
+            r.release(&their_node_id, ids);
+            self.next_batches(&mut r);
         }
     }
 
@@ -843,6 +1011,7 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &NodeAnnouncement,
     ) -> Result<bool, LightningError> {
+        self.charge(their_node_id, 1);
         let bytes = msg.serialized_length();
         self.count(&self.counters.node_announcements, bytes);
         // An oversized one is kept trimmed and unsigned, so its signature is checked here.
@@ -857,9 +1026,13 @@ impl RoutingMessageHandler for Gossip {
         } else {
             None
         };
-        if self.hold_node(msg, trimmed.as_ref()) {
-            self.counters.held.fetch_add(1, Ordering::Relaxed);
-            return Err(ignore("held until its stored channels are checked"));
+        match self.hold_node(msg, trimmed.as_ref()) {
+            Ok(true) => {
+                self.counters.held.fetch_add(1, Ordering::Relaxed);
+                return Err(ignore("held until its stored channels are checked"));
+            }
+            Ok(false) => {}
+            Err(e) => return self.tally(Err(e)),
         }
         let r = match &trimmed {
             Some(contents) => {
@@ -884,6 +1057,9 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &ChannelAnnouncement,
     ) -> Result<bool, LightningError> {
+        // Four signatures (both nodes' and both funding keys'), checked again when a lookup
+        // answers it later.
+        self.charge(their_node_id, 8);
         self.admit(
             &self.counters.channel_announcements,
             msg.serialized_length(),
@@ -897,6 +1073,7 @@ impl RoutingMessageHandler for Gossip {
         their_node_id: Option<PublicKey>,
         msg: &ChannelUpdate,
     ) -> Result<bool, LightningError> {
+        self.charge(their_node_id, 1);
         self.admit(&self.counters.channel_updates, msg.serialized_length())?;
         if self.hold_update(msg) {
             self.counters.held.fetch_add(1, Ordering::Relaxed);
@@ -959,15 +1136,15 @@ impl RoutingMessageHandler for Gossip {
         for scid in msg.short_channel_ids {
             // Each peer's list is capped on its own, so one listing invented ids cannot crowd
             // out the others'.
-            // The batch in flight counts too: what one peer holds stays under the ceiling.
-            let held = p.wanted.len() + p.in_flight.as_ref().map_or(0, |(b, _)| b.len());
-            if held >= self.max_channels {
+            // `listed` holds the batch in flight too: what one peer holds stays under the ceiling.
+            if p.listed.len() >= self.max_channels {
                 break;
             }
             let want = match graph.channel(scid) {
-                // Unless it is being checked: stored, or waiting for its lookup.
+                // Unless it is being checked: stored, or waiting for its lookup. One another peer
+                // is answering for is kept in this peer's list, in case it is refused.
                 None => {
-                    !self.lookup.holds(scid)
+                    (!self.lookup.holds(scid) || queued.contains(&scid))
                         && !self
                             .replay
                             .lock()
@@ -984,12 +1161,17 @@ impl RoutingMessageHandler for Gossip {
                     new
                 }
             };
-            if want && queued.insert(scid) {
-                p.wanted.push_back(scid);
+            // Listed before: asked of it already, or kept for when another peer withholds it.
+            if want && !p.listed.contains_key(&scid) {
+                let first = queued.insert(scid);
+                p.listed.insert(scid, first);
+                if first {
+                    p.wanted.push_back(scid);
+                }
             }
         }
         drop(graph);
-        self.next_batch(&mut r, their_node_id);
+        self.next_batches(&mut r);
         Ok(())
     }
 
@@ -1001,10 +1183,14 @@ impl RoutingMessageHandler for Gossip {
         let Ok(mut r) = self.range.lock() else {
             return Ok(());
         };
-        if r.peers.contains_key(&their_node_id) {
-            r.finish_batch(&their_node_id);
-            self.next_batch(&mut r, their_node_id);
+        if let Some((ids, _)) = r
+            .peers
+            .get_mut(&their_node_id)
+            .and_then(|p| p.in_flight.take())
+        {
+            self.judge(&mut r, their_node_id, ids, false);
         }
+        self.next_batches(&mut r);
         Ok(())
     }
 

@@ -104,11 +104,12 @@ fn one_absurd_transaction_moves_nothing() {
 fn steady_arrivals_raise_a_level_that_would_otherwise_be_the_minimum() {
     let d = depth(&[(1_000, B / 2)]);
     assert_eq!(levels(recommend(&d, &Inflow::default(), 100)), [100; 4]);
-    // 50 kvB a minute at 2 sat/vB: 805 kvB before the next block at 80%, on top of half a
-    // block at 1 sat/vB, does not fit: outbid the 1 sat/vB half. Three blocks have room.
+    // 50 kvB a minute at 2 sat/vB: 1.15 MvB before the next block at 90%, more than a block:
+    // outbid the arrivals too. Three blocks hold 2.66 MvB of them but not the 1 sat/vB half as
+    // well: outbid that half. Six blocks hold everything.
     let minutes = vec![vec![(2_000, 50_000)]; 10];
     let r = recommend(&d, &inflow(&minutes), 100);
-    assert_eq!(levels(r), [1_001, 100, 100, 100]);
+    assert_eq!(levels(r), [2_001, 1_001, 100, 100]);
 }
 
 #[test]
@@ -125,21 +126,24 @@ fn a_sudden_burst_counts_where_it_is_and_is_not_extrapolated() {
     // half block, but not the arrivals at 2 sat/vB as well: outbid those too.
     assert_eq!(levels(before), [501, 501, 100, 100]);
     assert_eq!(levels(r), [50_001, 50_001, 2_001, 100]);
-    // The burst's minute is among the busiest quarter, so it is left out of the arrivals.
+    // The burst's minute is the busiest, so it is left out of the arrivals.
     let i = inflow(&minutes);
-    assert!((i.per_minute_at_or_above(2_000) - 10_000.0).abs() < 1e-9);
+    assert!((i.per_minute_at_or_above(2_000, &TUNING) - 10_000.0).abs() < 1e-9);
 }
 
 #[test]
-fn bursts_on_a_quiet_network_are_not_taken_for_a_trend() {
-    // Eight minutes, two of them bursts at 3 sat/vB, the rest silent: as on regtest or signet.
+fn one_burst_on_a_quiet_network_is_not_taken_for_a_trend() {
+    // Eight minutes, one a burst, the rest silent: as on regtest or signet.
     let mut minutes = vec![Vec::new(); 8];
     minutes[2] = vec![(10_000, 720_000), (5_000, 720_000), (2_000, 720_000)];
-    minutes[6] = vec![(3_000, 900_000)];
     let i = inflow(&minutes);
-    assert_eq!(i.per_minute_at_or_above(100), 0.0);
+    assert_eq!(i.per_minute_at_or_above(100, &TUNING), 0.0);
     let r = recommend(&depth(&[(2_000, B), (3_000, B / 4)]), &i, 100);
     assert_eq!(levels(r), [2_001, 100, 100, 100]);
+    // A second burst is a flow that recurs, and is counted over the minutes watched.
+    minutes[6] = vec![(3_000, 900_000)];
+    let i = inflow(&minutes);
+    assert!((i.per_minute_at_or_above(100, &TUNING) - 900_000.0 / 7.0).abs() < 1e-6);
 }
 
 #[test]
@@ -193,18 +197,18 @@ fn inflow_counts_whole_minutes_and_quiet_ones_as_zero() {
     // Three minutes later: the busy one and two quiet ones.
     i.roll(1_000 + 180);
     assert_eq!(i.minutes(), 3);
-    assert!((i.per_minute_at_or_above(1) - 400.0 / 3.0).abs() < 1e-9);
+    assert!((i.per_minute_at_or_above(1, &TUNING) - 400.0 / 3.0).abs() < 1e-9);
     i.roll(1_000 + 300);
     assert!(i.ready());
     // Never more than the window, however long the silence.
     i.roll(1_000_000);
     assert_eq!(i.minutes(), INFLOW_MINUTES);
-    assert_eq!(i.per_minute_at_or_above(1), 0.0);
+    assert_eq!(i.per_minute_at_or_above(1, &TUNING), 0.0);
     // A gap drops the minute in progress.
     i.record(1_000_010, 2_000, 999);
     i.gap(1_000_020);
     i.roll(1_000_080);
-    assert_eq!(i.per_minute_at_or_above(1), 0.0);
+    assert_eq!(i.per_minute_at_or_above(1, &TUNING), 0.0);
 }
 
 fn tip(n: u8) -> Option<ChainTip> {
@@ -303,14 +307,22 @@ fn a_recorded_mainnet_mempool_gives_the_recorded_answer() {
     assert_eq!(minutes.len(), INFLOW_MINUTES);
     let i = inflow(&minutes);
     let floor = f["floor"].as_u64().unwrap() as u32;
-    let r = recommend(&d, &i, floor);
+    // The tuning it was recorded with gives the recorded answer, so a replay reproduces it.
+    let before = Tuning {
+        confidence: 0.8,
+        busiest_left_out: |n| if n >= 5 { (n / 4).max(1) } else { 0 },
+    };
+    let then = recommend_tuned(&d, &i, floor, &before);
     let expected: Vec<u32> = f["expected"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_u64().unwrap() as u32)
         .collect();
-    assert_eq!([&r.levels[..], &[r.minimum]].concat(), expected);
+    assert_eq!([&then.levels[..], &[then.minimum]].concat(), expected);
+    // The tuning served since counts more arrivals for longer: every level at least as high.
+    let r = recommend(&d, &i, floor);
+    assert_eq!(levels(r), [2_008, 1_141, 1_001, 100]);
     // Each level outbids the bottom of the projected block after its horizon: what pays the
     // bottom of block N or less does not all fit in N blocks.
     let bottoms: Vec<u32> = f["projected_min_rates"]
@@ -396,9 +408,9 @@ fn random_mempools_are_ordered_floored_bounded_and_exactly_at_the_boundary() {
                 "case {case}: {rate} outside [{min}, {top}]"
             );
             let room = u64::from(level.blocks) * B;
+            let minutes = secs(level) / 60.0;
             let fits = |x: u32| {
-                d.at_or_above(x) as f64
-                    + arrivals.per_minute_at_or_above(x) * level.arrival_secs as f64 / 60.0
+                d.at_or_above(x) as f64 + arrivals.per_minute_at_or_above(x, &TUNING) * minutes
                     < room as f64
             };
             // Monotonic lifting can only raise a slower level's answer to a faster one's, which
@@ -419,9 +431,14 @@ fn random_mempools_are_ordered_floored_bounded_and_exactly_at_the_boundary() {
     }
 }
 
+fn secs(level: Level) -> f64 {
+    arrival_secs(level.blocks, TUNING.confidence) as f64
+}
+
 /// One level alone, by brute force over the candidate rates.
 fn recommend_one(d: &Depth, i: &Inflow, floor: u32, level: Level) -> u32 {
     let room = u64::from(level.blocks) * B;
+    let minutes = secs(level) / 60.0;
     let mut candidates: Vec<u32> = d.rates.iter().map(|r| r.saturating_add(1)).collect();
     for m in &i.closed {
         candidates.extend(m.rates.iter().map(|r| r.saturating_add(1)));
@@ -432,8 +449,96 @@ fn recommend_one(d: &Depth, i: &Inflow, floor: u32, level: Level) -> u32 {
     candidates
         .into_iter()
         .find(|&x| {
-            d.at_or_above(x) as f64 + i.per_minute_at_or_above(x) * level.arrival_secs as f64 / 60.0
-                < room as f64
+            d.at_or_above(x) as f64 + i.per_minute_at_or_above(x, &TUNING) * minutes < room as f64
         })
         .unwrap_or(floor)
+}
+
+#[test]
+fn the_time_allowed_is_the_gamma_quantile_of_block_times() {
+    // The constants the method used at 80% were these, rounded rather than rounded up.
+    let at_80: Vec<u64> = LEVELS.iter().map(|l| arrival_secs(l.blocks, 0.8)).collect();
+    assert_eq!(at_80, [966, 2_568, 4_744, 92_395]);
+    // One block: -600 ln(1 - q).
+    assert_eq!(arrival_secs(1, 0.95), 1_798);
+    assert!(arrival_secs(6, 0.9) > arrival_secs(6, 0.8));
+}
+
+/// Each level's lowest share of samples met on `fixtures/fees/replay.json`, high, medium, low.
+/// The tuning chosen on 2026-11-13 meets 14 of 17, 15 of 15 and 8 of 9; the one before it met
+/// 12, 11 and 3, under every bound.
+const MET_AT_LEAST: [f64; 3] = [0.8, 0.9, 0.85];
+
+/// A stretch of mainnet recorded by `examples/fee_watch.rs` and trimmed as
+/// `fixtures/fees/README.md` says: the method is replayed through it, and each level must still
+/// be met as often as it was when the tuning was chosen.
+#[test]
+fn replayed_on_recorded_mainnet_each_level_is_met_often_enough() {
+    let f: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../fixtures/fees/replay.json")).unwrap();
+    // `rate, vsize, rate, vsize …`
+    let pairs = |v: &serde_json::Value| -> Vec<(u32, u64)> {
+        v.as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|p| (p[0].as_u64().unwrap() as u32, p[1].as_u64().unwrap()))
+            .collect()
+    };
+    let start = f["start"].as_u64().unwrap();
+    let minutes = f["minutes"].as_array().unwrap();
+    let blocks: Vec<(u64, Option<u64>)> = f["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b[0].as_u64().unwrap(), b[1].as_u64()))
+        .collect();
+    let mut inflow = Inflow::default();
+    inflow.roll(start);
+    let mut next = 0;
+    let (mut met, mut scored) = ([0usize; 3], [0usize; 3]);
+    for s in f["samples"].as_array().unwrap() {
+        let t = s[0].as_u64().unwrap();
+        // Every minute begun before the sample, at its start: the minute is all that counts.
+        while let Some(m) = minutes.get(next).filter(|_| start + next as u64 * 60 <= t) {
+            for (rate, vsize) in pairs(m) {
+                inflow.record(
+                    start + next as u64 * 60,
+                    rate,
+                    u32::try_from(vsize).unwrap(),
+                );
+            }
+            next += 1;
+        }
+        inflow.roll(t);
+        assert!(inflow.ready());
+        let r = recommend(
+            &Depth::new(pairs(&s[2])),
+            &inflow,
+            s[1].as_u64().unwrap() as u32,
+        );
+        let after = blocks.partition_point(|b| b.0 <= t);
+        for (i, level) in LEVELS.iter().take(3).enumerate() {
+            let Some(horizon) = blocks.get(after..after + level.blocks as usize) else {
+                continue;
+            };
+            // Met: one step above the clearing rate of one of the next `N` blocks.
+            let Some(need) = horizon.iter().filter_map(|b| b.1).min() else {
+                continue;
+            };
+            scored[i] += 1;
+            met[i] += usize::from(u64::from(r.levels[i]) > need);
+        }
+    }
+    let shares: Vec<f64> = met
+        .iter()
+        .zip(scored)
+        .map(|(&m, n)| m as f64 / n as f64)
+        .collect();
+    for ((share, bound), level) in shares.iter().zip(MET_AT_LEAST).zip(LEVELS) {
+        assert!(
+            *share >= bound,
+            "{} met {share:.3} of {scored:?}, under {bound}",
+            level.name
+        );
+    }
 }

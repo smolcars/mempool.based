@@ -367,9 +367,9 @@ pub struct Bucket {
     pub fee_rate: Option<Rates>,
 }
 
-/// Aggregates over heights `from..=to`, oldest bucket first. Reads only the stored rows in that
-/// range; a one-year daily aggregate on a full mainnet table takes milliseconds
-/// (`docs/STORE.md`).
+/// Aggregates over heights `from..=to`, oldest bucket first. Over a long range a day or a block
+/// series' point is read from the running totals ([`super::totals`]), which hold what this
+/// statement computes for each bucket, so the cost follows the buckets, not the rows.
 pub async fn periods(store: &Store, from: u32, to: u32, by: Period) -> Result<Vec<Bucket>, Error> {
     let n: u32 = match by {
         Period::Day => 0,
@@ -377,65 +377,86 @@ pub async fn periods(store: &Store, from: u32, to: u32, by: Period) -> Result<Ve
     };
     store
         .read(Read::Blocks, move |sql| {
-            let mut stmt = sql.prepare(
-                "SELECT CASE WHEN ?3 = 0 THEN time / 86400 ELSE height / ?3 END AS k, count(*), \
-                 min(height), max(height), min(time), max(time), sum(tx_count), sum(size), \
-                 sum(weight), sum(fees), sum(subsidy), sum(reward), avg(difficulty), sum(rated), \
-                 avg(fee_min), avg(fee_p10), avg(fee_p25), avg(fee_median), avg(fee_p75), \
-                 avg(fee_p90), avg(fee_max) \
-                 FROM blocks WHERE height BETWEEN ?1 AND ?2 GROUP BY k ORDER BY k",
-            )?;
-            let rows = stmt.query_map(params![from, to, n], |r| {
-                let f: [Option<f64>; 7] = [
-                    r.get(14)?,
-                    r.get(15)?,
-                    r.get(16)?,
-                    r.get(17)?,
-                    r.get(18)?,
-                    r.get(19)?,
-                    r.get(20)?,
-                ];
-                let fee_rate = match f {
-                    [
-                        Some(min),
-                        Some(p10),
-                        Some(p25),
-                        Some(median),
-                        Some(p75),
-                        Some(p90),
-                        Some(max),
-                    ] => Some(Rates {
-                        min,
-                        p10,
-                        p25,
-                        median,
-                        p75,
-                        p90,
-                        max,
-                    }),
-                    _ => None,
-                };
-                Ok(Bucket {
-                    key: r.get(0)?,
-                    blocks: get(r, 1)?,
-                    first_height: get(r, 2)?,
-                    last_height: get(r, 3)?,
-                    first_time: get(r, 4)?,
-                    last_time: get(r, 5)?,
-                    tx_count: get(r, 6)?,
-                    size: get(r, 7)?,
-                    weight: get(r, 8)?,
-                    fees: get(r, 9)?,
-                    subsidy: get(r, 10)?,
-                    reward: get(r, 11)?,
-                    difficulty: r.get(12)?,
-                    rated: get(r, 13)?,
-                    fee_rate,
-                })
-            })?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            if super::totals::worth(from, to) && super::totals::kept(n) {
+                sql.prepare("BEGIN")?.execute([])?;
+                if let Some(b) = super::totals::periods(sql, from, to, n)? {
+                    return Ok(b);
+                }
+            }
+            periods_scan(sql, from, to, n)
         })
         .await
+}
+
+/// The statement [`periods_scan`] runs, and the one the totals keep each bucket's result of.
+/// `?3` is 0 for days, else the heights in a bucket.
+macro_rules! periods_sql {
+    () => {
+        "SELECT CASE WHEN ?3 = 0 THEN time / 86400 ELSE height / ?3 END AS k, count(*), \
+         min(height), max(height), min(time), max(time), sum(tx_count), sum(size), \
+         sum(weight), sum(fees), sum(subsidy), sum(reward), avg(difficulty), sum(rated), \
+         avg(fee_min), avg(fee_p10), avg(fee_p25), avg(fee_median), avg(fee_p75), \
+         avg(fee_p90), avg(fee_max) \
+         FROM blocks WHERE height BETWEEN ?1 AND ?2 GROUP BY k ORDER BY k"
+    };
+}
+pub(super) use periods_sql;
+
+/// [`periods`] by reading every row in the range: by day when `n` is 0, else by `n` heights.
+pub(super) fn periods_scan(sql: &Sql, from: u32, to: u32, n: u32) -> Result<Vec<Bucket>, Error> {
+    let mut stmt = sql.prepare(periods_sql!())?;
+    let rows = stmt.query_map(params![from, to, n], read_bucket)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// A bucket from [`periods_sql`] or from `block_totals`, whose columns come in the same order.
+pub(super) fn read_bucket(r: &rusqlite::Row) -> Result<Bucket, SqlError> {
+    let f: [Option<f64>; 7] = [
+        r.get(14)?,
+        r.get(15)?,
+        r.get(16)?,
+        r.get(17)?,
+        r.get(18)?,
+        r.get(19)?,
+        r.get(20)?,
+    ];
+    let fee_rate = match f {
+        [
+            Some(min),
+            Some(p10),
+            Some(p25),
+            Some(median),
+            Some(p75),
+            Some(p90),
+            Some(max),
+        ] => Some(Rates {
+            min,
+            p10,
+            p25,
+            median,
+            p75,
+            p90,
+            max,
+        }),
+        _ => None,
+    };
+    Ok(Bucket {
+        key: r.get(0)?,
+        blocks: get(r, 1)?,
+        first_height: get(r, 2)?,
+        last_height: get(r, 3)?,
+        first_time: get(r, 4)?,
+        last_time: get(r, 5)?,
+        tx_count: get(r, 6)?,
+        size: get(r, 7)?,
+        weight: get(r, 8)?,
+        fees: get(r, 9)?,
+        subsidy: get(r, 10)?,
+        reward: get(r, 11)?,
+        difficulty: r.get(12)?,
+        rated: get(r, 13)?,
+        fee_rate,
+    })
 }
 
 /// Stored hashes and whether each row is rated, for heights `lo..=hi`.
@@ -487,8 +508,12 @@ pub(super) fn next_unrated(sql: &Sql, lo: u32, hi: u32) -> Result<Option<(u32, B
         .optional()?)
 }
 
-/// Rows in the table, and how many of them are rated.
+/// Rows in the table, and how many of them are rated: from the totals once they are filled.
 pub(super) fn counts(sql: &Sql) -> Result<(u64, u64), Error> {
+    sql.prepare("BEGIN")?.execute([])?;
+    if let Some(c) = super::totals::counts(sql)? {
+        return Ok(c);
+    }
     let rows: i64 = sql
         .prepare("SELECT count(*) FROM blocks")?
         .query_row([], |r| r.get(0))?;

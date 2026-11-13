@@ -449,34 +449,34 @@ A block at difficulty *d* takes *d* × 2³² hashes on average, so the hashrate 
 
 #### Freshness and cost
 
-An answer is computed once per change to the table and served from memory. A task per network recomputes the answers clients have asked for whenever `follow` writes a new block, at most once a minute while the backfill adds rows, and at least every 10 minutes even without either, so a day's answer drops blocks older than a day; between those, a request is a lookup. An answer's reads are separate statements, so one whose chain tip changed while it was read is thrown away (a request then gets `503` and retries; the refresh starts over at the new tip), never published with blocks from two chains. An answer nobody has asked for is computed by the first request, one computation at a time per network. A pool's statistics and weekly shares are computed for every pool together. The routes marked "no" above are a single bounded indexed read each. Headers as for every `/api/v1` route; `Age` appears while the node's tip is not the one the answer was computed at.
+An answer is computed once per change to the table and served from memory. A task per network recomputes the answers clients have asked for whenever `follow` writes a new block, at most once a minute while the backfill adds rows, and at least every 10 minutes even without either, so a day's answer drops blocks older than a day; between those, a request is a lookup. An answer's reads are separate statements, so one whose chain tip changed while it was read is thrown away (a request then gets `503` and retries; the refresh starts over at the new tip), never published with blocks from two chains. An answer nobody has asked for is computed by the first request, one computation at a time per network. A pool's statistics and weekly shares are computed for every pool together, and an interval's five block series (fees, rewards, fee rates whole and precise, sizes and weights) together. Over long periods the reads add up the block table's running totals rather than its rows ([`STORE.md`](STORE.md#totals)), so their cost does not grow with the table; within one refresh, answers that need the same network hashrate points or weekly pool counts read them once. The routes marked "no" above are a single bounded indexed read each. Headers as for every `/api/v1` route; `Age` appears while the node's tip is not the one the answer was computed at.
 
 Measured on the Apple M4 under the load described in [`STORE.md`](STORE.md#measurements), release build, from `curl` on the same machine. The reference backend (a stock mempool backend in front of the same node) was asked once per route, over the network; the pool routes for Foundry USA.
 
-| Route | Reference | Ours, 7,851 mainnet rows: first / then | Ours, 975,000 rows: first / then |
-|---|---|---|---|
-| `pools` | 0.09 s | 0.8 / 0.4 ms | |
-| `pools/1w` | 23.7 s | 1.2 / 0.3 ms | 1.4 / 0.4 ms |
-| `pools/all` | | 2.0 / 0.3 ms | 222 / 0.5 ms |
-| `pool/:slug` | 54.2 s | 7.1 / 0.4 ms | 999 / 0.3 ms (every pool's at once) |
-| `pool/:slug/hashrate` | 24.0 s | 0.5 / 0.4 ms (computed with the above) | 0.5 / 0.5 ms |
-| `pool/:slug/blocks` | 13.9 s | 0.9 ms | 0.9 ms |
-| `hashrate/1m` | 23.4 s | 3.4 / 0.4 ms | 4.1 / 0.4 ms |
-| `hashrate/all` | | 4.0 / 0.3 ms | 597 / 0.4 ms |
-| `hashrate/pools/1m` | 24.4 s | 3.2 / 0.3 ms | 3.6 / 0.3 ms |
-| `hashrate/pools/all` | | | 836 / 1.8 ms (2 MB) |
-| `difficulty-adjustments/1m` | 0.01 s | 0.8 / 0.3 ms | 0.7 / 0.4 ms |
-| `reward-stats/144` | 0.08 s | 0.7 ms | 0.6 ms; 31 ms for 52,560 |
-| `blocks/fees/1w` | 23.9 s | 1.4 / 0.4 ms | 1.6 / 0.5 ms |
-| `blocks/fees/all` | | | 565 / 0.5 ms |
-| `blocks/rewards/1w` | 23.9 s | 1.6 / 0.5 ms | 1.7 / 0.4 ms |
-| `blocks/fee-rates/1w` | 23.9 s | 1.5 / 0.4 ms | 1.7 / 0.5 ms |
-| `blocks/fee-rates/all/precise` | 404 | | 591 / 0.4 ms |
-| `blocks/sizes-weights/1w` | 24.0 s | 1.6 / 0.4 ms | 68 / 1.2 ms (a busy moment) |
-| `blocks/sizes-weights/all` | | | 560 / 0.6 ms |
-| `blocks/timestamp/:t` | 0.02 s | 0.6 ms | 0.4 ms |
+| Route | Reference | Ours, 7,851 mainnet rows: first / then | Ours, 975,000 rows before the totals: first / then | Mainnet's 975,672 rows with the totals: first |
+|---|---|---|---|---|
+| `pools` | 0.09 s | 0.8 / 0.4 ms | | 0.7 ms |
+| `pools/1w` | 23.7 s | 1.2 / 0.3 ms | 1.4 / 0.4 ms | 0.5 ms |
+| `pools/all` | | 2.0 / 0.3 ms | 222 / 0.5 ms | 2.8 ms |
+| `pool/:slug` | 54.2 s | 7.1 / 0.4 ms | 999 / 0.3 ms (every pool's at once) | 14.6 ms (every pool's at once) |
+| `pool/:slug/hashrate` | 24.0 s | 0.5 / 0.4 ms (computed with the above) | 0.5 / 0.5 ms | (computed with the above) |
+| `pool/:slug/blocks` | 13.9 s | 0.9 ms | 0.9 ms |  |
+| `hashrate/1m` | 23.4 s | 3.4 / 0.4 ms | 4.1 / 0.4 ms | 0.3 ms |
+| `hashrate/all` | | 4.0 / 0.3 ms | 597 / 0.4 ms | 6.5 ms |
+| `hashrate/pools/1m` | 24.4 s | 3.2 / 0.3 ms | 3.6 / 0.3 ms | 0.2 ms |
+| `hashrate/pools/all` | | | 836 / 1.8 ms (2 MB) | 8.9 ms |
+| `difficulty-adjustments/1m` | 0.01 s | 0.8 / 0.3 ms | 0.7 / 0.4 ms | 0.07 ms |
+| `reward-stats/144` | 0.08 s | 0.7 ms | 0.6 ms; 31 ms for 52,560 |  |
+| `blocks/fees/1w` | 23.9 s | 1.4 / 0.4 ms | 1.6 / 0.5 ms | 1.5 ms (all five series of the week) |
+| `blocks/fees/all` | | | 565 / 0.5 ms | 0.9 ms (all five series) |
+| `blocks/rewards/1w` | 23.9 s | 1.6 / 0.5 ms | 1.7 / 0.4 ms | (with fees) |
+| `blocks/fee-rates/1w` | 23.9 s | 1.5 / 0.4 ms | 1.7 / 0.5 ms | (with fees) |
+| `blocks/fee-rates/all/precise` | 404 | | 591 / 0.4 ms | (with fees) |
+| `blocks/sizes-weights/1w` | 24.0 s | 1.6 / 0.4 ms | 68 / 1.2 ms (a busy moment) | (with fees) |
+| `blocks/sizes-weights/all` | | | 560 / 0.6 ms | (with fees) |
+| `blocks/timestamp/:t` | 0.02 s | 0.6 ms | 0.4 ms |  |
 
-The 975,000-row table is synthetic (realistic sizes, the list's tags, the last year rated): `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark` fills it and times the statements; the server then runs over it as regtest with no reachable node. With every route and interval asked for, a new block costs the refresh a few seconds of reads on one of the four reader connections, once per block.
+The 975,000-row table is synthetic (realistic sizes, the list's tags, the last year rated): `MINING_BENCH_DIR=<dir> cargo test --release -p engine -- --ignored --nocapture mining_benchmark` fills it and times the statements; the server then runs over it as regtest with no reachable node. The last column is each answer's first computation, without HTTP, on a copy of a synced mainnet store with its totals filled: `MINING_BENCH_DIR=<dir> MINING_BENCH_NET=mainnet cargo test --release -p rbitcoin-space -- --ignored --nocapture answers_benchmark`, which also times a new block's refresh of every answer. With every route and interval asked for, that refresh took 9.5 to 11.3 s before the totals and 47 to 53 ms with them ([`PERFORMANCE.md`](PERFORMANCE.md#6-reads-that-grew-with-the-block-table-done)).
 
 ### Block audits
 
