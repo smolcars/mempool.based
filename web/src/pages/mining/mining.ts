@@ -304,29 +304,48 @@ export function hashrateSeries(h: Hashrates): {
   };
 }
 
-/** The most pools drawn as their own layer; the rest are one. */
-export const TOP_LAYERS = 6;
 export const OTHER_POOLS = "Other pools";
 
 /**
- * Weekly pool shares as stacked layers, the biggest pool over the period at the bottom: the top
- * `top` pools by blocks found (Unknown among them, ranked like any pool), then the rest as one.
+ * The six pools drawn in a colour of their own, the same at every period and in every share
+ * graphic, so a colour always names one pool: the six with the most blocks in the year to
+ * November 2026, biggest first. Every other pool is counted in "Other pools", in grey; the table
+ * names them all.
+ * shortcut: a fixed list, revise it when a pool outside it joins the year's top six.
  */
-export function poolLayers(
-  weeks: readonly PoolWeek[],
-  top = TOP_LAYERS,
-): { x: number[]; layers: { name: string; values: number[]; pool: number }[] } {
+export const COLOURED_POOLS = [
+  "Foundry USA",
+  "AntPool",
+  "F2Pool",
+  "ViaBTC",
+  "SpiderPool",
+  "MARA Pool",
+] as const;
+
+/** A pool's colour, 1–6, or 0 for the grey every other pool shares. */
+export function poolColour(name: string): number {
+  return (COLOURED_POOLS as readonly string[]).indexOf(name) + 1;
+}
+
+/**
+ * Weekly pool shares as stacked layers: each coloured pool found in the period, the biggest over
+ * the period at the bottom, then every other pool as one grey layer.
+ */
+export function poolLayers(weeks: readonly PoolWeek[]): {
+  x: number[];
+  layers: { name: string; values: number[]; pool: number }[];
+} {
   const x = sorted(new Set(weeks.map((w) => w.timestamp)), (a, b) => a - b);
   const at = new Map(x.map((t, i) => [t, i]));
   const totals = new Map<string, number>();
   for (const w of weeks) totals.set(w.poolName, (totals.get(w.poolName) ?? 0) + w.share);
-  const ranked = sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const named = ranked.slice(0, ranked.length > top + 1 ? top : top + 1).map(([name]) => name);
-  // The biggest six take their colours in order; any more, and the rest, share the neutral one.
-  const layers = named.map((name, i) => ({
+  const named = sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name]) => name)
+    .filter((name) => poolColour(name) > 0);
+  const layers = named.map((name) => ({
     name,
     values: x.map(() => 0),
-    pool: i < 6 ? i + 1 : 0,
+    pool: poolColour(name),
   }));
   const index = new Map(named.map((n, i) => [n, i]));
   const rest = x.map(() => 0);
@@ -336,7 +355,7 @@ export function poolLayers(
     if (layer) layer.values[i] = (layer.values[i] ?? 0) + w.share;
     else rest[i] = (rest[i] ?? 0) + w.share;
   }
-  if (ranked.length > named.length) layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
+  if (totals.size > named.length) layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
   return { x, layers };
 }
 

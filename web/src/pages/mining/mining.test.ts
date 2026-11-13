@@ -80,27 +80,29 @@ describe("pool layers", () => {
     share,
     avgHashrate: 0,
   });
-  it("stacks the biggest pool at the bottom and the rest as one layer", () => {
+  it("stacks the coloured pools, biggest at the bottom, and every other pool as one layer", () => {
     const weeks = [
-      week(2, "A", 0.5),
-      week(2, "B", 0.3),
-      week(2, "C", 0.1),
-      week(2, "D", 0.1),
-      week(1, "A", 0.6),
-      week(1, "Unknown", 0.4),
+      week(2, "AntPool", 0.5),
+      week(2, "Luxor", 0.3),
+      week(2, "Unknown", 0.1),
+      week(2, "F2Pool", 0.1),
+      week(1, "AntPool", 0.4),
+      week(1, "F2Pool", 0.6),
     ];
-    const { x, layers } = poolLayers(weeks, 2);
+    const { x, layers } = poolLayers(weeks);
     expect(x).toStrictEqual([1, 2]);
-    expect(layers.map((l) => l.name)).toStrictEqual(["A", "Unknown", OTHER_POOLS]);
-    expect(layers[0]?.values).toStrictEqual([0.6, 0.5]);
-    expect(layers[1]?.values).toStrictEqual([0.4, 0]);
-    expect(layers[2]?.values[1]).toBeCloseTo(0.5);
-    // The biggest take their pool colours in order; the rest is the neutral one.
-    expect(layers.map((l) => l.pool)).toStrictEqual([1, 2, 0]);
+    expect(layers.map((l) => l.name)).toStrictEqual(["AntPool", "F2Pool", OTHER_POOLS]);
+    expect(layers[0]?.values).toStrictEqual([0.4, 0.5]);
+    expect(layers[2]?.values[1]).toBeCloseTo(0.4);
+    // A pool's colour is its own, whatever its rank: AntPool is 2 and F2Pool 3 here and everywhere.
+    expect(layers.map((l) => l.pool)).toStrictEqual([2, 3, 0]);
   });
-  it("never makes a layer of others out of one pool", () => {
-    const { layers } = poolLayers([week(1, "A", 0.6), week(1, "B", 0.3), week(1, "C", 0.1)], 2);
-    expect(layers.map((l) => l.name)).toStrictEqual(["A", "B", "C"]);
+  it("leaves out the grey layer when every pool has a colour", () => {
+    const { layers } = poolLayers([week(1, "ViaBTC", 0.7), week(1, "Foundry USA", 0.3)]);
+    expect(layers.map((l) => [l.name, l.pool])).toStrictEqual([
+      ["ViaBTC", 4],
+      ["Foundry USA", 1],
+    ]);
   });
 });
 

@@ -30,6 +30,8 @@ import {
   PERIODS,
   type Period,
   parsePeriod,
+  OTHER_POOLS,
+  poolColour,
   poolLayers,
   type Ranked,
   type Ranking,
@@ -411,28 +413,28 @@ function answeredPeriod(a: { path: string } | undefined): Period | undefined {
   return PERIODS.find((p) => a?.path.endsWith(`/${p.id}`));
 }
 
-/** Layers in the period's share bar: the six biggest pools, then the rest as one. */
-const SHARE_PARTS = 6;
-
 /**
- * The period's share of blocks as one bar, biggest pool first, in the shades the weekly chart's
- * layers use, with each pool and its share named beside it.
+ * The period's share of blocks as one bar: each coloured pool found in the period, biggest first,
+ * in its own colour (`COLOURED_POOLS`), then every other pool as one grey part, each named beside
+ * it.
  */
 function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => number }) {
   const parts = () => {
-    const top = props.pools
-      .slice(0, SHARE_PARTS)
-      .map((p) => ({ name: p.name, share: props.share(p) }));
-    const rest = props.pools.slice(SHARE_PARTS).reduce((sum, p) => sum + props.share(p), 0);
-    return rest > 0 ? [...top, { name: "Other pools", share: rest }] : top;
+    const coloured = props.pools
+      .filter((p) => poolColour(p.name) > 0)
+      .map((p) => ({ name: p.name, share: props.share(p), pool: poolColour(p.name) }));
+    const rest = props.pools
+      .filter((p) => poolColour(p.name) === 0)
+      .reduce((sum, p) => sum + props.share(p), 0);
+    return rest > 0 ? [...coloured, { name: OTHER_POOLS, share: rest, pool: 0 }] : coloured;
   };
   return (
     <figure class="mining-period-shares">
       <div class="mining-period-shares__bar" aria-hidden="true">
         <For each={parts()}>
-          {(p, i) => (
+          {(p) => (
             <span
-              class={`mining-period-shares__part mining-period-shares__part--${i() < SHARE_PARTS ? i() + 1 : "other"}`}
+              class={`mining-period-shares__part mining-period-shares__part--${p.pool || "other"}`}
               style={{ "--p": String(p.share) }}
             />
           )}
@@ -440,10 +442,10 @@ function PeriodShares(props: { pools: readonly Ranked[]; share: (p: Ranked) => n
       </div>
       <ol class="mining-period-shares__key">
         <For each={parts()}>
-          {(p, i) => (
+          {(p) => (
             <li>
               <span
-                class={`mining-period-shares__swatch mining-period-shares__part mining-period-shares__part--${i() < SHARE_PARTS ? i() + 1 : "other"}`}
+                class={`mining-period-shares__swatch mining-period-shares__part mining-period-shares__part--${p.pool || "other"}`}
                 aria-hidden="true"
               />
               <span class="mining-period-shares__name">{p.name}</span>

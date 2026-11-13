@@ -129,3 +129,73 @@ test("the pools caption follows the period through every switch", async ({ page 
     }
   }
 });
+
+// Colours once followed rank, so F2Pool was gold one day and lavender the next week.
+test("a pool keeps its colour at every period and in both share graphics", async ({ page }) => {
+  // Regtest has no pools: each period answers with the same pools in a different order.
+  const orders: Record<string, string[]> = {
+    "24h": ["F2Pool", "AntPool", "Luxor", "Foundry USA", "SpiderPool"],
+    "1w": ["AntPool", "Foundry USA", "F2Pool", "SpiderPool", "Luxor"],
+    "1m": ["Foundry USA", "SpiderPool", "AntPool", "Luxor", "F2Pool"],
+    "1y": ["Luxor", "F2Pool", "Foundry USA", "AntPool", "SpiderPool"],
+    all: ["SpiderPool", "Luxor", "AntPool", "F2Pool", "Foundry USA"],
+  };
+  const period = (url: string) => /\/(24h|1w|1m|1y|all)$/.exec(url)?.[1] ?? "1w";
+  await page.route(/\/api\/v1\/mining\/pools\/\w+$/, (route) => {
+    const names = orders[period(route.request().url())] ?? [];
+    const pools = names.map((name, i) => ({
+      poolId: i + 1,
+      name,
+      link: "",
+      blockCount: 50 - i * 10,
+      rank: i + 1,
+      emptyBlocks: 0,
+      slug: name.toLowerCase().replaceAll(" ", ""),
+      avgMatchRate: null,
+      avgFeeDelta: null,
+      poolUniqueId: i + 1,
+    }));
+    return route.fulfill({
+      json: { pools, blockCount: 150, lastEstimatedHashrate: 1e18, lastEstimatedHashrate1w: 1e18 },
+    });
+  });
+  await page.route(/\/api\/v1\/mining\/hashrate\/pools\/\w+$/, (route) => {
+    const names = orders[period(route.request().url())] ?? [];
+    const weeks = [1_790_000_000, 1_790_604_800].flatMap((timestamp) =>
+      names.map((poolName, i) => ({
+        timestamp,
+        avgHashrate: 1e18,
+        share: (50 - i * 10) / 150,
+        poolName,
+      })),
+    );
+    return route.fulfill({ json: weeks });
+  });
+  const seen = new Map<string, string>();
+  for (const id of ["24h", "1w", "1m", "1y", "all"]) {
+    await page.goto(`/regtest/mining?period=${id}`);
+    const pools = page.getByRole("region", { name: "Pools" });
+    // A day and a week show one bar; longer periods the weekly chart, read out beside it.
+    const keys =
+      id === "24h" || id === "1w"
+        ? pools.locator(".mining-period-shares__key li")
+        : pools.locator(".chart__value");
+    await expect(keys.filter({ hasText: "Foundry USA" })).toBeVisible({ timeout: 30_000 });
+    const swatches = await keys.evaluateAll((items) =>
+      items.map((li) => {
+        const swatch = li.querySelector(".mining-period-shares__swatch, .chart__key");
+        const name = li.querySelector(".mining-period-shares__name, .chart__name")?.textContent;
+        return [name ?? "", swatch ? getComputedStyle(swatch).backgroundColor : ""] as const;
+      }),
+    );
+    for (const [name, colour] of swatches) {
+      expect(colour, `${name} at ${id}`).not.toBe("");
+      expect(colour, `${name} at ${id}`).toBe(seen.get(name) ?? colour);
+      seen.set(name, colour);
+    }
+  }
+  // Luxor has no colour of its own: it is counted with the other pools, in their grey.
+  expect([...seen.keys()]).not.toContain("Luxor");
+  expect(seen.get("Other pools")).toBeDefined();
+  expect(new Set(seen.values()).size).toBe(seen.size);
+});
