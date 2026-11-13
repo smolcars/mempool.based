@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  btcAxis,
   cleanAlias,
   msatShort,
   coverageSentence,
@@ -188,5 +189,16 @@ describe("a node's fee rates", () => {
     expect(feeSentence(one)).toBe(
       "It charges 100–199 ppm to forward; its peer has set none towards it.",
     );
+  });
+});
+
+describe("btcAxis", () => {
+  it("writes ticks as decimals at every size, never as a power of ten", () => {
+    expect(btcAxis(0)).toBe("0");
+    expect(btcAxis(0.5)).not.toMatch(/e/);
+    expect(btcAxis(1)).toBe("0.00000001");
+    expect(btcAxis(37_200)).toBe("0.000372");
+    expect(btcAxis(5_500_000)).toBe("0.055");
+    expect(btcAxis(28_500_000_000).replaceAll("\u202F", " ")).toBe("285");
   });
 });

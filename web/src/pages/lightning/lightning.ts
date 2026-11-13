@@ -466,7 +466,10 @@ export const ppm = (n: number): string => `${groupDigits(n)} ppm`;
 /** A capacity axis's ticks, in BTC: three significant digits below 100, never a power of ten. */
 export const btcAxis = (sats: number): string => {
   const btc = sats / 1e8;
-  return btc >= 100 ? groupDigits(btc) : String(Number(btc.toPrecision(3)));
+  if (btc >= 100) return groupDigits(btc);
+  // Below 0.001 JavaScript may write a number as `5e-9`: to the satoshi instead.
+  if (btc < 0.001) return btc.toFixed(8).replace(/\.?0+$/, "");
+  return String(Number(btc.toPrecision(3)));
 };
 
 export const msat = (n: number): string => `${groupDigits(n)} msat`;

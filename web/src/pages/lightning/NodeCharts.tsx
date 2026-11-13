@@ -123,10 +123,11 @@ export function NodeFees(props: { node: NodeDetail }) {
       numeric: true,
       cell: (r) => groupDigits(r.outgoing.count),
     },
+    // Every column stays on a phone, where the table scrolls: the capacities are only here.
     {
       header: "Their capacity, BTC",
+      short: "Out, BTC",
       numeric: true,
-      optional: true,
       cell: (r) => <Amount sats={r.outgoing.capacity} unit={false} short />,
     },
     {
@@ -137,8 +138,8 @@ export function NodeFees(props: { node: NodeDetail }) {
     },
     {
       header: "Their capacity, BTC",
+      short: "In, BTC",
       numeric: true,
-      optional: true,
       cell: (r) => <Amount sats={r.incoming.capacity} unit={false} short />,
     },
   ];

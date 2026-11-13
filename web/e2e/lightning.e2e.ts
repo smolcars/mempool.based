@@ -386,6 +386,8 @@ test("a node's past and fee rates sit side by side, and a phone reaches its chan
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(fees.getByRole("table")).toBeVisible();
   await tablesFit(page, "a node's fee figures at 320 px");
+  // Every column, the capacities included: the table scrolls rather than drop one.
+  await expect(fees.locator("thead th:visible")).toHaveCount(5);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
