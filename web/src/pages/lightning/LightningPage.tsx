@@ -1,7 +1,7 @@
 // The Lightning network now and over time, and its newest opens and closes
 // (docs/DESIGN.md "Lightning", docs/FRONTEND.md "Lightning pages").
-import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import { useLocation, useSearchParams } from "@solidjs/router";
+import { createEffect, createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatMoment, formatSi } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
@@ -78,6 +78,15 @@ function Overview(props: { network: Network }) {
     (n, signal) => ask(n, "/overview", isOverview, signal),
   );
   onSettled(() => void Chart.preload());
+  // "History" in the section's links lands on the chart: once the figures above it have arrived,
+  // so they do not push it out of view after the jump.
+  const location = useLocation();
+  createEffect(
+    () => [location.hash, overview.latest !== undefined] as const,
+    ([hash, ready]) => {
+      if (hash === "#history" && ready) document.getElementById("history")?.scrollIntoView();
+    },
+  );
   return (
     <>
       <Show
@@ -233,7 +242,7 @@ function History(props: { network: Network }) {
     return search["interval"] === undefined && a !== undefined && dataFrom(a) !== undefined;
   };
   return (
-    <section aria-labelledby="ln-history-title">
+    <section id="history" class="ln-history" aria-labelledby="ln-history-title">
       <SectionHeader title="Over time" id="ln-history-title">
         Every ten minutes
       </SectionHeader>

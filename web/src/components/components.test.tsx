@@ -108,7 +108,9 @@ describe("Hash", () => {
     button.click();
     await vi.waitFor(() => expect(button.dataset["copied"]).toBeDefined());
     expect(writeText).toHaveBeenCalledWith(txid);
-    expect(button.textContent).toBe("Copied");
+    // Once in sight beside the icon, once for a screen reader.
+    expect(q(button, ".copy__note").textContent).toBe("Copied");
+    expect(q(button, "[aria-live]").textContent).toBe("Copied");
   });
 
   it("renders chain data as text, never as markup", () => {

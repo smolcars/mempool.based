@@ -235,3 +235,32 @@ for (const width of [360, 768, 1440]) {
     }
   });
 }
+
+test("History in the section's links lands on the overview's chart from any Lightning page", async ({
+  page,
+}) => {
+  await serve(page, mainnet());
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const from of [
+      `/regtest/lightning/node/${ACINQ}`,
+      "/regtest/lightning/channel/811984x2037x0",
+      "/regtest/lightning/rankings",
+    ]) {
+      await page.goto(from);
+      const nav = page.getByRole("navigation", { name: "Lightning" });
+      await expect(nav.getByRole("link", { name: "Overview" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Rankings" })).toBeVisible();
+      await nav.getByRole("link", { name: "History" }).click();
+      await expect(page).toHaveURL(/\/regtest\/lightning#history$/);
+      const heading = page.getByRole("heading", { name: "Over time" });
+      await expect(heading).toBeInViewport();
+      // Clear of the sticky header, not under it.
+      const header = await page.locator(".site-header").boundingBox();
+      const top = (await heading.boundingBox())?.y ?? 0;
+      expect(top, `${from} at ${width} px`).toBeGreaterThanOrEqual(
+        (header?.y ?? 0) + (header?.height ?? 0),
+      );
+    }
+  }
+});

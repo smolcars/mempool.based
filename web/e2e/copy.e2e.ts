@@ -79,6 +79,13 @@ for (const [what, path, label, value] of [
     await expect(button).toHaveAccessibleName(label);
     await button.click();
     await expect(button).toHaveAccessibleName("Copied");
+    // A sighted reader sees the word too, at a readable size, not only a green icon.
+    const note = button.locator(".copy__note");
+    await expect(note).toHaveText("Copied");
+    await expect(note).toBeVisible();
+    const box = await note.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThan(30);
+    expect(box?.height ?? 0).toBeGreaterThan(12);
     const copied = await clipboardText(page, baseURL ?? "");
     test.info().annotations.push({ type: "clipboard read back by", description: copied.how });
     // Chromium lets a test read the clipboard; where an engine will not, "Copied" is the proof.

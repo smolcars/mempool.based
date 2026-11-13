@@ -307,7 +307,8 @@ export function rememberList(href: string, label: string): void {
 }
 
 /**
- * Lightning's own way around: its overview and its rankings, as a short row of links, and on a node
+ * Lightning's own way around: its overview, its rankings and the overview's history chart, as a short
+ * row of links, and on a node
  * or channel a way back to the list the reader came from. One line, never a tall band.
  */
 export function LightningNav(props: { here: "overview" | "rankings" | "search" | "detail" }) {
@@ -334,6 +335,10 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
         aria-current={props.here === "rankings" ? "page" : undefined}
       >
         Rankings
+      </Link>
+      {/* The overview's chart, from wherever the reader is: an anchor, not another page. */}
+      <Link class="ln-nav__item" href={`${paths.lightning()}#history`}>
+        History
       </Link>
     </nav>
   );

@@ -91,6 +91,12 @@ export function CopyButton(props: { value: string; label?: string }) {
           Not copied
         </span>
       </Show>
+      {/* Seen beside the icon for a moment; the live region below says it to a screen reader. */}
+      <Show when={state() === "copied"}>
+        <span class="copy__note" aria-hidden="true">
+          Copied
+        </span>
+      </Show>
       <span class="visually-hidden" aria-live="polite">
         {state() === "copied"
           ? "Copied"
