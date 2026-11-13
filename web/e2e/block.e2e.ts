@@ -63,6 +63,16 @@ test("the blocks list pages back and forward", async ({ page }) => {
   await page.goto("/regtest/blocks");
   const firstHeight = page.getByRole("table").getByRole("row").nth(1).getByRole("link").first();
   await expect(firstHeight).toHaveText(String(chain.tip.height));
+  // A block this server never audited reads a dash in "Match rate", and "no audit" aloud. A phone
+  // drops the column.
+  const headers = await page.getByRole("columnheader").allTextContents();
+  const match = headers.indexOf("Match rate, %");
+  if (!test.info().project.name.endsWith("-phone")) expect(match).toBeGreaterThanOrEqual(0);
+  if (match >= 0) {
+    const cell = page.getByRole("table").getByRole("row").nth(1).getByRole("cell").nth(match);
+    await expect(cell).toHaveText("–no audit");
+    await expect(cell.locator(".visually-hidden")).toHaveText("no audit");
+  }
   await page.getByRole("link", { name: /Older/ }).click();
   // 25 to a page.
   await expect(page).toHaveURL(`/regtest/blocks/${chain.tip.height - 25}`);
