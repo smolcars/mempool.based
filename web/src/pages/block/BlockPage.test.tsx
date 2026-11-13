@@ -56,17 +56,21 @@ interface Reply {
   body: unknown;
   headers?: Record<string, string>;
 }
-let replies: Record<string, Reply | ((n: number) => Reply)> = {};
+let replies: Record<string, Reply | ((n: number) => Reply | Promise<Reply>)> = {};
 const calls: string[] = [];
+/** How each call in `calls` treated the browser's HTTP cache. */
+const caching: (RequestCache | undefined)[] = [];
 
 function serve(table: typeof replies) {
   replies = table;
   calls.length = 0;
-  vi.stubGlobal("fetch", async (input: string) => {
+  caching.length = 0;
+  vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
     const path = input.replace(/^(\/(signet|testnet4|regtest))?\/api/, "");
     calls.push(path);
+    caching.push(init?.cache);
     const r = replies[path];
-    const reply = typeof r === "function" ? r(calls.filter((c) => c === path).length) : r;
+    const reply = typeof r === "function" ? await r(calls.filter((c) => c === path).length) : r;
     if (!reply) return Response.json({ error: "not found" }, { status: 404 });
     const status = reply.status ?? 200;
     // Block JSON is immutable, as the server marks it, so the client keeps it in memory.
@@ -498,6 +502,112 @@ describe("BlockPage", () => {
     );
     expect(text(el.querySelector(".block-pager") as Element)).toContain("The newest block");
     expect(calls).toContain("/block-height/0");
+  });
+
+  it("follows the newest block until the next is found, before it followed or after", async () => {
+    let found = false;
+    serve({
+      ...normal(),
+      [`/block/${HASH}/status`]: () => status({ next_best: found ? NEXT : null }),
+    });
+    const el = open(`/block/${HASH}`);
+    const pager = () => text(el.querySelector(".block-pager") as Element);
+    await until(() => expect(pager()).toContain("The newest block"));
+    const asked = () => calls.filter((c) => c === `/block/${HASH}/status`).length;
+    expect(asked()).toBe(1);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    // The tip as it stands is this block: nothing to ask.
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: HASH } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(asked()).toBe(1);
+    expect(pager()).toContain("The newest block");
+    // The next one, found whether before the subscription took effect or after.
+    found = true;
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await until(() => expect(pager()).toContain("Next: 975 412"));
+    expect(asked()).toBe(2);
+    // The first ask may come from the browser's cache; the one the block prompted may not.
+    expect(caching.filter((_, i) => calls[i] === `/block/${HASH}/status`)).toStrictEqual([
+      undefined,
+      "no-cache",
+    ]);
+  });
+
+  it("asks again when the next block was announced while its status was on its way", async () => {
+    let answer: (r: Reply) => void = () => undefined;
+    serve({
+      ...normal(),
+      // The node answered before the next block; the answer arrives after its announcement.
+      [`/block/${HASH}/status`]: (n) =>
+        n === 1
+          ? new Promise<Reply>((resolve) => {
+              answer = resolve;
+            })
+          : status(),
+    });
+    const el = open(`/block/${HASH}`);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    answer(status({ next_best: null }));
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 412"),
+    );
+  });
+
+  it("follows the newest block opened from an older one, through a block found meanwhile", async () => {
+    let answer: (r: Reply) => void = () => undefined;
+    serve({
+      ...normal(),
+      [`/block/${PREV}`]: { body: { ...block, id: PREV, height: block.height - 1 } },
+      [`/block/${PREV}/status`]: status({ height: block.height - 1, next_best: HASH }),
+      [`/block/${PREV}/txs/0`]: { body: [coinbase] },
+      [`/block/${HASH}/status`]: (n) =>
+        n === 1
+          ? new Promise<Reply>((resolve) => {
+              answer = resolve;
+            })
+          : status(),
+    });
+    const el = open(`/block/${PREV}`);
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 411"),
+    );
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    history.set({ value: `/block/${HASH}` });
+    await until(() => expect(calls).toContain(`/block/${HASH}/status`));
+    // The older block's "next" is this block: it must not stand for this one's while it loads.
+    const next = () => el.querySelector(".block-pager a[rel=next]")?.getAttribute("href");
+    expect(next()).toBeUndefined();
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    answer(status({ next_best: null }));
+    await until(() => expect(next()).toBe(`/block/${NEXT}`));
+  });
+
+  it("asks nothing more for an older block, whatever the topic says", async () => {
+    serve(normal());
+    const el = open(`/block/${HASH}`);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 412"),
+    );
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: "ef".repeat(32) } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(calls.filter((c) => c === `/block/${HASH}/status`)).toHaveLength(1);
   });
 
   it("marks a block that is not on the best chain", async () => {

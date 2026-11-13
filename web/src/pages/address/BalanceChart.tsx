@@ -64,7 +64,11 @@ export function BalanceChart(props: {
   const controller = new AbortController();
   onCleanup(() => controller.abort());
   const fetch = (path: string): Promise<Stamped<unknown>> =>
-    fetchStamped<unknown>(network(), path, { signal: controller.signal });
+    // Fresh once the chart is drawn: later pages follow a change the page was told of.
+    fetchStamped<unknown>(network(), path, {
+      signal: controller.signal,
+      fresh: history !== undefined,
+    });
 
   let history: History | undefined;
   let started = false;

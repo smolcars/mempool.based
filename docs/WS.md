@@ -126,7 +126,7 @@ For pages that list replacements (`/rbf` and the recent replacements on the home
 | `{"topic":"replacements","type":"replacements","version":812}` | The record's version: it changes with every replacement recorded, every replacement confirmed, and every change a reorg makes. Sent from the tracker's first cycle and then on each change, at most once per tracker cycle (one delta), and kept as the snapshot for new subscribers. Compare it with the last one seen; it means nothing else. It starts again from a low number when the server restarts |
 | `{"topic":"replacements","type":"off"}` | The mempool engine is switched off on this network: there is no record |
 
-About 70 bytes a message. On mainnet in November 2026 a replacement arrived every six seconds or so. The reply to `/api/v1/replacements` is `max-age=1`, so a page asks again no sooner than 1.5 s after its last ask, or the browser's cache would answer with the list from before the change.
+About 70 bytes a message. On mainnet in November 2026 a replacement arrived every six seconds or so. The reply to `/api/v1/replacements` is `max-age=1`, so a page asks for it from the server, skipping the browser's cache, which can hold the list from before the change ([`FRONTEND.md`](FRONTEND.md#following-live-data)).
 
 ### When a block is found
 

@@ -2,78 +2,13 @@
 // The orderings a live address page meets, each built on purpose against the real node and server
 // (docs/FRONTEND.md "Live data"). Each test watches an address of its own, and confirms its own
 // payments in a block that holds nothing else: later tests count on the scenario's mempool.
-import { createHash, randomBytes } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
-
-/** P2WSH of OP_TRUE: the harness's miner script (docs/REGTEST.md), spent with the witness [OP_TRUE]. */
-const MINER_SCRIPT = "00204ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260";
-type Rpc = <T>(method: string, params?: unknown[]) => Promise<T>;
-
-const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const sha256 = (b: Buffer) => createHash("sha256").update(b).digest();
-
-/** A regtest P2PKH address of random bytes, which nobody has used. */
-function freshAddress(): string {
-  const body = Buffer.concat([Buffer.from([0x6f]), randomBytes(20)]);
-  let n = BigInt(`0x${Buffer.concat([body, sha256(sha256(body)).subarray(0, 4)]).toString("hex")}`);
-  let s = "";
-  for (; n > 0n; n /= 58n) s = `${B58[Number(n % 58n)]}${s}`;
-  return s;
-}
-
-const le = (n: bigint, bytes: number) =>
-  Array.from({ length: bytes }, (_, i) =>
-    ((n >> BigInt(8 * i)) & 0xffn).toString(16).padStart(2, "0"),
-  ).join("");
-
-/** Coinbases this file has spent, so two payments in a row never take the same one. */
-const spent = new Set<string>();
-
-/** Pays `sats` to `address` from a mature coinbase of the miner script, as the harness does. */
-async function pay(rpc: Rpc, address: string, sats: bigint): Promise<string> {
-  const { scriptPubKey } = await rpc<{ scriptPubKey: string }>("validateaddress", [address]);
-  for (let h = (await rpc<number>("getblockcount")) - 100; h > 0; h--) {
-    const id = (await rpc<{ tx: string[] }>("getblock", [await rpc("getblockhash", [h]), 1])).tx[0];
-    if (id === undefined || spent.has(id)) continue;
-    // An unspent output's details, or null (which the helper reports as a failure) when spent.
-    const out = await rpc<{ value: number; scriptPubKey: { hex: string } }>("gettxout", [id, 0])
-      .then((o) => (o.scriptPubKey.hex === MINER_SCRIPT ? o : null))
-      .catch(() => null);
-    if (out === null) continue;
-    spent.add(id);
-    const change = BigInt(Math.round(out.value * 1e8)) - sats - 10_000n;
-    const prev = Array.from({ length: 32 }, (_, i) => id.slice(62 - 2 * i, 64 - 2 * i)).join("");
-    const script = (hex: string) => `${(hex.length / 2).toString(16).padStart(2, "0")}${hex}`;
-    const raw =
-      `02000000` +
-      `0001` +
-      `01${prev}00000000` +
-      `00fdffffff` +
-      `02${le(sats, 8)}${script(scriptPubKey)}${le(change, 8)}${script(MINER_SCRIPT)}` +
-      `010151` +
-      `00000000`;
-    return rpc<string>("sendrawtransaction", [raw]);
-  }
-  throw new Error("a mature coinbase is unspent");
-}
-
-/** A block whose coinbase pays `address`, holding `txids` and nothing else from the mempool. */
-const block = (rpc: Rpc, address: string, txids: string[] = []) =>
-  rpc("generateblock", [address, txids]);
+import { block, freshAddress, gate, keep, pay } from "./regtest";
 
 const rows = (page: Page) => page.getByRole("table").locator("tbody tr");
 const unconfirmed = (page: Page) => rows(page).filter({ hasText: "Unconfirmed" });
 const live = (page: Page) => page.getByText("Live", { exact: true });
-
-/** A gate a socket route waits at until the test opens it. */
-function gate() {
-  let open: () => void = () => undefined;
-  const shut = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { open, shut };
-}
 
 let address = "";
 test.beforeEach(async ({ rpc, mine }) => {
@@ -178,11 +113,7 @@ test("a payment shows when the browser holds a history answer from before it", a
   await expect(live(page)).toBeVisible();
   await expect(rows(page)).toHaveCount(1);
   // At the start of a later second than the totals' answer, the browser keeps a history answer.
-  await page.waitForTimeout(1000 + 20 - (Date.now() % 1000));
-  await page.evaluate(
-    (url) => fetch(url, { headers: { accept: "application/json" } }).then((r) => r.text()),
-    `/regtest/api/address/${address}/txs`,
-  );
+  await keep(page, `/regtest/api/address/${address}/txs`);
   await block(rpc, address);
   await expect(rows(page)).toHaveCount(2);
 });
