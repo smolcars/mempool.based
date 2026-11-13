@@ -38,6 +38,7 @@ let fees: Option<i64> = store.read(Read::Blocks, move |sql| {
 - **Back-pressure.** `write` waits when `Options::queue` writes (64) are already waiting. `try_write` fails with `Error::Full` instead, for a producer that would rather drop a sample than fall behind. `queue_depth()` says how many are waiting.
 - **Reads.** At most `Options::readers` (4) reads run at once; more wait for a free connection. Once a read has run for `read_time_limit` (2 s), its running statement and any later one are stopped, it returns `Error::TimedOut`, and `Event::ReadTimedOut` names it by the `Read` its caller gave (`store_read_timed_out`). The deadline is enforced on the blocking thread: SQLite's progress handler stops a long statement, and `Sql::prepare` refuses new ones, so it holds across statements and after the caller stops waiting. It bounds SQL, not Rust work inside the closure. It is wall-clock time, so a stalled machine trips it too: on 2026-11-12 a host at load 20 to 33 timed out a count that takes milliseconds. Do not call `Statement::reset_status` on SQLite's VM-step counter in a read: the progress handler counts on it. A read may use `BEGIN` for a consistent snapshot across statements; one left open is rolled back before the connection is reused. Reads see the last committed write, never one in progress, and never wait for the writer: measured on a 300,000-row table, a full scan took 35 ms (median) alone and 43 ms (at most 55 ms) while 10,000-row writes committed back to back, every third holding the writer for a second.
 - **Versions.** `version(&[Table::Blocks, …])` is a number that changes whenever one of those tables changes, or `None` while a write to one of them is open: the writer's authorizer marks each table a statement will insert into, update or delete from when the statement is prepared, before it runs (whatever its form: a replace, a table without rowids, a whole-table delete, a trigger's writes or a foreign key's cascade; a trigger's table is marked even when it does not fire), and the writer clears the marks once the write has committed or rolled back, before `write` returns. A statement cannot outlive its write (`Sql::prepare` has no statement cache), so one run many times was marked when it was prepared and stays marked to the end. Each write that marks a table moves its number by one step, and nothing else moves it: the store's tests write through every path above, a migration and a rollback, and check exactly that. An answer computed after reading `Some(v)` is what a fresh read gives for as long as `version` returns `Some(v)`; the server keeps such answers in memory ([`API.md`](API.md#answers-kept-in-memory)). Only `blocks`, `audits` and `mempool_history` are followed; add a table to `Table` when an answer kept in memory reads it. A write from another process or connection is not seen, which the one-writer rule rules out.
+- **The gate.** With `Options::genesis` set, as the server sets it, writes wait until the caller opens the gate, and stop whenever it closes it ([`chain`](#chain)). `try_write` waits for the gate too; it fails at once only on a full queue. Reads are never held. Without `genesis` (tests, tools) the gate is open from the start.
 - **A queued write cannot be cancelled.** Dropping the future of a `write` that is already queued does not stop it; it still commits.
 - **Failing writes are counted.** A write SQLite refuses (anything but a constraint, which is the caller's logic) is classified by its code, `disk_full`, `read_only`, `corrupt`, `busy`, `io` or `other` (`store::failure_kind`), and reported as `Event::WriteFailed` with SQLite's message at the 1st, 2nd, 4th… failure in a row, then `Event::WriteRecovered` at the next commit. `write_health()` says when a write last committed and how many have failed since, for `/readyz` ([`DEPLOY.md`](DEPLOY.md#health)). The writes themselves are each caller's to retry or drop. Tested with a full disk simulated by `max_page_count` (SQLite answers `SQLITE_FULL`, as for a full disk) and a read-only connection.
 - **Errors stay inside.** A store error can contain SQL text. Never send it to a client ([`SECURITY.md`](SECURITY.md) rule 17): answer `500` and report it.
@@ -73,6 +74,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | [`replacements`](#replacements) | `0005_replacements.sql`, `0008_replacement_blocks.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
 | [`ln_channels`](#ln_channels) | `0006_lightning.sql`, `0007_lightning_lookups.sql` (`open_txid` and the lookup indexes) | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
 | [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
+| [`chain`](#chain) | `0009_chain.sql` | One row: the genesis hash of the chain the file was written for | Yes: written again by the check below |
 
 ### Adding a table
 
@@ -83,6 +85,37 @@ Follow `blocks` (`crates/engine/src/blocks/`):
 3. **I/O through a trait** (`Source`) with a real implementation over the node clients and a mock in the tests, so the logic is tested without a node.
 4. **Report, don't log:** the engine returns errors and calls an observer with typed events; the server turns them into log events (`crates/server/src/blocks.rs`).
 5. **Say here** which of its data is rebuildable and which is lost with the file.
+
+### chain
+
+A file is named for a network, but nothing in a block row says which chain it came from, and a server whose `{NET}_*` variables point at another network's node would fill the file with that chain's data (found in the deployment rehearsal: `mainnet.sqlite` filled with regtest blocks). Two guards keep that from happening; neither ever deletes data.
+
+**The file records its chain.** `chain` holds one row, the genesis block's hash (32 bytes, internal order). At open, with `Options::genesis` set:
+
+| The file has | Open |
+|---|---|
+| A row naming this genesis | Opens |
+| A row naming another | Refused, file untouched: `OpenError::WrongChain`, logged as `store_open_failed` with the file and the other genesis hash, and the network runs without a store |
+| No row, no block rows (a new file) | Writes the row and opens |
+| No row, but block rows: a file from before this table | Opens, *unstamped*: the server checks its rows against the node first (below) |
+
+**Writes wait for the node** (`Store::set_gate`). The gate starts `Waiting`. The server's RPC check, at startup and every 30 s ([`DEPLOY.md`](DEPLOY.md#health)), sets it:
+
+- The node answers for this network's chain: `Open`, after checking an unstamped file. Writes that waited commit.
+- The node answers for another chain: `Held`. New writes wait. When the gate opens again, every write that began while it was held, or waited through a hold, fails with `Error::Held`, because it carries what was read from the other chain; so does a write the writer reaches while it is held. The writers take their next data from the node as usual.
+- The node is unreachable, or refuses the password: nothing changes. At startup, writes keep waiting, and the server serves what it can meanwhile; after the chain was confirmed, writes go on, since the chain was right when last seen.
+
+What is not covered: data read in the up to 30 s between a node changing chain under the server and the next check is written. The block table replaces those rows as a reorg once the right chain is back; an audit, a mempool sample or a replacement from that window stays. The check reads the RPC endpoint's chain; Esplora and Electrum on another node than RPC are not checked.
+
+**An unstamped file is checked against the node** at the first check that finds the right chain. The server reads two rows that lie at least 100 blocks below the node's tip, so a reorg cannot have moved them, the lowest and the highest, and asks the node for each (`getblockheader`: the same height, on the active chain):
+
+| Result | Then |
+|---|---|
+| Both on the node's chain, or no block rows | The row is written and the gate opens |
+| Either is not | `store_wrong_chain` with its height; the gate is `Refused` for as long as the process runs. Reads go on, so pages still show what the file holds; the file is untouched |
+| No row that deep yet (a node far behind the file) | Writes wait; `store_chain_unverified` once, and each check tries again |
+
+Another chain's rows sit at one end of a file: another node's backfill writes from its tip down to the lowest row, and following its tip writes the highest. The two rows are a sample, not a proof: rows from another chain in the middle of a file filled by both are not found. Moving a refused file out of `DATA_DIR` and restarting starts an empty file, which the backfill fills again.
 
 ### blocks
 
