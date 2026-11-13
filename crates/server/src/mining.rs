@@ -299,7 +299,7 @@ async fn cached(ctx: &NetworkContext, key: Key, route: &'static str) -> Response
     let Some(table) = *m.table.borrow() else {
         return NOT_READY.into_response();
     };
-    match compute(store, table, key).await {
+    match compute(store, table, key, &Shared::default()).await {
         // The chain moved under the reads; the refresh that follows answers next time.
         Ok(None) => NOT_READY.into_response(),
         Ok(Some(answers)) => {
@@ -923,12 +923,67 @@ async fn coverage(store: &Store, span: Span, r: &Range) -> Result<Coverage, stor
     })
 }
 
-/// Hashrate over the last `n` blocks of the history, or fewer where it is shorter.
-async fn recent_hashrate(store: &Store, span: Span, n: u32) -> Result<Option<f64>, store::Error> {
-    let lo = span.tip.saturating_sub(n).max(span.from);
-    Ok(blocks::work(store, lo, span.tip)
-        .await?
-        .and_then(|w| hashrate::estimate(w.difficulty_sum, w.max_time.saturating_sub(w.min_time))))
+/// Reads that several answers of one computation run make alike: the hashrate over the newest
+/// blocks, the network's hashrate points over a range, and the pools' weekly counts. A refresh
+/// reads each once for all the answers it recomputes; a request's computation has its own.
+#[derive(Default)]
+struct Shared {
+    recent: Mutex<HashMap<u32, Option<f64>>>,
+    points: Mutex<HashMap<(u64, bool), Arc<NetworkPoints>>>,
+    weeks: Mutex<HashMap<(u32, u32), Arc<Vec<blocks::PoolWeek>>>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Shared {
+    /// Hashrate over the last `n` blocks of the history, or fewer where it is shorter.
+    async fn recent_hashrate(
+        &self,
+        store: &Store,
+        span: Span,
+        n: u32,
+    ) -> Result<Option<f64>, store::Error> {
+        if let Some(h) = lock(&self.recent).get(&n) {
+            return Ok(*h);
+        }
+        let lo = span.tip.saturating_sub(n).max(span.from);
+        let h = blocks::work(store, lo, span.tip).await?.and_then(|w| {
+            hashrate::estimate(w.difficulty_sum, w.max_time.saturating_sub(w.min_time))
+        });
+        lock(&self.recent).insert(n, h);
+        Ok(h)
+    }
+
+    async fn network_points(
+        &self,
+        store: &Store,
+        span: Span,
+        first_point: u64,
+        weekly: bool,
+    ) -> Result<Arc<NetworkPoints>, store::Error> {
+        if let Some(p) = lock(&self.points).get(&(first_point, weekly)) {
+            return Ok(Arc::clone(p));
+        }
+        let p = Arc::new(network_points(store, span, first_point, weekly).await?);
+        lock(&self.points).insert((first_point, weekly), Arc::clone(&p));
+        Ok(p)
+    }
+
+    async fn pool_weeks(
+        &self,
+        store: &Store,
+        from: u32,
+        to: u32,
+    ) -> Result<Arc<Vec<blocks::PoolWeek>>, store::Error> {
+        if let Some(w) = lock(&self.weeks).get(&(from, to)) {
+            return Ok(Arc::clone(w));
+        }
+        let w = Arc::new(blocks::pool_weeks(store, from, to).await?);
+        lock(&self.weeks).insert((from, to), Arc::clone(&w));
+        Ok(w)
+    }
 }
 
 /// The answer for `key` (a pool's comes with every pool's), or `None` if the table's chain moved
@@ -937,8 +992,9 @@ async fn compute(
     store: &Store,
     table: Table,
     key: Key,
+    shared: &Shared,
 ) -> Result<Option<Vec<(Key, Answer)>>, store::Error> {
-    let answers = compute_unchecked(store, table, key).await?;
+    let answers = compute_unchecked(store, table, key, shared).await?;
     Ok((!moved(store, table.span).await?).then_some(answers))
 }
 
@@ -951,6 +1007,7 @@ async fn compute_unchecked(
     store: &Store,
     table: Table,
     key: Key,
+    shared: &Shared,
 ) -> Result<Vec<(Key, Answer)>, store::Error> {
     let span = table.span;
     let now = unix_now();
@@ -1002,23 +1059,31 @@ async fn compute_unchecked(
                         }
                     })
                     .collect(),
-                last_estimated_hashrate: recent_hashrate(store, span, 144).await?.map(whole),
-                last_estimated_hashrate3d: recent_hashrate(store, span, 432).await?.map(whole),
-                last_estimated_hashrate1w: recent_hashrate(store, span, 1008).await?.map(whole),
+                last_estimated_hashrate: shared.recent_hashrate(store, span, 144).await?.map(whole),
+                last_estimated_hashrate3d: shared
+                    .recent_hashrate(store, span, 432)
+                    .await?
+                    .map(whole),
+                last_estimated_hashrate1w: shared
+                    .recent_hashrate(store, span, 1008)
+                    .await?
+                    .map(whole),
             };
             vec![(
                 key,
                 answer(table, &body, Some(coverage(store, span, &r).await?)),
             )]
         }
-        Key::Pool(_) | Key::PoolHashrate(_) => pool_family(store, table, now).await?,
+        Key::Pool(_) | Key::PoolHashrate(_) => pool_family(store, table, now, shared).await?,
         Key::Hashrate(i) => {
             let first_point = if i.weekly_hashrate() {
                 week_floor(i.start(now))
             } else {
                 i.start(now) / DAY * DAY
             };
-            let points = network_points(store, span, first_point, i.weekly_hashrate()).await?;
+            let points = shared
+                .network_points(store, span, first_point, i.weekly_hashrate())
+                .await?;
             let r = since(store, span, i.start(now)).await?;
             let difficulty = blocks::retargets(store, span.from, r.lo, r.hi)
                 .await?
@@ -1041,16 +1106,18 @@ async fn compute_unchecked(
                     })
                     .collect(),
                 difficulty,
-                current_hashrate: recent_hashrate(store, span, 1008).await?.map(whole),
+                current_hashrate: shared.recent_hashrate(store, span, 1008).await?.map(whole),
                 current_difficulty: tip.map_or(0.0, |t| t.difficulty),
             };
             vec![(key, answer(table, &body, Some(points.coverage)))]
         }
         Key::HashratePools(i) => {
             let first_point = week_ceil(i.start(now));
-            let net = network_points(store, span, first_point, true).await?;
+            let net = shared
+                .network_points(store, span, first_point, true)
+                .await?;
             // Rows come oldest week first: one week's pools are adjacent.
-            let weekly = blocks::pool_weeks(store, net.lo, span.tip).await?;
+            let weekly = shared.pool_weeks(store, net.lo, span.tip).await?;
             let list = pools::list();
             let mut body = Vec::new();
             for p in &net.points {
@@ -1288,6 +1355,7 @@ async fn pool_family(
     store: &Store,
     table: Table,
     now: u64,
+    shared: &Shared,
 ) -> Result<Vec<(Key, Answer)>, store::Error> {
     let span = table.span;
     let list = pools::list();
@@ -1314,12 +1382,13 @@ async fn pool_family(
             hashrate::estimate(w.difficulty_sum, w.max_time.saturating_sub(w.min_time))
         })
     };
-    let net = network_points(store, span, 0, true).await?;
-    let weekly: HashMap<(u64, u16), u32> = blocks::pool_weeks(store, span.from, span.tip)
-        .await?
-        .into_iter()
-        .map(|(w, p, n)| ((w, p), n))
-        .collect();
+    let net = shared.network_points(store, span, 0, true).await?;
+    // Each pool's weeks, oldest first, and the network's hashrate by week.
+    let mut weekly: HashMap<u16, Vec<(u64, u32)>> = HashMap::new();
+    for &(w, p, n) in shared.pool_weeks(store, span.from, span.tip).await?.iter() {
+        weekly.entry(p).or_default().push((w, n));
+    }
+    let points: HashMap<u64, f64> = net.points.iter().map(|w| (w.time, w.hashrate)).collect();
     let coverage = Some(Coverage {
         from: Some((span.from, span.from_time)),
         complete: span.from == 0,
@@ -1368,15 +1437,16 @@ async fn pool_family(
                 .to_string(),
         };
         out.push((Key::Pool(p.id), answer(table, &body, coverage)));
-        let weeks: Vec<_> = net
-            .points
+        let weeks: Vec<_> = weekly
+            .get(&p.id)
+            .map_or(&[][..], Vec::as_slice)
             .iter()
-            .filter_map(|w| {
-                let n = *weekly.get(&(w.time, p.id))?;
-                let s = share(n, *net.blocks.get(&w.time)?);
+            .filter_map(|&(time, n)| {
+                let hashrate = *points.get(&time)?;
+                let s = share(n, *net.blocks.get(&time)?);
                 Some(PoolWeek {
-                    timestamp: w.time,
-                    avg_hashrate: whole(w.hashrate * s),
+                    timestamp: time,
+                    avg_hashrate: whole(hashrate * s),
                     share: round(s, 6),
                     pool_name: &p.name,
                 })
@@ -1479,6 +1549,7 @@ async fn fill(ctx: Arc<NetworkContext>) {
                         heights: d.heights,
                         writes: d.writes,
                         duration_ms: d.elapsed.as_secs_f64() * 1000.0,
+                        longest_write_ms: d.longest.as_secs_f64() * 1000.0,
                     });
                 }
                 return;
@@ -1524,6 +1595,7 @@ async fn refresh(
         .copied()
         .collect();
     let mut families = std::collections::HashSet::new();
+    let shared = Shared::default();
     let mut answers = 0;
     for key in keys {
         // One computation answers its whole family.
@@ -1534,7 +1606,7 @@ async fn refresh(
         if m.get(key).is_some_and(|a| a.version == table.version) {
             continue;
         }
-        let Some(computed) = compute(store, table, key).await? else {
+        let Some(computed) = compute(store, table, key, &shared).await? else {
             return Ok(false);
         };
         answers += computed.len();
@@ -1587,7 +1659,12 @@ mod tests {
         let span = blocks::span(&store).await.unwrap().unwrap();
         let t1 = Table { version: 1, span };
         let all = Key::Pools(Interval::All);
-        m.insert(compute(&store, t1, all).await.unwrap().unwrap());
+        m.insert(
+            compute(&store, t1, all, &Shared::default())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
         let count = |m: &Mining| {
             let a = m.get(all).unwrap();
             let v: serde_json::Value = serde_json::from_slice(&a.body).unwrap();
@@ -1619,10 +1696,114 @@ mod tests {
         refresh(&m, Network::Regtest, &store, t2).await.unwrap();
         assert_eq!(Arc::as_ptr(&m.get(all).unwrap()), before);
         // A pool's answers come as a family: every pool's, from one computation.
-        m.insert(compute(&store, t2, Key::Pool(88)).await.unwrap().unwrap());
+        m.insert(
+            compute(&store, t2, Key::Pool(88), &Shared::default())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
         assert!(m.get(Key::PoolHashrate(1)).is_some());
         store.close().await;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The first computation of every mining answer on the store in
+    /// `$MINING_BENCH_DIR/$MINING_BENCH_NET.sqlite` (filling its totals first if they are not),
+    /// then three new blocks, each written as `follow` writes one and followed by the refresh of
+    /// every answer. Run with `MINING_BENCH_DIR=<dir> MINING_BENCH_NET=mainnet cargo test
+    /// --release -p rbitcoin-space -- --ignored --nocapture answers_benchmark` on a copy: it
+    /// writes the blocks and deletes them again.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "reads a store of mainnet's size; a benchmark, not a test"]
+    #[allow(clippy::print_stdout)] // A benchmark's report.
+    async fn answers_benchmark() {
+        let dir = std::path::PathBuf::from(std::env::var_os("MINING_BENCH_DIR").unwrap());
+        let net = std::env::var("MINING_BENCH_NET").unwrap_or_else(|_| "regtest".into());
+        let store = Store::open(&dir, &net, store::Options::default()).unwrap();
+        let started = Instant::now();
+        if let Some(f) = blocks::fill_totals(&store).await.unwrap() {
+            println!(
+                "filled the totals: {} heights in {} writes, {:.0} ms, the longest {:.0} ms",
+                f.heights,
+                f.writes,
+                started.elapsed().as_secs_f64() * 1000.0,
+                f.longest.as_secs_f64() * 1000.0
+            );
+        }
+        let ms = |s: Instant| s.elapsed().as_secs_f64() * 1000.0;
+        let s = Instant::now();
+        let (span, _, _) = fingerprint(&store).await.unwrap().unwrap();
+        println!("fingerprint (span and counts): {:.2} ms", ms(s));
+        let m = Mining::default();
+        let t = Table { version: 1, span };
+        let mut keys = vec![Key::List, Key::Pool(0)];
+        for i in Interval::ALL {
+            keys.extend([
+                Key::Pools(i),
+                Key::Hashrate(i),
+                Key::HashratePools(i),
+                Key::Adjustments(i),
+                Key::Fees(i),
+            ]);
+        }
+        let mut total = 0.0;
+        let shared = Shared::default();
+        for key in keys {
+            let s = Instant::now();
+            let a = compute(&store, t, key, &shared).await.unwrap().unwrap();
+            let took = ms(s);
+            total += took;
+            println!("first {key:?}: {took:.2} ms ({} answers)", a.len());
+            m.insert(a);
+        }
+        println!("every first answer: {total:.1} ms");
+        for n in 1..=3u32 {
+            let s = Instant::now();
+            let tip = span.tip + n;
+            store
+                .write(move |sql| {
+                    sql.prepare(
+                        "INSERT OR REPLACE INTO blocks (height, hash, time, tx_count, size, \
+                         weight, paying_weight, fees, subsidy, reward, difficulty, \
+                         coinbase_tag, payouts, rated, fee_min, fee_p10, fee_p25, fee_median, \
+                         fee_p75, fee_p90, fee_max, band0, band1, band2, band3, band4, band5, \
+                         band6, band7, band8, band9, pool) \
+                         SELECT height + 1, randomblob(32), time + 600, tx_count, size, weight, \
+                         paying_weight, fees, subsidy, reward, difficulty, coinbase_tag, \
+                         payouts, rated, fee_min, fee_p10, fee_p25, fee_median, fee_p75, \
+                         fee_p90, fee_max, band0, band1, band2, band3, band4, band5, band6, \
+                         band7, band8, band9, pool FROM blocks WHERE height = ?1",
+                    )?
+                    .execute(store::params![tip - 1])?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let write = ms(s);
+            let s = Instant::now();
+            let (span, _, _) = fingerprint(&store).await.unwrap().unwrap();
+            let fp = ms(s);
+            let s = Instant::now();
+            let t = Table {
+                version: 1 + u64::from(n),
+                span,
+            };
+            assert!(refresh(&m, Network::Regtest, &store, t).await.unwrap());
+            println!(
+                "block {n}: write {write:.2} ms, fingerprint {fp:.2} ms, refresh of every \
+                 answer {:.1} ms",
+                ms(s)
+            );
+        }
+        store
+            .write(move |sql| {
+                sql.prepare("DELETE FROM blocks WHERE height > ?1")?
+                    .execute(store::params![span.tip])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        store.close().await;
     }
 
     #[test]

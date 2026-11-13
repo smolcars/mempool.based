@@ -983,6 +983,8 @@ pub struct BlockTotalsFilled {
     pub heights: u64,
     pub writes: u64,
     pub duration_ms: f64,
+    /// The longest single write, waiting for the writer included.
+    pub longest_write_ms: f64,
 }
 event!(BlockTotalsFilled, "block_totals_filled", Info, keep);
 
@@ -1959,6 +1961,7 @@ mod tests {
                 heights: 975_672,
                 writes: 98,
                 duration_ms: 6_400.0,
+                longest_write_ms: 140.0,
             }),
             both(&MiningRefreshed {
                 network: n,

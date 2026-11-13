@@ -143,10 +143,13 @@ pub(super) fn pool_counts_scan(sql: &Sql, from: u32, to: u32) -> Result<Vec<Pool
 pub const WEEK_OFFSET: u64 = 4 * 86_400;
 pub const WEEK: u64 = 7 * 86_400;
 
+/// One pool's blocks in one week: `(week start, pool, blocks)`.
+pub type PoolWeek = (u64, u16, u32);
+
 /// Blocks per pool per week (starting Monday 00:00 UTC) in `from..=to`: `(week start, pool,
 /// blocks)`, oldest week first. Over a long range the weeks whose every block lies in it come from
 /// the running totals.
-pub async fn pool_weeks(store: &Store, from: u32, to: u32) -> Result<Vec<(u64, u16, u32)>, Error> {
+pub async fn pool_weeks(store: &Store, from: u32, to: u32) -> Result<Vec<PoolWeek>, Error> {
     store
         .read(Read::Mining, move |sql| {
             if super::totals::worth(from, to) {
@@ -161,11 +164,7 @@ pub async fn pool_weeks(store: &Store, from: u32, to: u32) -> Result<Vec<(u64, u
 }
 
 /// [`pool_weeks`] by reading every row in the range.
-pub(super) fn pool_weeks_scan(
-    sql: &Sql,
-    from: u32,
-    to: u32,
-) -> Result<Vec<(u64, u16, u32)>, Error> {
+pub(super) fn pool_weeks_scan(sql: &Sql, from: u32, to: u32) -> Result<Vec<PoolWeek>, Error> {
     let mut stmt = sql.prepare(
         "SELECT (time - ?3) / ?4 AS w, pool, count(*) FROM blocks \
          WHERE height BETWEEN ?1 AND ?2 GROUP BY w, pool ORDER BY w, pool",

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use super::db::{Bucket, get, int, periods_scan, periods_sql, read_bucket};
 use super::mining::{
-    PoolCount, WEEK, WEEK_OFFSET, first_since_scan, pool_counts_scan, pool_weeks_scan,
+    PoolCount, PoolWeek, WEEK, WEEK_OFFSET, first_since_scan, pool_counts_scan, pool_weeks_scan,
 };
 use crate::store::{Error, OptionalExtension, Read, Sql, Store, params};
 
@@ -155,6 +155,8 @@ pub struct Filled {
     pub heights: u64,
     pub writes: u64,
     pub elapsed: Duration,
+    /// The longest of its writes: how long it held the writer at once.
+    pub longest: Duration,
 }
 
 /// Totals the rows stored before the totals existed, newest first, [`FILL`] heights a write.
@@ -169,6 +171,7 @@ pub(super) async fn fill_by(store: &Store, chunk: u32) -> Result<Option<Filled>,
     let started = Instant::now();
     let mut done = Filled::default();
     loop {
+        let write = Instant::now();
         let step = store
             .write(move |sql| {
                 let below: Option<u32> = sql
@@ -202,6 +205,7 @@ pub(super) async fn fill_by(store: &Store, chunk: u32) -> Result<Option<Filled>,
             })
             .await?;
         let Some(heights) = step else { break };
+        done.longest = done.longest.max(write.elapsed());
         done.heights += u64::from(heights);
         done.writes += 1;
     }
@@ -368,11 +372,7 @@ pub(super) fn pool_counts(sql: &Sql, from: u32, to: u32) -> Result<Option<Vec<Po
 /// [`super::pool_weeks`] from the week buckets whose every block lies in `from..=to` (their
 /// heights are their days'), and the rows in range of the weeks at either end. `None` until the
 /// fill is done.
-pub(super) fn pool_weeks(
-    sql: &Sql,
-    from: u32,
-    to: u32,
-) -> Result<Option<Vec<(u64, u16, u32)>>, Error> {
+pub(super) fn pool_weeks(sql: &Sql, from: u32, to: u32) -> Result<Option<Vec<PoolWeek>>, Error> {
     if !ready(sql)? {
         return Ok(None);
     }

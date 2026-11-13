@@ -1431,6 +1431,27 @@ async fn table_reads_benchmark() {
             }
         })
     });
+    if !totals_ready(&store).await.unwrap() {
+        // What a reader meets meanwhile: the scan, while the fill writes.
+        let tip = top(&store).await.unwrap().unwrap().0;
+        let fill = tokio::spawn({
+            let store = Arc::clone(&store);
+            async move { fill_totals(&store).await.unwrap().unwrap() }
+        });
+        while !fill.is_finished() {
+            let s = Instant::now();
+            pool_counts(&store, 0, tip).await.unwrap();
+            println!(
+                "during the fill, pool_counts all: {:.1} ms",
+                s.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        let f = fill.await.unwrap();
+        println!(
+            "filled the totals: {} heights in {} writes, {:?}, the longest write {:?}",
+            f.heights, f.writes, f.elapsed, f.longest
+        );
+    }
     let tip = top(&store).await.unwrap().unwrap().0;
     let tip_time = by_height(&store, tip).await.unwrap().unwrap().time;
     let back = |days: u64| tip_time - days * 86_400;
@@ -1521,6 +1542,41 @@ async fn table_reads_benchmark() {
         "audit pool_health all",
         crate::audit::pool_health(&store, 0, tip).await.unwrap()
     );
+    // A new block, written as `follow` writes it (its totals settled in the same write), then
+    // rated, then removed again.
+    let row = by_height(&store, tip).await.unwrap().unwrap();
+    let mut next = row.clone();
+    next.height = tip + 1;
+    next.hash = hash(9, tip + 1);
+    next.time += 600;
+    time!("a new block's write", {
+        write_rows(&store, db::REPLACE, vec![next.clone()]).await;
+    });
+    let rated = next.rates.unwrap_or(Rated {
+        fee_rate: None,
+        fee_bands: [0; 10],
+    });
+    time!("rating it", {
+        store
+            .write(move |sql| {
+                Ok(db::rate_row(
+                    &mut sql.prepare(db::RATE)?,
+                    tip + 1,
+                    &next.hash,
+                    &rated,
+                )?)
+            })
+            .await
+            .unwrap();
+    });
+    store
+        .write(move |sql| {
+            sql.prepare("DELETE FROM blocks WHERE height > ?1")?
+                .execute(crate::store::params![tip])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
     if let Some(w) = writer {
         w.abort();
     }
