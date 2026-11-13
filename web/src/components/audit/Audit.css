@@ -163,6 +163,9 @@
     justify-self: end;
     font-weight: var(--weight-medium);
   }
+  .audit-kinds__part {
+    white-space: nowrap;
+  }
   .audit-kinds__says {
     grid-column: 2 / -1;
     color: var(--color-text-muted);

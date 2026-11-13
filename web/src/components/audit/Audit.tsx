@@ -202,7 +202,9 @@ function Kinds(props: { audit: AuditTotals; kinds: readonly Kind[] }) {
               <span class="audit-kinds__name">{c.name}</span>
               <span class="audit-kinds__figures num">
                 <Show when={part().txs > 0} fallback="None">
-                  {txCount(part().txs)}, {formatSize(part().vsize)}
+                  {/* A phone may break the line between the count and the size, never inside one. */}
+                  <span class="audit-kinds__part">{txCount(part().txs)},</span>{" "}
+                  <span class="audit-kinds__part">{formatSize(part().vsize)}</span>
                 </Show>
               </span>
               <span class="audit-kinds__says">{c.says}</span>

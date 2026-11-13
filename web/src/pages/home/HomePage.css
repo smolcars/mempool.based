@@ -436,6 +436,14 @@
     padding-top: var(--space-5);
     padding-bottom: var(--space-7);
   }
+  /* One answer for every wait: the fee panel as tall as its one tile and line, not the mempool
+     panel's share beside it; the difficulty panel sits under it at its own height. */
+  .home-grid:has(.home-fees__item--all) {
+    grid-template-rows: auto 1fr;
+  }
+  .home-grid:has(.home-fees__item--all) .home-difficulty {
+    align-self: start;
+  }
   .home-mempool,
   .home-fees,
   .home-recent {
