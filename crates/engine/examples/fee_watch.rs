@@ -9,6 +9,9 @@
 //! - `REFERENCE_URL=<base>/v1` also asks `<base>/v1/fees/precise` every `REF_SECS` (300), with
 //!   `curl`. Keep it rare: the reference is someone else's server.
 //! - `FIXTURE=path` records the method's inputs once, after the warm-up, for the fixture test.
+//! - `INPUTS=1` also records what a replay needs: every arrival (`{"arrived": t, "txs": [[rate,
+//!   vsize], ...]}`, `{"gap": t}` when some were missed) and each sample's whole depth
+//!   (`"depth": [[rate, vsize], ...]`). About 25 MB an hour at `SAMPLE_SECS=10`.
 //! - `RESCORE=fees.jsonl` scores a recorded run again without a node.
 #![allow(
     clippy::unwrap_used,
@@ -30,6 +33,9 @@ use engine::projected::{Config, Projection, Projector};
 use node::esplora::Esplora;
 use node::rpc::Rpc;
 use serde_json::{Value, json};
+
+/// The recorded sources, in the order the scorer prints them.
+const SOURCES: [&str; 3] = ["ours", "node", "reference"];
 
 fn var(net: &str, name: &str) -> String {
     std::env::var(format!("{net}_{name}")).unwrap_or_else(|_| panic!("{net}_{name} is not set"))
@@ -97,6 +103,7 @@ async fn main() {
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
                 .collect::<Vec<Value>>(),
+            &SOURCES,
         );
         return;
     }
@@ -106,6 +113,7 @@ async fn main() {
     let ref_every = env_secs("REF_SECS", 300);
     let reference_url = std::env::var("REFERENCE_URL").ok();
     let mut fixture = std::env::var("FIXTURE").ok();
+    let inputs = std::env::var("INPUTS").is_ok_and(|v| v == "1");
     let mut out =
         std::fs::File::create(std::env::var("OUT").unwrap_or_else(|_| "fees.jsonl".into()))
             .unwrap();
@@ -157,10 +165,15 @@ async fn main() {
                         continue;
                     }
                     let t = now();
+                    let mut added = Vec::new();
                     for (_, i) in &d.added {
                         rec.arrived(t, i.fee.to_sat(), i.vsize);
                         let rate = u32::try_from(i.fee.to_sat() * 1000 / u64::from(i.vsize.max(1))).unwrap_or(u32::MAX);
                         arrivals.push_back((t, rate, i.vsize));
+                        added.push((rate, i.vsize));
+                    }
+                    if inputs && !added.is_empty() {
+                        write(json!({"arrived": t, "txs": added}), &mut lines);
                     }
                     while arrivals.front().is_some_and(|a| t - a.0 > 31 * 60) {
                         arrivals.pop_front();
@@ -168,6 +181,9 @@ async fn main() {
                 }
                 Err(_) => {
                     rec.gap(now());
+                    if inputs {
+                        write(json!({"gap": now()}), &mut lines);
+                    }
                     (synced, deltas) = tracker.subscribe(|m| m.tip().is_some());
                 }
             },
@@ -202,7 +218,7 @@ async fn main() {
                     }
                     _ => None,
                 };
-                let v = json!({
+                let mut v = json!({
                     "t": t,
                     "tip": before.tip.map(|t| t.height),
                     "txs": before.blocks.iter().map(|b| b.summary.txs).sum::<u32>(),
@@ -214,11 +230,14 @@ async fn main() {
                     "reference": reference,
                 });
                 println!("{v}");
+                if inputs {
+                    v["depth"] = json!(depth_of(&before));
+                }
                 write(v, &mut lines);
             }
         }
     }
-    score(&lines);
+    score(&lines, &SOURCES);
 }
 
 /// The blocks from `from_height + 1` to `new`, each with the rate that sufficed to get in,
@@ -267,6 +286,15 @@ async fn blocks(
     out
 }
 
+/// A projection's transactions as `(rate, vsize)` pairs, one per distinct rate, highest first.
+fn depth_of(p: &Projection) -> Vec<(u32, u64)> {
+    let mut depth: BTreeMap<u32, u64> = BTreeMap::new();
+    for (_, t) in p.blocks.iter().flat_map(|b| b.txs.iter()) {
+        *depth.entry(t.rate).or_default() += u64::from(t.vsize);
+    }
+    depth.into_iter().rev().collect()
+}
+
 /// The method's inputs at one moment, and its answer, for `crates/engine/src/fees/tests.rs`.
 fn record_fixture(path: &str, p: &Projection, floor: u32, arrivals: &VecDeque<(u64, u32, u32)>) {
     let mut depth: BTreeMap<u32, u64> = BTreeMap::new();
@@ -311,85 +339,196 @@ fn record_fixture(path: &str, p: &Projection, floor: u32, arrivals: &VecDeque<(u
     std::fs::write(path, v.to_string()).unwrap();
 }
 
-/// Scores every sample's levels against the blocks that came after it.
-fn score(lines: &[Value]) {
-    let mut blocks: Vec<(u64, Option<u32>)> = lines
+/// A recorded block: when we saw it, and the rate that sufficed to get in, if any.
+struct Block {
+    t: u64,
+    clearing: Option<u32>,
+}
+
+/// One source's tally at one level.
+#[derive(Default)]
+struct Tally {
+    met: usize,
+    total: usize,
+    /// Overpay when met and shortfall when missed, sat/vB.
+    over: Vec<f64>,
+    short: Vec<f64>,
+    /// No block of the horizon has a clearing rate (all held none of our transactions).
+    unscored: usize,
+    /// Per block that ended the wait: (met, total). Samples waiting for the same block share
+    /// its fate, so the confidence interval is clustered on it.
+    groups: BTreeMap<usize, (usize, usize)>,
+    /// (met, total) when the `N`-th block came within `N` × 10 minutes, and when it did not.
+    faster: (usize, usize),
+    slower: (usize, usize),
+}
+
+impl Tally {
+    fn pct(met: usize, total: usize) -> String {
+        if total == 0 {
+            return "-".into();
+        }
+        format!("{:.1}% of {total}", met as f64 * 100.0 / total as f64)
+    }
+
+    /// The 95% interval of the met share, clustered on the block each sample waited for.
+    fn interval(&self) -> (f64, f64) {
+        let (n, g) = (self.total as f64, self.groups.len() as f64);
+        let p = self.met as f64 / n;
+        if g < 2.0 {
+            return (f64::NAN, f64::NAN);
+        }
+        let ss: f64 = self
+            .groups
+            .values()
+            .map(|&(m, t)| (m as f64 - p * t as f64).powi(2))
+            .sum();
+        let half = 1.96 * (g / (g - 1.0) * ss).sqrt() / n;
+        ((p - half).max(0.0), (p + half).min(1.0))
+    }
+}
+
+fn mean(v: &[f64]) -> f64 {
+    v.iter().sum::<f64>() / v.len() as f64
+}
+
+/// Spans whose outcome means nothing: a gap between two recorded blocks longer than `max_gap`
+/// (the recorder's node lost the network; on a live chain a two-hour gap comes about once in
+/// 450 years), and the [`fees::INFLOW_MINUTES`] after it, while the method's arrivals still
+/// hold the quiet and the mempool refills.
+fn outages(blocks: &[Block], max_gap: u64) -> Vec<(u64, u64)> {
+    blocks
+        .windows(2)
+        .filter(|w| w[1].t - w[0].t > max_gap)
+        .map(|w| (w[0].t, w[1].t + fees::INFLOW_MINUTES as u64 * 60))
+        .collect()
+}
+
+/// Scores every sample's levels, for each of `sources`, against the blocks that came after it.
+/// Samples are those where ours was served (the others are the node's estimates under our
+/// name), less those whose horizon reaches into an outage.
+fn score(lines: &[Value], sources: &[&str]) {
+    let mut blocks: Vec<Block> = lines
         .iter()
         .filter(|v| v.get("block").is_some())
-        .map(|v| {
-            (
-                v["t"].as_u64().unwrap(),
-                v["clearing"].as_u64().map(|c| c as u32),
-            )
+        .map(|v| Block {
+            t: v["t"].as_u64().unwrap(),
+            clearing: v["clearing"].as_u64().map(|c| c as u32),
         })
         .collect();
-    blocks.sort_by_key(|b| b.0);
-    let samples: Vec<&Value> = lines.iter().filter(|v| v.get("block").is_none()).collect();
-    println!("\n{} samples, {} blocks", samples.len(), blocks.len());
-    // All samples where ours was served, then only the moments the reference was asked.
+    blocks.sort_by_key(|b| b.t);
+    let samples: Vec<&Value> = lines
+        .iter()
+        .filter(|v| v.get("bottoms").is_some() && !v["ours"].is_null())
+        .collect();
+    let out = outages(&blocks, env_secs("MAX_GAP_SECS", 7200));
+    println!(
+        "\n{} samples with our own answer, {} blocks ({} without a clearing rate)",
+        samples.len(),
+        blocks.len(),
+        blocks.iter().filter(|b| b.clearing.is_none()).count()
+    );
+    for (from, to) in &out {
+        println!("left out: {from} to {to}, a gap between blocks and the inflow window after it");
+    }
     for (title, with_ref) in [
         ("every sample with our own answer", false),
         ("moments the reference was asked", true),
     ] {
         println!("\n{title}");
         println!(
-            "{:<10} {:<8} {:>5} {:>8} {:>16} {:>16} {:>14}",
-            "source", "level", "n", "met", "mean overpay", "median overpay", "mean short"
+            "{:<12} {:<7} {:>5} {:>6} {:>15} {:>6} {:>8} {:>8} {:>8} {:>5} {:>16} {:>16}",
+            "source",
+            "level",
+            "n",
+            "met",
+            "95% interval",
+            "blocks",
+            "overpay",
+            "median",
+            "short",
+            "unsc.",
+            "met when faster",
+            "met when slower"
         );
-        for source in ["ours", "node", "reference"] {
-            for (i, level) in LEVELS.iter().take(3).enumerate() {
-                let n = level.blocks as usize;
-                let (mut met, mut total, mut over, mut short) =
-                    (0usize, 0usize, Vec::new(), Vec::new());
+        for (i, level) in LEVELS.iter().take(3).enumerate() {
+            let n = level.blocks as usize;
+            let mut left_out = 0;
+            for source in sources {
+                let mut tally = Tally::default();
+                left_out = 0;
                 for s in &samples {
-                    if s["ours"].is_null() || (with_ref && s["reference"].is_null()) {
+                    if with_ref && s["reference"].is_null() {
                         continue;
                     }
-                    let Some(rate) = s[source][i].as_u64() else {
+                    let t = s["t"].as_u64().unwrap();
+                    let first = blocks.partition_point(|b| b.t <= t);
+                    let Some(after) = blocks.get(first..first + n) else {
                         continue;
                     };
-                    let t = s["t"].as_u64().unwrap();
-                    let after: Vec<_> = blocks.iter().filter(|b| b.0 > t).take(n).collect();
-                    if after.len() < n {
+                    let end = after[n - 1].t;
+                    if out.iter().any(|(from, to)| t < *to && end > *from) {
+                        left_out += 1;
                         continue;
                     }
+                    let Some(rate) = s[*source][i].as_u64() else {
+                        continue;
+                    };
                     // The cheapest rate that got into one of the next `n` blocks: one step above
                     // a block's clearing rate.
-                    let sufficed = after
+                    let Some(need) = after
                         .iter()
-                        .filter_map(|b| b.1)
+                        .filter_map(|b| b.clearing)
                         .map(|c| u64::from(c) + 1)
-                        .min();
-                    total += 1;
-                    match sufficed {
-                        Some(need) if rate >= need => {
-                            met += 1;
-                            over.push((rate - need) as f64 / 1000.0);
-                        }
-                        Some(need) => short.push((need - rate) as f64 / 1000.0),
-                        None => short.push(f64::NAN),
+                        .min()
+                    else {
+                        tally.unscored += 1;
+                        continue;
+                    };
+                    let ok = rate >= need;
+                    tally.total += 1;
+                    tally.met += usize::from(ok);
+                    let g = tally.groups.entry(first).or_default();
+                    g.0 += usize::from(ok);
+                    g.1 += 1;
+                    let pace = if end - t <= n as u64 * 600 {
+                        &mut tally.faster
+                    } else {
+                        &mut tally.slower
+                    };
+                    pace.0 += usize::from(ok);
+                    pace.1 += 1;
+                    if ok {
+                        tally.over.push((rate - need) as f64 / 1000.0);
+                    } else {
+                        tally.short.push((need - rate) as f64 / 1000.0);
                     }
                 }
-                if total == 0 {
+                if tally.total == 0 {
                     continue;
                 }
-                over.sort_by(f64::total_cmp);
-                let mean = |v: &[f64]| {
-                    if v.is_empty() {
-                        f64::NAN
-                    } else {
-                        v.iter().sum::<f64>() / v.len() as f64
-                    }
-                };
+                tally.over.sort_by(f64::total_cmp);
+                let (lo, hi) = tally.interval();
                 println!(
-                    "{source:<10} {:<8} {total:>5} {:>7.1}% {:>12.3} sat/vB {:>12.3} sat/vB {:>10.3} sat/vB",
+                    "{source:<12} {:<7} {:>5} {:>5.1}% {:>6.1}% - {:>5.1}% {:>6} {:>8.3} {:>8.3} {:>8.3} {:>5} {:>16} {:>16}",
                     level.name,
-                    met as f64 * 100.0 / total as f64,
-                    mean(&over),
-                    over.get(over.len() / 2).copied().unwrap_or(f64::NAN),
-                    mean(&short),
+                    tally.total,
+                    tally.met as f64 * 100.0 / tally.total as f64,
+                    lo * 100.0,
+                    hi * 100.0,
+                    tally.groups.len(),
+                    mean(&tally.over),
+                    tally.over.get(tally.over.len() / 2).copied().unwrap_or(f64::NAN),
+                    mean(&tally.short),
+                    tally.unscored,
+                    Tally::pct(tally.faster.0, tally.faster.1),
+                    Tally::pct(tally.slower.0, tally.slower.1),
                 );
             }
+            println!("{:<12} {:<7} {left_out:>5} samples left out (outage)", "", level.name);
         }
     }
+    println!(
+        "\nmet: share of samples whose level paid at least one step above the clearing rate of one of\nthe next N blocks. 95% interval clustered on the block each sample waited for. overpay\n(mean, median) when met and short (mean) when missed, sat/vB. unsc.: no block of the horizon\nhas a clearing rate. faster: the N-th block came within N x 10 minutes."
+    );
 }
