@@ -398,7 +398,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
           <span class="ln-row-head">
             <ChannelLink id={c.id} />
             <span class="ln-row-when">
-              <Show when={c.closed}>{(x) => `${KIND_SHORT[x().kind]} · `}</Show>
+              <Show when={c.closed}>{(x) => <>{`${KIND_SHORT[x().kind]} · `}</>}</Show>
               <Show when={props.kind === "closed" ? c.closed?.block : c.opened}>
                 {(b) => <TimeAgo time={b().time} />}
               </Show>

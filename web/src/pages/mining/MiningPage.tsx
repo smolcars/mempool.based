@@ -233,9 +233,12 @@ function Pools(props: {
 }) {
   const [all, setAll] = createSignal(false);
   const r = () => props.ranking.answer()?.value;
+  // While the next period loads the last answer stays, so the words follow the answer shown.
+  const period = (): Period => answeredPeriod(props.ranking.answer()) ?? props.period;
+  const weeksPeriod = (): Period => answeredPeriod(weeks.answer()) ?? props.period;
   const network = () => {
     const a = r();
-    return a ? networkHashrate(props.period, a, props.hashrates.answer()?.value) : undefined;
+    return a ? networkHashrate(period(), a, props.hashrates.answer()?.value) : undefined;
   };
   const rows = () => {
     const list = r()?.pools ?? [];
@@ -259,11 +262,9 @@ function Pools(props: {
   return (
     <section class="mining-section" aria-labelledby="mining-pools-title">
       <SectionHeader title="Pools" id="mining-pools-title">
-        <Show when={r()}>
-          {(a) =>
-            `${groupDigits(a().blockCount)} ${a().blockCount === 1 ? "block" : "blocks"} in ${props.period.words}`
-          }
-        </Show>
+        {/* An expression, not a Show callback: a callback's string is made once and goes stale. */}
+        {r() &&
+          `${groupDigits(r()?.blockCount ?? 0)} ${r()?.blockCount === 1 ? "block" : "blocks"} in ${period().words}`}
       </SectionHeader>
       <Section
         what="the pools"
@@ -274,15 +275,15 @@ function Pools(props: {
         retry={props.ranking.retry}
         busy={props.ranking.loading()}
       >
-        <CoverageNote coverage={props.ranking.answer()?.coverage} period={props.period} />
+        <CoverageNote coverage={props.ranking.answer()?.coverage} period={period()} />
         <Show
           when={(r()?.blockCount ?? 0) > 0}
-          fallback={<NothingStored what="blocks" period={props.period} />}
+          fallback={<NothingStored what="blocks" period={period()} />}
         >
           <div class="mining-pools">
             <div class="mining-pools__ranking">
               <DataTable
-                caption={`Pools ranked by blocks found in ${props.period.words}`}
+                caption={`Pools ranked by blocks found in ${period().words}`}
                 rows={rows()}
                 rowHref={(p) => paths.pool(p.slug)}
                 columns={[
@@ -349,12 +350,12 @@ function Pools(props: {
             </div>
             <div class="mining-pools__shares">
               <h3 class="mining-subtitle">
-                {sharesOverTime(props.period)
+                {sharesOverTime(period())
                   ? "Share of blocks, week by week"
-                  : `Share of blocks, ${props.period.words}`}
+                  : `Share of blocks, ${period().words}`}
               </h3>
               <Show
-                when={sharesOverTime(props.period)}
+                when={sharesOverTime(period())}
                 fallback={
                   <>
                     <PeriodShares pools={r()?.pools ?? []} share={share} />
@@ -376,14 +377,14 @@ function Pools(props: {
                 >
                   <Show
                     when={(layers()?.x.length ?? 0) > 0}
-                    fallback={<NothingStored what="weeks" period={props.period} />}
+                    fallback={<NothingStored what="weeks" period={weeksPeriod()} />}
                   >
                     <ChartSlot
-                      label={`Share of blocks by pool, week by week, ${props.period.words}`}
+                      label={`Share of blocks by pool, week by week, ${weeksPeriod().words}`}
                       x={layers()?.x ?? []}
                       domain={
                         weeks.answer()?.coverage?.complete === false
-                          ? periodDomain(props.period, layers()?.x ?? [], Date.now() / 1000)
+                          ? periodDomain(weeksPeriod(), layers()?.x ?? [], Date.now() / 1000)
                           : undefined
                       }
                       dataFrom={weeks.answer()?.coverage?.fromTime}
@@ -403,6 +404,11 @@ function Pools(props: {
       </Section>
     </section>
   );
+}
+
+/** The period an answer's route names, if it names one. */
+function answeredPeriod(a: { path: string } | undefined): Period | undefined {
+  return PERIODS.find((p) => a?.path.endsWith(`/${p.id}`));
 }
 
 /** Layers in the period's share bar: the six biggest pools, then the rest as one. */
@@ -474,11 +480,8 @@ function Rewards(props: { period: Period; ranking: MiningData<Ranking>; network:
     <Show when={props.ranking.answer() === undefined || count() > 0}>
       <section class="mining-section" aria-labelledby="mining-rewards-title">
         <SectionHeader title="Rewards" id="mining-rewards-title">
-          <Show when={stats.answer()}>
-            {(a) =>
-              `Blocks ${groupDigits(a().value.startBlock)} to ${groupDigits(a().value.endBlock)}`
-            }
-          </Show>
+          {stats.answer() &&
+            `Blocks ${groupDigits(stats.answer()?.value.startBlock ?? 0)} to ${groupDigits(stats.answer()?.value.endBlock ?? 0)}`}
         </SectionHeader>
         <Show when={(props.ranking.answer()?.value.blockCount ?? 0) > REWARD_MAX}>
           <p class="mining-aside">

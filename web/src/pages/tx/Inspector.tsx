@@ -251,7 +251,7 @@ function OutputDetails(props: {
         <Fact label="Script type">{kind().label}</Fact>
         <Fact label="Spent">
           <Switch fallback="Checking…">
-            <Match when={props.unspendable}>{(why) => `Unspendable: ${why()}`}</Match>
+            <Match when={props.unspendable}>{(why) => <>{`Unspendable: ${why()}`}</>}</Match>
             <Match when={props.failed}>
               Could not check right now. Reload the page to try again.
             </Match>

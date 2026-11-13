@@ -88,3 +88,44 @@ test("the Unknown pool's page lists the chain's blocks, linked", async ({ page }
     `/regtest/block/${chain.tip.hash}`,
   );
 });
+
+// The Pools caption once kept the first period's count while the table moved on.
+test("the pools caption follows the period through every switch", async ({ page }) => {
+  const periods = [
+    ["24 h", "the last 24 hours"],
+    ["1 w", "the last week"],
+    ["1 m", "the last 30 days"],
+    ["1 y", "the last year"],
+    ["All", "all time"],
+  ] as const;
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/regtest/mining?period=all");
+    const pools = page.getByRole("region", { name: "Pools" });
+    const caption = pools.locator(".section__head");
+    await expect(caption).toContainText(/blocks? in all time/, { timeout: 30_000 });
+    for (const [label, words] of periods) {
+      await page
+        .getByRole("navigation", { name: "Period" })
+        .getByRole("link", { name: new RegExp(`: ${words}$`) })
+        .click();
+      await expect(caption).toContainText(new RegExp(`^Pools[\\d\\s\\u202f]+blocks? in ${words}$`));
+      const count = Number(
+        /^Pools([\d\s\u202F]+) block/
+          .exec((await caption.textContent()) ?? "")?.[1]
+          ?.replaceAll(/\D/g, ""),
+      );
+      if (count === 0) {
+        await expect(pools.getByText(`No blocks stored for ${words}`)).toBeVisible();
+        continue;
+      }
+      const table = pools.getByRole("table", { name: `Pools ranked by blocks found in ${words}` });
+      const all = pools.getByRole("button", { name: /^Show all \d+ pools$/ });
+      if (await all.isVisible()) await all.click();
+      const column = (await table.locator("thead th").allInnerTexts()).indexOf("Blocks");
+      const cells = await table.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
+      const sum = cells.reduce((total, c) => total + Number(c.replaceAll(/\D/g, "")), 0);
+      expect(sum, `${label} at ${width} px`).toBe(count);
+    }
+  }
+});

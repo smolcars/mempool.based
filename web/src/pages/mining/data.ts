@@ -18,6 +18,8 @@ export const isNoTable = (e: unknown): boolean =>
 export interface Answer<T> {
   value: T;
   coverage: Coverage | undefined;
+  /** The route this answer came from, so what is said about it names its own period. */
+  path: string;
 }
 
 export interface MiningData<T> {
@@ -57,7 +59,7 @@ export function createMiningData<T>(
         if (c.signal.aborted) return;
         setLoading(false);
         if (check(r.value)) {
-          setAnswer({ value: r.value, coverage: r.coverage });
+          setAnswer({ value: r.value, coverage: r.coverage, path: p });
           setError(undefined);
         } else setError(new ApiError(200, "The server sent a reply that could not be read."));
       },

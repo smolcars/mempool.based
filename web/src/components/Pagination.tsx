@@ -31,7 +31,7 @@ export function Pagination(props: PaginationProps) {
       </button>
       <span class="pagination__status num" aria-live="polite">
         Page {groupDigits(props.page)}
-        <Show when={props.pageCount}>{(n) => ` of ${groupDigits(n())}`}</Show>
+        <Show when={props.pageCount}>{(n) => <>{` of ${groupDigits(n())}`}</>}</Show>
       </span>
       <button
         class="btn"

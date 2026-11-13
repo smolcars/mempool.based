@@ -1,3 +1,4 @@
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
 import { NNBSP } from "../lib/format";
@@ -185,6 +186,14 @@ describe("Pagination", () => {
     expect(q(el, ".pagination__status").textContent).toBe("Page 1 of 3");
     next?.click();
     expect(onPage).toHaveBeenCalledWith(2);
+  });
+
+  it("follows a total that changes", () => {
+    const [count, setCount] = createSignal(3);
+    const el = mount(() => <Pagination page={1} pageCount={count()} onPage={() => {}} label="P" />);
+    setCount(5);
+    flush();
+    expect(q(el, ".pagination__status").textContent).toBe("Page 1 of 5");
   });
 
   it("works without a total", () => {

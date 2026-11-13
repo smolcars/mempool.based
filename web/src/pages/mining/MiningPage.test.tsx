@@ -140,6 +140,29 @@ describe("mining page", () => {
     expect(current?.textContent).toBe("1 m: the last 30 days");
   });
 
+  it("keeps the pools caption with the period's own data when the period changes", async () => {
+    let answer = () => {};
+    const held = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    replies["/v1/mining/pools/24h"] = async () => {
+      await held;
+      return Response.json({ ...RANKING, blockCount: 7 });
+    };
+    replies["/v1/mining/hashrate/24h"] =
+      replies["/v1/mining/hashrate/1w"] ?? (() => Response.json({}));
+    const el = mount(() => <MiningPage />, "/mining");
+    const caption = () =>
+      el.querySelector("[aria-labelledby=mining-pools-title] .section__head")?.textContent ?? "";
+    await vi.waitFor(() => expect(caption()).toContain("40 blocks in the last week"));
+    el.querySelector<HTMLAnchorElement>("a[href='/mining?period=24h']")?.click();
+    // While the day loads, the week's figures stay, and so do the words that describe them.
+    await vi.waitFor(() => expect(requests).toContain("/v1/mining/pools/24h"));
+    expect(caption()).toContain("40 blocks in the last week");
+    answer();
+    await vi.waitFor(() => expect(caption()).toContain("7 blocks in the last 24 hours"));
+  });
+
   it("says when nothing is stored for the period, and offers all time", async () => {
     replies["/v1/mining/pools/1w"] = () => Response.json({ ...RANKING, pools: [], blockCount: 0 });
     const el = mount(() => <MiningPage />, "/mining");

@@ -648,10 +648,10 @@ function MinedTile(props: {
             fallback={<span class="home-tile__bone home-tile__bone--line home-tile__bone--short" />}
           >
             <Match when={rates()}>
-              {(r) => `${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}
+              {(r) => <>{`${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}</>}
             </Match>
             <Match when={guessing() && projected}>
-              {(p) => `${formatFeeRate(p().minRate)} – ${formatFeeRate(p().maxRate)}`}
+              {(p) => <>{`${formatFeeRate(p().minRate)} – ${formatFeeRate(p().maxRate)}`}</>}
             </Match>
             <Match when={summary()}>Coinbase only</Match>
             <Match when={facts() === "failed"}>{fullness(b().weight)}</Match>
