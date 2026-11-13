@@ -73,7 +73,11 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
     controller = c;
     // A 503 before the server's first answer is retried as it says, without showing an error.
     withRetry(
-      () => fetchStamped<unknown>(props.network, "/v1/difficulty-adjustment", { signal: c.signal }),
+      () =>
+        fetchStamped<unknown>(props.network, "/v1/difficulty-adjustment", {
+          signal: c.signal,
+          fresh: true,
+        }),
       c.signal,
     ).then(
       ({ value, tip }) => {

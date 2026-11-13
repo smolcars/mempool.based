@@ -27,7 +27,14 @@ import { TimeAgo, TimeUtc } from "../../components/Time";
 import type { GridState } from "../../components/txgrid/TxGrid";
 import { decodeTxs, TxsFormatError } from "../../components/txgrid/decode";
 import type { GridTx } from "../../components/txgrid/layout";
-import { createApi, createRequest, fetchApi, fetchApp, isNotFound } from "../../lib/api";
+import {
+  createApi,
+  createRequest,
+  fetchApi,
+  fetchApp,
+  isNotFound,
+  type Stamped,
+} from "../../lib/api";
 import { blocksTopic } from "../../lib/blocks-topic";
 import type { Block, BlockStatus, Transaction } from "../../lib/esplora";
 import {
@@ -222,8 +229,12 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const at = (suffix: string) => () => props.hash && `/block/${props.hash}${suffix}`;
   const [block, blockCtl] = createApi<Block>(at(""));
   // Stamped: confirmations and "the newest block" both come from this one reply's tip, so they can
-  // never disagree the way a separate tip request could when a block lands between the two.
-  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
+  // never disagree the way a separate tip request could when a block lands between the two. Fresh:
+  // the newest block asks again when the next is found (NextListener).
+  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), {
+    stamped: true,
+    fresh: true,
+  });
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
   // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
   const [summary, summaryCtl] = createRequest(
@@ -259,7 +270,13 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const settle = createMemo(() => !props.hash || !knownSummary(network(), props.hash));
 
   const b = () => ready(block);
-  const s = () => ready(status)?.value;
+  // Kept while it is asked again for the same block, so the pager does not blink on a new block.
+  const kept = createMemo((was?: { hash: string | undefined; reply: Stamped<BlockStatus> }) => {
+    const reply = ready(status);
+    if (reply) return { hash: props.hash, reply };
+    return was?.hash === props.hash ? was : undefined;
+  });
+  const s = () => kept()?.reply.value;
   // A new block's facts, and its audit, may come over the WebSocket before the request answers.
   const [pushed, setPushed] = createSignal<BlockSummary>();
   const sum = () => {
@@ -351,7 +368,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
     const blk = b();
     const st = s();
     if (!blk || !st) return undefined;
-    const t = ready(status)?.tip?.height;
+    const t = kept()?.reply.tip?.height;
     if (!st.in_best_chain) return 0;
     return t === undefined ? null : Math.max(1, t - blk.height + 1);
   };
@@ -700,6 +717,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
           </div>
         </div>
 
+        <Show when={props.hash && s() && !stale() && !s()?.next_best && props.hash} keyed>
+          {(h) => <NextListener hash={h} onNext={() => statusCtl.refetch()} />}
+        </Show>
         <Show when={props.hash && sum() === undefined}>
           <SummaryListener
             onSummary={(pushedSummary) => {
@@ -793,6 +813,22 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
       </div>
     );
   }
+}
+
+/**
+ * Hears the `blocks` topic while the page shows the newest block, and calls `onNext` when the tip
+ * is another block: the next one was found, before the page followed or after. Its first message
+ * is the tip as it stands, so a block found between the page's answer and the subscription counts.
+ */
+function NextListener(props: { hash: string; onNext: () => void }) {
+  useTopic(blocksTopic, {
+    message: (m) => {
+      if (m.type === "summary" || (m.type === "block" && m.block.id === props.hash)) return;
+      props.onNext();
+    },
+    resync: () => props.onNext(),
+  });
+  return null;
 }
 
 /** Hears the `blocks` topic while mounted, for a block whose facts have not arrived yet. */

@@ -550,6 +550,19 @@ describe("TransactionPage", () => {
     expect(text(el)).not.toContain("This version was replaced");
   });
 
+  it("asks again when it left the mempool between the page's answer and its first word", async () => {
+    serve(payment({ confirmed: false }));
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Unconfirmed");
+    // Confirmed before the page followed it: the topic never saw it leave.
+    replies[api(`/tx/${TXID}/status`)] = { status: 200, body: confirmed };
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(msg({ state: "unknown" }));
+    await settle();
+    expect(el.querySelector(".tx-status")?.textContent).toBe("Confirmed");
+  });
+
   it("trusts HTTP for a transaction confirmed before anyone followed it", async () => {
     serve(payment(confirmed));
     const el = page(`/tx/${TXID}`);

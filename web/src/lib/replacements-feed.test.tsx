@@ -6,6 +6,8 @@ import { FakeSocket } from "./fakes";
 import { createReplacements, type Replacements } from "./replacements";
 
 let asks: number[];
+/** How each ask treated the browser's HTTP cache. */
+let caching: (RequestCache | undefined)[];
 let feeds: Replacements[];
 /** How long the server takes to answer, as a retry after a refusal would. */
 let delay = 0;
@@ -25,8 +27,10 @@ beforeEach(() => {
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   delay = 0;
-  vi.stubGlobal("fetch", async () => {
+  caching = [];
+  vi.stubGlobal("fetch", async (_: string, init?: RequestInit) => {
     asks.push(Date.now());
+    caching.push(init?.cache);
     await new Promise((resolve) => {
       setTimeout(resolve, delay);
     });
@@ -89,5 +93,14 @@ describe("createReplacements", () => {
     expect(asks).toHaveLength(2);
     // The answer took 3 s, then its 1.5 s wait.
     expect((asks[1] ?? 0) - (asks[0] ?? 0)).toBeGreaterThanOrEqual(4500);
+  });
+
+  it("asks the server, never the browser's cache, which can hold the list from before a change", async () => {
+    // Past the wait the tests before left: asks are remembered page-wide, on a clock they ran ahead.
+    await vi.advanceTimersByTimeAsync(30_000);
+    mount(() => <Probe />, "/regtest/");
+    FakeSocket.last().hello();
+    version(1);
+    await vi.waitFor(() => expect(caching).toStrictEqual(["no-cache"]));
   });
 });

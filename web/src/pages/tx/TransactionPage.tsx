@@ -216,6 +216,7 @@ function TransactionView(props: { txid: string }) {
       try {
         const next = await fetchApi<TxStatus>(network(), `/tx/${props.txid}/status`, {
           signal: controller.signal,
+          fresh: true,
         });
         setModel((m) => answered(m, next, asked, req));
       } catch (e) {
@@ -234,6 +235,7 @@ function TransactionView(props: { txid: string }) {
       const height = await fetchApi<string>(network(), "/blocks/tip/height", {
         as: "text",
         signal: controller.signal,
+        fresh: true,
       });
       if (Number.isSafeInteger(Number(height))) setPolledTip(Number(height));
     } catch {
@@ -256,11 +258,13 @@ function TransactionView(props: { txid: string }) {
     }
     if (msg.type !== "tx") return;
     // The topic asks the node nothing: whether an unknown transaction confirmed is HTTP's to say.
-    // A first `unknown` adds nothing to the answer the page loaded with a moment ago.
-    const news = before.last !== undefined || before.http === undefined;
+    // A first `unknown` adds nothing to a load that found it confirmed or missing a moment ago;
+    // after one that found it waiting, it left the mempool before the page followed it.
+    const http = before.http?.status;
+    const waited = http !== undefined && http !== "missing" && !http.confirmed;
+    const news = before.last !== undefined || before.http === undefined || waited;
     if (msg.state === "unknown" && news) void check();
     // The block's time, and an HTTP word as new as the topic's, come from the status route.
-    const http = before.http?.status;
     if (
       msg.state === "confirmed" &&
       (http === undefined || http === "missing" || http.block_hash !== msg.hash)

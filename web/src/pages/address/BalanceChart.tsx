@@ -64,7 +64,7 @@ export function BalanceChart(props: {
   const controller = new AbortController();
   onCleanup(() => controller.abort());
   const fetch = (path: string): Promise<Stamped<unknown>> =>
-    fetchStamped<unknown>(network(), path, { signal: controller.signal });
+    fetchStamped<unknown>(network(), path, { signal: controller.signal, fresh: true });
 
   let history: History | undefined;
   let started = false;

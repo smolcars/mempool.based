@@ -187,10 +187,20 @@ async function request<T>(
   return { value: value as T, tip: chainTip(res.headers), ...(coverage ? { coverage } : {}) };
 }
 
+/**
+ * How a call asks. `fresh: true` takes every answer from the server, never from the browser's HTTP
+ * cache: for a request a live message prompted, which an answer kept from before it would undo
+ * (docs/FRONTEND.md "Following live data").
+ */
+export interface Ask {
+  signal?: AbortSignal;
+  fresh?: boolean;
+}
+
 /** Every request is a GET, safe to repeat, so a busy refusal is retried as it says ({@link withRetry}). */
-function cachedOrFetch<T>(url: string, kind: ReplyKind, signal?: AbortSignal): Promise<Stamped<T>> {
+function cachedOrFetch<T>(url: string, kind: ReplyKind, ask: Ask): Promise<Stamped<T>> {
   if (cache.has(url)) return Promise.resolve({ value: cache.get(url) as T, tip: undefined });
-  return withRetry(() => request<T>(url, kind, signal), signal);
+  return withRetry(() => request<T>(url, kind, ask.signal, ask.fresh === true), ask.signal);
 }
 
 /**
@@ -200,9 +210,9 @@ function cachedOrFetch<T>(url: string, kind: ReplyKind, signal?: AbortSignal): P
 export function fetchApi<T>(
   network: Network,
   path: string,
-  options: { as?: ReplyKind; signal?: AbortSignal } = {},
+  options: Ask & { as?: ReplyKind } = {},
 ): Promise<T> {
-  return cachedOrFetch<T>(`${apiBase(network)}${path}`, options.as ?? "json", options.signal).then(
+  return cachedOrFetch<T>(`${apiBase(network)}${path}`, options.as ?? "json", options).then(
     (r) => r.value,
   );
 }
@@ -211,19 +221,19 @@ export function fetchApi<T>(
 export function fetchStamped<T>(
   network: Network,
   path: string,
-  options: { signal?: AbortSignal } = {},
+  options: Ask = {},
 ): Promise<Stamped<T>> {
-  return cachedOrFetch<T>(`${apiBase(network)}${path}`, "json", options.signal);
+  return cachedOrFetch<T>(`${apiBase(network)}${path}`, "json", options);
 }
 
 /** {@link fetchApi} for the app's own API under the network's `/app` (docs/FRONTEND.md). */
 export function fetchApp<T>(
   network: Network,
   path: string,
-  options: { as?: ReplyKind; signal?: AbortSignal } = {},
+  options: Ask & { as?: ReplyKind } = {},
 ): Promise<T> {
   const url = `${onNetwork(network, "")}/app${path}`;
-  return cachedOrFetch<T>(url, options.as ?? "json", options.signal).then((r) => r.value);
+  return cachedOrFetch<T>(url, options.as ?? "json", options).then((r) => r.value);
 }
 
 /**
@@ -420,8 +430,7 @@ export function createApi<T>(
 ): ApiRequest<T>;
 /**
  * With `stamped: true` the value comes with the chain tip it is as of, to compare across requests.
- * With `fresh: true` every answer comes from the server, never from the browser's HTTP cache: for
- * a page that asks because a live message said something changed.
+ * With `fresh: true` every answer comes from the server, as {@link Ask} says.
  */
 export function createApi<T>(
   path: () => string | false | null | undefined,

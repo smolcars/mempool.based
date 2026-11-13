@@ -86,7 +86,7 @@ export function createBlockFeed(network: Network, status: Accessor<LiveStatus>):
     queue = [];
     again = false;
     try {
-      const reply = await fetchApi<unknown>(network, "/blocks", { signal });
+      const reply = await fetchApi<unknown>(network, "/blocks", { signal, fresh: true });
       const list = (Array.isArray(reply) ? reply.filter((b: unknown) => isBlock(b)) : [])
         // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
         .sort((a, b) => b.height - a.height)

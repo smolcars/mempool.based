@@ -500,6 +500,33 @@ describe("BlockPage", () => {
     expect(calls).toContain("/block-height/0");
   });
 
+  it("follows the newest block until the next is found, before it followed or after", async () => {
+    let found = false;
+    serve({
+      ...normal(),
+      [`/block/${HASH}/status`]: () => status({ next_best: found ? NEXT : null }),
+    });
+    const el = open(`/block/${HASH}`);
+    const pager = () => text(el.querySelector(".block-pager") as Element);
+    await until(() => expect(pager()).toContain("The newest block"));
+    const asked = () => calls.filter((c) => c === `/block/${HASH}/status`).length;
+    expect(asked()).toBe(1);
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    // The tip as it stands is this block: nothing to ask.
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: HASH } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(asked()).toBe(1);
+    expect(pager()).toContain("The newest block");
+    // The next one, found whether before the subscription took effect or after.
+    found = true;
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await until(() => expect(pager()).toContain("Next: 975 412"));
+    expect(asked()).toBe(2);
+  });
+
   it("marks a block that is not on the best chain", async () => {
     serve({
       ...normal(),

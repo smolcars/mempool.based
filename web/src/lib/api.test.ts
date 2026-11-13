@@ -58,6 +58,16 @@ describe("fetchApi", () => {
     expect(fetch).toHaveBeenCalledWith("/signet/api/block/ab", expect.anything());
   });
 
+  it("skips the browser's HTTP cache only when asked to be fresh", async () => {
+    const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      reply(200, "[]"),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await fetchApi("mainnet", "/blocks");
+    await fetchApi("mainnet", "/blocks", { fresh: true });
+    expect(fetch.mock.calls.map(([, init]) => init?.cache)).toStrictEqual([undefined, "no-cache"]);
+  });
+
   it("reads text replies", async () => {
     vi.stubGlobal("fetch", async () => reply(200, "975411\n"));
     await expect(fetchApi("mainnet", "/blocks/tip/height", { as: "text" })).resolves.toBe("975411");
