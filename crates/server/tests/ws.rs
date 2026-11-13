@@ -39,7 +39,8 @@ const WAIT: Duration = Duration::from_secs(5);
 /// Block JSON the mock Esplora serves, by hash. Unknown hashes are a 404.
 type Blocks = Arc<Mutex<HashMap<String, Value>>>;
 
-/// How many times the mock Esplora answered 404, by hash.
+/// How many times the mock Esplora answered 404, by hash; under `"served"`, how many blocks it
+/// served.
 type Misses = Arc<Mutex<HashMap<String, u32>>>;
 
 async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
@@ -48,7 +49,10 @@ async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
         State((blocks, misses)): State<(Blocks, Misses)>,
     ) -> impl IntoResponse {
         match blocks.lock().unwrap().get(&hash) {
-            Some(b) => (StatusCode::OK, b.to_string()).into_response(),
+            Some(b) => {
+                *misses.lock().unwrap().entry("served".into()).or_default() += 1;
+                (StatusCode::OK, b.to_string()).into_response()
+            }
             None => {
                 *misses.lock().unwrap().entry(hash).or_default() += 1;
                 (StatusCode::NOT_FOUND, "Block not found").into_response()
@@ -1624,6 +1628,7 @@ async fn a_client_that_never_reads_but_pings_is_dropped_once_its_writes_stall() 
     });
     let pad = "x".repeat(256 * 1024);
     let started = Instant::now();
+    let served = || s.misses.lock().unwrap().get("served").copied().unwrap_or(0);
     let blocks = chain(s.h[2].block_hash(), 400, 5);
     for (i, header) in blocks.iter().enumerate() {
         if s.sockets.open() == 0 {
@@ -1636,8 +1641,15 @@ async fn a_client_that_never_reads_but_pings_is_dropped_once_its_writes_stall() 
             .lock()
             .unwrap()
             .insert(id.clone(), json!({"id": id, "height": height, "pad": pad}));
+        // Each next tip once the hub has fetched this one, so every block goes out whole. Pushed on
+        // a timer instead, a machine slow enough for the hub to fall behind turned the feed into
+        // small `resync` messages that never filled the buffers.
+        let before = served();
         s.peer.push_tip(height, header).await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        while served() == before && s.sockets.open() > 0 {
+            assert!(started.elapsed() < Duration::from_secs(30), "never dropped");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
     pinging.abort();
     // Dropped, though its pings keep it from ever being idle. How soon depends on how fast the
