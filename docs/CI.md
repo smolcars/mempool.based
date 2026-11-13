@@ -6,24 +6,40 @@
 
 A PR that adds a slower step must make room for it or move it out of the PR path (to a scheduled or post-merge job).
 
+**Each job has a limit of its own,** a little above its time on the day it was set, so a job that drifts is named the moment it does, not after thirty merges have each added a little:
+
+| Job | Limit | Warm, 2026-11-13 |
+|---|---|---|
+| `rust` | 120 s | JOB_RUST |
+| `e2e` | 120 s | JOB_E2E |
+| `web` | 60 s | JOB_WEB |
+
+The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
+
+### When a job goes over
+
+Make room in the same pull request; never raise a limit to pass. In order: shrink or delete a test that re-proves something slowly (a random test runs a few steps in the suite and its long form behind `#[ignore]`, with the command beside it); replace a real wait with an event or a paused clock; stop building what no test needs. Read the summary's slowest tests first. Raise a limit only in a pull request that does nothing else and says why the time is worth it.
+
 ## How it stays fast
 
 1. **One workflow, one required check.** `ci.yml` ends in a `ci-ok` job that depends on every other job. Branch protection requires only `ci-ok`, so skipped jobs never block a merge.
 2. **Run only what changed.** A first `changes` job maps changed paths to jobs. A docs-only PR runs nothing but `ci-ok`. On `master`, a push that touches code runs every job, which verifies the merge and refreshes the caches; a docs-only push runs nothing but `changes` and `ci-ok`.
 3. **Jobs run in parallel,** never chained unless one needs another's output.
-4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them. The `rust` and `e2e` jobs each cache the cargo registry and `target/`. `bun install` from the registry is faster than restoring a cache, and so is downloading Playwright's headless Chromium, which `e2e` does while it compiles.
+4. **Caches are written on `master` and read on PRs.** GitHub scopes caches by branch: a PR can read `master`'s cache but not another PR's. So `master` pushes save caches and PR runs only restore them. The `rust` and `e2e` jobs each cache the cargo registry and `target/`. `rust-cache`'s key leaves out the `[profile]` sections of `Cargo.toml`, so its `key` input names the profile: change it when a profile changes, or every run rebuilds what the profile touches and no run saves it. `bun install` from the registry is faster than restoring a cache, and so is downloading Playwright's headless Chromium, which `e2e` does while it compiles.
 5. **Cancel superseded runs.** A new push to a PR cancels the run in progress.
 6. **No compiling tools in CI.** Tools are installed as prebuilt binaries.
 7. **Slow waits overlap.** The `e2e` job starts the regtest node and the browser download in the background, then compiles while the node mines.
-8. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size.
-9. **Every job has a timeout of 10 minutes.** A hung job fails fast.
+8. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size. One dependency is optimised even there: secp256k1's C library, which at `-O0` made signature checks most of the Lightning tests' time (a test of 1,500 announcements took 6.9 s; optimised, 0.3 s). It builds once into the cache.
+9. **The test binaries run at once.** [cargo-nextest](https://nexte.st) runs every test as its own process, eight at a time on the runner's four cores, since most slow tests wait on a socket or a timer ([`.config/nextest.toml`](../.config/nextest.toml)). `cargo test` ran the 28 test binaries one after another, each waiting for its slowest test. nextest is a prebuilt binary checked against a pinned checksum; it adds nothing to the product or the lockfile. Doc tests, which nextest does not run, run after it with `cargo test --doc`. Examples are not built for the tests: clippy already checks they compile.
+10. **Browser tests use the runner's four cores:** four Playwright workers.
+11. **Every job has a timeout of 10 minutes.** A hung job fails fast; a test past 30 s fails too (nextest's `slow-timeout`).
 
 ## Jobs
 
 | Job | Runs when | Does |
 |---|---|---|
 | `changes` | always | Decides which jobs below run. Pull requests run only the jobs their paths need; a `master` push runs every job when it touches code and none when it touches only docs |
-| `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile or workflow changes | Format check, clippy with warnings denied, tests |
+| `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile, `.config/nextest.toml` or workflow changes | Format check, clippy with warnings denied, tests with nextest, doc tests |
 | `web` | `web/`, the files the frontend imports from `design/` (`tokens.css`, `logo.svg`, `fonts/`) or workflow changes | Type check (both tsconfigs), `oxlint` with type-aware rules and the `oxfmt` format check, unit tests, production build, bundle-size check |
 | `e2e` | anything `rust` or `web` runs for, or `dev/regtest/` | `bun run e2e` ([`FRONTEND.md`](FRONTEND.md#browser-tests)): the server and frontend built from the PR, a regtest node with the known chain, Playwright in headless Chromium |
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
@@ -98,6 +114,7 @@ Most coverage belongs in the first two layers. Integration and end-to-end tests 
 - **Tests never reach the public internet or a shared node.** CI has no access to either.
 - **Tests bind port 0** or take their port from the environment.
 - **A flaky test is a failing test.** Fix it or delete it; do not retry it.
+- **A test never passes or fails on how long something took on the machine that runs it.** CI's runner is shared and slow, and a busy laptop is slower: a bound that held on an idle machine fails there for no fault of the code. Wait for the event the test means (a reply, a log line, a gate the test opens), or run it on tokio's paused clock (`#[tokio::test(start_paused = true)]`), where a timer's spacing is exact. A time budget the code must meet is a benchmark: put it behind `#[ignore]` with the command to run it, and keep a test of the same work's answers, without the clock, in the suite. A lower bound on a real clock (it waited at least the timeout) is fine; an upper bound is a budget.
 - **Browser tests run at the server's production limits** and fail on any refusal, naming the limit and the request ([`FRONTEND.md`](FRONTEND.md#browser-tests)). A test that trips one has found a page that asks for too much, or a test that does; never raise a limit to make it pass.
 - **New logic with a branch, a loop or a parser ships with a test.**
 
