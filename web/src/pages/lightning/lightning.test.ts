@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanAlias,
+  msatShort,
   coverageSentence,
   cut,
   dataFrom,
@@ -118,5 +119,16 @@ describe("coverage", () => {
     );
     expect(dataFrom(s)).toBeUndefined();
     expect(coverageSentence({ ...s, complete: true }, "the last week")).toBeUndefined();
+  });
+});
+
+describe("msatShort", () => {
+  it("reads millisatoshis in magnitude: msat, then sats, then BTC", () => {
+    expect(msatShort(900)).toBe("900 msat");
+    expect(msatShort(1000)).toBe("1 sat");
+    expect(msatShort(1500)).toBe("1.5 sats");
+    expect(msatShort(958_366_000)).toBe("958\u202F366 sats");
+    expect(msatShort(18_958_366_000)).toBe("0.190 BTC");
+    expect(msatShort(2_100_000_000_000_000_000)).toBe("21\u202F000\u202F000 BTC");
   });
 });

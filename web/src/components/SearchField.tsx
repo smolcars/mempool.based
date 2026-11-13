@@ -33,8 +33,18 @@ function summary(miss: Miss, network: string): string {
  * The header's search. Reads the query as it is typed, and on Enter goes to its page or explains
  * why there is none. The logic (search/search.ts) loads when the field is first used.
  */
+/** A phone's resting header gives the search little room: its hint is one word there. */
+const PHONE = "(max-width: 640px)";
+
 export function SearchField(props: SearchFieldProps) {
   const id = () => props.id ?? "search";
+  const phone = typeof matchMedia === "function" ? matchMedia(PHONE) : undefined;
+  const [narrow, setNarrow] = createSignal(phone?.matches === true);
+  onSettled(() => {
+    const change = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    phone?.addEventListener("change", change);
+    return () => phone?.removeEventListener("change", change);
+  });
   const network = useNetwork();
   const navigate = useNavigate();
   const [text, setText] = createSignal("");
@@ -160,7 +170,7 @@ export function SearchField(props: SearchFieldProps) {
           id={id()}
           name="q"
           type="search"
-          placeholder="Transaction, address or block"
+          placeholder={narrow() ? "Search" : "Transaction, address or block"}
           autocomplete="off"
           spellcheck="false"
           enterkeyhint="search"

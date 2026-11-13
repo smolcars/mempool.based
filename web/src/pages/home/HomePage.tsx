@@ -15,7 +15,10 @@ import { DifficultyPanel } from "./DifficultyPanel";
 import "./HomePage.css";
 
 /** A failure that means the node, not the request, is the problem. */
-const nodeSilent = (e: unknown) => e instanceof ApiError && (e.status === 0 || e.status >= 500);
+// The server's word that its node is not answering: a 5xx. A request that got no answer at all
+// (status 0) is the reader's own connection, as when a phone wakes a tab it had frozen, and the
+// socket's state says that already.
+const nodeSilent = (e: unknown) => e instanceof ApiError && e.status >= 500;
 
 export default function HomePage() {
   usePageTitle(() => "Blocks and mempool");
@@ -61,8 +64,8 @@ function Home(props: { network: Network }) {
         network={props.network}
       />
       <div class="home-grid wrap">
-        <MempoolPanel feed={live.mempool} />
         <FeePanel answer={fees} />
+        <MempoolPanel feed={live.mempool} />
         <RecentTxs feed={live.recent} />
         <DifficultyPanel network={props.network} tip={() => blocks.data()?.[0]?.id} />
       </div>

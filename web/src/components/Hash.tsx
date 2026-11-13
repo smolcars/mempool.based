@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { hashGroups, truncateMiddle } from "../lib/format";
+import type { JSX } from "@solidjs/web";
 import { CopyButton } from "./CopyButton";
 import { Link } from "./Link";
 import "./Hash.css";
@@ -15,13 +16,32 @@ export interface HashProps {
   copy?: boolean;
   /** What the copy button copies, for its label: "Copy transaction ID". */
   copyLabel?: string;
+  /** The whole value, wrapping where it must, instead of a shortened one. */
+  whole?: boolean;
+  /**
+   * As much as the room allows: the value cut in the middle only when its column is narrower than
+   * it, always keeping the last eight characters. For a table's identifier column.
+   */
+  fit?: boolean;
 }
 
 /** A hash or address shortened in the middle, in the monospace cut. Full value in the title and the copy. */
 export function Hash(props: HashProps) {
-  const short = () => truncateMiddle(props.value, props.head, props.tail);
+  const short = (): JSX.Element =>
+    props.fit ? (
+      <>
+        <span class="hash__head">{props.value.slice(0, -8)}</span>
+        <span class="hash__tail">{props.value.slice(-8)}</span>
+      </>
+    ) : props.whole ? (
+      props.value
+    ) : (
+      truncateMiddle(props.value, props.head, props.tail)
+    );
   return (
-    <span class="hash">
+    <span
+      class={["hash", { "hash--whole": props.whole === true, "hash--fit": props.fit === true }]}
+    >
       <Show
         when={props.href}
         fallback={
@@ -43,7 +63,7 @@ export function Hash(props: HashProps) {
   );
 }
 
-/** A hash shown whole as a page subject, in groups of eight that alternate in tone, with a copy button. */
+/** A hash shown whole as a page subject, in groups of eight, with a copy button. */
 export function HashFull(props: { value: string; copyLabel?: string }) {
   return (
     <span class="hash hash--full">

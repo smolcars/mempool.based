@@ -10,7 +10,7 @@ const block = {
   min_rate: 1012,
   median_rate: 1500,
   max_rate: 250_000,
-  bands: [0, 0, 0, 0, 312_000, 0, 0, 0, 0, 685_969],
+  bands: [0, 0, 0, 0, 0, 0, 312_000, 0, 0, 0, 0, 685_969],
 };
 const msg = (extra: object = {}) => ({
   topic: "projected",

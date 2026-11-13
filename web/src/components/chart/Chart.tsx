@@ -22,6 +22,7 @@ import {
   type Scale,
   scale,
   timeTicks,
+  endLabels,
 } from "./scale";
 import "./Chart.css";
 
@@ -62,12 +63,26 @@ export interface ChartBand {
   format: (v: number) => string;
 }
 
+/**
+ * Where the layers change how they divide the same total at one moment (a change of bookkeeping,
+ * not of the data): at `index`, the run arrives at `before` and leaves at `after` (one value per
+ * layer, each the point's own values when absent), changing on vertical edges, so the top of the
+ * stack never moves. Only the drawing changes: the readout and the figures keep the point's own.
+ */
+export interface ChartJoin {
+  index: number;
+  before?: readonly number[];
+  after?: readonly number[];
+}
+
 /** One stacked layer on the left axis, the first at the bottom: shares (0–1) or amounts. */
 export interface ChartLayer {
   name: string;
   values: readonly Value[];
   /** A fee band (1–10): the layer is that band's fee color, for amounts by fee rate. */
   fee?: number;
+  /** A mining pool's place (1–6, 0 for the rest): its categorical colour (`--pool-n`). */
+  pool?: number;
   /** A shorter name for the readout, where the key says the rest; `name` is read aloud. */
   short?: string;
 }
@@ -105,6 +120,8 @@ export interface ChartProps {
    * fixed step: wider is a gap. Three times the median step when not given.
    */
   gap?: number | undefined;
+  /** Vertical joins between the layers' bookkeepings ({@link ChartJoin}). */
+  joins?: readonly ChartJoin[] | undefined;
   /** How a point's time reads: a day by default. */
   time?: (t: number) => string;
   /** Replaces the summary written from the series. */
@@ -123,9 +140,15 @@ const reading = (v: Value | undefined, format: (v: number) => string) =>
 
 const layerMix = (k: number) => `${LAYER_MIX[k % LAYER_MIX.length] ?? 50}%`;
 
-/** A layer's fill: its fee color, or its shade of the text color (Chart.css). */
-const layerStyle = (l: ChartLayer | undefined, k: number) =>
-  l?.fee === undefined ? { "--mix": layerMix(k) } : { "--fill": `var(--fee-${l.fee})` };
+/** A layer's fill: its fee colour, its pool's colour, or its shade of series 1 (Chart.css). */
+const layerStyle = (l: ChartLayer | undefined, k: number) => {
+  if (l?.fee !== undefined) return { "--fill": `var(--fee-${l.fee})` };
+  if (l?.pool !== undefined)
+    return { "--fill": l.pool > 0 ? `var(--pool-${l.pool})` : "var(--pool-other)" };
+  return { "--mix": layerMix(k) };
+};
+/** A layer with a colour of its own rather than a shade. */
+const filled = (l: ChartLayer | undefined) => l?.fee !== undefined || l?.pool !== undefined;
 
 interface AxisFrame {
   scale: Scale;
@@ -158,10 +181,22 @@ export default function Chart(props: ChartProps) {
 
   onSettled(() => {
     if (!box) return undefined;
+    const plot = box;
     setWidth(box.clientWidth);
     const ro = new ResizeObserver(() => setWidth(box?.clientWidth ?? 0));
     ro.observe(box);
-    return () => ro.disconnect();
+    // A finger's reading stays after it lifts; a press anywhere outside the plot lets it go.
+    const away = (e: PointerEvent) => {
+      if (e.target instanceof Node && !plot.contains(e.target)) {
+        setPicked(undefined);
+        setHoverLayer(-1);
+      }
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => {
+      ro.disconnect();
+      document.removeEventListener("pointerdown", away, true);
+    };
   });
 
   const height = () => props.height ?? 240;
@@ -188,6 +223,23 @@ export default function Chart(props: ChartProps) {
       layers().map((l) => l.values),
       xs.length,
     );
+    // Each join's values stacked as the layers are, for each layer's path.
+    const stacked = (values: readonly number[] | undefined) => {
+      if (!values) return undefined;
+      let floor = 0;
+      return layers().map((_, k) => {
+        const lo = floor;
+        floor += values[k] ?? 0;
+        return { hi: floor, lo };
+      });
+    };
+    const joinStacks = (props.joins ?? []).map((j) => ({
+      index: j.index,
+      in: stacked(j.before),
+      out: stacked(j.after),
+    }));
+    const joinsOf = (k: number) =>
+      new Map(joinStacks.map((j) => [j.index, { in: j.in?.[k], out: j.out?.[k] }] as const));
     const on = (side: "left" | "right") =>
       series()
         .filter((s) => (s.axis ?? "left") === side)
@@ -205,6 +257,8 @@ export default function Chart(props: ChartProps) {
     const yOf = (s: ChartSeries) => ((s.axis ?? "left") === "right" && yr ? yr : yl).scale;
     const floor = yl.scale(yl.scale.domain[0]);
     const time = timeTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 84)));
+    // Too narrow for ticks a reader can place (a phone): the axis names its two ends instead.
+    const ends = right - left < 420 ? endLabels(domain[0], domain[1], right - left) : undefined;
     const covered = props.dataFrom;
     return {
       w,
@@ -217,15 +271,19 @@ export default function Chart(props: ChartProps) {
       yr,
       yOf,
       time,
+      ends,
       hatch:
         covered !== undefined && covered > domain[0]
           ? { x: left, w: Math.min(right, sx(covered)) - left }
           : undefined,
-      layers: stack.map((s) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver)),
+      layers: stack.map((s, k) => areaPath(xs, s.hi, s.lo, sx, yl.scale, gap, sliver, joinsOf(k))),
       stack,
       bands: bands().map((b) => areaPath(xs, b.hi, b.lo, sx, yl.scale, gap, sliver)),
+      // An area only over an axis from zero: filled down to a cut axis, it would overstate a change.
       areas: series().map((s) =>
-        s.draw === "area" ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver) : "",
+        s.draw === "area" && yOf(s).domain[0] === 0
+          ? areaPath(xs, s.values, yOf(s).domain[0], sx, yOf(s), gap, sliver)
+          : "",
       ),
       lines: series().map(
         (s) =>
@@ -262,6 +320,7 @@ export default function Chart(props: ChartProps) {
   const readings = (i: number) => [
     ...bands().map((b) => ({
       kind: `band-${b.tone ?? 1}`,
+      band: false,
       style: undefined,
       layer: -1,
       name: b.name,
@@ -270,30 +329,37 @@ export default function Chart(props: ChartProps) {
         typeof b.lo[i] !== "number" || typeof b.hi[i] !== "number"
           ? "no data"
           : `${b.format(b.lo[i] ?? 0)} to ${b.format(b.hi[i] ?? 0)}`,
+      empty: false,
     })),
     ...series().map((s) => ({
       kind: `line-${s.tone ?? 1}`,
+      band: false,
       style: undefined,
       layer: -1,
       name: s.name,
       short: undefined,
       value: reading(s.values[i], s.format),
+      empty: false,
     })),
     ...notes().map((s) => ({
       kind: "note",
+      band: false,
       style: undefined,
       layer: -1,
       name: s.name,
       short: undefined,
       value: reading(s.values[i], s.format),
+      empty: false,
     })),
     ...layers().map((l, k) => ({
-      kind: l.fee === undefined ? "layer" : "fee",
+      kind: filled(l) ? "fee" : "layer",
+      band: l.fee !== undefined,
       style: layerStyle(l, k),
       layer: k,
       name: l.name,
       short: l.short,
       value: reading(l.values[i], layerFormat),
+      empty: l.values[i] === 0,
     })),
   ];
   const valueText = () => {
@@ -370,6 +436,8 @@ export default function Chart(props: ChartProps) {
                   "chart__value",
                   {
                     "chart__value--on": r().layer >= 0 && r().layer === hoverLayer(),
+                    "chart__value--empty": r().empty,
+                    "chart__value--band": r().band,
                   },
                 ]}
               >
@@ -381,6 +449,10 @@ export default function Chart(props: ChartProps) {
               </li>
             )}
           </For>
+          {/* A narrow chart names one fee band at a time: its line is held for it, saying how. */}
+          <Show when={layers().some((l) => l.fee !== undefined)}>
+            <li class="chart__value chart__hint">Tap a layer to name it</li>
+          </Show>
         </ul>
       </div>
       <div
@@ -499,7 +571,7 @@ export default function Chart(props: ChartProps) {
                     class={[
                       "chart__layer",
                       {
-                        "chart__layer--fee": layers()[k()]?.fee !== undefined,
+                        "chart__layer--fee": filled(layers()[k()]),
                         "chart__layer--on": hoverLayer() === k(),
                       },
                     ]}
@@ -526,13 +598,34 @@ export default function Chart(props: ChartProps) {
                 y1={f().bottom}
                 y2={f().bottom}
               />
-              <For each={f().time.ticks}>
-                {(t) => (
-                  <text class="chart__label" x={f().sx(t)} y={f().bottom + 18} text-anchor="middle">
-                    {f().time.label(t)}
-                  </text>
+              <Show
+                when={f().ends}
+                fallback={
+                  <For each={f().time.ticks}>
+                    {(t) => (
+                      <text
+                        class="chart__label"
+                        x={f().sx(t)}
+                        y={f().bottom + 18}
+                        text-anchor="middle"
+                      >
+                        {f().time.label(t)}
+                      </text>
+                    )}
+                  </For>
+                }
+              >
+                {(ends) => (
+                  <>
+                    <text class="chart__label" x={f().left} y={f().bottom + 18} text-anchor="start">
+                      {ends()[0]}
+                    </text>
+                    <text class="chart__label" x={f().right} y={f().bottom + 18} text-anchor="end">
+                      {ends()[1]}
+                    </text>
+                  </>
                 )}
-              </For>
+              </Show>
               <Show when={props.x[index()]}>
                 {(t) => (
                   <g class="chart__cursor">

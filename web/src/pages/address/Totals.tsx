@@ -1,10 +1,11 @@
-import { Match, Show, Switch } from "solid-js";
+import { createSignal, createUniqueId, Match, Show, Switch } from "solid-js";
 import type { ApiResource } from "../../lib/api";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
+import { CopyButton } from "../../components/CopyButton";
 import { ErrorState } from "../../components/States";
 import type { AddressStats } from "../../lib/esplora";
-import { groupDigits } from "../../lib/format";
+import { formatBtc, groupDigits } from "../../lib/format";
 import { refusal } from "./address";
 import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
 
@@ -36,6 +37,34 @@ function Stat(props: {
   );
 }
 
+/**
+ * A summary amount in magnitude (`195.27 BTC`, `5 894 BTC`); the exact amount is in its title, and
+ * a tap or a key opens it on a line below with a copy button that copies it, to the satoshi.
+ */
+function Total(props: { sats: number; what: string }) {
+  const [open, setOpen] = createSignal(false);
+  const id = createUniqueId();
+  return (
+    <>
+      <button
+        type="button"
+        class="address-total"
+        aria-expanded={open() ? "true" : "false"}
+        aria-controls={id}
+        title={`${formatBtc(props.sats)} BTC`}
+        onClick={() => setOpen(!open())}
+      >
+        <Amount sats={props.sats} short />
+        <span class="visually-hidden">, show the exact amount</span>
+      </button>
+      <span id={id} class="address-total__exact" hidden={!open()}>
+        <span class="num">{formatBtc(props.sats)}</span>
+        <CopyButton value={formatBtc(props.sats)} label={`Copy the exact ${props.what}`} />
+      </span>
+    </>
+  );
+}
+
 const EMPTY = {
   funded_txo_count: 0,
   funded_txo_sum: 0,
@@ -53,7 +82,11 @@ export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => v
   const failure = () => (props.stats.state === "errored" ? refusal(props.stats.error) : undefined);
 
   return (
-    <section class="address-totals" aria-label="Totals" aria-busy={ready() ? "false" : "true"}>
+    <section
+      class="address-totals panel"
+      aria-label="Totals"
+      aria-busy={ready() ? "false" : "true"}
+    >
       <Switch>
         <Match when={failure() === "too-large"}>
           <Notice title="Totals are not available for this address">
@@ -74,19 +107,19 @@ export function Totals(props: { stats: ApiResource<AddressStats>; retry: () => v
               class="address-stat--balance"
               label="Balance"
               ready={ready()}
-              value={<Amount sats={chain().funded_txo_sum - chain().spent_txo_sum} />}
+              value={<Total sats={chain().funded_txo_sum - chain().spent_txo_sum} what="balance" />}
               sub="Confirmed"
             />
             <Stat
               label="Received"
               ready={ready()}
-              value={<Amount sats={chain().funded_txo_sum} />}
+              value={<Total sats={chain().funded_txo_sum} what="amount received" />}
               sub={plural(chain().funded_txo_count, "output", "outputs")}
             />
             <Stat
               label="Sent"
               ready={ready()}
-              value={<Amount sats={chain().spent_txo_sum} />}
+              value={<Total sats={chain().spent_txo_sum} what="amount sent" />}
               sub={plural(chain().spent_txo_count, "output", "outputs")}
             />
             <Stat

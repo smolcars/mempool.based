@@ -87,7 +87,9 @@ describe("mining page", () => {
     // A week's estimate: its share of the week's blocks times the week's hashrate.
     expect(pools?.textContent).toContain("713 EH/s");
     await vi.waitFor(() => expect(text(el)).toContain("Paid to miners"));
-    expect(text(el)).toContain("126.00000000 BTC");
+    // A summary reads in magnitude, the exact amount in its title.
+    expect(text(el)).toContain("126.00 BTC");
+    expect(el.querySelector('[title^="126.00000000 BTC"]')).not.toBeNull();
   });
 
   it("names each recent block's miner from one batch of facts", async () => {
@@ -136,6 +138,29 @@ describe("mining page", () => {
     expect(requests).toContain("/v1/mining/hashrate/pools/1m");
     const current = el.querySelector("[aria-current=page]");
     expect(current?.textContent).toBe("1 m: the last 30 days");
+  });
+
+  it("keeps the pools caption with the period's own data when the period changes", async () => {
+    let answer = () => {};
+    const held = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    replies["/v1/mining/pools/24h"] = async () => {
+      await held;
+      return Response.json({ ...RANKING, blockCount: 7 });
+    };
+    replies["/v1/mining/hashrate/24h"] =
+      replies["/v1/mining/hashrate/1w"] ?? (() => Response.json({}));
+    const el = mount(() => <MiningPage />, "/mining");
+    const caption = () =>
+      el.querySelector("[aria-labelledby=mining-pools-title] .section__head")?.textContent ?? "";
+    await vi.waitFor(() => expect(caption()).toContain("40 blocks in the last week"));
+    el.querySelector<HTMLAnchorElement>("a[href='/mining?period=24h']")?.click();
+    // While the day loads, the week's figures stay, and so do the words that describe them.
+    await vi.waitFor(() => expect(requests).toContain("/v1/mining/pools/24h"));
+    expect(caption()).toContain("40 blocks in the last week");
+    answer();
+    await vi.waitFor(() => expect(caption()).toContain("7 blocks in the last 24 hours"));
   });
 
   it("says when nothing is stored for the period, and offers all time", async () => {
@@ -230,7 +255,7 @@ describe("pool page", () => {
     expect(el.querySelector("a[href^='javascript']")).toBeNull();
     expect(text(el)).toContain("No blocks from this pool are stored");
     expect(text(el)).toContain("10\u202FEH/s");
-    expect(text(el)).toContain("9.37500000 BTC");
+    expect(text(el)).toContain("9.38 BTC");
   });
 
   it("links a pool's site by its host", async () => {

@@ -5,6 +5,7 @@ import { formatDay, formatHashrate, formatShare } from "../../components/chart/s
 import { DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -120,7 +121,8 @@ function Pool(props: { network: Network; slug: string }) {
         </Show>
         <section class="mining-section" aria-labelledby="pool-stats-title">
           <SectionHeader title="Blocks found" id="pool-stats-title" />
-          {/* Its height is held, coverage note included, so the figures arriving move nothing. */}
+          {/* Its height is held, so the figures arriving move nothing. Where the stored blocks begin
+              is said once, over the chart below. */}
           <div class="pool-stats">
             <dl class="mining-rewards" aria-busy={s() ? "false" : "true"}>
               <Stat
@@ -162,12 +164,11 @@ function Pool(props: { network: Network; slug: string }) {
                 </Show>
               </Stat>
               <Stat label="Rewards earned" sub="In the blocks stored">
-                <Show when={s()}>{(a) => <Amount sats={Number(a().totalReward)} />}</Show>
+                <Show when={s()}>{(a) => <Amount sats={Number(a().totalReward)} short />}</Show>
               </Stat>
             </dl>
             <Show when={(s()?.pool.regexes.length ?? 0) + (s()?.pool.addresses.length ?? 0) > 0}>
-              <details class="mining-recognised">
-                <summary>How its blocks are recognised</summary>
+              <More label="How its blocks are recognised">
                 <p>
                   By {groupDigits(s()?.pool.addresses.length ?? 0)} payout{" "}
                   {s()?.pool.addresses.length === 1 ? "address" : "addresses"} and these coinbase
@@ -178,9 +179,8 @@ function Pool(props: { network: Network; slug: string }) {
                     <li class="num">{t}</li>
                   ))}
                 </ul>
-              </details>
+              </More>
             </Show>
-            <CoverageNote coverage={stats.answer()?.coverage} period={ALL} />
           </div>
         </section>
         <section class="mining-section" aria-labelledby="pool-hashrate-title">
@@ -189,7 +189,8 @@ function Pool(props: { network: Network; slug: string }) {
           </SectionHeader>
           <Section
             what="the pool's weeks"
-            reserve={`calc(${chartHeight(240)} + 4.75rem)`}
+            // The chart alone: a pool whose weeks are all stored has no coverage note above it.
+            reserve={chartHeight(240)}
             hold={series().x.length > 0}
             ready={weeks.answer() !== undefined}
             error={weeks.error()}
@@ -295,6 +296,7 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
         <DataTable
           caption={`Blocks found by ${props.name ?? "this pool"}, newest first`}
           rows={rows()}
+          rowHref={(b) => paths.block(b.id)}
           empty={<Empty title="No blocks from this pool are stored" />}
           columns={[
             {
@@ -306,9 +308,16 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
               ),
             },
             { header: "Mined", cell: (b) => <TimeAgo time={b.timestamp} /> },
-            { header: "Transactions", numeric: true, cell: (b) => groupDigits(b.tx_count) },
+            {
+              header: "Transactions",
+              short: "Txs",
+              numeric: true,
+              drop: 2,
+              cell: (b) => groupDigits(b.tx_count),
+            },
             {
               header: "Median fee rate, sat/vB",
+              short: "Median, sat/vB",
               numeric: true,
               cell: (b) =>
                 typeof b.extras.medianFee === "number" ? (
@@ -326,6 +335,7 @@ function PoolBlocks(props: { network: Network; slug: string; name: string | unde
             {
               header: "Reward, BTC",
               numeric: true,
+              drop: 3,
               cell: (b) => <Amount sats={b.extras.reward} unit={false} />,
             },
             { header: "Size", numeric: true, optional: true, cell: (b) => bytesText(b.size) },

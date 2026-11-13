@@ -10,6 +10,7 @@
 // reconnect), so the tile people were watching is still there to cross the line when it lands.
 import type { Block } from "../../lib/esplora";
 import type { ProjectedBlock, ProjectedMessage, Projection } from "../../lib/projected-topic";
+import { FEE_BANDS } from "../../lib/format";
 
 /** Tiles left of the "now" line: three blocks and one for everything after them. */
 export const SLOTS = 4;
@@ -145,7 +146,9 @@ function merge(parts: readonly ProjectedBlock[], slot: number, key: number, rest
     minRate: held.length > 0 ? Math.min(...held.map((b) => b.minRate)) : 0,
     medianRate: middle?.medianRate ?? 0,
     maxRate: held.length > 0 ? Math.max(...held.map((b) => b.maxRate)) : 0,
-    bands: Array.from({ length: 10 }, (_, i) => held.reduce((s, b) => s + (b.bands[i] ?? 0), 0)),
+    bands: Array.from({ length: FEE_BANDS }, (_, i) =>
+      held.reduce((s, b) => s + (b.bands[i] ?? 0), 0),
+    ),
   };
 }
 

@@ -11,7 +11,7 @@ export function point(time: number, over: Partial<History["points"][number]> = {
     vsize: 550_000,
     fees: 100_000,
     min_fee_rate: 100,
-    bands: [100_000, 0, 0, 50_000, 400_000, 0, 0, 0, 0, 0],
+    bands: [100_000, 0, 0, 0, 0, 50_000, 400_000, 0, 0, 0, 0, 0],
     in_count: 10,
     in_vsize: 6000,
     out_count: 5,

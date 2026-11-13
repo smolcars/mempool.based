@@ -46,7 +46,7 @@
   }
   .audit__rate {
     font-size: var(--text-3xl);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     line-height: var(--leading-tight);
     letter-spacing: var(--tracking-tight);
   }

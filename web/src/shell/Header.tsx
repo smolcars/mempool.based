@@ -10,6 +10,7 @@ import "./Header.css";
 
 const NAV = [
   { href: "/blocks", label: "Blocks", match: (p: string) => /^\/blocks?(\/|$)/.test(p) },
+  { href: "/mempool", label: "Mempool", match: (p: string) => /^\/mempool(\/|$)/.test(p) },
   { href: "/mining", label: "Mining", match: (p: string) => /^\/mining(\/|$)/.test(p) },
   { href: "/lightning", label: "Lightning", match: (p: string) => /^\/lightning(\/|$)/.test(p) },
 ];
@@ -51,8 +52,11 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
         </div>
         <nav class="nav" aria-label="Main">
           {NAV.map((item) => (
+            // "true", the current section, not "page": the router marks and unmarks "page" on
+            // links whose address is exactly the page's, and took the mark off when a query
+            // or a child page differed. A value it did not write, it leaves alone.
             // oxlint-disable-next-line unicorn/prefer-regexp-test -- `match` is our own function, not String#match
-            <Link href={item.href} aria-current={item.match(page()) ? "page" : undefined}>
+            <Link href={item.href} aria-current={item.match(page()) ? "true" : "false"}>
               {item.label}
             </Link>
           ))}

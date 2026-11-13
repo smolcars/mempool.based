@@ -20,10 +20,15 @@ const COLUMNS: Column<RecentTx | null>[] = [
   {
     header: "Transaction",
     cell: (t) =>
-      t ? <Hash value={t.txid} href={paths.tx(t.txid)} copy={false} /> : <span class="home-bone" />,
+      t ? (
+        <Hash value={t.txid} href={paths.tx(t.txid)} copy={false} fit />
+      ) : (
+        <span class="home-bone" />
+      ),
   },
   {
     header: "Fee rate, sat/vB",
+    short: "sat/vB",
     cell: (t) =>
       t ? (
         <FeeRate rate={feeRate(t.fee, t.vsize) ?? Number.NaN} unit={false} />
@@ -114,6 +119,7 @@ export function RecentTxs(props: { feed: Feed<RecentTx[]> }) {
           caption="The newest transactions waiting in the mempool"
           columns={COLUMNS}
           rows={rows() ?? Array.from({ length: ROWS }, () => null)}
+          rowHref={(t) => (t ? paths.tx(t.txid) : undefined)}
           rowClass={(t) => (t && fresh.has(t) ? "home-recent__new" : undefined)}
           empty={
             <Empty title="No transactions are waiting">

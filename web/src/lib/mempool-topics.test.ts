@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mempoolTopic, transactionsTopic } from "./mempool-topics";
 
-const bands = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const bands = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 describe("the mempool topics", () => {
   it("read the mempool totals, rates in sat/vB", () => {

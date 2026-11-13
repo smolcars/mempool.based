@@ -1,11 +1,12 @@
 // The Lightning network now and over time, and its newest opens and closes
 // (docs/DESIGN.md "Lightning", docs/FRONTEND.md "Lightning pages").
-import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import { useLocation, useSearchParams } from "@solidjs/router";
+import { createEffect, createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatMoment, formatSi } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -37,17 +38,23 @@ import {
   LightningSearch,
   NodeName,
   nodeColumns,
+  LightningNav,
+  rememberList,
   Stat,
   VERIFIED_NOTE,
 } from "./parts";
 
 const Chart = lazy(() => import("../../components/chart/Chart"));
 
+/** Rows in each of the overview's lists: a preview; the rankings hold the rest. */
+const PREVIEW = 5;
+
 export default function LightningPage() {
   usePageTitle(() => "Lightning");
   const network = useNetwork();
   return (
     <div class="wrap ln">
+      <LightningNav here="overview" />
       <header class="ln-head">
         <h1>Lightning</h1>
         <LightningSearch />
@@ -65,11 +72,21 @@ export default function LightningPage() {
 }
 
 function Overview(props: { network: Network }) {
+  rememberList(paths.lightning(), "Lightning overview");
   const [overview, { refetch }] = createRequest(
     () => props.network,
     (n, signal) => ask(n, "/overview", isOverview, signal),
   );
   onSettled(() => void Chart.preload());
+  // "History" in the section's links lands on the chart: once the figures above it have arrived,
+  // so they do not push it out of view after the jump.
+  const location = useLocation();
+  createEffect(
+    () => [location.hash, overview.latest !== undefined] as const,
+    ([hash, ready]) => {
+      if (hash === "#history" && ready) document.getElementById("history")?.scrollIntoView();
+    },
+  );
   return (
     <>
       <Show
@@ -91,47 +108,42 @@ function Overview(props: { network: Network }) {
         {(o) => (
           <>
             <div class="ln-pair">
+              <section aria-labelledby="ln-top-capacity-title">
+                <SectionHeader title="Largest nodes" id="ln-top-capacity-title">
+                  <Link href={paths.lightningRankings("capacity")}>Top 100</Link>
+                </SectionHeader>
+                <TopTable
+                  rows={o().top_capacity.slice(0, PREVIEW)}
+                  caption="The five nodes with the most capacity"
+                  by="capacity"
+                />
+              </section>
+              <section aria-labelledby="ln-top-channels-title">
+                <SectionHeader title="Most connected nodes" id="ln-top-channels-title">
+                  <Link href={paths.lightningRankings("channels")}>Top 100</Link>
+                </SectionHeader>
+                <TopTable
+                  rows={o().top_channels.slice(0, PREVIEW)}
+                  caption="The five nodes with the most channels"
+                  by="channels"
+                />
+                <p class="ln-more">
+                  <Link href={paths.lightningRankings("age")}>The oldest nodes</Link>
+                </p>
+              </section>
+            </div>
+            <div class="ln-pair">
               <section aria-labelledby="ln-opened-title">
                 <SectionHeader title="Newest channels" id="ln-opened-title">
                   By funding block
                 </SectionHeader>
-                <ChannelTable rows={o().opened} kind="opened" />
+                <ChannelTable rows={o().opened.slice(0, PREVIEW)} kind="opened" />
               </section>
               <section aria-labelledby="ln-closed-title">
                 <SectionHeader title="Newest closes" id="ln-closed-title">
                   Seen on the chain
                 </SectionHeader>
-                <ChannelTable rows={o().closed} kind="closed" />
-              </section>
-            </div>
-            <div class="ln-pair">
-              <section aria-labelledby="ln-top-capacity-title">
-                <SectionHeader title="Largest nodes" id="ln-top-capacity-title">
-                  By capacity
-                </SectionHeader>
-                <TopTable
-                  rows={o().top_capacity}
-                  caption="The ten nodes with the most capacity"
-                  by="capacity"
-                />
-                <p class="ln-more">
-                  <Link href={paths.lightningRankings("capacity")}>The top 100 by capacity</Link>
-                </p>
-              </section>
-              <section aria-labelledby="ln-top-channels-title">
-                <SectionHeader title="Most connected nodes" id="ln-top-channels-title">
-                  By open channels
-                </SectionHeader>
-                <TopTable
-                  rows={o().top_channels}
-                  caption="The ten nodes with the most channels"
-                  by="channels"
-                />
-                <p class="ln-more">
-                  <Link href={paths.lightningRankings("channels")}>The top 100 by channels</Link>
-                  {" · "}
-                  <Link href={paths.lightningRankings("age")}>The oldest nodes</Link>
-                </p>
+                <ChannelTable rows={o().closed.slice(0, PREVIEW)} kind="closed" />
               </section>
             </div>
           </>
@@ -164,7 +176,7 @@ function Now(props: { stats: Stats | null }) {
                 label="Channels"
                 sub={
                   <>
-                    Median size <Amount sats={s().med_capacity} />
+                    Median size <Amount sats={s().med_capacity} short />
                   </>
                 }
               >
@@ -177,11 +189,11 @@ function Now(props: { stats: Stats | null }) {
                 label="Capacity"
                 sub={
                   <>
-                    Average per channel <Amount sats={s().avg_capacity} />
+                    Average per channel <Amount sats={s().avg_capacity} short />
                   </>
                 }
               >
-                <Amount sats={s().capacity} />
+                <Amount sats={s().capacity} short />
               </Stat>
               <Stat label="Median fee rate" sub={`Average ${ppm(s().avg_fee_rate)}`}>
                 <span class="num">{ppm(s().med_fee_rate)}</span>
@@ -190,11 +202,14 @@ function Now(props: { stats: Stats | null }) {
                 <span class="num">{msat(s().med_base_fee_msat)}</span>
               </Stat>
             </dl>
-            <p class="ln-aside">
-              {VERIFIED_NOTE} Fee figures are what nodes charge to forward a payment, over{" "}
-              {groupDigits(s().policies)} policies; averages leave out the few over 1 000 000, which
-              refuse to route.
-            </p>
+            <p class="ln-aside">Only channels checked against the chain are counted.</p>
+            <More>
+              <p>
+                {VERIFIED_NOTE} Fee figures are what nodes charge to forward a payment, over{" "}
+                {groupDigits(s().policies)} policies; averages leave out the few over 1 000 000,
+                which refuse to route.
+              </p>
+            </More>
           </>
         )}
       </Show>
@@ -222,21 +237,34 @@ function History(props: { network: Network }) {
     (id, signal) => ask(props.network, `/statistics/${id}`, isSeries, signal),
   );
   const answer = () => series.latest;
+  const fitted = () => {
+    const a = answer();
+    return search["interval"] === undefined && a !== undefined && dataFrom(a) !== undefined;
+  };
   return (
-    <section aria-labelledby="ln-history-title">
+    <section id="history" class="ln-history" aria-labelledby="ln-history-title">
       <SectionHeader title="Over time" id="ln-history-title">
         Every ten minutes
       </SectionHeader>
       <div class="ln-section-head">
+        {/* A view fitted to what is recorded has its own choice: a period's name is its whole width. */}
         <nav class="ln-picker" aria-label="Period">
           <ul>
+            <Show when={fitted()}>
+              <li>
+                <Link class="ln-picker__item" href={paths.lightning()} aria-current="page">
+                  Recorded
+                  <span class="visually-hidden">: since this server began recording</span>
+                </Link>
+              </li>
+            </Show>
             <For each={INTERVALS}>
               {(p) => (
                 <li>
                   <Link
                     class="ln-picker__item"
                     href={paths.lightning(p.id)}
-                    aria-current={p.id === interval().id ? "page" : undefined}
+                    aria-current={!fitted() && p.id === interval().id ? "page" : "false"}
                   >
                     {p.label}
                     <span class="visually-hidden">: {p.words}</span>
@@ -271,7 +299,11 @@ function History(props: { network: Network }) {
               aria-busy={s().interval === interval().id && !series.loading ? "false" : "true"}
             >
               <Show when={s().points.length > 0} fallback={<NothingRecorded s={s()} />}>
-                <HistoryChart s={s()} interval={interval()} />
+                <HistoryChart
+                  s={s()}
+                  interval={interval()}
+                  fit={search["interval"] === undefined}
+                />
               </Show>
             </div>
           )}
@@ -301,7 +333,13 @@ function NothingRecorded(props: { s: Series }) {
   );
 }
 
-function HistoryChart(props: { s: Series; interval: Interval }) {
+/**
+ * `fit`: the reader chose no period, so a view whose records begin inside it starts where they do
+ * rather than hatching most of its width; the sentence above says so. A period the reader chose
+ * keeps its whole width.
+ */
+function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
+  const from = () => (props.fit ? dataFrom(props.s) : undefined);
   const x = () => props.s.points.map((p) => p.time);
   const col = (f: (p: Stats) => number) => props.s.points.map(f);
   const time = () =>
@@ -314,7 +352,9 @@ function HistoryChart(props: { s: Series; interval: Interval }) {
             <Show when={dataFrom(props.s) !== undefined}>
               <span class="ln-coverage__swatch" aria-hidden="true" />
             </Show>
-            {text()}
+            {from() === undefined
+              ? text()
+              : `Everything recorded, since ${formatMoment(props.s.first ?? 0)}.`}
           </p>
         )}
       </Show>
@@ -323,8 +363,8 @@ function HistoryChart(props: { s: Series; interval: Interval }) {
           <Chart
             label={`Lightning channels and capacity, ${props.interval.words}`}
             x={x()}
-            domain={[props.s.from, props.s.to]}
-            dataFrom={dataFrom(props.s)}
+            domain={[from() ?? props.s.from, props.s.to]}
+            dataFrom={from() === undefined ? dataFrom(props.s) : undefined}
             gap={props.s.step}
             height={240}
             left={{ format: (v) => groupDigits(v) }}
@@ -367,7 +407,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
           <span class="ln-row-head">
             <ChannelLink id={c.id} />
             <span class="ln-row-when">
-              <Show when={c.closed}>{(x) => `${KIND_SHORT[x().kind]} · `}</Show>
+              <Show when={c.closed}>{(x) => <>{`${KIND_SHORT[x().kind]} · `}</>}</Show>
               <Show when={props.kind === "closed" ? c.closed?.block : c.opened}>
                 {(b) => <TimeAgo time={b().time} />}
               </Show>
@@ -381,7 +421,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
     {
       header: "Capacity, BTC",
       numeric: true,
-      cell: (c) => <Amount sats={c.capacity} unit={false} />,
+      cell: (c) => <Amount sats={c.capacity} unit={false} short />,
     },
     {
       header: "Block",
@@ -399,6 +439,7 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
       caption={props.kind === "opened" ? "The newest channels" : "The newest closes"}
       columns={columns()}
       rows={props.rows}
+      rowHref={(c) => paths.lightningChannel(c.id)}
       empty={
         props.kind === "opened" ? (
           <Empty title="No channel yet" />
@@ -414,5 +455,12 @@ function ChannelTable(props: { rows: ListedChannel[]; kind: "opened" | "closed" 
 }
 
 function TopTable(props: { rows: RankedNode[]; caption: string; by: "capacity" | "channels" }) {
-  return <DataTable caption={props.caption} columns={nodeColumns(props.by)} rows={props.rows} />;
+  return (
+    <DataTable
+      caption={props.caption}
+      columns={nodeColumns(props.by)}
+      rows={props.rows}
+      rowHref={(n) => paths.lightningNode(n.id)}
+    />
+  );
 }

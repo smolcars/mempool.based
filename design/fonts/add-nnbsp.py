@@ -38,10 +38,12 @@ for table in font["cmap"].tables:
 
 font.save(path)
 
-# Check: the new space keeps its width at the corners of both axes.
+# Check: the new space keeps its width at both ends of every axis left in the font.
 from fontTools.varLib import instancer  # noqa: E402
 
-for location in ({"wght": 300, "MONO": 0}, {"wght": 800, "MONO": 1}):
+axes = font["fvar"].axes
+for end in ("minValue", "maxValue"):
+    location = {a.axisTag: getattr(a, end) for a in axes}
     static = instancer.instantiateVariableFont(TTFont(path), location)
     assert static["hmtx"][NAME][0] == WIDTH, (location, static["hmtx"][NAME])
     assert static["hmtx"]["zero"][0] == 600, (location, static["hmtx"]["zero"])

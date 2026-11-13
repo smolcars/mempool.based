@@ -16,17 +16,19 @@ test("the next block shows the waiting transactions as squares and rows", async 
     name: "Transactions in the next block, highest fee rate first",
   });
   for (const txid of WAITING) {
-    await expect(list.locator(`a[href="/regtest/tx/${txid}"]`)).toBeVisible();
+    await expect(list.locator(`a.hash__text[href="/regtest/tx/${txid}"]`)).toBeVisible();
   }
   // The replaced original is not waiting any more.
-  await expect(list.locator(`a[href="/regtest/tx/${chain.txs.rbf_original}"]`)).toHaveCount(0);
+  await expect(
+    list.locator(`a.hash__text[href="/regtest/tx/${chain.txs.rbf_original}"]`),
+  ).toHaveCount(0);
   // One square per row, drawn by the grid from the same records.
   const rows = await list.locator("tbody tr").count();
   const canvas = page.getByRole("img", { name: /^Map of the next block's/ });
   await expect(canvas).toHaveAttribute("data-squares", String(rows));
   // The parent lifted by its child is mined at their chunk's rate, and says what it pays itself.
   const parent = list.locator("tr", {
-    has: page.locator(`a[href="/regtest/tx/${chain.txs.cpfp_parent}"]`),
+    has: page.locator(`a.hash__text[href="/regtest/tx/${chain.txs.cpfp_parent}"]`),
   });
   await expect(parent).toContainText("own 1.00");
   await expect(page.getByText("Live", { exact: true })).toBeVisible();

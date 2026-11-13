@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
+import { tablesFit, tapRow } from "./rows";
 
 // Regtest runs without Lightning, so the filled pages are drawn from answers a mainnet server
 // gave on 2026-11-12 (fixtures/lightning/app), served in place of this server's own.
@@ -66,7 +67,7 @@ test("the overview, a node and a channel, from mainnet's answers", async ({ page
   await expect(page.locator("dl").getByText(/^36\s228$/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Newest channels" })).toBeVisible();
 
-  const connected = page.getByRole("table", { name: "The ten nodes with the most channels" });
+  const connected = page.getByRole("table", { name: "The five nodes with the most channels" });
   await connected.getByRole("link", { name: "ACINQ" }).click();
   await expect(page).toHaveURL(`/regtest/lightning/node/${ACINQ}`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("ACINQ");
@@ -74,6 +75,8 @@ test("the overview, a node and a channel, from mainnet's answers", async ({ page
 
   await page.getByRole("link", { name: "811984x2037x0" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Channel 811984x2037x0");
+  // Back to where the reader came from: the node, by its name.
+  await expect(page.locator(".ln-nav__back")).toHaveText("← ACINQ");
   await expect(page.getByRole("heading", { name: "Its two ends" })).toBeVisible();
   await expect(page.getByRole("link", { name: /^811\s984$/ })).toHaveAttribute(
     "href",
@@ -139,7 +142,8 @@ test("a transaction page links the channel its transaction opened", async ({ pag
   ).toHaveAttribute("href", `/regtest/lightning/channel/${overview.opened[0]?.id ?? ""}`);
 });
 
-for (const width of [320, 360]) {
+// The narrowest phone, strictly: 390 and 720 px are in "Lightning's lists" below.
+for (const width of [320]) {
   test(`every Lightning table fits at ${width} px`, async ({ page }) => {
     await serve(page, mainnet());
     await page.setViewportSize({ width, height: 800 });
@@ -153,7 +157,9 @@ for (const width of [320, 360]) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       // Every page here links a node once its answer is drawn.
-      await expect(page.locator('main a[href*="/lightning/node/"]').first()).toBeVisible();
+      await expect(
+        page.locator('main a[href*="/lightning/node/"]:not(.table__rowlink)').first(),
+      ).toBeVisible();
       for (const t of await page.getByRole("table").all()) {
         const box = await t.evaluate((el) => ({
           table: el.scrollWidth,
@@ -181,3 +187,136 @@ for (const width of [320, 360]) {
     }
   });
 }
+
+// Right-aligned figures once ran into the next column's text ("RankNode", "0.17000000Active"):
+// at every width, the text of neighbouring cells keeps a gutter between them.
+for (const width of [360, 768, 1440]) {
+  test(`every Lightning table keeps a gutter between columns at ${width} px`, async ({ page }) => {
+    await serve(page, mainnet());
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [`/regtest/lightning/node/${ACINQ}`, "/regtest/lightning/rankings"]) {
+      await page.goto(path);
+      await expect(
+        page.locator('main a[href*="/lightning/node/"]:not(.table__rowlink)').first(),
+      ).toBeVisible();
+      const tight = await page.evaluate(() => {
+        const out: string[] = [];
+        for (const row of document.querySelectorAll("main table tr")) {
+          const boxes = [...row.querySelectorAll("th, td")]
+            .filter((c) => (c as HTMLElement).offsetParent !== null)
+            .map((c) => {
+              // The visible text only: a unit hidden for screen readers takes no room.
+              let left = Number.POSITIVE_INFINITY;
+              let right = Number.NEGATIVE_INFINITY;
+              const walk = document.createTreeWalker(c, NodeFilter.SHOW_TEXT);
+              for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+                if (n.parentElement?.closest(".visually-hidden, .table__long")) continue;
+                const range = document.createRange();
+                range.selectNodeContents(n);
+                for (const r of range.getClientRects()) {
+                  if (r.width === 0) continue;
+                  left = Math.min(left, r.left);
+                  right = Math.max(right, r.right);
+                }
+              }
+              return {
+                left,
+                right,
+                extent: right > left ? right - left : 0,
+                text: c.textContent ?? "",
+              };
+            })
+            .filter((b) => b.extent > 0);
+          for (let i = 1; i < boxes.length; i++) {
+            const a = boxes[i - 1];
+            const b = boxes[i];
+            if (a && b && b.left - a.right < 8) out.push(`${a.text}|${b.text}`);
+          }
+        }
+        return out.slice(0, 5);
+      });
+      expect(tight, `${path} at ${width} px`).toStrictEqual([]);
+    }
+  });
+}
+
+test("History in the section's links lands on the overview's chart from any Lightning page", async ({
+  page,
+}) => {
+  await serve(page, mainnet());
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const from of [
+      `/regtest/lightning/node/${ACINQ}`,
+      "/regtest/lightning/channel/811984x2037x0",
+      "/regtest/lightning/rankings",
+    ]) {
+      await page.goto(from);
+      const nav = page.getByRole("navigation", { name: "Lightning" });
+      await expect(nav.getByRole("link", { name: "Overview" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Rankings" })).toBeVisible();
+      await nav.getByRole("link", { name: "History" }).click();
+      await expect(page).toHaveURL(/\/regtest\/lightning#history$/);
+      // One current destination: the chart, now the reader is on it.
+      await expect(nav.locator('[aria-current="location"]')).toHaveText("History");
+      await expect(nav.locator('[aria-current="page"]')).toHaveCount(0);
+      const heading = page.getByRole("heading", { name: "Over time" });
+      await expect(heading).toBeInViewport();
+      // Clear of the sticky header, not under it.
+      const header = await page.locator(".site-header").boundingBox();
+      const top = (await heading.boundingBox())?.y ?? 0;
+      expect(top, `${from} at ${width} px`).toBeGreaterThanOrEqual(
+        (header?.y ?? 0) + (header?.height ?? 0),
+      );
+    }
+  }
+});
+
+test.describe("Lightning's lists", () => {
+  // A tap opens a node or channel with no recorded answer, which the stand-in refuses with a 500.
+  test.use({ consoleErrorsAllowed: [/status of 500/] });
+  const pages = [
+    "/regtest/lightning",
+    "/regtest/lightning/rankings",
+    `/regtest/lightning/node/${ACINQ}`,
+    "/regtest/lightning/search?q=acinq",
+  ];
+
+  test("every row opens its item from anywhere on it, at a phone's width", async ({ page }) => {
+    await serve(page, mainnet());
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const path of pages) {
+      await page.goto(path);
+      const tables = page.locator("table.table--rows");
+      await expect(tables.first()).toBeVisible();
+      const count = await tables.count();
+      for (let i = 0; i < count; i++) {
+        if (i > 0) await page.goto(path);
+        await tapRow(page, page.locator("table.table--rows").nth(i), `${path}, table ${i + 1}`);
+      }
+    }
+  });
+
+  test("every table fits its panel or shows that it scrolls, at 320, 390 and 720 px", async ({
+    page,
+  }) => {
+    await serve(page, mainnet());
+    for (const width of [320, 390, 720]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const path of pages) {
+        await page.goto(path);
+        await expect(page.locator("table.table--rows tbody tr").first()).toBeVisible();
+        await tablesFit(page, `${path} at ${width} px`);
+      }
+    }
+  });
+});
+
+test("the overview's own links mark one current place at a time", async ({ page }) => {
+  await serve(page, mainnet());
+  await page.goto("/regtest/lightning");
+  const nav = page.getByRole("navigation", { name: "Lightning" });
+  await expect(nav.locator(":is([aria-current='page'], [aria-current='location'])")).toHaveText(
+    "Overview",
+  );
+});

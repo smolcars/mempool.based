@@ -1,6 +1,6 @@
 // Pieces every Lightning page shares: the gate that says whether there is anything to show,
 // names from gossip, links, figures and the section's own search.
-import { useNavigate } from "@solidjs/router";
+import { useLocation, useNavigate } from "@solidjs/router";
 import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
@@ -17,6 +17,8 @@ import {
   count,
   cut,
   isStatus,
+  msat,
+  msatShort,
   NAME_IN_LIST,
   type NodeRef,
   type RankedNode,
@@ -215,12 +217,14 @@ export function nodeColumns(by: "capacity" | "channels" | "age"): Column<RankedN
       header: "Capacity, BTC",
       numeric: true,
       optional: by === "channels",
-      cell: (n) => <Amount sats={n.capacity} unit={false} />,
+      drop: by === "capacity" ? undefined : 4,
+      cell: (n) => <Amount sats={n.capacity} unit={false} short />,
     },
     {
       header: "Channels",
       numeric: true,
       optional: by !== "channels",
+      drop: by === "channels" ? undefined : 4,
       cell: (n) => groupDigits(n.channels),
     },
   ];
@@ -296,4 +300,86 @@ export function closesInWords(c: {
     c.other > 0 ? `${groupDigits(c.other)} other` : "",
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : "none";
+}
+
+/** The last Lightning list the reader looked at, so a node or channel can lead back to it. */
+let lastList: { href: string; label: string } | undefined;
+
+/** Remembers a list page as where the reader came from; call it when one is shown. */
+export function rememberList(href: string, label: string): void {
+  lastList = { href, label };
+}
+
+/**
+ * Lightning's own way around: its overview, its rankings and the overview's history chart, as a short
+ * row of links, and on a node
+ * or channel a way back to the list the reader came from. One line, never a tall band.
+ */
+export function LightningNav(props: { here: "overview" | "rankings" | "search" | "detail" }) {
+  const back = () => (props.here === "detail" ? lastList : undefined);
+  // One current destination: the overview at its top, its chart once the address says so.
+  const location = useLocation();
+  const atChart = () => props.here === "overview" && location.hash === "#history";
+  return (
+    <nav class="ln-nav" aria-label="Lightning">
+      <Show when={back()}>
+        {(b) => (
+          <Link class="ln-nav__back" href={b().href}>
+            ← {b().label}
+          </Link>
+        )}
+      </Show>
+      <Link
+        class="ln-nav__item"
+        href={paths.lightning()}
+        aria-current={props.here === "overview" && !atChart() ? "page" : "false"}
+      >
+        Overview
+      </Link>
+      <Link
+        class="ln-nav__item"
+        href={paths.lightningRankings()}
+        aria-current={props.here === "rankings" ? "page" : "false"}
+      >
+        Rankings
+      </Link>
+      {/* The overview's chart, from wherever the reader is: an anchor, not another page. */}
+      <Link
+        class="ln-nav__item"
+        href={`${paths.lightning()}#history`}
+        aria-current={atChart() ? "location" : "false"}
+      >
+        History
+      </Link>
+    </nav>
+  );
+}
+
+/**
+ * A channel term in millisatoshis, in magnitude (`0.190 BTC`), never broken inside: the exact
+ * figure is its title, and a tap or a key shows it in place (`18 958 366 000 msat`).
+ */
+export function Msat(props: { msat: number }) {
+  const [exact, setExact] = createSignal(false);
+  return (
+    <span class="ln-msat-wrap">
+      <button
+        type="button"
+        class="ln-msat num"
+        title={msat(props.msat)}
+        aria-expanded={exact() ? "true" : "false"}
+        onClick={() => setExact(!exact())}
+        onBlur={() => setExact(false)}
+      >
+        {msatShort(props.msat)}
+        <span class="visually-hidden">, exactly {msat(props.msat)}</span>
+      </button>
+      {/* Above the figure, over its neighbours: the exact msat is longer than a phone's column. */}
+      <Show when={exact()}>
+        <span class="ln-msat__exact num" aria-hidden="true">
+          {msat(props.msat)}
+        </span>
+      </Show>
+    </span>
+  );
 }

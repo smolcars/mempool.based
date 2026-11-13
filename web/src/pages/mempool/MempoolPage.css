@@ -52,8 +52,10 @@
     text-decoration: none;
     white-space: nowrap;
   }
-  .mempool-intervals__item:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .mempool-intervals__item:hover {
+      color: var(--color-text);
+    }
   }
   .mempool-intervals__item[aria-current="page"] {
     color: var(--color-text);
@@ -116,17 +118,33 @@
       flex-direction: column;
       align-items: stretch;
     }
-    /* Eleven intervals do not fit a phone's width: two even rows. */
+    /* One row on a phone, so the chart is on the first screen: it scrolls, its far edge fading. */
+    /* Its row's full length must not widen the page: it scrolls within the width it is given. */
+    .mempool-intervals {
+      contain: inline-size;
+    }
     .mempool-intervals ul {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      /* Holds the links' visually hidden words, which would otherwise widen the page. */
+      position: relative;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
     }
     .mempool-intervals__item {
-      width: 100%;
-      min-width: 0;
+      min-height: var(--touch);
     }
+    /* A line to each reading on a phone (Chart.css), 1.5625rem with its gap, and a 44 px
+       "Show the figures". */
     .mempool-chart--size {
-      min-height: calc(300px + 16rem);
+      min-height: calc(240px + var(--lines) * 1.5625rem + 3.5rem);
+    }
+    .mempool-chart--flow {
+      min-height: calc(200px + var(--lines) * 1.5625rem + 3.5rem);
+    }
+    /* One line of coverage in any font: the sentence says from when, which is where the hatch
+       ends, so the key to the hatch steps aside. */
+    .mempool-coverage__swatch {
+      display: none;
     }
   }
 }

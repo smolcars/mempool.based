@@ -4,14 +4,21 @@ import { useSearchParams } from "@solidjs/router";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { DataTable } from "../../components/DataTable";
-import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { createRequest } from "../../lib/api";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isSearchResult, type SearchResult, searchProblem, STATE_WORDS } from "./lightning";
-import { ask, ChannelLink, Gate, LightningSearch, nodeColumns } from "./parts";
+import {
+  ask,
+  ChannelLink,
+  Gate,
+  LightningSearch,
+  nodeColumns,
+  LightningNav,
+  rememberList,
+} from "./parts";
 
 export default function SearchPage() {
   const [search] = useSearchParams();
@@ -23,9 +30,7 @@ export default function SearchPage() {
   usePageTitle(() => "Lightning search");
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="search" />
       <header class="ln-head">
         <h1>Search Lightning</h1>
         <LightningSearch value={q()} />
@@ -47,6 +52,7 @@ export default function SearchPage() {
 }
 
 function Results(props: { network: Network; q: string }) {
+  rememberList(paths.lightningSearch(props.q), "Search results");
   const [found, { refetch }] = createRequest(
     () => props.q,
     (q, signal) => ask(props.network, `/search?q=${encodeURIComponent(q)}`, isSearchResult, signal),
@@ -85,7 +91,7 @@ function Found(props: { r: SearchResult; q: string }) {
               {
                 header: "Capacity, BTC",
                 numeric: true,
-                cell: (c) => <Amount sats={c.capacity} unit={false} />,
+                cell: (c) => <Amount sats={c.capacity} unit={false} short />,
               },
               { header: "State", cell: (c) => STATE_WORDS[c.state] ?? c.state },
             ]}
@@ -102,6 +108,7 @@ function Found(props: { r: SearchResult; q: string }) {
             caption="Nodes that match"
             columns={nodeColumns("capacity")}
             rows={props.r.nodes}
+            rowHref={(n) => paths.lightningNode(n.id)}
           />
           <p class="ln-aside">
             Any node can announce any name, so a famous name can appear more than once: the public

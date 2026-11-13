@@ -2,18 +2,58 @@
   .hash {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-1);
+    gap: var(--space-2);
     min-width: 0;
     max-width: 100%;
     vertical-align: bottom;
   }
   .hash__text {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     font-size: 0.92em;
+    font-variant-numeric: slashed-zero;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* Cut in the middle only when the column is narrower than the value: the head gives way, the
+     last eight characters stay. */
+  /* A grid, not a flex row: a grid's narrowest width counts its text track as nothing, so a table
+     column holding a cut ID can be as narrow as its other columns need, in any table. */
+  .hash--fit {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-columns: minmax(0, max-content);
+    justify-content: start;
+  }
+  .hash--fit .hash__text {
+    display: flex;
+    min-width: 0;
+  }
+  /* One underline under a cut ID, not one under each half with the head's spare room between. */
+  .hash--fit a.hash__text {
+    text-decoration: none;
+    background: linear-gradient(color-mix(in srgb, currentColor 40%, transparent) 0 0) 0 100% / 100%
+      1px no-repeat;
+  }
+  @media (hover: hover) {
+    .hash--fit a.hash__text:hover {
+      background-image: linear-gradient(currentColor 0 0);
+    }
+  }
+  .hash__head {
+    min-width: 8ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hash__tail {
+    flex: none;
+  }
+  /* Broken at any character, the lines balanced: never a last line of two characters. */
+  .hash--whole .hash__text {
+    white-space: normal;
+    word-break: break-all;
+    text-wrap: balance;
   }
   .hash--full {
     align-items: flex-start;
@@ -24,9 +64,5 @@
     column-gap: 0.45em;
     white-space: normal;
     font-size: var(--text-md);
-    color: var(--color-text-muted);
-  }
-  .hash__group:nth-child(odd) {
-    color: var(--color-text);
   }
 }

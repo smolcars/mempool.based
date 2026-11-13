@@ -44,7 +44,8 @@
     overscroll-behavior-x: contain;
     scrollbar-width: thin;
     /* Room above for the "now" label and the crossing tile's lift. */
-    padding: var(--space-6) var(--gutter) var(--space-2);
+    padding-block: var(--space-6) var(--space-2);
+    padding-inline: max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
     /* More tiles beyond either edge. */
     mask-image: linear-gradient(
       to right,
@@ -163,13 +164,15 @@
     border-color: var(--color-line);
     background: var(--color-surface);
   }
-  a.home-tile__body:hover {
-    color: inherit;
-    border-color: var(--color-text);
+  @media (hover: hover) {
+    a.home-tile__body:hover {
+      color: inherit;
+      border-color: var(--color-text);
+    }
   }
   .home-tile__title {
     font-size: var(--text-lg);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     line-height: var(--leading-tight);
     letter-spacing: var(--tracking-tight);
   }
@@ -179,7 +182,8 @@
   }
   /* Each line keeps its height whether it holds a figure, a word or a loading bar. */
   .home-tile__fee,
-  .home-tile__range {
+  .home-tile__range,
+  .home-tile__fees {
     min-height: calc(1em * var(--leading-body));
     white-space: nowrap;
     overflow: hidden;
@@ -189,21 +193,36 @@
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
   }
-  .home-tile__range {
+  .home-tile__range,
+  .home-tile__fees {
     font-size: var(--text-xs);
     color: var(--color-text-muted);
+  }
+  .home-tile__fees .unit {
+    color: inherit;
   }
   /* The unit a size down, so the median and its swatch fit a phone's tile. */
   .home-tile__fee .unit {
     font-size: var(--text-xs);
   }
+  /* The block's capacity as a box: the gauge fills it from the floor, so the empty part above reads
+     as room left, never as missing data. */
   .home-tile__strata {
+    --strata-seam: var(--color-surface-sunken);
     position: relative;
     flex: 1;
     display: flex;
     align-items: flex-end;
     min-height: 0;
-    margin: var(--space-2) 0 var(--space-1);
+    margin: var(--space-1) 0 var(--space-1);
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+    overflow: hidden;
+  }
+  .home-tile--projected .home-tile__strata {
+    --strata-seam: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line-strong);
   }
   .home-tile__layers {
     position: absolute;
@@ -216,7 +235,7 @@
     min-height: 2px;
     border-top: 2px solid var(--color-line-strong);
     border-radius: 1px;
-    background: var(--color-surface-sunken);
+    background: var(--color-line);
     transform: scaleY(var(--fill));
     transform-origin: bottom;
     transition: opacity var(--dur-slow) var(--ease-out);
@@ -358,7 +377,7 @@
     overflow: visible;
   }
   .home-live__dot {
-    fill: var(--color-positive);
+    fill: var(--color-live);
     stroke: none;
   }
   .home-live__cross {
@@ -402,17 +421,36 @@
   }
 
   /* ---------- Below the strip ---------- */
+  /* The fee answer and the difficulty stacked beside the mempool, about its height, so no panel
+     is stretched far past its content; the latest transactions take the width below. */
   .home-grid {
     display: grid;
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-    gap: var(--space-7);
-    padding-top: var(--space-6);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-areas:
+      "fees mempool"
+      "difficulty mempool"
+      "recent recent";
+    align-items: stretch;
+    gap: var(--space-5);
+    padding-top: var(--space-5);
     padding-bottom: var(--space-7);
   }
   .home-mempool,
   .home-fees,
   .home-recent {
     min-width: 0;
+  }
+  .home-fees {
+    grid-area: fees;
+  }
+  .home-mempool {
+    grid-area: mempool;
+  }
+  .home-recent {
+    grid-area: recent;
+  }
+  .home-difficulty {
+    grid-area: difficulty;
   }
 
   .home-stats {
@@ -455,213 +493,181 @@
     color: var(--color-text-muted);
   }
 
-  .home-feebar {
-    margin-top: var(--space-5);
+  .home-depth {
+    margin-top: var(--space-4);
   }
-  .home-feebar__frame {
-    position: relative;
+  .home-depth__answer {
+    min-height: 1.5em;
+    font-size: var(--text-sm);
   }
-  .home-feebar__bar {
+  .home-depth__answer strong {
+    font-weight: var(--weight-bold);
+  }
+  .home-depth__more {
+    margin-top: var(--space-2);
+  }
+  .home-depth__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--touch);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    list-style: none;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 0.2em;
+  }
+  .home-depth__summary::-webkit-details-marker {
+    display: none;
+  }
+  .home-depth__summary::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform var(--dur-quick) var(--ease-out);
+  }
+  .home-depth__more[open] > .home-depth__summary::before {
+    transform: rotate(45deg);
+  }
+  .home-depth__table {
+    width: 100%;
+    font-size: var(--text-sm);
+  }
+  .home-depth__table th {
+    padding: 0 0 var(--space-1);
+    font-weight: var(--weight-regular);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    text-align: left;
+  }
+  .home-depth__table td {
+    padding: 3px 0;
+  }
+  .home-depth__table :is(th, td) + :is(th, td) {
+    padding-left: var(--space-3);
+  }
+  .home-depth__table .home-depth__num {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .home-depth__range {
+    width: 4.5rem;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .home-depth__barcell {
+    width: 100%;
+  }
+  /* A track one block long on a log scale: each band's size against it, past a block filling it. */
+  .home-depth__bar {
     position: relative;
-    height: 44px;
+    display: block;
+    height: 10px;
     overflow: hidden;
-    border-radius: var(--radius-m);
+    border-radius: var(--radius-s);
     background: var(--color-surface-sunken);
   }
-  .home-feebar__seg {
+  .home-depth__bar::before {
+    content: "";
     position: absolute;
-    inset: 0;
+    inset: 0 auto 0 0;
+    width: max(3px, calc(var(--w, 0) * 100%));
     background: var(--c);
-    transform-origin: left;
-    transform: translateX(calc(var(--x, 0) * 100%)) scaleX(var(--w, 0));
-    transition: transform var(--dur-slow) var(--ease-out);
-    /* A hairline between bands. */
-    box-shadow: inset -1px 0 0 var(--color-surface);
   }
-  /* A scaled band would scale its outline too, so the ring is drawn by its own element. */
-  .home-feebar__seg:focus-visible {
-    outline: none;
+  .home-depth__row--none .home-depth__bar::before {
+    display: none;
   }
-  .home-feebar__ring {
+  /* Past one block: the bar's end is cut, so a capped row never reads as exactly one block. */
+  .home-depth__row--full .home-depth__bar::after {
+    content: "";
     position: absolute;
     top: 0;
-    left: calc(var(--x) * 100%);
-    width: calc(var(--w) * 100%);
-    min-width: 4px;
-    height: 44px;
-    border-radius: var(--radius-s);
-    outline: 2px solid var(--color-text);
-    outline-offset: 1px;
-    pointer-events: none;
+    bottom: 0;
+    right: 6px;
+    width: 3px;
+    background: var(--color-surface);
+    transform: skewX(-20deg);
   }
-  .home-feebar__ring--focus {
-    outline-color: var(--color-focus);
-  }
-  .home-feebar__empty {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    padding: 0 var(--space-3);
-    height: 44px;
-    font-size: var(--text-sm);
-    color: var(--color-text-muted);
-  }
-  .home-feebar__tip {
-    position: absolute;
-    bottom: calc(100% + var(--space-2));
-    left: 0;
-    z-index: var(--z-tooltip);
-    display: grid;
-    gap: 1px;
-    width: max-content;
-    max-width: min(18rem, 100%);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--color-line);
-    border-radius: var(--radius-m);
-    background: var(--color-surface-raised);
-    box-shadow: var(--shadow-pop);
-    font-size: var(--text-sm);
-    pointer-events: none;
-    transform: translateX(var(--left, 0));
-  }
-  .home-feebar__tip span {
-    color: var(--color-text-muted);
-  }
-  .home-feebar__caption {
-    margin: var(--space-2) 0 var(--space-3);
-    font-size: var(--text-sm);
+  .home-depth__note {
+    margin-top: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--color-text-muted);
   }
 
-  /* ---------- Fee ladder ---------- */
-  .home-ladder {
-    /* Room for four rows of pin labels, the most four pins can need, so nothing below ever moves. */
-    padding-top: calc(4 * 2.2rem + var(--space-2));
-  }
-  .home-ladder__track {
-    position: relative;
-  }
-  .home-ladder__scale {
-    position: relative;
-    height: 14px;
-    overflow: hidden;
-    border-radius: var(--radius-pill);
-  }
-  .home-ladder__band {
-    position: absolute;
-    inset: 0;
-    background: var(--c);
-    transform-origin: left;
-    transform: translateX(calc(var(--x) * 100%)) scaleX(var(--w));
-  }
-  .home-ladder__ticks {
-    position: relative;
-    height: 1.5rem;
-  }
-  .home-ladder__tick {
-    position: absolute;
-    top: 4px;
-    left: calc(var(--x) * 100%);
-    translate: -50% 0;
-    font-size: var(--text-xs);
-    color: var(--color-text-muted);
-  }
-  .home-ladder__tick:first-child {
-    translate: 0 0;
-  }
-  /* A zero-size pin on the scale's centre line; only transform moves it. */
-  .home-ladder__pin {
-    --row: 0;
-    /* Lower rows on top: a label then hides any stem that has to rise behind it. */
-    z-index: calc(10 - var(--row));
-    position: absolute;
-    top: 7px;
-    left: 0;
-    width: 0;
-    height: 0;
-    transform: translateX(var(--px, 0));
-    transition: transform var(--dur-slow) var(--ease-out);
-  }
-  .home-ladder__pin::before {
-    content: "";
-    position: absolute;
-    left: -1px;
-    bottom: 0;
-    width: 2px;
-    height: calc(2.2rem + var(--row) * 2.2rem);
-    background: var(--color-text);
-  }
-  .home-ladder__pin::after {
-    content: "";
-    position: absolute;
-    left: -7px;
-    top: -7px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--c);
-    box-shadow:
-      0 0 0 2px var(--color-surface),
-      0 0 0 3.5px var(--color-text);
-  }
-  .home-ladder__pin--none {
-    visibility: hidden;
-  }
-  .home-ladder__pin-label {
-    position: absolute;
-    padding: 0 2px;
-    background: var(--color-bg);
-    left: 6px;
-    bottom: calc(0.7rem + var(--row) * 2.2rem);
-    display: flex;
-    flex-direction: column;
-    line-height: 1.15;
-    white-space: nowrap;
-  }
-  .home-ladder__pin--flip .home-ladder__pin-label {
-    left: auto;
-    right: 6px;
-    align-items: flex-end;
-  }
-  .home-ladder__pin-name {
-    font-size: var(--text-xs);
-    color: var(--color-text-muted);
-  }
-  .home-ladder__pin-value {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
-  }
-  .home-ladder__list {
+  /* ---------- Fee to pay now ---------- */
+  /* Two rows of two in every grouping, each row at least an answer's height, so an update that
+     merges or splits answers never moves what follows. */
+  .home-fees__list {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(6.75rem, auto));
     gap: var(--space-3);
-    margin-top: var(--space-4);
   }
-  .home-ladder__item {
-    padding-top: var(--space-2);
-    border-top: 1px solid var(--color-line);
-  }
-  .home-ladder__item dt {
+  .home-fees__item {
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+  }
+  .home-fees__item--row {
+    grid-column: span 2;
+  }
+  /* One answer for every wait: one row of the two, centred, not a tall tile for one number; what
+     it means is the second row. */
+  .home-fees__item--all {
+    grid-column: span 2;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-5);
+  }
+  .home-fees__item--all .home-fees__rate {
+    font-size: var(--text-2xl);
+  }
+  .home-fees__same {
+    grid-column: span 2;
+    align-self: center;
+    justify-self: center;
+    max-width: 24rem;
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    text-align: center;
+  }
+  .home-fees__item dt {
+    display: flex;
+    flex-direction: column;
+    line-height: var(--leading-snug);
+  }
+  .home-fees__name {
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
   }
-  .home-ladder__when {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-regular);
+  .home-fees__when {
+    font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
-  .home-ladder__item dd {
-    margin-top: var(--space-1);
-    min-height: 1.5em;
+  .home-fees__rate {
+    min-height: 1.3em;
+    font-size: var(--text-xl);
     font-weight: var(--weight-bold);
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .home-fees__rate .unit {
+    font-size: var(--text-sm);
   }
   .home-fees__note,
   .home-fees__none {
     max-width: 60ch;
-    margin-top: var(--space-4);
+    margin-top: var(--space-3);
     font-size: var(--text-sm);
     color: var(--color-text-muted);
   }
@@ -696,14 +702,22 @@
 
   /* ---------- Narrow screens ---------- */
   @media (max-width: 1040px) {
+    /* One column in the page's order: fees, mempool, latest transactions, difficulty. */
     .home-grid {
       grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: none;
+    }
+    .home-fees,
+    .home-mempool,
+    .home-recent,
+    .home-difficulty {
+      grid-area: auto;
     }
   }
   @media (max-width: 640px) {
     .home-strip {
       --tile-w: 7.5rem;
-      --tile-h: 9.25rem;
+      --tile-h: 10rem;
       --tile-gap: 0.625rem;
     }
     .home-strip__legend,
@@ -719,12 +733,12 @@
     .home-live {
       margin-left: auto;
     }
-    .home-stats,
-    .home-ladder__list {
+    .home-stats {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .home-grid {
-      gap: var(--space-6);
+      gap: var(--space-4);
+      padding-top: var(--space-4);
     }
     /* Headers wrap, so the figures, not the units, set each column's width. */
     .home-recent th {

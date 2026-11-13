@@ -27,14 +27,13 @@
   }
   .address-head__raw {
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     overflow-wrap: anywhere;
     color: var(--color-text-muted);
   }
 
   /* Totals: the balance leads, four figures follow. Every line exists while loading. */
   .address-totals {
-    margin-top: var(--space-6);
+    margin-top: var(--space-4);
   }
   .address-stats {
     display: grid;
@@ -64,14 +63,37 @@
     font-size: var(--text-3xl);
     letter-spacing: var(--tracking-tight);
   }
-  /* An amount may wrap only before its unit; the number itself never breaks. */
-  .address-stat__value .amount {
-    white-space: normal;
+  /* A total in magnitude, the exact amount a tap away: drawn as the figure, not as a button. */
+  .address-total {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+    margin-block: calc((var(--touch) - 1lh) / -2);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: start;
+    cursor: pointer;
+    text-decoration: underline dotted var(--color-line-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
   }
-  @media (min-width: 641px) {
-    .address-stat--balance .amount {
-      white-space: nowrap;
+  @media (hover: hover) {
+    .address-total:hover {
+      text-decoration-color: var(--color-text-muted);
     }
+  }
+  .address-total__exact:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-regular);
+    letter-spacing: normal;
+    color: var(--color-text-muted);
   }
 
   /* Balance over time: the chart's whole height is held while its code and data load. */
@@ -82,13 +104,11 @@
   .address-balance__slot {
     min-height: calc(200px + 5.75rem);
   }
-  /* On a phone the readout takes three lines: the time, the balance and block, the change. */
+  /* On a phone each reading has a line (Chart.css): the time, the balance, the block and the
+     change, 1.5625rem each with its gap, then a 44 px "Show the figures". */
   @media (max-width: 640px) {
-    .address-balance .chart__readout {
-      min-height: 4.25rem;
-    }
     .address-balance__slot {
-      min-height: calc(200px + 7.25rem);
+      min-height: calc(200px + 4 * 1.5625rem + 3.5rem);
     }
   }
   .address-balance-none {
@@ -104,10 +124,17 @@
   .address-history__head {
     align-items: flex-end;
   }
+  .address-busy {
+    margin-bottom: var(--space-3);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  /* Room under the chosen tab's bar, which hangs below the tabs, so it never meets the table. */
   .address-tabs {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2) var(--space-5);
+    margin-bottom: var(--space-3);
   }
   .address-tab {
     position: relative;
@@ -121,9 +148,13 @@
     cursor: pointer;
     transition: color var(--dur-quick) var(--ease-out);
   }
-  .address-tab:hover,
   .address-tab[aria-selected="true"] {
     color: var(--color-text);
+  }
+  @media (hover: hover) {
+    .address-tab:hover {
+      color: var(--color-text);
+    }
   }
   .address-tab::after {
     content: "";
@@ -258,6 +289,11 @@
     border-radius: 0 var(--radius-m) var(--radius-m) 0;
     background: var(--color-surface);
   }
+  /* Inside a panel the panel is the frame: the notice drops its own surface and offset. */
+  .panel .address-notice {
+    margin-top: 0;
+    background: var(--color-surface-sunken);
+  }
   .address-notice--caution {
     border-left-color: var(--color-caution);
   }
@@ -310,8 +346,9 @@
     .address {
       padding-top: var(--space-5);
     }
+    /* The right column holds the exact unconfirmed change, the left only figures in magnitude. */
     .address-stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
       gap: var(--space-4);
     }
     .address-stat__value {
@@ -361,7 +398,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0 var(--space-2);
-    margin-top: calc(-1 * var(--space-3));
+    margin-top: var(--space-2);
     color: var(--color-text-muted);
     font-size: var(--text-sm);
   }
@@ -378,7 +415,7 @@
     stroke-width: 1.4;
   }
   .address-live--on .address-live__icon {
-    fill: var(--color-positive);
+    fill: var(--color-live);
     stroke: none;
     animation: address-breathe 2.4s var(--ease-in-out) infinite;
   }

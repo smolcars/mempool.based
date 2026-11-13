@@ -2,7 +2,7 @@
 // grid"). Loaded lazily: import it with `lazy()` so pages without a grid never fetch it.
 import { useNavigate } from "@solidjs/router";
 import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
-import { formatSats, formatSize, MISSING, truncateMiddle } from "../../lib/format";
+import { FEE_BANDS, formatSats, formatSize, MISSING, truncateMiddle } from "../../lib/format";
 import { onNetwork, paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
 import { Amount } from "../Amount";
@@ -94,8 +94,11 @@ export default function TxGrid(props: TxGridProps) {
   };
   const readPaint = () => {
     const s = style();
-    const colors = new Float32Array(33);
-    const names = [...Array.from({ length: 10 }, (_, i) => `--fee-${i + 1}`), "--color-text-muted"];
+    const colors = new Float32Array((FEE_BANDS + 1) * 3);
+    const names = [
+      ...Array.from({ length: FEE_BANDS }, (_, i) => `--fee-${i + 1}`),
+      "--color-text-muted",
+    ];
     for (const [i, name] of names.entries()) {
       colors.set(parseColor(s.getPropertyValue(name)) ?? [0.5, 0.5, 0.5], i * 3);
     }
@@ -198,7 +201,7 @@ export default function TxGrid(props: TxGridProps) {
       width = w;
       height = h;
       scale = w > 0 ? canvas.width / w : dpr;
-      const size = gridSize(w / h, shown.length);
+      const size = gridSize(w / h);
       if (!before) relayout(drawn ? "snap" : "pour");
       else if (size.cols !== before.cols || size.rows !== before.rows) relayout("snap");
       else setGeometry((g) => g + 1);
@@ -344,7 +347,8 @@ export default function TxGrid(props: TxGridProps) {
     return {
       x: p.x + (current.x[r] ?? 0) * p.cell,
       y: p.y + (current.y[r] ?? 0) * p.cell,
-      s: (current.side[r] ?? 0) * p.cell,
+      w: (current.w[r] ?? 0) * p.cell,
+      h: (current.h[r] ?? 0) * p.cell,
     };
   };
   const ringed = () => box(active() ?? props.highlight);
@@ -361,9 +365,9 @@ export default function TxGrid(props: TxGridProps) {
       const w = tip.offsetWidth;
       const h = tip.offsetHeight;
       const gap = 8;
-      const x = Math.min(Math.max(0, b.x + b.s / 2 - w / 2), Math.max(0, width - w));
+      const x = Math.min(Math.max(0, b.x + b.w / 2 - w / 2), Math.max(0, width - w));
       const above = b.y - h - gap;
-      const y = above >= 0 ? above : Math.min(b.y + b.s + gap, Math.max(0, height - h));
+      const y = above >= 0 ? above : Math.min(b.y + b.h + gap, Math.max(0, height - h));
       setTipAt({ x, y });
     },
   );
@@ -390,7 +394,8 @@ export default function TxGrid(props: TxGridProps) {
             style={{
               "--x": `${b().x}px`,
               "--y": `${b().y}px`,
-              "--s": `${b().s}px`,
+              "--w": `${b().w}px`,
+              "--h": `${b().h}px`,
             }}
           />
         )}
@@ -407,7 +412,7 @@ export default function TxGrid(props: TxGridProps) {
             <>
               <span class="txgrid__title">
                 <Show when={!tx().coinbase} fallback="Coinbase">
-                  <FeeRate rate={rateOf(tx())} />
+                  <FeeRate rate={rateOf(tx())} swatch />
                 </Show>
               </span>
               <span class="txgrid__id">

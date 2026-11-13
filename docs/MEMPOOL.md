@@ -272,7 +272,7 @@ One record per transaction, 49 bytes on the wire:
 | vsize | 4 | sigop-adjusted virtual size |
 | fee | 8 | its own base fee in satoshis |
 
-Each block also has totals: transaction count, raw weight, vsize, fees, the lowest, median (at the middle vbyte) and highest effective rate, and the vsize in each of the ten fee bands of `docs/DESIGN.md`. A rate is banded as it prints, rounded to two decimals, so 0.1996 sat/vB takes band 2.
+Each block also has totals: transaction count, raw weight, vsize, fees, the lowest, median (at the middle vbyte) and highest effective rate, and the vsize in each of the 12 fee bands of `docs/DESIGN.md` (edges at 0.12, 0.15, 0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5 and 10 sat/vB). A rate is banded as it prints, rounded to two decimals, so 0.1196 sat/vB takes band 2 (0.12–0.15) and 0.1996 band 4 (0.2–0.3). How the store keeps them is in [`STORE.md`](STORE.md#fee-bands).
 
 The stream works like the tracker's: `subscribe` returns the current projection and a subscription whose first delta is the next one, deltas are numbered without gaps, and a subscriber more than 64 deltas behind gets `Lagged` and subscribes again. A delta carries the records that entered, moved to another block or changed rate (`set`), the txids that left the mempool (`removed`), both sorted by txid, and every block's new totals. Applying `removed`, then `set`, to the previous projection's records gives the next one's; a test checks this against a running tracker. Order inside a block is not in the delta: it is by rate, and a client sorts by it. Ties keep no meaningful order (see below).
 

@@ -15,7 +15,7 @@ const totals = (txs: number) => ({
   min_rate: 1000,
   median_rate: 2000,
   max_rate: 25_000,
-  bands: [0, 0, 0, 0, txs * 150, 0, 0, 0, 0, 0],
+  bands: [0, 0, 0, 0, 0, 0, txs * 150, 0, 0, 0, 0, 0],
 });
 const projected = (
   height: number,
@@ -91,7 +91,7 @@ describe("projected-block page", () => {
     const { el, ws } = live();
     ws.receive(projected(100));
     ws.receive(snapshotFrame(0, 1, [rec(1, 1500), rec(2, 25_000), rec(3, 2000)]));
-    expect(el.textContent).toContain("block 101 would hold these transactions");
+    expect(el.textContent).toContain("block 101 would hold if it were mined now");
     expect(el.querySelector(".projected-facts")?.textContent).toContain("Transactions3");
     expect(rows(el)).toStrictEqual([2, 3, 1].map((n) => `/regtest/tx/${fakeTxid(n)}`));
     // A size keeps its unit in the cell, as on every other page.
@@ -143,7 +143,7 @@ describe("projected-block page", () => {
     expect(status?.textContent).toBe(
       "Block 101 was found. This page now shows the next block after it.",
     );
-    expect(el.textContent).toContain("block 102 would hold these transactions");
+    expect(el.textContent).toContain("block 102 would hold if it were mined now");
     // Further updates on the same tip are not announced again.
     ws.receive(projected(101, { txs: 5 }));
     expect(status?.textContent).toBe(

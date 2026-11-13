@@ -40,8 +40,10 @@
     color: var(--color-text-muted);
     text-decoration: none;
   }
-  .projected-pager a:hover {
-    color: var(--color-accent);
+  @media (hover: hover) {
+    .projected-pager a:hover {
+      color: var(--color-accent);
+    }
   }
   .projected-pager__next {
     margin-left: auto;
@@ -96,7 +98,7 @@
     width: 12px;
     height: 12px;
     overflow: visible;
-    fill: var(--color-positive);
+    fill: var(--color-live);
   }
   .projected-live--live .projected-live__icon {
     animation: projected-breathe 2.4s var(--ease-in-out) infinite;
@@ -199,10 +201,11 @@
   }
 
   /* ---- Core sample and facts ---- */
+  /* The facts first, the map beside them; on narrow screens, the facts above it. */
   .projected-layout {
     display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    gap: var(--space-7);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: var(--space-5);
     align-items: start;
   }
 
@@ -331,11 +334,13 @@
     margin-top: var(--space-1);
   }
 
+  /* No rule under the last row: the list's last pixel is cut off (as .tx-facts). */
   .projected-facts {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0 var(--space-5);
     align-content: start;
+    clip-path: inset(-100vmax -100vmax 1px -100vmax);
   }
   .projected-fact {
     min-width: 0;
@@ -382,6 +387,10 @@
       background: var(--color-accent-soft);
     }
   }
+  .projected-txcell {
+    display: grid;
+    justify-items: start;
+  }
   .projected-rate {
     display: inline-flex;
     flex-wrap: wrap;
@@ -399,10 +408,6 @@
     align-items: center;
     gap: var(--space-2) var(--space-3);
     margin-top: var(--space-4);
-  }
-  .projected-txs__of {
-    font-size: var(--text-sm);
-    color: var(--color-text-muted);
   }
 
   /* ---- The mempool is off on this network ---- */
@@ -422,7 +427,7 @@
   @media (max-width: 1040px) {
     .projected-layout {
       grid-template-columns: minmax(0, 1fr);
-      gap: var(--space-6);
+      gap: var(--space-4);
     }
   }
   @media (max-width: 640px) {

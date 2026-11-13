@@ -1,4 +1,5 @@
 import { type Accessor, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { type Layer, Strata, strataLayers } from "../../components/Strata";
 import { formatFeeRate, groupDigits } from "../../lib/format";
@@ -84,6 +85,9 @@ export function ProjectedTile(props: {
             <Show when={tile().txs > 0}>
               <span class="home-tile__range num">
                 {`${formatFeeRate(tile().minRate)} – ${formatFeeRate(tile().maxRate)}`}
+              </span>
+              <span class="home-tile__fees">
+                <Amount sats={tile().fees} short approx />
               </span>
             </Show>
             <span class="home-tile__strata">

@@ -1,11 +1,20 @@
 // The mempool over time: its size by fee band and what flowed through it, from the server's
 // history (docs/FRONTEND.md "Mempool history", docs/DESIGN.md "Mempool history").
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  lazy,
+  Loading as Pending,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { formatSi } from "../../components/chart/scale";
-import { FeeKey } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
+import { scrollCue } from "../../components/scrollCue";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { ApiError, createRequest, fetchApp } from "../../lib/api";
@@ -23,6 +32,7 @@ import {
   parseInterval,
   pointTime,
   rateText,
+  recentMoment,
   seriesOf,
   sizeSummary,
 } from "./history";
@@ -38,7 +48,7 @@ const REFRESH_OFFSET_MS = 3000;
 export const isNoStore = (e: unknown): boolean =>
   e instanceof ApiError && e.status === 503 && /data directory/i.test(e.message);
 
-/** The ten bands, cheapest first, as the readout shows them beside their colour: `0.2–0.3`, `10+`. */
+/** The twelve bands, cheapest first, as the readout shows them beside their colour: `0.2–0.3`, `10+`. */
 const BAND_SHORT = FEE_KEY_BOUNDS.map((from, k) => {
   const to = FEE_KEY_BOUNDS[k + 1];
   if (k === 0) return `under ${to ?? ""}`;
@@ -91,7 +101,14 @@ function MempoolHistory(props: { network: Network }) {
     <div class="wrap mempool">
       <header class="mempool-head">
         <h1>Mempool history</h1>
-        <IntervalPicker interval={interval()} />
+        <IntervalPicker
+          interval={interval()}
+          fitted={
+            search["interval"] === undefined &&
+            answer() !== undefined &&
+            dataFrom(answer() as History) !== undefined
+          }
+        />
       </header>
       <Show
         when={request.state !== "errored"}
@@ -108,7 +125,7 @@ function MempoolHistory(props: { network: Network }) {
           {(h) => (
             <div class="mempool-busy" aria-busy={current() && !request.loading ? "false" : "true"}>
               <Show when={h().points.length > 0} fallback={<NothingRecorded h={h()} />}>
-                <Charts h={h()} interval={interval()} />
+                <Charts h={h()} interval={interval()} fit={search["interval"] === undefined} />
               </Show>
             </div>
           )}
@@ -118,17 +135,53 @@ function MempoolHistory(props: { network: Network }) {
   );
 }
 
-function IntervalPicker(props: { interval: Interval }) {
+/**
+ * The periods. A view fitted to what is recorded has its own choice, "Recorded", and is the one
+ * marked current: a period's name always means its whole width, never a narrower view.
+ */
+function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
+  let list: HTMLUListElement | undefined;
+  // The chosen period in sight on a phone's one row, even when it is far along it: whenever the
+  // choice changes, and when the browser brings the page back from its cache (Back, in Safari,
+  // restored the row's old scroll with the chosen period out of sight).
+  const reveal = () => {
+    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (list && current) list.scrollLeft = current.offsetLeft - list.clientWidth / 2;
+  };
+  createEffect(
+    () => [props.interval.id, props.fitted] as const,
+    () => {
+      requestAnimationFrame(reveal);
+    },
+  );
+  onSettled(() => {
+    reveal();
+    window.addEventListener("pageshow", reveal);
+    return () => window.removeEventListener("pageshow", reveal);
+  });
   return (
     <nav class="mempool-intervals" aria-label="Period">
-      <ul>
+      <ul
+        ref={(el) => {
+          list = el;
+          scrollCue(el);
+        }}
+      >
+        <Show when={props.fitted}>
+          <li class="mempool-intervals__recorded">
+            <Link class="mempool-intervals__item" href={paths.mempool()} aria-current="page">
+              Recorded
+              <span class="visually-hidden">: since this server began recording</span>
+            </Link>
+          </li>
+        </Show>
         <For each={INTERVALS}>
           {(p) => (
             <li>
               <Link
                 class="mempool-intervals__item"
                 href={paths.mempool(p.id)}
-                aria-current={p.id === props.interval.id ? "page" : undefined}
+                aria-current={!props.fitted && p.id === props.interval.id ? "page" : "false"}
               >
                 {p.label}
                 <span class="visually-hidden">: {p.words}</span>
@@ -182,17 +235,43 @@ function NothingRecorded(props: { h: History }) {
   );
 }
 
-function ChartSlot(props: { class: string; children: JSX.Element }) {
+function ChartSlot(props: { class: string; lines: number; children: JSX.Element }) {
   return (
-    <div class={`mempool-chart ${props.class}`}>
+    <div class={`mempool-chart ${props.class}`} style={{ "--lines": props.lines }}>
       <Pending>{props.children}</Pending>
     </div>
   );
 }
 
-function Charts(props: { h: History; interval: Interval }) {
+/**
+ * `fit`: the reader chose no period, so a view whose records begin inside it starts where they do
+ * rather than hatching most of its width; the coverage sentence says so. A period the reader chose
+ * keeps its whole width, the part before the records hatched.
+ */
+/** The longest run of missing steps drawn across rather than as a break. */
+const BRIDGE_STEPS = 5;
+
+/** A phone's size chart is shorter, so it and its time axis are on the first screen in any font. */
+const PHONE = "(max-width: 640px)";
+const SIZE_HEIGHT = 300;
+const SIZE_HEIGHT_PHONE = 240;
+
+function Charts(props: { h: History; interval: Interval; fit: boolean }) {
+  const phone = typeof matchMedia === "function" ? matchMedia(PHONE) : undefined;
+  const [narrow, setNarrow] = createSignal(phone?.matches === true);
+  onSettled(() => {
+    const change = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    phone?.addEventListener("change", change);
+    return () => phone?.removeEventListener("change", change);
+  });
+  const fitted = () => (props.fit ? dataFrom(props.h) : undefined);
+  // A missing minute or few is bridged, not drawn as a stripe that looks like a fault; a longer
+  // pause in recording still breaks the line, and the table lists only what was stored.
+  // Points either side of n missing steps stand n + 1 steps apart.
+  const bridged = () => props.h.step * (BRIDGE_STEPS + 1);
   const s = createMemo(() => seriesOf(props.h));
-  const domain = () => [props.h.from, props.h.to] as const;
+  const domain = () => [fitted() ?? props.h.from, props.h.to] as const;
+  const hatchFrom = () => (fitted() === undefined ? dataFrom(props.h) : undefined);
   const time = () => pointTime(props.h.step);
   const per = () => props.h.step / 60;
   const notes = () => [
@@ -215,13 +294,17 @@ function Charts(props: { h: History; interval: Interval }) {
   ];
   return (
     <>
-      <Show when={coverageSentence(props.h, props.interval.words)}>
+      <Show when={coverageSentence(props.h)}>
         {(text) => (
           <p class="mempool-coverage">
-            <Show when={dataFrom(props.h) !== undefined}>
+            <Show when={hatchFrom() !== undefined}>
               <span class="mempool-coverage__swatch" aria-hidden="true" />
             </Show>
-            {text()}
+            {/* Fitted to the records, one line says from when; the period's own account is a
+                choice away. */}
+            {fitted() === undefined
+              ? text()
+              : `Recorded since ${recentMoment(props.h.first ?? 0)}.`}
           </p>
         )}
       </Show>
@@ -229,29 +312,44 @@ function Charts(props: { h: History; interval: Interval }) {
         <SectionHeader title="Waiting, by fee rate" id="mempool-size-title">
           {per() === 1 ? "One point a minute" : `Each point the mean of ${stepWords(props.h.step)}`}
         </SectionHeader>
-        <ChartSlot class="mempool-chart--size">
+        {/* The time, the total, the notes and the fee band's line. */}
+        <ChartSlot class="mempool-chart--size" lines={3 + notes().length}>
           <Chart
             label={`The mempool's size by fee rate, ${props.interval.words}`}
             x={s().x}
             domain={domain()}
-            dataFrom={dataFrom(props.h)}
-            gap={props.h.step}
-            height={300}
+            dataFrom={hatchFrom()}
+            gap={bridged()}
+            joins={s().joins}
+            height={narrow() ? SIZE_HEIGHT_PHONE : SIZE_HEIGHT}
             left={{ format: (v) => formatSi(v, "vB"), zero: true }}
             series={[{ name: "Total", values: s().vsize, draw: "line", format: formatSize }]}
             notes={notes()}
-            layers={s().bands.map((values, k) => ({
-              name: `${BAND_SHORT[k] ?? ""} sat/vB`,
-              short: BAND_SHORT[k] ?? "",
-              values,
-              fee: k + 1,
-            }))}
+            layers={[
+              // Minutes stored before the lowest band was split: all under 0.2 in one layer, in
+              // the lowest band's grey, until the three finer bands take over where it ends.
+              ...(s().unsplit
+                ? [
+                    {
+                      name: "under 0.2 sat/vB, not yet split",
+                      short: "under 0.2, not split",
+                      values: s().unsplit ?? [],
+                      fee: 1,
+                    },
+                  ]
+                : []),
+              ...s().bands.map((values, k) => ({
+                name: `${BAND_SHORT[k] ?? ""} sat/vB`,
+                short: BAND_SHORT[k] ?? "",
+                values,
+                fee: k + 1,
+              })),
+            ]}
             layerFormat={formatSize}
             time={time()}
             summary={sizeSummary(props.h)}
           />
         </ChartSlot>
-        <FeeKey />
       </section>
       <section class="mempool-section" aria-labelledby="mempool-flow-title">
         <SectionHeader title="Flow" id="mempool-flow-title">
@@ -260,13 +358,13 @@ function Charts(props: { h: History; interval: Interval }) {
         <Show when={flowSentence(props.h, props.interval.words)}>
           {(text) => <p class="mempool-flow">{text()}</p>}
         </Show>
-        <ChartSlot class="mempool-chart--flow">
+        <ChartSlot class="mempool-chart--flow" lines={4}>
           <Chart
             label={`What entered and left the mempool, ${props.interval.words}`}
             x={s().x}
             domain={domain()}
-            dataFrom={dataFrom(props.h)}
-            gap={props.h.step}
+            dataFrom={hatchFrom()}
+            gap={bridged()}
             height={200}
             left={{ format: (v) => `${formatSi(v, "vB")}/s`, zero: true }}
             series={[{ name: "Arrived", values: s().entered, draw: "line", format: rateText }]}

@@ -80,25 +80,68 @@ describe("pool layers", () => {
     share,
     avgHashrate: 0,
   });
-  it("stacks the biggest pool at the bottom and the rest as one layer", () => {
+  it("stacks the coloured pools, biggest at the bottom, and every other pool as one layer", () => {
     const weeks = [
-      week(2, "A", 0.5),
-      week(2, "B", 0.3),
-      week(2, "C", 0.1),
-      week(2, "D", 0.1),
-      week(1, "A", 0.6),
-      week(1, "Unknown", 0.4),
+      week(2, "AntPool", 0.5),
+      week(2, "Luxor", 0.3),
+      week(2, "Unknown", 0.1),
+      week(2, "F2Pool", 0.1),
+      week(1, "AntPool", 0.4),
+      week(1, "F2Pool", 0.6),
     ];
-    const { x, layers } = poolLayers(weeks, 2);
+    const { x, layers } = poolLayers(weeks);
     expect(x).toStrictEqual([1, 2]);
-    expect(layers.map((l) => l.name)).toStrictEqual(["A", "Unknown", OTHER_POOLS]);
-    expect(layers[0]?.values).toStrictEqual([0.6, 0.5]);
-    expect(layers[1]?.values).toStrictEqual([0.4, 0]);
-    expect(layers[2]?.values[1]).toBeCloseTo(0.5);
+    expect(layers.map((l) => l.name)).toStrictEqual(["AntPool", "F2Pool", "Luxor", OTHER_POOLS]);
+    expect(layers[0]?.values).toStrictEqual([0.4, 0.5]);
+    expect(layers[3]?.values[1]).toBeCloseTo(0.1);
+    // A pool's colour is its own, whatever its rank: AntPool is 2, F2Pool 3, Luxor 7, everywhere.
+    expect(layers.map((l) => l.pool)).toStrictEqual([2, 3, 7, 0]);
   });
-  it("never makes a layer of others out of one pool", () => {
-    const { layers } = poolLayers([week(1, "A", 0.6), week(1, "B", 0.3), week(1, "C", 0.1)], 2);
-    expect(layers.map((l) => l.name)).toStrictEqual(["A", "B", "C"]);
+  it("picks and orders the pools by the table's blocks, not by summed weekly shares", () => {
+    // Five pools at 17% both weeks; MARA 12% of a 1,000-block week and 1% of a 100-block one,
+    // Luxor 3% and 14%: MARA has 121 blocks to Luxor's 44, so MARA is drawn, not Luxor.
+    const five = ["Foundry USA", "AntPool", "F2Pool", "ViaBTC", "SpiderPool"];
+    const weeks = [1, 2].flatMap((t) => five.map((name) => week(t, name, 0.17)));
+    weeks.push(
+      week(1, "MARA Pool", 0.12),
+      week(1, "Luxor", 0.03),
+      week(2, "MARA Pool", 0.01),
+      week(2, "Luxor", 0.14),
+    );
+    const table = [...five, "MARA Pool", "Luxor"];
+    expect(poolLayers(weeks, table).layers.map((l) => l.name)).toStrictEqual([
+      ...five,
+      "MARA Pool",
+      OTHER_POOLS,
+    ]);
+    // Without the table, the weekly sums are all there is.
+    expect(poolLayers(weeks).layers.map((l) => l.name)).toContain("Luxor");
+  });
+
+  it("keeps the rest when the table names a pool the weeks do not hold", () => {
+    // Foundry mined only in the period's opening part-week, which the weekly answer leaves out.
+    const weeks = [week(1, "AntPool", 0.8), week(1, "Unknown", 0.2)];
+    const { layers } = poolLayers(weeks, ["Foundry USA", "AntPool", "Unknown"]);
+    expect(layers.map((l) => [l.name, l.values[0]])).toStrictEqual([
+      ["Foundry USA", 0],
+      ["AntPool", 0.8],
+      [OTHER_POOLS, 0.2],
+    ]);
+  });
+
+  it("draws only the period's six largest coloured pools, so it agrees with the table", () => {
+    const names = ["Luxor", "Foundry USA", "Ocean.xyz", "AntPool", "SecPool", "F2Pool", "ViaBTC"];
+    const weeks = names.map((name, i) => week(1, name, (10 - i) / 100));
+    const { layers } = poolLayers(weeks);
+    expect(layers.map((l) => l.name)).toStrictEqual([...names.slice(0, 6), OTHER_POOLS]);
+    expect(layers.at(-1)?.values[0]).toBeCloseTo(0.04);
+  });
+  it("leaves out the grey layer when every pool has a colour", () => {
+    const { layers } = poolLayers([week(1, "ViaBTC", 0.7), week(1, "Foundry USA", 0.3)]);
+    expect(layers.map((l) => [l.name, l.pool])).toStrictEqual([
+      ["ViaBTC", 4],
+      ["Foundry USA", 1],
+    ]);
   });
 });
 

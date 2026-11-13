@@ -199,7 +199,13 @@ describe("BlockPage", () => {
     expect(fact(el, "Total fees")).toContain("500 000 sats");
     expect(fact(el, "Reward")).toContain("3.12500000 BTC subsidy");
     expect(fact(el, "Confirmations")).toContain("10");
-    expect(fact(el, "Weight")).toContain("99.8% of the limit");
+    expect(fact(el, "Fullness")).toContain("99.8%");
+    // The facts come before the drawing in reading order, so a phone shows them first.
+    const side = el.querySelector(".block-side");
+    const core = el.querySelector(".block-core");
+    expect(
+      !!side && !!core && !!(side.compareDocumentPosition(core) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
     // This summary is from a server that does not name miners.
     await until(() => expect(fact(el, "Miner")).toBe("Not known on this server"));
     expect(fact(el, "Bits")).toContain("0x1701e5ac");
@@ -224,9 +230,8 @@ describe("BlockPage", () => {
     const layers = [...el.querySelectorAll<HTMLElement>(".block-core .strata__layer")];
     expect(layers).toHaveLength(10);
     expect(layers[0]?.style.getPropertyValue("--c")).toBe("var(--fee-1)");
-    // The median's swatch is the band of its printed value, and that band holds part of the block.
-    const swatch = el.querySelector<HTMLElement>(".block-fact .fee__swatch");
-    expect(swatch?.style.getPropertyValue("--swatch")).toBe("var(--fee-5)");
+    // Colour belongs to the drawing: the facts give rates as numbers alone.
+    expect(el.querySelector(".block-fact .fee__swatch")).toBeNull();
     const caption = text(el.querySelector(".block-core__caption") as Element);
     expect(caption).toContain("Layers, cheapest first: under 0.20 sat/vB: 367.01 kvB, 37%");
     expect(caption).toContain("10.0 sat/vB and up: 5 453 vB, under 1%");
@@ -591,12 +596,20 @@ describe("BlocksPage", () => {
       height: from - i,
     }));
 
-  it("lists the newest blocks and pages back", async () => {
-    serve({ "/blocks": { body: list(975_420) }, "/blocks/tip/height": { body: "975420" } });
+  it("lists the newest 25 blocks from three of the API's answers and pages back", async () => {
+    serve({
+      "/blocks": { body: list(975_420) },
+      "/blocks/975410": { body: list(975_410) },
+      "/blocks/975400": { body: list(975_400) },
+      "/blocks/tip/height": { body: "975420" },
+    });
     const el = open("/blocks");
-    await until(() => expect(text(el.querySelector("tbody tr td") as Element)).toBe("975 420"));
-    expect(el.querySelectorAll("tbody tr")).toHaveLength(10);
-    expect(el.querySelector('a[rel="next"]')?.getAttribute("href")).toBe("/blocks/975410");
+    await until(() =>
+      expect(text(el.querySelector("tbody tr td .blocks-height") as Element)).toBe("975 420"),
+    );
+    await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(25));
+    expect(text(el.querySelectorAll("tbody tr .blocks-height")[24] as Element)).toBe("975 396");
+    expect(el.querySelector('a[rel="next"]')?.getAttribute("href")).toBe("/blocks/975395");
     expect(el.querySelector('a[rel="prev"]')).toBeNull();
   });
 
@@ -604,7 +617,7 @@ describe("BlocksPage", () => {
     serve({ "/blocks/5": { body: list(5) }, "/blocks/tip/height": { body: "975420" } });
     const el = open("/blocks/5");
     await until(() => expect(el.querySelectorAll("tbody tr")).toHaveLength(6));
-    expect(el.querySelector('a[rel="prev"]')?.getAttribute("href")).toBe("/blocks/15");
+    expect(el.querySelector('a[rel="prev"]')?.getAttribute("href")).toBe("/blocks/30");
     expect(el.querySelector('a[rel="next"]')).toBeNull();
   });
 
@@ -613,6 +626,7 @@ describe("BlocksPage", () => {
     const rows = list(975_420);
     const table: typeof replies = {
       "/blocks": { body: rows },
+      "/blocks/975410": { body: [] },
       "/blocks/tip/height": { body: "975420" },
     };
     for (const [i, b] of rows.entries()) {
@@ -636,10 +650,11 @@ describe("BlocksPage", () => {
     await until(() => expect(row(2)).toContain("0.00000007"));
   });
 
-  it("gives each audited block its match rate, and nothing to a block without one", async () => {
+  it("gives each audited block its match rate, and a dash to a block without one", async () => {
     const rows = list(975_420);
     const table: typeof replies = {
       "/blocks": { body: rows },
+      "/blocks/975410": { body: [] },
       "/blocks/tip/height": { body: "975420" },
     };
     for (const [i, b] of rows.entries()) {
@@ -658,7 +673,7 @@ describe("BlocksPage", () => {
     await until(() =>
       expect(text(el.querySelectorAll("tbody tr")[1] as Element)).toContain("1.09"),
     );
-    expect(cell(1)).toBe("");
+    expect(cell(1)).toBe("–no audit");
   });
 
   it("refuses a bad height", () => {

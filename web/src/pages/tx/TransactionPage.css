@@ -2,7 +2,7 @@
   .tx-page {
     display: grid;
     align-content: start;
-    gap: var(--space-6);
+    gap: var(--space-5);
     /* Keeps the footer below the fold, so it never jumps when the transaction arrives. */
     min-height: 100dvh;
     padding-top: var(--space-6);
@@ -57,6 +57,71 @@
   }
 
   /* ---- Status timeline: a real sequence, so its steps are numbered ---- */
+  /* ---- The answer first ---- */
+  .tx-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+  .tx-summary__item {
+    min-width: 0;
+  }
+  .tx-summary__item dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .tx-summary__item dd {
+    display: grid;
+  }
+  .tx-summary__value {
+    min-height: 1.4em;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-bold);
+    line-height: 1.4;
+  }
+  .tx-summary__value .unit {
+    font-size: var(--text-sm);
+  }
+  .tx-summary__sub {
+    min-height: 1.5em;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  /* Confirmed and settled: the steps shrink to one line of words; the summary holds the rest. */
+  .tx-timeline.tx-timeline--line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    font-size: var(--text-sm);
+  }
+  .tx-timeline.tx-timeline--line .tx-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0;
+  }
+  .tx-timeline.tx-timeline--line .tx-step::before {
+    display: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step__marker {
+    width: 18px;
+    height: 18px;
+    border-width: 1.5px;
+    font-size: var(--text-xs);
+    box-shadow: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step__title {
+    font-weight: var(--weight-medium);
+  }
+  .tx-timeline.tx-timeline--line .tx-step__detail {
+    display: none;
+  }
+  .tx-timeline.tx-timeline--line .tx-step:last-child .tx-step__detail {
+    display: inline;
+    min-height: 0;
+  }
+
   .tx-timeline {
     display: grid;
     grid-auto-flow: column;
@@ -176,14 +241,15 @@
   }
 
   /* ---- Layout: flow and fee side by side, details under the flow ---- */
+  /* The flow takes the page's width, so an address fits its box on one line; the fee and the
+     details share the row under it. */
   .tx-layout {
     display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
-      "flow fee"
-      "details fee";
-    grid-template-rows: auto 1fr;
-    gap: var(--space-6) var(--space-7);
+      "flow flow"
+      "fee details";
+    gap: var(--space-5);
     align-items: start;
   }
   .tx-layout__flow {
@@ -309,26 +375,46 @@
     min-height: 24px;
     min-width: 24px;
   }
+  /* A 44 px target in a 28 px button's room sideways and above; below, it keeps clear of the
+     address under it. */
   .tx-flow__open {
+    position: relative;
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: var(--touch);
+    height: var(--touch);
+    margin: -8px -8px 0;
     flex: none;
-    border: 1px solid transparent;
-    border-radius: var(--radius-m);
+    isolation: isolate;
+    border: 0;
     background: none;
     color: var(--color-text-muted);
     cursor: pointer;
     transition: background-color var(--dur-quick) var(--ease-out);
   }
-  .tx-flow__open:hover {
-    background: var(--color-surface-sunken);
-    color: var(--color-text);
+  /* The drawn button is the middle 28 px; the rest is target. */
+  .tx-flow__open::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    z-index: -1;
+    border-radius: var(--radius-m);
+  }
+  @media (hover: hover) {
+    .tx-flow__open:hover {
+      color: var(--color-text);
+    }
+  }
+  @media (hover: hover) {
+    .tx-flow__open:hover::before {
+      background: var(--color-surface-sunken);
+    }
   }
   .tx-flow__open[aria-expanded="true"] {
-    background: var(--color-accent-soft);
     color: var(--color-text);
+  }
+  .tx-flow__open[aria-expanded="true"]::before {
+    background: var(--color-accent-soft);
   }
   .tx-flow__open svg {
     width: 16px;
@@ -353,14 +439,28 @@
     text-underline-offset: 0.2em;
     cursor: pointer;
   }
-  .tx-flow__more:hover {
-    color: var(--color-accent);
+  @media (hover: hover) {
+    .tx-flow__more:hover {
+      color: var(--color-accent);
+    }
   }
+  /* Sized by its row, never by its own viewBox: without size containment the box it was last
+     drawn at fed back into the row's height, so a page widened from a phone kept a tall empty
+     region until reload. */
   .tx-flow__ribbons {
     align-self: stretch;
     width: 100%;
-    height: 100%;
+    height: auto;
+    min-height: 100%;
+    contain: size;
     overflow: visible;
+  }
+  /* Addresses whole where the cards have room; shortened in the middle on a phone. */
+  .tx-flow__addr--short {
+    display: none;
+  }
+  .tx-flow__addr--whole .hash__text {
+    font-size: var(--text-sm);
   }
   .tx-ribbon {
     fill: var(--color-line-strong);
@@ -451,7 +551,6 @@
     border-radius: var(--radius-m);
     background: var(--color-surface-sunken);
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     font-size: var(--text-xs);
     line-height: var(--leading-body);
     white-space: pre-wrap;
@@ -472,10 +571,14 @@
   }
 
   /* ---- Fact lists ---- */
+  /* Each fact has a rule under it, except the last row's: the list's last pixel is cut off, which
+     finds the last row however the facts wrap. Only the bottom: a focus ring or note can spill
+     out of the other sides. */
   .tx-facts {
     display: grid;
     gap: 0 var(--space-5);
     align-content: start;
+    clip-path: inset(-100vmax -100vmax 1px -100vmax);
   }
   .tx-fact {
     min-width: 0;
@@ -655,6 +758,9 @@
   .tx-group__who {
     color: var(--color-text-muted);
   }
+  .tx-group__more {
+    justify-self: start;
+  }
 
   /* ---- Live state: an icon and a word, and what the page does instead ---- */
   .tx-live {
@@ -673,7 +779,7 @@
     height: 12px;
     flex: none;
     overflow: visible;
-    fill: var(--color-positive);
+    fill: var(--color-live);
   }
   .tx-live--live .tx-live__icon {
     animation: tx-breathe 2.4s var(--ease-in-out) infinite;
@@ -842,6 +948,16 @@
     .tx-flow {
       grid-template-columns: minmax(0, 1fr) 2.25rem minmax(0, 1fr);
     }
+    .tx-flow__addr--short {
+      display: contents;
+    }
+    /* On a phone the amount and where it went lead; the script type is in the inspector. */
+    .tx-flow__meta .tx-flow__type {
+      display: none;
+    }
+    .tx-flow__addr--whole {
+      display: none;
+    }
     .tx-flow__item {
       padding: var(--space-1) var(--space-2);
     }
@@ -849,15 +965,39 @@
       font-size: var(--text-sm);
     }
     .tx-flow__open {
-      width: 24px;
-      height: 24px;
+      margin: -10px -10px 0;
     }
     .tx-facts--two {
       grid-template-columns: minmax(0, 1fr);
     }
+    /* Two to a row while they fit, each at least as wide as its figures: a long one takes a row
+       of its own rather than running into its neighbour; the amount always has a row. */
+    .tx-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+    .tx-summary__item {
+      flex: 1 1 calc(50% - var(--space-3));
+      min-width: fit-content;
+    }
+    .tx-summary__item--amount {
+      flex-basis: 100%;
+    }
+    /* A card is a third of a phone: a thousand bitcoin and more read in magnitude there, the
+       exact amount in the title and in the card's details. */
+    .amount--long .amount__exact {
+      display: none;
+    }
+    .amount--long .amount__short {
+      display: inline;
+    }
+    /* Each fact's name above its value, which then has the panel's width: a 13-digit fee and its
+       unit on one line. */
     .tx-facts--single .tx-fact,
     .tx-inspector .tx-fact {
-      grid-template-columns: 7rem minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
     }
     .tx-inspector {
       padding: var(--space-3);

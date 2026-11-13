@@ -396,17 +396,20 @@ async fn store_row(dir: &std::path::Path, hash: &str) {
     }
     let store = Store::open(dir, "regtest", Options::default()).unwrap();
     let id = *bitcoin::hashes::Hash::as_byte_array(&f.id);
-    let b = f.fee_bands.map(|b| b as i64);
+    let b = f.fee_bands.stored.map(|b| b as i64);
+    let split = f.fee_bands.split.map(|s| s.map(|b| b as i64));
+    let (s0, s1) = (split.map(|s| s[0]), split.map(|s| s[1]));
     store
         .write(move |sql| {
             sql.prepare(
                 "INSERT INTO blocks VALUES (?1, ?2, 1, ?3, 1000, 4000, ?4, ?5, 0, 0, 1.0, ?23, ?24, \
-                 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 0)",
+                 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 0, ?25, \
+                 ?26)",
             )?
             .execute(params![
                 f.height, &id[..], f.tx_count as i64, f.weight as i64, f.fees as i64,
                 r.min, r.p10, r.p25, r.median, r.p75, r.p90, r.max,
-                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], tag, payouts
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], tag, payouts, s0, s1
             ])?;
             Ok(())
         })

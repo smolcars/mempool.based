@@ -72,6 +72,23 @@ export function formatBtc(sats: number): string {
   return p ? `${p.sign}${p.whole}.${p.significant}${p.zeros}` : MISSING;
 }
 
+/**
+ * BTC to the precision a summary needs, magnitude first: whole bitcoins from 1 000 (`2 799`), two
+ * decimals from 1 (`3.15`), three significant digits below (`0.0225`, `0.00149`). Rounded to
+ * nearest; the exact amount belongs in a title or a detail page.
+ */
+export function formatBtcShort(sats: number): string {
+  if (!Number.isSafeInteger(sats)) return MISSING;
+  const btc = Math.abs(sats) / SATS_PER_BTC;
+  const sign = sats < 0 ? "−" : "";
+  if (btc === 0) return "0";
+  if (btc >= 999.5) return sign + groupDigits(btc);
+  if (btc >= 0.9995) return sign + btc.toFixed(2);
+  // Three significant digits, never written as a power of ten.
+  const decimals = Math.min(8, 2 - Math.floor(Math.log10(btc)));
+  return sign + btc.toFixed(decimals);
+}
+
 /** sats as a grouped integer: `167`, `1 250 000`. */
 export function formatSats(sats: number): string {
   return Number.isSafeInteger(sats) ? groupDigits(sats) : MISSING;
@@ -99,12 +116,17 @@ export function formatFeeRate(rate: number): string {
 }
 
 /**
- * A recommended fee rate at the node's resolution, 0.001 sat/vB: `0.101`, `12.501`. Rounded up,
- * never down, so the figure shown is never less than the rate it stands for.
+ * A recommended fee rate, printed as {@link formatFeeRate} prints but rounded up, never down, so the
+ * figure shown is never less than the rate it stands for: `0.133` → `0.14`, `12.51` → `12.6`.
  */
-export function formatFeeRatePrecise(rate: number): string {
+export function formatFeeRateUp(rate: number): string {
   if (!Number.isFinite(rate) || rate < 0) return MISSING;
-  return (Math.ceil(Number((rate * 1000).toPrecision(12))) / 1000).toFixed(3);
+  const up = (decimals: number) => Math.ceil(Number((rate * 10 ** decimals).toPrecision(12)));
+  const hundredths = up(2);
+  if (hundredths < 1000) return (hundredths / 100).toFixed(2);
+  const tenths = up(1);
+  if (tenths < 1000) return (tenths / 10).toFixed(1);
+  return groupDigits(Math.ceil(Number(rate.toPrecision(12))));
 }
 
 /** Fee rate in sat/vB from a fee in sats and a size in vB, or null when the size is not positive. */
@@ -117,20 +139,33 @@ export function vsizeFromWeight(weight: number): number {
   return Math.ceil(weight / 4);
 }
 
-/** Lower bounds (sat/vB) of fee bands 2–10; band 1 is everything below 0.2. docs/DESIGN.md "Fee scale". */
-export const FEE_BOUNDS = [0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5, 10] as const;
-/** Lower bound of each of the ten bands, for the fee key. */
+/** Lower bounds (sat/vB) of fee bands 2–12; band 1 is everything below 0.12. docs/DESIGN.md "Fee scale". */
+export const FEE_BOUNDS = [0.12, 0.15, 0.2, 0.3, 0.5, 1, 1.5, 2, 3, 5, 10] as const;
+/** Lower bound of each of the twelve bands, for the fee key. */
 export const FEE_KEY_BOUNDS = [0.1, ...FEE_BOUNDS] as const;
+/** How many fee bands there are. */
+export const FEE_BANDS = FEE_KEY_BOUNDS.length;
+/** A block or minute stored before the lowest band was split in three has ten, all under 0.2 first. */
+export const UNSPLIT_BANDS = 10;
 
 /**
- * The fee band (1–10) of a rate, taken from the rate as printed, so the color always agrees with
+ * Twelve bands from a server answer of twelve, or of ten from before the lowest band was split
+ * (docs/API.md): then everything under 0.2 sat/vB stays whole, in the first slot, `unsplit`.
+ */
+export function widenBands(bands: readonly number[]): { bands: number[]; unsplit: boolean } {
+  if (bands.length !== UNSPLIT_BANDS) return { bands: [...bands], unsplit: false };
+  return { bands: [bands[0] ?? 0, 0, 0, ...bands.slice(1)], unsplit: true };
+}
+
+/**
+ * The fee band (1–12) of a rate, taken from the rate as printed, so the color always agrees with
  * the number beside it: 0.1996 prints as `0.20` and takes band 2.
  */
 export function feeBand(rate: number, print: (rate: number) => string = formatFeeRate): number {
   const printed = Number(print(rate).replaceAll(NNBSP, ""));
   if (!Number.isFinite(printed)) return 1;
   const i = FEE_BOUNDS.findIndex((bound) => printed < bound);
-  return i === -1 ? 10 : i + 1;
+  return i === -1 ? FEE_BANDS : i + 1;
 }
 
 /** The CSS color for a rate's band. */
@@ -194,6 +229,10 @@ export function formatRelative(
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min${ago}`;
   const h = Math.floor(m / 60);
-  if (h < 48) return m % 60 === 0 ? `${h} h${ago}` : `${h} h ${m % 60} min${ago}`;
-  return `${Math.floor(h / 24)} days${ago}`;
+  if (h < 24) return m % 60 === 0 ? `${h} h${ago}` : `${h} h ${m % 60} min${ago}`;
+  // From a day on, days lead: "1 day 23 h", and from a week, days alone.
+  const d = Math.floor(h / 24);
+  const days = `${d} ${d === 1 ? "day" : "days"}`;
+  if (d >= 7 || h % 24 === 0) return `${days}${ago}`;
+  return `${days} ${h % 24} h${ago}`;
 }

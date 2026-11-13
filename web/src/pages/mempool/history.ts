@@ -1,7 +1,7 @@
 // The mempool's history (`/app/mempool/history/:interval`, docs/FRONTEND.md "Mempool history"):
 // its shape, a check, the intervals, and what the page says about it. Pure.
 import { formatMoment } from "../../components/chart/scale";
-import { formatSize, groupDigits } from "../../lib/format";
+import { FEE_BANDS, formatSize, groupDigits, UNSPLIT_BANDS, widenBands } from "../../lib/format";
 
 export const INTERVALS = [
   { id: "2h", label: "2 h", words: "the last 2 hours" },
@@ -84,7 +84,8 @@ function isPoint(v: unknown): v is Point {
   return (
     NUMBERS.every((k) => finite(p[k])) &&
     Array.isArray(bands) &&
-    bands.length === 10 &&
+    // Ten for a minute stored before the lowest band was split (widenBands), else twelve.
+    (bands.length === FEE_BANDS || bands.length === UNSPLIT_BANDS) &&
     bands.every((b) => finite(b))
   );
 }
@@ -108,9 +109,6 @@ export function isHistory(v: unknown): v is History {
   );
 }
 
-/** A whole number of minutes in words: `1 minute`, `1 439 minutes`. */
-const minutes = (n: number) => `${groupDigits(n)} ${n === 1 ? "minute" : "minutes"}`;
-
 /** A share of the period, never rounded up to whole: `15%`, `under 1%`, `99%`. */
 function share(part: number, whole: number): string {
   if (whole <= 0) return "0%";
@@ -120,25 +118,33 @@ function share(part: number, whole: number): string {
 }
 
 /**
- * How much of the period the answer holds, in a sentence; undefined when every minute is there.
+ * How much of the period the answer holds, in one short line; undefined when every minute is there.
  * Say since when when recording began inside the period, or always for all of history (which owes
- * only the minutes since then), so a short history is not mistaken for a quiet mempool.
+ * only the minutes since then), so a short history is not mistaken for a quiet mempool. One line
+ * on a phone, so the chart below it is on the first screen.
  */
-export function coverageSentence(h: History, words: string): string | undefined {
+const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+/** A moment without its year when the year is this one: the line must fit a phone in one. */
+export const recentMoment = (t: number, now = Date.now() / 1000) => {
+  const m = formatMoment(t);
+  const year = String(new Date(now * 1000).getUTCFullYear());
+  return m.replace(` ${year},`, ",");
+};
+
+export function coverageSentence(h: History, now = Date.now() / 1000): string | undefined {
   if (h.points.length === 0) return undefined;
   const pct = share(h.sampled, h.minutes);
   if (h.first !== null && h.interval === "all") {
-    const since = `This server has recorded the mempool since ${formatMoment(h.first)}`;
+    const from = recentMoment(h.first, now);
     return h.complete
-      ? `${since}, every minute of it.`
-      : `${since}, and holds ${minutes(h.sampled)} of the ${minutes(h.minutes)} since then (${pct}).`;
+      ? `Every minute recorded since ${from}.`
+      : `${cap(pct)} recorded, since ${from}.`;
   }
   if (h.complete) return undefined;
-  const held = `${minutes(h.sampled)} of the ${minutes(h.minutes)} in ${words} (${pct})`;
   if (h.first !== null && h.first > h.from) {
-    return `This server has recorded the mempool since ${formatMoment(h.first)}, so this view holds ${held}.`;
+    return `${cap(pct)} recorded, from ${recentMoment(h.first, now)}.`;
   }
-  return `This view holds ${held}. The gaps are times this server was not recording.`;
+  return `${cap(pct)} recorded, with gaps while this server was off.`;
 }
 
 /**
@@ -160,13 +166,41 @@ export function pointTime(step: number): (t: number) => string {
 export function seriesOf(h: History) {
   const ps = h.points;
   const perSecond = (vb: number) => vb / 60;
+  const wide = ps.map((p) => widenBands(p.bands));
+  // A point stored before the lowest band was split keeps all under 0.2 whole, in a layer of its
+  // own below the twelve: one column per point, that layer first, then the twelve bands.
+  const merged = (b: readonly number[]) => [
+    (b[0] ?? 0) + (b[1] ?? 0) + (b[2] ?? 0),
+    0,
+    0,
+    0,
+    ...b.slice(3),
+  ];
+  const cols = wide.map((w) =>
+    w.unsplit ? [w.bands[0] ?? 0, 0, ...w.bands.slice(1)] : [0, ...w.bands],
+  );
+  // Where the bookkeeping changes, the chart joins on a vertical edge at one point, the total
+  // unchanged across it: unsplit to split arrives at the split point as one layer; split to
+  // unsplit (a later row summed with one from before) leaves the last split point as one layer.
+  // Only the drawing joins: each point's figures stay as recorded.
+  const joins: { index: number; before?: number[]; after?: number[] }[] = [];
+  for (let i = 1; i < wide.length; i++) {
+    const before = wide[i - 1]?.unsplit === true;
+    const now = wide[i]?.unsplit === true;
+    if (before && !now) joins.push({ index: i, before: merged(wide[i]?.bands ?? []) });
+    if (!before && now) joins.push({ index: i - 1, after: merged(wide[i - 1]?.bands ?? []) });
+  }
+  const any = wide.some((w) => w.unsplit);
   return {
     x: ps.map((p) => p.time),
     vsize: ps.map((p) => p.vsize),
     count: ps.map((p) => p.count),
     floor: ps.map((p) => p.min_fee_rate / 1000),
     samples: ps.map((p) => p.samples),
-    bands: Array.from({ length: 10 }, (_, k) => ps.map((p) => p.bands[k] ?? 0)),
+    bands: Array.from({ length: FEE_BANDS }, (_, k) => cols.map((c) => c[k + 1] ?? 0)),
+    unsplit: any ? cols.map((c) => c[0] ?? 0) : undefined,
+    // In the layers' order, the unsplit layer first: only when there is one.
+    joins: any ? joins : [],
     entered: ps.map((p) => perSecond(p.in_vsize)),
     mined: ps.map((p) => perSecond(p.mined_vsize)),
     otherwise: ps.map((p) => perSecond(Math.max(0, p.out_vsize - p.mined_vsize))),

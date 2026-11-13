@@ -8,4 +8,17 @@
     max-width: 60ch;
     color: var(--color-text-muted);
   }
+  .not-found__search {
+    max-width: 34rem;
+  }
+  .not-found__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--space-5);
+  }
+  .not-found__links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--touch);
+  }
 }

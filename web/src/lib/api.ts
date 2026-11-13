@@ -219,6 +219,21 @@ export function fetchApp<T>(
   return cachedOrFetch<T>(url, options.as ?? "json", options.signal).then((r) => r.value);
 }
 
+/**
+ * A refusal that only says "not now": the server is busy, or this client asked a lot at once.
+ * Every 503 carries Retry-After, but some are about the address and the server's setup, which a
+ * retry cannot change (docs/API.md, "Error bodies" and "Mining"; the mempool engine switched off
+ * and mempool history without a data directory, docs/FRONTEND.md). Whether retries remain is not
+ * part of it: one that outlasted them is still busy, not broken.
+ */
+export const isBusy = (error: unknown): error is ApiError =>
+  error instanceof ApiError &&
+  (error.status === 429 ||
+    (error.status === 503 &&
+      !/too large|index is disabled|needs a block table|needs a data directory|switched off/i.test(
+        error.message,
+      )));
+
 /** Retries after a refusal that says to (503, 429), this many times before giving up. */
 export const RETRY_ATTEMPTS = 6;
 const RETRY_MAX_MS = 30_000;
@@ -235,19 +250,7 @@ export function retryDelay(
   attempt: number,
   random: () => number = Math.random,
 ): number | undefined {
-  if (
-    !(error instanceof ApiError) ||
-    (error.status !== 503 && error.status !== 429) ||
-    exhausted.has(error) ||
-    // Every 503 carries Retry-After, but these refusals are about the address and the server's
-    // setup, which a retry cannot change (docs/API.md, "Error bodies" and "Mining"; the mempool
-    // engine switched off and mempool history without a data directory, docs/FRONTEND.md).
-    /too large|index is disabled|needs a block table|needs a data directory|switched off/i.test(
-      error.message,
-    )
-  ) {
-    return undefined;
-  }
+  if (!isBusy(error) || exhausted.has(error)) return undefined;
   if (attempt >= RETRY_ATTEMPTS) return undefined;
   const told = (error.retryAfter ?? 1) * 1000;
   const backoff = Math.min(RETRY_MAX_MS, 1000 * 2 ** attempt);
@@ -264,6 +267,11 @@ const abortReason = (signal: AbortSignal): Error => {
  * last error, or with the abort reason when `signal` aborts while waiting. Every fetch in this
  * file already runs inside it; only wrap a call that is safe to repeat.
  */
+// How many requests are waiting out a busy refusal right now, for pages that say so.
+const [retrying, setRetrying] = createSignal(0);
+/** Whether some request is waiting to ask again after the server said it was busy (503, 429). */
+export const busyRetrying = (): boolean => retrying() > 0;
+
 export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -276,8 +284,13 @@ export async function withRetry<T>(call: () => Promise<T>, signal?: AbortSignal)
         if (e instanceof ApiError) exhausted.add(e);
         throw e;
       }
-      // oxlint-disable-next-line no-await-in-loop -- the wait is the point
-      await pause(wait, signal);
+      setRetrying((n) => n + 1);
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- the wait is the point
+        await pause(wait, signal);
+      } finally {
+        setRetrying((n) => n - 1);
+      }
     }
   }
 }

@@ -37,23 +37,21 @@ describe("checking a reply", () => {
 
 describe("coverage", () => {
   it("says nothing when every minute is there, or when there is nothing to qualify", () => {
-    expect(coverageSentence(history(), "the last 2 hours")).toBeUndefined();
-    expect(
-      coverageSentence(history({ complete: false, points: [] }), "the last 2 hours"),
-    ).toBeUndefined();
+    expect(coverageSentence(history(), T0)).toBeUndefined();
+    expect(coverageSentence(history({ complete: false, points: [] }), T0)).toBeUndefined();
   });
   it("says since when, and how much, when recording began inside the period", () => {
     const h = history({ first: T0 + 6060, complete: false, sampled: 18, minutes: 119 });
-    expect(coverageSentence(h, "the last 2 hours")).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 15:41 UTC, so this view holds 18 minutes of the 119 minutes in the last 2 hours (15%).",
-    );
+    expect(coverageSentence(h, T0)).toBe("15% recorded, from 12 Nov, 15:41 UTC.");
     expect(dataFrom(h)).toBe(T0 + 6060);
+    // A year that is not this one stays.
+    expect(coverageSentence(h, T0 + 60 * 86_400)).toBe(
+      "15% recorded, from 12 Nov 2026, 15:41 UTC.",
+    );
   });
   it("names gaps as gaps when recording began before the period", () => {
     const h = history({ first: T0 - 3600, complete: false, sampled: 1, minutes: 1440 });
-    expect(coverageSentence(h, "the last 24 hours")).toBe(
-      "This view holds 1 minute of the 1\u202F440 minutes in the last 24 hours (under 1%). The gaps are times this server was not recording.",
-    );
+    expect(coverageSentence(h, T0)).toBe("Under 1% recorded, with gaps while this server was off.");
     expect(dataFrom(h)).toBeUndefined();
   });
   it("ends the hatch where the step holding the first record starts, as its point is drawn there", () => {
@@ -77,28 +75,68 @@ describe("coverage", () => {
       points: [point(midnight)],
     };
     expect(dataFrom(history({ ...all, complete: true }))).toBeUndefined();
-    expect(coverageSentence(history({ ...all, complete: true }), "all of history")).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, every minute of it.",
+    expect(coverageSentence(history({ ...all, complete: true }), T0)).toBe(
+      "Every minute recorded since 12 Nov, 14:00 UTC.",
     );
     expect(
-      coverageSentence(history({ ...all, complete: false, sampled: 30, minutes: 40 }), "x"),
-    ).toBe(
-      "This server has recorded the mempool since 12 Nov 2026, 14:00 UTC, and holds 30 minutes of the 40 minutes since then (75%).",
-    );
+      coverageSentence(history({ ...all, complete: false, sampled: 30, minutes: 40 }), T0),
+    ).toBe("75% recorded, since 12 Nov, 14:00 UTC.");
   });
   it("never rounds a share up to whole", () => {
     const h = history({ first: T0 - 60, complete: false, sampled: 1439, minutes: 1440 });
-    expect(coverageSentence(h, "x")).toContain("(99%)");
+    expect(coverageSentence(h, T0)).toContain("99%");
   });
 });
 
 describe("series", () => {
+  const ten = (u: number) => [u, 50, 0, 0, 0, 0, 0, 0, 0, 0];
+  const twelve = (a: number, b: number) => [a, b, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0];
+  it("joins minutes from before the split to the three finer bands at one point", () => {
+    const h = history({
+      points: [
+        point(T0, { bands: ten(900), vsize: 950 }),
+        point(T0 + 60, { bands: twelve(300, 600), vsize: 950 }),
+      ],
+    });
+    const s = seriesOf(h);
+    expect(s.unsplit).toStrictEqual([900, 0]);
+    expect(s.bands[0]).toStrictEqual([0, 300]);
+    expect(s.bands[1]).toStrictEqual([0, 600]);
+    // Just before the split point the same total, all under 0.2 as one layer: a vertical edge.
+    expect(s.joins).toStrictEqual([
+      { index: 1, before: [900, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
+    ]);
+  });
+  it("joins the other way too, leaving the last split point as one layer", () => {
+    const h = history({
+      points: [
+        point(T0, { bands: twelve(300, 600), vsize: 950 }),
+        point(T0 + 60, { bands: ten(900), vsize: 950 }),
+      ],
+    });
+    const s = seriesOf(h);
+    // The split point keeps its recorded bands for the readout and the figures; only the
+    // drawing leaves it as one layer.
+    expect(s.unsplit).toStrictEqual([0, 900]);
+    expect(s.bands[0]).toStrictEqual([300, 0]);
+    expect(s.bands[1]).toStrictEqual([600, 0]);
+    expect(s.joins).toStrictEqual([
+      { index: 0, after: [900, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0] },
+    ]);
+    // Every point's layers still add up to its total.
+    for (let i = 0; i < 2; i++) {
+      const sum = (s.unsplit?.[i] ?? 0) + s.bands.reduce((t, b) => t + (b[i] ?? 0), 0);
+      expect(sum).toBe(950);
+    }
+  });
+
   it("has one entry per point and no zero where a step is missing", () => {
     const h = history({ points: [point(T0), point(T0 + 60), point(T0 + 300)] });
     const s = seriesOf(h);
     expect(s.x).toStrictEqual([T0, T0 + 60, T0 + 300]);
-    expect(s.bands).toHaveLength(10);
-    expect(s.bands[4]).toStrictEqual([400_000, 400_000, 400_000]);
+    expect(s.bands).toHaveLength(12);
+    expect(s.bands[6]).toStrictEqual([400_000, 400_000, 400_000]);
+    expect(s.unsplit).toBeUndefined();
     expect(s.floor[0]).toBe(0.1);
     expect(s.entered[0]).toBe(100);
     expect(s.mined[0]).toBe(40);

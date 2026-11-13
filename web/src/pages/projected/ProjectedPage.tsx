@@ -17,6 +17,7 @@ import { DataTable } from "../../components/DataTable";
 import { FeeKey, FeeRate } from "../../components/FeeRate";
 import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { Pagination } from "../../components/Pagination";
 import { SectionHeader } from "../../components/SectionHeader";
 import { describeBands, Strata, strataLayers, strataTop } from "../../components/Strata";
@@ -259,24 +260,28 @@ function ProjectedView(props: { index: number }) {
           </span>
           <LiveState status={status()} stale={stale()} off={off()} />
         </div>
+        {/* One line says what this is; how it changes is a tap away. */}
         <p class="projected-head__lede">
-          <Show
-            when={!isRest}
-            fallback="Everything still waiting beyond the seven blocks ahead: transactions that pay too little to fit in them for now. It shrinks as blocks are found and grows as transactions arrive."
-          >
+          <Show when={!isRest} fallback="Everything still waiting beyond the seven blocks ahead.">
             <Show when={height()} fallback="A block that is not mined yet.">
               {(h) => (
                 <>
-                  If it were mined now, block <span class="num">{groupDigits(h())}</span> would hold
-                  these transactions.{" "}
+                  What block <span class="num">{groupDigits(h())}</span> would hold if it were mined
+                  now.
                 </>
               )}
             </Show>
-            {index === 0
-              ? "It changes as transactions arrive and outbid each other, and the miner who finds it builds their own, usually much the same."
-              : `They pay too little to fit in ${positionName(index - 1, true)}, and will move up as blocks are found.`}
           </Show>
         </p>
+        <More label="How this changes">
+          <p>
+            {isRest
+              ? "Transactions that pay too little to fit in the seven blocks ahead for now. It shrinks as blocks are found and grows as transactions arrive."
+              : index === 0
+                ? "It changes as transactions arrive and outbid each other, and the miner who finds it builds their own, usually much the same."
+                : `They pay too little to fit in ${positionName(index - 1, true)}, and will move up as blocks are found.`}
+          </p>
+        </More>
       </header>
 
       <p class="visually-hidden" role="status">
@@ -314,15 +319,7 @@ function ProjectedView(props: { index: number }) {
 
       <Show when={!off()} fallback={<Off />}>
         <div class="projected-layout">
-          <CoreSample
-            index={index}
-            block={block()}
-            txs={hasMap ? txs() : undefined}
-            highlight={highlight()}
-            found={told()?.at}
-            lastChange={lastChange()}
-          />
-          <dl class="projected-facts">
+          <dl class="projected-facts panel">
             <Fact
               label="Transactions"
               value={block() && <span class="num">{groupDigits(block()?.txs ?? 0)}</span>}
@@ -361,6 +358,14 @@ function ProjectedView(props: { index: number }) {
             />
             <Fact label="Expected" wide value={expected()} />
           </dl>
+          <CoreSample
+            index={index}
+            block={block()}
+            txs={hasMap ? txs() : undefined}
+            highlight={highlight()}
+            found={told()?.at}
+            lastChange={lastChange()}
+          />
         </div>
 
         <Show when={hasMap}>
@@ -370,7 +375,7 @@ function ProjectedView(props: { index: number }) {
                 <span class="num">{groupDigits(sorted().length)}, highest fee rate first</span>
               </Show>
             </SectionHeader>
-            {/* A row under the pointer or focus rings its square in the map above. */}
+            {/* A row under the pointer or focus rings its rectangle in the map. */}
             <div
               class="projected-txs__table"
               onPointerOver={rowAt}
@@ -382,6 +387,7 @@ function ProjectedView(props: { index: number }) {
                 caption={`Transactions in ${positionName(index, true)}, highest fee rate first`}
                 columns={columns}
                 rows={rows()}
+                rowHref={(t) => paths.tx(t.id)}
                 rowClass={(tx) => (fresh().has(tx.id) ? "projected-txs__row--new" : undefined)}
                 empty={
                   <p class="projected-txs__empty">
@@ -392,14 +398,12 @@ function ProjectedView(props: { index: number }) {
             </div>
             <Show when={pageCount() > 1}>
               <div class="projected-txs__pages">
-                {/* hasNext rather than a page count, which would be read out on every update. */}
                 <Pagination
                   page={page()}
-                  hasNext={page() < pageCount()}
+                  pageCount={pageCount()}
                   onPage={setPage}
                   label="Pages of transactions"
                 />
-                <span class="projected-txs__of num">of {groupDigits(pageCount())}</span>
               </div>
             </Show>
           </section>
@@ -581,8 +585,11 @@ const ownRate = (tx: ProjectedTx) => (tx.vsize > 0 ? tx.fee / tx.vsize : 0);
 const columns = [
   {
     header: "Transaction",
+    // In a grid, so the column may be narrower than the whole ID and the ID is cut to fit it.
     cell: (tx: ProjectedTx) => (
-      <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" />
+      <span class="projected-txcell">
+        <Hash value={tx.id} href={paths.tx(tx.id)} copyLabel="Copy transaction ID" fit />
+      </span>
     ),
   },
   {
@@ -607,6 +614,7 @@ const columns = [
     // Sizes keep their unit in the cell, as one column can span vB to kvB (docs/DESIGN.md).
     header: "Virtual size",
     numeric: true,
+    drop: 2,
     cell: (tx: ProjectedTx) => formatSize(tx.vsize),
   },
 ];
@@ -649,10 +657,10 @@ function CoreSample(props: {
   const where = positionName(props.index, true);
   const label = () => {
     const n = props.txs?.length ?? 0;
-    return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one square each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
+    return `Map of ${where}'s ${groupDigits(n)} ${n === 1 ? "transaction" : "transactions"}, one rectangle each, the highest fee rate at the top left. It changes as the mempool does; the list below has every one.`;
   };
   return (
-    <figure class={["projected-core", { "projected-core--grid": drawn() }]}>
+    <figure class={["projected-core panel", { "projected-core--grid": drawn() }]}>
       <div class={["projected-core__frame", { "projected-core__frame--empty": empty() }]}>
         <span class="projected-core__limit" aria-hidden="true">
           {isRest ? "One block's limit" : "Weight limit"}
@@ -732,9 +740,7 @@ function CoreSample(props: {
           <Show when={fill() !== undefined && !empty()}>
             It would fill ~{percent(fill() ?? 0)} of the weight limit.{" "}
           </Show>
-          Each square is a transaction, as large as its virtual size and colored by the rate it
-          would be mined at, the highest at the top left. Newcomers drop in; what is outbid or
-          leaves fades where it stood.{" "}
+          One rectangle a transaction, by size and the rate it would be mined at.{" "}
           {/* rel="external" keeps the router out: it would mark this in-page link as the current page. */}
           <a href="#projected-txs-title" rel="external">
             Every transaction is in the list below.

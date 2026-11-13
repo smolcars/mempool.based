@@ -76,20 +76,20 @@ Rates are integers in **sat per 1,000 vB**, the node's own unit and resolution (
 
 ```json
 {"topic":"mempool","type":"mempool","seq":812,"count":55210,"vsize":41503331,"fees":20125872,
- "min_fee_rate":1000,"bands":[25411234,…10 values],"stale":false}
+ "min_fee_rate":1000,"bands":[3104211,9872001,12434022,…12 values],"stale":false}
 ```
 
-`count`, `vsize` and `fees` are the whole mempool. `min_fee_rate` is the node's `mempoolminfee`, the lowest rate it accepts now (`null` before the first answer). `bands` is the virtual size in each of the ten fee bands of [`DESIGN.md`](DESIGN.md#fee-scale), cheapest first, by each transaction's effective rate: the mempool bar. `stale` is true while the node is failing: the numbers are the last good ones. `seq` is the projection they come from.
+`count`, `vsize` and `fees` are the whole mempool. `min_fee_rate` is the node's `mempoolminfee`, the lowest rate it accepts now (`null` before the first answer). `bands` is the virtual size in each of the 12 fee bands of [`DESIGN.md`](DESIGN.md#fee-scale), cheapest first, by each transaction's effective rate: the mempool bar. `stale` is true while the node is failing: the numbers are the last good ones. `seq` is the projection they come from.
 
 **`projected`**
 
 ```json
 {"topic":"projected","type":"projected","seq":812,"tip":{"height":975530,"hash":"…"},"stale":false,
  "blocks":[{"txs":3214,"weight":3991876,"vsize":997969,"fees":1543210,"min_rate":1012,
-            "median_rate":1500,"max_rate":250000,"bands":[0,0,0,0,312000,…]}, … 8 blocks]}
+            "median_rate":1500,"max_rate":250000,"bands":[0,0,0,0,0,0,312000,…12 values]}, … 8 blocks]}
 ```
 
-Eight blocks, the next first; the last holds everything beyond the other seven (the "+N blocks" tile). `tip` is the block they were projected on. `median_rate` is the rate at the block's middle vbyte; `bands` are its strata. `stale` as above. Key the tiles by position: block 0 is always "next".
+Eight blocks, the next first; the last holds everything beyond the other seven (the "+N blocks" tile). `tip` is the block they were projected on. `median_rate` is the rate at the block's middle vbyte; `bands` are its strata, 12 as above. A mined block's `fee_bands` can be ten ([`STORE.md`](STORE.md#fee-bands)). `stale` as above. Key the tiles by position: block 0 is always "next".
 
 **`transactions`**
 

@@ -20,7 +20,7 @@ use super::db::roll;
 use super::*;
 use crate::mempool::{self, Delta, Removal, Tracker, TxInfo};
 use crate::projected::tests::{Mock, block, tx, vsize};
-use crate::projected::{BlockSummary, ProjectedBlock, Projector};
+use crate::projected::{Bands, BlockSummary, ProjectedBlock, Projector, STORED_BANDS};
 use crate::store::{Error, Options, Store, params};
 
 struct Temp {
@@ -60,7 +60,7 @@ fn minute(time: u64, n: u64) -> Point {
             vsize: 55 * n,
             fees: 7 * n,
             min_fee: 100,
-            bands,
+            bands: Bands::new(bands),
             flow: Flow {
                 in_count: n % 5,
                 in_vsize: 3 * n,
@@ -80,14 +80,21 @@ async fn rows(store: &Store) -> Vec<(i64, Point)> {
             let mut stmt = sql.prepare(
                 "SELECT level, time, samples, count, vsize, fees, min_fee, band0, band1, band2, \
                  band3, band4, band5, band6, band7, band8, band9, in_count, in_vsize, out_count, \
-                 out_vsize, mined_count, mined_vsize FROM mempool_history ORDER BY level, time",
+                 out_vsize, mined_count, mined_vsize, band0_12_15, band0_15_20 FROM mempool_history \
+                 ORDER BY level, time",
             )?;
             let rows = stmt.query_map(params![], |r| {
                 let v = |i: usize| -> u64 { u64::try_from(r.get::<_, i64>(i).unwrap()).unwrap() };
-                let mut bands = [0; BANDS];
-                for (i, b) in bands.iter_mut().enumerate() {
+                let mut stored = [0; STORED_BANDS];
+                for (i, b) in stored.iter_mut().enumerate() {
                     *b = v(7 + i);
                 }
+                let split: [Option<i64>; 2] = [r.get(23)?, r.get(24)?];
+                let split = match split {
+                    [Some(a), Some(b)] => Some([a as u64, b as u64]),
+                    [None, None] => None,
+                    _ => panic!("half a split: {split:?}"),
+                };
                 Ok((
                     r.get(0)?,
                     Point {
@@ -98,7 +105,7 @@ async fn rows(store: &Store) -> Vec<(i64, Point)> {
                             vsize: v(4),
                             fees: v(5),
                             min_fee: v(6),
-                            bands,
+                            bands: Bands { stored, split },
                             flow: Flow {
                                 in_count: v(17),
                                 in_vsize: v(18),
@@ -146,7 +153,7 @@ fn a_sample_is_the_projections_totals() {
         })
     };
     let p = Projection {
-        blocks: vec![summary(3, 900, 5_000, 9), summary(2, 400, 80, 0)],
+        blocks: vec![summary(3, 900, 5_000, 11), summary(2, 400, 80, 0)],
         ..Projection::default()
     };
     let flow = Flow {
@@ -160,8 +167,10 @@ fn a_sample_is_the_projections_totals() {
         (t.count, t.vsize, t.fees, t.min_fee),
         (5, 1_300, 5_080, 1_000)
     );
-    assert_eq!(t.bands, [400, 0, 0, 0, 0, 0, 0, 0, 0, 900]);
-    assert_eq!(t.bands.iter().sum::<u64>(), t.vsize);
+    assert_eq!(t.bands.list(), [400, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 900]);
+    assert_eq!(t.bands.stored, [400, 0, 0, 0, 0, 0, 0, 0, 0, 900]);
+    assert_eq!(t.bands.split, Some([0, 0]));
+    assert_eq!(t.bands.list().iter().sum::<u64>(), t.vsize);
     assert_eq!(t.flow, flow);
 }
 
@@ -468,6 +477,172 @@ async fn a_database_at_the_audits_version_gains_the_table_and_a_fresh_one_ends_a
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn a_split_survives_a_roll_up_only_if_every_row_summed_knew_it() {
+    let t = temp();
+    let cut = (NOW - KEEP_MINUTES) / HOUR * HOUR;
+    let unsplit = |p: Point| Point {
+        sums: Totals {
+            bands: Bands {
+                split: None,
+                ..p.sums.bands
+            },
+            ..p.sums
+        },
+        ..p
+    };
+    // Hour A: split and unsplit minutes. Hour B: split minutes only. Hour C: an unsplit hour row
+    // already there, and split minutes rolled into it. Hour D: a split hour row and split minutes.
+    let (a, b, c, d) = (cut - 4 * HOUR, cut - 3 * HOUR, cut - 2 * HOUR, cut - HOUR);
+    let minutes: Vec<Point> = (0..60)
+        .map(|i| minute(a + i * MINUTE, i))
+        .map(|p| {
+            if p.time % (2 * MINUTE) == 0 {
+                unsplit(p)
+            } else {
+                p
+            }
+        })
+        .chain((0..60).map(|i| minute(b + i * MINUTE, i)))
+        .chain((0..60).map(|i| minute(c + i * MINUTE, i)))
+        .chain((0..60).map(|i| minute(d + i * MINUTE, i)))
+        .collect();
+    insert(&t.store, Level::Minute, minutes.clone())
+        .await
+        .unwrap();
+    let hour_row = |time| Point {
+        time,
+        samples: 5,
+        sums: minute(0, 9).sums,
+    };
+    insert(
+        &t.store,
+        Level::Hour,
+        vec![unsplit(hour_row(c)), hour_row(d)],
+    )
+    .await
+    .unwrap();
+    // Mixed rows read back unsplit through a series too, as one point for the hour.
+    let m = series(&t.store, Interval::Month, NOW).await.unwrap();
+    let at = |time| m.points.iter().find(|p| p.time == time).unwrap();
+    assert_eq!(at(a).sums.bands.split, None);
+    assert_eq!(at(a).sums.bands.list().len(), 10);
+    assert_eq!(at(b).sums.bands.list().len(), 12);
+
+    roll_up(&t.store, NOW).await.unwrap();
+    let hours: Vec<Point> = rows(&t.store)
+        .await
+        .into_iter()
+        .filter(|(l, _)| *l == 1)
+        .map(|(_, p)| p)
+        .collect();
+    let sum = |time, extra: Option<Point>| {
+        let mut s = Totals::default();
+        for m in minutes.iter().filter(|m| m.time / HOUR * HOUR == time) {
+            s.add(&m.sums);
+        }
+        if let Some(e) = extra {
+            s.add(&e.sums);
+        }
+        s
+    };
+    assert_eq!(hours.len(), 4);
+    for h in &hours {
+        let want = match h.time {
+            t if t == c => sum(c, Some(unsplit(hour_row(c)))),
+            t if t == d => sum(d, Some(hour_row(d))),
+            t => sum(t, None),
+        };
+        assert_eq!(h.sums, want, "hour {}", h.time);
+    }
+    let split = |time| {
+        hours
+            .iter()
+            .find(|h| h.time == time)
+            .unwrap()
+            .sums
+            .bands
+            .split
+    };
+    assert_eq!(split(a), None, "a mixed hour does not know its split");
+    assert_eq!(split(c), None, "NULL + x stays NULL in the upsert");
+    // All split: the exact sums.
+    let exact =
+        |time: u64, n: u64| (0..60).map(|i| i * n).sum::<u64>() + if time == d { 9 * n } else { 0 };
+    assert_eq!(split(b), Some([exact(b, 2), exact(b, 3)]));
+    assert_eq!(split(d), Some([exact(d, 2), exact(d, 3)]));
+    // The ten stored bands are summed whatever the split: band0 is all under 0.2 throughout.
+    let band0 = |time: u64| {
+        hours
+            .iter()
+            .find(|h| h.time == time)
+            .unwrap()
+            .sums
+            .bands
+            .stored[0]
+    };
+    assert_eq!(band0(a), (0..60).map(|i| i * 6).sum::<u64>());
+}
+
+#[tokio::test]
+async fn a_database_with_rows_from_before_the_split_keeps_them_whole() {
+    // A file as the build before the split left it: eight migrations, rows in the old shape.
+    let dir =
+        std::env::temp_dir().join(format!("rbitcoin-space-history-v8-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = BlockHash::from_byte_array([7; 32]);
+    let hour = (NOW - KEEP_MINUTES) / HOUR * HOUR - HOUR;
+    {
+        let c = rusqlite::Connection::open(dir.join("regtest.sqlite")).unwrap();
+        c.pragma_update(None, "journal_mode", "WAL").unwrap();
+        for m in &crate::store::MIGRATIONS[..8] {
+            c.execute_batch(m.1).unwrap();
+        }
+        c.pragma_update(None, "user_version", 8).unwrap();
+        c.execute(
+            "INSERT INTO blocks (height, hash, time, tx_count, size, weight, paying_weight, fees, \
+             subsidy, reward, difficulty, coinbase_tag, payouts, rated, fee_min, fee_p10, fee_p25, \
+             fee_median, fee_p75, fee_p90, fee_max, band0, band1, band2, band3, band4, band5, \
+             band6, band7, band8, band9) VALUES (5, ?1, 1, 2, 300, 1200, 800, 50, 0, 0, 1.0, \
+             x'', x'', 1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 100, 0, 0, 0, 0, 0, 0, 0, 0, 100)",
+            params![&hash.to_byte_array()[..]],
+        )
+        .unwrap();
+        // Two minutes of one hour, stored before the split.
+        for i in 0..2 {
+            c.execute(
+                "INSERT INTO mempool_history VALUES (0, ?1, 1, 1, 10, 1, 100, 10, 0, 0, 0, 0, 0, \
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+                params![i64::try_from(hour + i * MINUTE).unwrap()],
+            )
+            .unwrap();
+        }
+    }
+    let store = Store::open(&dir, "regtest", Options::default()).unwrap();
+    // The block keeps its ten bands: nothing is guessed about how its lowest one splits.
+    let row = crate::blocks::by_hash(&store, hash).await.unwrap().unwrap();
+    let rated = row.rates.unwrap();
+    assert_eq!(rated.fee_bands.split, None);
+    assert_eq!(rated.fee_bands.list(), [100, 0, 0, 0, 0, 0, 0, 0, 0, 100]);
+    let old = rows(&store).await;
+    assert_eq!(old.len(), 2);
+    assert!(old.iter().all(|(_, p)| p.sums.bands.split.is_none()));
+    assert_eq!(old[0].1.sums.bands.stored[0], 10);
+    // A minute sampled after the split joins the old ones' hour, which then does not know it.
+    insert(&store, Level::Minute, vec![minute(hour + 2 * MINUTE, 1)])
+        .await
+        .unwrap();
+    roll_up(&store, NOW).await.unwrap();
+    let rolled = rows(&store).await;
+    assert_eq!(rolled.len(), 1);
+    assert_eq!(rolled[0].1.samples, 3);
+    assert_eq!(rolled[0].1.sums.bands.split, None);
+    assert_eq!(rolled[0].1.sums.bands.stored[0], 10 + 10 + 6);
+    store.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // Reading.
 
 #[tokio::test]
@@ -717,7 +892,7 @@ async fn samples_each_minute_skips_stale_late_and_syncing_minutes_and_rolls_up()
     let (va, vb, vc) = (vsize(&a), vsize(&b), vsize(&c));
     let p = at(first + MINUTE);
     assert_eq!((p.sums.count, p.sums.vsize, p.sums.fees), (1, va, 500));
-    assert_eq!(p.sums.bands.iter().sum::<u64>(), va);
+    assert_eq!(p.sums.bands.list().iter().sum::<u64>(), va);
     let p = at(first + 2 * MINUTE).sums;
     assert_eq!((p.count, p.vsize), (3, va + vb + vc));
     assert_eq!(

@@ -219,7 +219,7 @@ export function Flow(props: {
               data-key="0"
             >
               <div class="tx-flow__top">
-                <Amount sats={totalOut(props.tx)} unit={false} />
+                <Amount sats={totalOut(props.tx)} unit={false} fit />
                 {openButton("in", 0)}
               </div>
               <span class="tx-flow__who">Coinbase</span>
@@ -237,7 +237,7 @@ export function Flow(props: {
               >
                 <div class="tx-flow__top">
                   <Show when={input.prevout} fallback={<span class="amount">–</span>}>
-                    {(p) => <Amount sats={p().value} unit={false} />}
+                    {(p) => <Amount sats={p().value} unit={false} fit />}
                   </Show>
                   {openButton("in", i())}
                 </div>
@@ -247,14 +247,36 @@ export function Flow(props: {
                     fallback={input.prevout ? scriptLabel(input.prevout) : "Unknown"}
                   >
                     {(a) => (
-                      <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                      <span class="tx-flow__addrs">
+                        <span class="tx-flow__addr tx-flow__addr--short">
+                          <span class="tx-flow__addrs">
+                            <span class="tx-flow__addr tx-flow__addr--short">
+                              <Hash
+                                value={a()}
+                                href={paths.address(a())}
+                                head={7}
+                                tail={5}
+                                copy={false}
+                              />
+                            </span>
+                            <span class="tx-flow__addr tx-flow__addr--whole">
+                              <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                            </span>
+                          </span>
+                        </span>
+                        <span class="tx-flow__addr tx-flow__addr--whole">
+                          <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                        </span>
+                      </span>
                     )}
                   </Show>
                 </span>
                 <span class="tx-flow__meta">
-                  {input.prevout?.scriptpubkey_address
-                    ? classify(input.prevout.scriptpubkey).label
-                    : ""}
+                  <span class="tx-flow__type">
+                    {input.prevout?.scriptpubkey_address
+                      ? classify(input.prevout.scriptpubkey).label
+                      : ""}
+                  </span>
                 </span>
               </li>
             )}
@@ -300,7 +322,7 @@ export function Flow(props: {
               data-key={i()}
             >
               <div class="tx-flow__top">
-                <Amount sats={out.value} unit={false} />
+                <Amount sats={out.value} unit={false} fit />
                 {openButton("out", i())}
               </div>
               <span class="tx-flow__who">
@@ -309,13 +331,26 @@ export function Flow(props: {
                   fallback={<span class="tx-flow__label">{scriptLabel(out)}</span>}
                 >
                   {(a) => (
-                    <Hash value={a()} href={paths.address(a())} head={7} tail={5} copy={false} />
+                    <span class="tx-flow__addrs">
+                      <span class="tx-flow__addr tx-flow__addr--short">
+                        <Hash
+                          value={a()}
+                          href={paths.address(a())}
+                          head={7}
+                          tail={5}
+                          copy={false}
+                        />
+                      </span>
+                      <span class="tx-flow__addr tx-flow__addr--whole">
+                        <Hash value={a()} href={paths.address(a())} whole copy={false} />
+                      </span>
+                    </span>
                   )}
                 </Show>
               </span>
               <span class="tx-flow__meta">
                 <Show when={out.scriptpubkey_address}>
-                  <span>{classify(out.scriptpubkey).label}</span>
+                  <span class="tx-flow__type">{classify(out.scriptpubkey).label}</span>
                 </Show>
                 <Spent
                   unspendable={whyUnspendable(props.tx, out) !== null}
@@ -339,7 +374,7 @@ export function Flow(props: {
             data-key="fee"
           >
             <div class="tx-flow__top">
-              <Amount sats={fee()} unit={false} />
+              <Amount sats={fee()} unit={false} fit />
             </div>
             <span class="tx-flow__who">Fee</span>
             <span class="tx-flow__meta">

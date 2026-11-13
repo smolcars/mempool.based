@@ -341,7 +341,13 @@ export class LiveConnection {
   }
 
   private wakeUp(): void {
-    if (this.subscribers.size === 0 || this.stopped || this.ws) return;
+    if (this.subscribers.size === 0 || this.stopped) return;
+    // A tab back from the background may hold a socket the phone let die while it slept: ask at
+    // once, so a dead one is found in a pong's wait rather than at the next ping.
+    if (this.ws) {
+      if (this.greeted) this.ping();
+      return;
+    }
     if (this.waiting || this.retryTimer !== undefined) this.connect();
   }
 
