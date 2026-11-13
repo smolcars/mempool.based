@@ -69,7 +69,7 @@ export function FeePanel(props: { answer: () => FeeAnswer | null | undefined }) 
         <p class="home-fees__note">
           {props.answer()?.source === "node"
             ? "The node's own estimates: this server cannot make its own recommendation right now."
-            : "Read from the projected blocks, rounded up."}
+            : "Pay this so later arrivals don't outbid you."}
         </p>
       </Show>
     </section>

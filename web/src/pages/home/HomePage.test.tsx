@@ -1008,7 +1008,7 @@ describe("the fee panel", () => {
     ]);
     // The rates are numbers alone: colour belongs to the drawings.
     expect(el.querySelector(".home-fees .fee__swatch")).toBeNull();
-    expect(feeNote(el)).toContain("Read from the projected blocks");
+    expect(feeNote(el)).toContain("later arrivals don't outbid you");
     expect(feeNote(el)).not.toContain("node");
     expect(count("/v1/fees/precise")).toBe(0);
   });
@@ -1052,7 +1052,7 @@ describe("the fee panel", () => {
     ws.receive(feesMsg("node", [1500, 1000, 1000, 120]));
     ws.receive(feesMsg("projected", [3000, 2000, 1000, 100]));
     expect(highest(el)).toBe("Highnext block3.00 sat/vB");
-    expect(feeNote(el)).toContain("Read from the projected blocks");
+    expect(feeNote(el)).toContain("later arrivals don't outbid you");
     ws.receive({ topic: "fees", type: "unavailable" });
     const panel = el.querySelector(".home-fees") as HTMLElement;
     expect(panel.textContent).toContain("No recommendation right now");
@@ -1102,7 +1102,7 @@ describe("the fee panel", () => {
         );
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS);
       await vi.waitFor(() => expect(highest(el)).toBe("Highnext block2.50 sat/vB"));
-      expect(feeNote(el)).toContain("Read from the projected blocks");
+      expect(feeNote(el)).toContain("later arrivals don't outbid you");
       // A failed ask shows no number rather than the last one.
       reply = () => Response.json({ error: "upstream unavailable" }, { status: 502 });
       await vi.advanceTimersByTimeAsync(FEES_POLL_MS);

@@ -167,7 +167,7 @@ test("the fee panel follows the fees topic: an update, the node's fallback, then
 
   send?.(levels([1031, 500, 200, 100], "projected"));
   await expect(high).toHaveText("1.04 sat/vB");
-  await expect(panel).toContainText("Read from the projected blocks");
+  await expect(panel).toContainText("later arrivals don't outbid you");
   // The mempool filled up: the next message is the new answer.
   send?.(levels([2501, 1031, 200, 100], "projected"));
   await expect(high).toHaveText("2.51 sat/vB");
