@@ -105,7 +105,7 @@ export async function amountsIntact(page: Page, label: string) {
 
 /**
  * Every exact-amount control on the page, opened one after another: its pop-up the only one open,
- * wholly on screen, its text not cut, nothing else on the page moved by it, and Escape closing it.
+ * wholly on screen, its text not cut, a copy button in it, nothing else on the page moved by it, and Escape closing it.
  */
 export async function exactsInside(page: Page, label: string) {
   const controls = page.locator("main button:has(+ .exact)");
@@ -134,6 +134,8 @@ export async function exactsInside(page: Page, label: string) {
         if (r.left < 0 || r.top < 0 || r.right > w || r.bottom > h) {
           fault = `off screen at ${Math.round(r.left)}–${Math.round(r.right)} × ${Math.round(r.top)}–${Math.round(r.bottom)} in ${w} × ${h}`;
         } else if (pop.scrollWidth > pop.clientWidth + 1) fault = "its text is cut";
+        // The same pop-up everywhere: its exact value with a copy button (a channel's had none).
+        else if (!pop.querySelector("button.copy")) fault = "it has no copy button";
       }
       const after = [
         ...document.querySelectorAll<HTMLElement>("main :is(dt, dd, td, th, button, h1, h2)"),
