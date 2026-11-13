@@ -16,6 +16,8 @@ type Handler = (url: string) => Response | Promise<Response>;
 // A JSON body, or a handler that answers.
 type Reply = Handler | object | string | number;
 let calls: string[] = [];
+/** How each call asked the browser's HTTP cache, in the order of `calls`. */
+let caching: (RequestCache | undefined)[] = [];
 
 const disposers: (() => void)[] = [];
 /** Whether the balance chart is in view: a stand-in observer reports it, or holds it back. */
@@ -51,6 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   clearApiCache();
   calls = [];
+  caching = [];
   document.body.replaceChildren();
 });
 
@@ -59,9 +62,10 @@ afterEach(() => {
  * for the balance chart's first summary page, which is empty unless a test says otherwise.
  */
 function serve(replies: Record<string, Reply>) {
-  vi.stubGlobal("fetch", async (input: string) => {
+  vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
     const url = input;
     calls.push(url);
+    caching.push(init?.cache);
     const path = url.replace(/^(\/\w+)?\/api/, "");
     const reply =
       url === "/app/config"
@@ -80,7 +84,11 @@ const sleep = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
-function open(url: string) {
+/**
+ * Opens the page. The server's first status for the address follows at once, as it does a few
+ * milliseconds after a real page subscribes, unless `first` is false.
+ */
+function open(url: string, first: string | null | false = "s0") {
   const Router = createRouter({
     routes: [{ path: ["/address/:address", "/:net/address/:address"], component: AddressPage }],
     history: memoryHistory(url),
@@ -88,6 +96,8 @@ function open(url: string) {
   const el = document.createElement("div");
   document.body.append(el);
   disposers.push(render(() => <Router>{(route) => route.children}</Router>, el));
+  // A page that shows no address (malformed, another network's) follows nothing.
+  if (first !== false && FakeSocket.all.length > 0) status(first);
   return el;
 }
 
@@ -248,11 +258,9 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     expect(FakeSocket.last().url).toContain("/app/ws");
     const asked = () => calls.filter((c) => c.endsWith("/txs")).length;
-    // The first status starts the watch and asks nothing: the page has just loaded.
-    status("s1");
     await until(() => expect(text(el.querySelector(".address-live") as Element)).toBe("Live"));
     // The same status again is no change.
-    status("s1");
+    status("s0");
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
@@ -283,8 +291,7 @@ describe("address page", () => {
         return Response.json(answer);
       },
     });
-    const el = open(`/address/${ME}`);
-    status("s1");
+    const el = open(`/address/${ME}`, "s1");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
     status("s2"); // its answer is held back
@@ -293,6 +300,61 @@ describe("address page", () => {
     status("s3"); // heard while s2's answer is still on its way
     release?.();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
+  });
+
+  describe("ends up showing what the node has, whatever the order of events", () => {
+    const paid = tx(2, [[OTHER, 9000]], [[ME, 8000]], false);
+    const rows = (el: Element) => el.querySelectorAll("tbody tr .hash");
+    /** The node's history, which a payment changes. */
+    let history: Transaction[] = [];
+    beforeEach(() => {
+      history = [tx(1, [[OTHER, 2000]], [[ME, 1000]])];
+      serve({
+        [`/address/${ME}`]: () => Response.json(stats()),
+        [`/address/${ME}/txs`]: () => Response.json(history),
+      });
+    });
+
+    it("asks nothing until the first status, so a payment just before it is shown", async () => {
+      const el = open(`/address/${ME}`, false);
+      await sleep(20);
+      expect(calls.filter((c) => c.includes(ME))).toStrictEqual([]);
+      // Paid before the page's subscription took effect: the first status counts the payment.
+      history = [paid, ...history];
+      status("s1");
+      await until(() => expect(rows(el)).toHaveLength(2));
+      expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(1);
+    });
+
+    it("asks after a second without a status, and takes the late first status for a change", async () => {
+      const el = open(`/address/${ME}`, false);
+      await until(() => expect(rows(el)).toHaveLength(1));
+      history = [paid, ...history];
+      status("s1");
+      await until(() => expect(rows(el)).toHaveLength(2));
+    });
+
+    it("asks at once when the node is unavailable, and refreshes on the status after it", async () => {
+      const el = open(`/address/${ME}`, false);
+      heard({ state: "unavailable" });
+      await until(() => expect(rows(el)).toHaveLength(1));
+      expect(text(el)).toContain("lost touch with its node");
+      history = [paid, ...history];
+      status("s1");
+      await until(() => expect(rows(el)).toHaveLength(2));
+    });
+
+    it("asks the server, never the browser's cache, which can hold an answer from before", async () => {
+      const el = open(`/address/${ME}`);
+      await until(() => expect(rows(el)).toHaveLength(1));
+      history = [paid, ...history];
+      status("s1");
+      await until(() => expect(rows(el)).toHaveLength(2));
+      // The totals and the first page; the balance chart checks its own answers against the totals.
+      const own = caching.filter((_, i) => /\/address\/\w+(\/txs)?$/.test(calls[i] ?? ""));
+      expect(own.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(own)).toStrictEqual(new Set(["no-cache"]));
+    });
   });
 
   it("asks again when the address index has not caught up with the change yet", async () => {
@@ -304,8 +366,7 @@ describe("address page", () => {
       [`/address/${ME}/txs`]: () =>
         Response.json(++served < 3 ? old : [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...old]),
     });
-    const el = open(`/address/${ME}`);
-    status("s1");
+    const el = open(`/address/${ME}`, "s1");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     status("s2");
     await vi.waitFor(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2), {
@@ -316,7 +377,7 @@ describe("address page", () => {
 
   it("says, without alarm, when the page cannot update itself", async () => {
     serve({ [`/address/${ME}`]: stats(), [`/address/${ME}/txs`]: [] });
-    const el = open(`/address/${ME}`);
+    const el = open(`/address/${ME}`, false);
     await until(() => expect(text(el)).toContain("This address has never been used"));
     expect(el.querySelector(".address-live")).toBeNull();
     heard({ state: "refused", reason: "too_large" });
@@ -356,7 +417,6 @@ describe("address page", () => {
     [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
     firstPage = range(0, 24);
-    status("before");
     status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
     const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
@@ -386,7 +446,6 @@ describe("address page", () => {
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
     // Thirty new transactions arrive while the page request is in flight.
     firstPage = range(1, 25);
-    status("before");
     status(`after ${String(firstPage.length)}`);
     await until(() =>
       expect(el.querySelector("tbody tr a")?.getAttribute("href")).toBe(`/tx/${txid(1)}`),
@@ -493,7 +552,6 @@ describe("address page", () => {
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
     // A reorg leaves only transaction 55: the whole history is now one row, the same last row.
     firstPage = [conf(55)];
-    status("before");
     status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     release(Response.json(range(56, 80)));
@@ -913,8 +971,7 @@ describe("balance chart", () => {
       timeout: 2000,
     });
     expect(chart.getAttribute("aria-valuemax")).toBe("1");
-    // The first status asks nothing; a change asks for one summary page.
-    status("s1");
+    // The first status asked nothing more; a change asks for one summary page.
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });

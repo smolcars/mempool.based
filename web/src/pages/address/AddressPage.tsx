@@ -1,5 +1,15 @@
 import { useParams } from "@solidjs/router";
-import { createMemo, createSignal, For, Match, onCleanup, Show, Switch, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js";
 import { HashFull } from "../../components/Hash";
 import { busyRetrying, createApi, createRequest } from "../../lib/api";
 import { fetchConfig } from "../../lib/config";
@@ -30,6 +40,12 @@ const PREFIXES: Record<Network, string> = {
  * of milliseconds, and then the history is not asked for at all (docs/API.md, "Very large addresses").
  */
 const HISTORY_WAITS_MS = 1000;
+
+/**
+ * The page asks for the address once the server has said where its history stands, or after this
+ * long without a word: normally a few milliseconds, longer while the socket opens on a first load.
+ */
+const FOLLOW_WAITS_MS = 1000;
 
 /** A history change the address index has not shown yet is asked again after 1, 2 and 4 s. */
 const CATCH_UP_MS = 1000;
@@ -92,10 +108,32 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   // The page is made afresh for each address (AddressPage keys it).
   const address = untrack(() => props.address);
   const path = `/address/${encodeURIComponent(address)}`;
-  const [stats, { refetch: refetchStats }] = createApi<AddressStats>(() => path);
+  const socket = useLiveStatus();
+  // Follow first, then ask (docs/WS.md): a change before the first status is in what the page then
+  // asks for, and a change after it is a new status. Asked early, with no status to come soon (the
+  // socket is down, or slow to open), the first status that comes is treated as a change.
+  const [asking, setAsking] = createSignal(false);
+  let started = false;
   const [waited, setWaited] = createSignal(false);
-  const wait = setTimeout(() => setWaited(true), HISTORY_WAITS_MS);
-  onCleanup(() => clearTimeout(wait));
+  let wait: ReturnType<typeof setTimeout> | undefined;
+  const ask = () => {
+    if (started) return;
+    started = true;
+    setAsking(true);
+    wait = setTimeout(() => setWaited(true), HISTORY_WAITS_MS);
+  };
+  const follow = setTimeout(ask, FOLLOW_WAITS_MS);
+  onCleanup(() => {
+    clearTimeout(follow);
+    clearTimeout(wait);
+  });
+  createEffect(socket, (s) => {
+    if (s === "reconnecting" || s === "offline") ask();
+  });
+  // Every answer from the server: one the browser kept a second could predate the status.
+  const [stats, { refetch: refetchStats }] = createApi<AddressStats>(() => asking() && path, {
+    fresh: true,
+  });
   // Once true, stays true: a later refetch of the totals does not take the history away.
   const statsAnswered = createMemo(
     (was?: boolean) =>
@@ -104,6 +142,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const tooLarge = () => stats.state === "errored" && refusal(stats.error) === "too-large";
   const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(
     () => statsAnswered() && !tooLarge() && `${path}/txs`,
+    { fresh: true },
   );
   let refreshHistory = () => {
     // Replaced by History once it mounts.
@@ -136,8 +175,8 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
     refreshHistory();
     refreshBalance();
   };
-  // The node's status can change a moment before its address index answers with the change
-  // (seen on regtest), so a refetch that brings nothing new is tried again, a few times.
+  // A refetch that brings nothing new is tried again, a few times, in case the node's index trails
+  // its status: never seen on regtest once answers skip the browser's cache, kept as a guard.
   const fingerprint = () =>
     JSON.stringify([settled(stats), settled(first)?.map((t) => [t.txid, t.status.block_hash])]);
   let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
@@ -161,17 +200,22 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   useTopic(addressTopic(address), {
     message: (m) => {
       setWatch(m);
-      if (m.type !== "watching") return;
+      if (m.type !== "watching") {
+        ask();
+        return;
+      }
       const before = token;
       token = m.status;
-      // The first status only starts the watch: the page asked for everything a moment ago, and
-      // asking again would spend the server's per-client allowance for addresses on nothing.
-      if (before !== undefined && before !== m.status) catchUp(fingerprint());
+      // The first status before the page asked: what it asks now is at least as new.
+      if (!started) {
+        ask();
+        return;
+      }
+      if (before !== m.status) catchUp(fingerprint());
     },
     // After a reconnect the first message is compared with the last status heard.
     resync: () => undefined,
   });
-  const socket = useLiveStatus();
 
   return (
     <Switch>
