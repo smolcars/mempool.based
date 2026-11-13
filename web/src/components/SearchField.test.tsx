@@ -207,6 +207,9 @@ describe("SearchField and navigation", () => {
     release();
     await vi.waitFor(() => expect(el.textContent).toContain("slow page"));
     expect(history.get()).toBe("/slow");
+    // The query left with its page: the next page's field is empty, with nothing to say.
+    expect(input.value).toBe("");
+    expect(el.querySelector(".search__reading")?.textContent).toBe("");
     dispose();
   });
 });

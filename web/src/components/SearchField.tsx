@@ -99,7 +99,12 @@ export function SearchField(props: SearchFieldProps) {
     setMiss(undefined);
   };
   // Navigation start, not end: a page still loading must not be overridden by a search answering.
-  useBeforeLeave(stop);
+  // The query goes too: on the next page it would read as that page's, "Not recognised" and all.
+  useBeforeLeave(() => {
+    stop();
+    setText("");
+    setNothingFor(undefined);
+  });
 
   const search = async (query: string) => {
     stop();
