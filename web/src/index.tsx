@@ -28,7 +28,14 @@ if (root) {
   watchFiles();
   // Lay text out once: in the preloaded font if it is here in time, otherwise in the fallbacks for good.
   // Prose is the system font; the web font sets hashes, addresses, numeric columns and digit gaps.
-  const font = document.fonts.load('1em "Recursive Mono"').catch(() => []);
+  // Both faces, though one file: a face first asked for after render (Firefox asks for the gap's
+  // only when a page needs it) is a download that leaving the page cancels, and a late swap.
+  const font = Promise.all([
+    document.fonts.load('1em "Recursive Mono"'),
+    document.fonts.load('1em "Recursive Gap"', "\u202F"),
+  ])
+    .then((faces) => faces.flat())
+    .catch(() => []);
   const timeout = new Promise<[]>((resolve) => {
     setTimeout(() => resolve([]), FONT_WAIT_MS);
   });

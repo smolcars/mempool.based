@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+import { groupDigits } from "../src/lib/format";
 import { chain, expect, test } from "./fixtures";
 
 test("the app shell loads on /regtest/ with the regtest network shown", async ({ page }) => {
@@ -26,35 +28,92 @@ test("an unknown page shows the not-found page inside the shell", async ({ page 
   await expect(page.getByRole("banner")).toContainText("Regtest");
 });
 
-test("digit groups show the same visible gap in every engine", async ({ page }) => {
+/**
+ * How the page's two stacks set the site's own digit grouping, in em, measured at 100 px as Chromium
+ * on Linux rounds each advance to a whole pixel: the gap a group adds, a word space beside it for
+ * scale, and how far two figures of the same length differ in width (0 when they line up).
+ * `tokens` measures the stylesheet's stacks, which a page whose font came late leaves out for that
+ * load; otherwise the stacks this page is using.
+ */
+async function digitGroups(page: Page, tokens: boolean) {
+  const text = {
+    plain: "1293",
+    grouped: groupDigits(1293),
+    ones: groupDigits(111_111),
+    eights: groupDigits(888_888),
+  };
+  return page.evaluate(
+    async ({ fromTokens, t }) => {
+      if (fromTokens) {
+        for (const name of ["--font-sans", "--font-mono"]) {
+          document.documentElement.style.removeProperty(name);
+        }
+        await document.fonts.load('100px "Recursive Gap"', t.grouped);
+        await document.fonts.load('100px "Recursive Mono"', t.grouped);
+      }
+      const width = (family: string, content: string) => {
+        const span = document.createElement("span");
+        span.className = "num";
+        span.style.fontSize = "100px";
+        span.style.fontFamily = family;
+        span.textContent = content;
+        document.querySelector("main")?.append(span);
+        const w = span.getBoundingClientRect().width;
+        span.remove();
+        return w / 100;
+      };
+      const stack = (family: string) => ({
+        gap: width(family, t.grouped) - width(family, t.plain),
+        space: width(family, "1 293") - width(family, t.plain),
+        misalign: Math.abs(width(family, t.ones) - width(family, t.eights)),
+      });
+      return { sans: stack("var(--font-sans)"), mono: stack("var(--font-mono)") };
+    },
+    { fromTokens: tokens, t: text },
+  );
+}
+
+test("digit groups show a visible narrow gap in every engine", async ({ page, browserName }) => {
   await page.goto("/regtest/no/such/page");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Page not found");
-  // The gap is the narrow no-break space in our own font, 0.15 em, in the system font's prose and in
-  // the monospace alike: before, each engine drew another font's, and WebKit's (0.05 em) let "1 293"
-  // read as "1293". Measured in the stacks by name (a page whose font came late leaves it out for
-  // that load) and at 100 px, as Chromium on Linux rounds each advance to a whole pixel.
-  const gaps = await page.evaluate(async () => {
-    await document.fonts.load('100px "Recursive Gap"', "1\u202F293");
-    await document.fonts.load('100px "Recursive Mono"', "1\u202F293");
-    const width = (family: string, text: string) => {
-      const span = document.createElement("span");
-      span.className = "num";
-      span.style.fontSize = "100px";
-      span.style.fontFamily = family;
-      span.textContent = text;
-      document.querySelector("main")?.append(span);
-      const w = span.getBoundingClientRect().width;
-      span.remove();
-      return w;
-    };
-    const gap = (family: string) => (width(family, "1\u202F293") - width(family, "1293")) / 100;
-    return [gap('"Recursive Gap", system-ui, sans-serif'), gap('"Recursive Mono", monospace')];
+  const { sans, mono } = await digitGroups(page, true);
+  // The monospace's gap is our font's narrow space, 0.15 em, in every engine.
+  expect(mono.gap).toBeCloseTo(0.15, 2);
+  if (browserName === "firefox") {
+    // Firefox takes the space from the font of the digits beside it, the system font's own narrow
+    // space: 0.10 em in a Mac's, 0.20 in DejaVu Sans on Linux. Visible, and narrower than a word
+    // space, so a figure never reads as two.
+    expect(sans.gap).toBeGreaterThanOrEqual(0.095);
+    expect(sans.gap).toBeLessThan(sans.space * 0.8);
+  } else {
+    // Chromium and WebKit take ours from "Recursive Gap", whatever the system font's is.
+    expect(sans.gap).toBeCloseTo(0.15, 2);
+  }
+  for (const s of [sans, mono]) expect(s.misalign).toBeLessThan(0.005);
+});
+
+test.describe("when the web font fails", () => {
+  // Each engine reports the refused font in its own words.
+  test.use({ consoleErrorsAllowed: [/font|Failed to load resource|ERR_FAILED/i] });
+  test("digit groups keep a visible gap and figures line up", async ({ page }) => {
+    await page.route(/\.woff2$/, (route) => route.abort());
+    await page.goto("/regtest/no/such/page");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Page not found");
+    // The page took our faces out of its stacks: the system's fonts draw everything.
+    const stacks = await page.evaluate(() => {
+      const tokens = getComputedStyle(document.documentElement);
+      return `${tokens.getPropertyValue("--font-sans")} ${tokens.getPropertyValue("--font-mono")}`;
+    });
+    expect(stacks).not.toContain("Recursive");
+    const { sans, mono } = await digitGroups(page, false);
+    // A system monospace's narrow space can be a whole cell (DejaVu Sans Mono's is), so a gap
+    // there is at most a word space; columns of figures still line up digit for digit.
+    expect(sans.gap).toBeGreaterThanOrEqual(0.095);
+    expect(sans.gap).toBeLessThan(sans.space * 0.8);
+    expect(mono.gap).toBeGreaterThanOrEqual(0.095);
+    expect(mono.gap).toBeLessThanOrEqual(mono.space + 0.005);
+    for (const s of [sans, mono]) expect(s.misalign).toBeLessThan(0.005);
   });
-  // In prose, Chromium and WebKit take the space from our face; Firefox takes a space from the font
-  // of the digits beside it (the system font's narrow space, 0.10 em), still a visible gap.
-  expect(gaps[0]).toBeGreaterThanOrEqual(0.095);
-  expect(gaps[0]).toBeLessThanOrEqual(0.155);
-  expect(gaps[1]).toBeCloseTo(0.15, 2);
 });
 
 test("the not-found page offers the search and ways on", async ({ page }) => {
