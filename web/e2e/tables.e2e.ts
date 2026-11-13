@@ -305,8 +305,10 @@ test("a chart's figures fit a phone whole: a node's history and fees, and the mi
       const section = page.locator("section", {
         has: page.getByRole("heading", { name, exact: true }),
       });
-      for (const s of await section.locator(".chart__figures > summary").all()) {
-        if (await s.isVisible()) await s.click();
+      for (const details of await section.locator(".chart__figures").all()) {
+        if (!(await details.locator("> summary").isVisible())) continue;
+        await details.locator("> summary").click();
+        await expect(details.locator("table").first()).toBeVisible();
       }
       const tables = section.locator(".chart__table table");
       for (const t of await tables.all()) {
