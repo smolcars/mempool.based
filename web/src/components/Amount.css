@@ -11,4 +11,10 @@
   .amount__short {
     display: none;
   }
+  .amount--tight .amount__exact {
+    display: none;
+  }
+  .amount--tight .amount__short {
+    display: inline;
+  }
 }

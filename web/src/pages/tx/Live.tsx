@@ -136,7 +136,7 @@ export function Where(props: { position: Position | null; live: boolean; reserve
                   <Link href={paths.projected(words().page)}>{words().where}</Link>
                   <span class="tx-where__projected">, projected</span>
                 </p>
-                <p class="tx-where__text num">{words().ahead}</p>
+                <p class="tx-where__text tx-where__text--figures">{words().ahead}</p>
                 <p class="tx-where__text">{words().when}</p>
                 <p class="tx-where__note">
                   A projection, not a promise: miners pick their own blocks, and anything that pays

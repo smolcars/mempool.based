@@ -84,7 +84,21 @@ export function Flow(props: {
   const [view, setView] = createSignal("0 0 0 0");
 
   // Ribbon geometry from where the cards actually sit. One layout read per draw.
+  // An exact amount wider than its card (a phone's, in a wide font) reads in magnitude there.
+  const fitAmounts = () => {
+    for (const amount of flowEl?.querySelectorAll<HTMLElement>(".tx-flow__item .amount") ?? []) {
+      const exact = amount.querySelector(".amount__exact");
+      const card = amount.closest(".tx-flow__item");
+      if (!exact || !card) continue;
+      amount.classList.remove("amount--tight");
+      // 2 px clear of the border on each side, inside the card's padding.
+      const wide = exact.getBoundingClientRect().width > card.clientWidth - 4;
+      amount.classList.toggle("amount--tight", wide);
+    }
+  };
+
   const draw = () => {
+    fitAmounts();
     if (!svgEl || !inCol || !outCol) return;
     const box = svgEl.getBoundingClientRect();
     const W = box.width;

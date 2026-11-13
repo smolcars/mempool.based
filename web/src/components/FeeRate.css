@@ -15,15 +15,21 @@
     background: var(--swatch);
   }
 
+  /* Twelve bands in a row where their labels fit, two rows of six where they do not. The test is
+     in the labels' own font (`ch`, a digit's width), so a wider face takes two rows sooner. */
   .feekey {
-    display: grid;
-    grid-template-columns: repeat(10, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 2px;
+    font-size: var(--text-xs);
   }
   .feekey__band {
     display: flex;
+    flex: 1 1 100%;
     flex-direction: column;
     gap: 3px;
+    /* A twelfth of the row while 12 labels of 3.5 digits and their gaps fit, else a sixth. */
+    max-width: clamp(100% / 12 - 2px, (12 * 3.5ch + 22px - 100%) * 999, 100% / 6 - 2px);
   }
   .feekey__swatch {
     height: 8px;
@@ -31,7 +37,6 @@
     background: var(--swatch);
   }
   .feekey__label {
-    font-size: var(--text-xs);
     color: var(--color-text-muted);
   }
 }

@@ -466,9 +466,10 @@
     grid-area: rbf;
   }
 
+  /* Equal columns, each at least as wide as its figure: a wider face widens it, not overruns it. */
   .home-stats {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(min-content, 1fr));
     gap: var(--space-4);
   }
   .home-stat__label {
@@ -484,6 +485,7 @@
     font-weight: var(--weight-bold);
     line-height: 1.3;
     letter-spacing: var(--tracking-tight);
+    white-space: nowrap;
   }
   .home-stat__value:empty::before {
     content: "";
@@ -501,6 +503,7 @@
   .home-stat__sub {
     font-size: var(--text-sm);
     font-weight: var(--weight-regular);
+    white-space: normal;
     letter-spacing: 0;
     line-height: 1.5;
     color: var(--color-text-muted);
@@ -735,7 +738,7 @@
       margin-left: auto;
     }
     .home-stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(min-content, 1fr));
     }
     .home-grid {
       gap: var(--space-4);

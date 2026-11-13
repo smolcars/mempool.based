@@ -38,7 +38,7 @@
   .address-stats {
     display: grid;
     /* Wide enough for most balances at once, so the figures beside it rarely move when it lands. */
-    grid-template-columns: minmax(22rem, auto) repeat(4, minmax(0, 1fr));
+    grid-template-columns: minmax(22rem, auto) repeat(4, minmax(min-content, 1fr));
     align-items: end;
     gap: var(--space-5) var(--space-5);
   }
@@ -166,6 +166,11 @@
   .address-txs .table,
   .address-utxos .table {
     table-layout: fixed;
+  }
+  /* A header wider than its fixed column, in a wide face, wraps rather than run into the next. */
+  .address-history .table th {
+    white-space: normal;
+    vertical-align: bottom;
   }
   .address-txs th:nth-child(1) {
     width: 20%;
@@ -327,7 +332,7 @@
   /* Below this the four figures beside the balance get too narrow, so the balance takes a row. */
   @media (max-width: 80em) {
     .address-stats {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(min-content, 1fr));
     }
     .address-stat--balance {
       grid-column: 1 / -1;
@@ -372,10 +377,6 @@
     }
     .address-txs td {
       height: auto;
-    }
-    .address-history .table th {
-      white-space: normal;
-      vertical-align: bottom;
     }
     /* Room for the whole shortened txid beside the amount; the transaction page has a copy. */
     .address-txcell .copy {

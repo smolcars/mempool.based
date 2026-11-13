@@ -90,6 +90,13 @@ describe("time ticks", () => {
     expect(endLabels(from, to, 136)).toStrictEqual(["Nov 2020", "Nov 2026"]);
     expect(endLabels(utc(2026, 11, 2, 0), to, 136)).toStrictEqual(["2 Nov", "9 Nov"]);
   });
+  it("names two days' times where they fit, and only the days on a phone", () => {
+    const from = utc(2026, 11, 12, 17);
+    const to = utc(2026, 11, 13, 23);
+    expect(endLabels(from, to)).toStrictEqual(["12 Nov 17:00", "13 Nov 23:00"]);
+    expect(endLabels(from, to, 150)).toStrictEqual(["12 Nov", "13 Nov"]);
+    expect(endLabels(from, utc(2026, 11, 12, 23), 150)).toStrictEqual(["12 Nov 17:00", "23:00"]);
+  });
   it("steps by hours over a day", () => {
     const from = utc(2026, 11, 11, 13);
     const { ticks, label } = timeTicks(from, from + DAY, 8);
