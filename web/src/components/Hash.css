@@ -17,8 +17,13 @@
   }
   /* Cut in the middle only when the column is narrower than the value: the head gives way, the
      last eight characters stay. */
+  /* A grid, not a flex row: a grid's narrowest width counts its text track as nothing, so a table
+     column holding a cut ID can be as narrow as its other columns need, in any table. */
   .hash--fit {
-    display: flex;
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-columns: minmax(0, max-content);
+    justify-content: start;
   }
   .hash--fit .hash__text {
     display: flex;

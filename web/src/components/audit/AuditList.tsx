@@ -75,6 +75,7 @@ export default function AuditList(props: { hash: string; audit: AuditTotals }) {
     },
     {
       header: "Fee rate, sat/vB",
+      short: "sat/vB",
       numeric: true,
       cell: (t: AuditTx) => <FeeRate rate={t.rate / 1000} unit={false} />,
     },

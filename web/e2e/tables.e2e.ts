@@ -1,6 +1,7 @@
 // Every table fits a phone's width with nothing cut off, and no page scrolls sideways (WCAG 1.4.10).
 import type { Locator, Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
+import { AUDIT } from "../src/components/audit/fakes";
 import { tablesFit, tapRow } from "./rows";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
@@ -203,4 +204,68 @@ test("a table that grows after it is drawn drops another column to fit", async (
     });
   await expect.poll(gone).toBeGreaterThan(before);
   await tablesFit(page, "/regtest/blocks after a wider row");
+});
+
+// Tables that appear only on a tap were outside the rule once: the audit's list on a phone put the
+// fee rate it is sorted by off-screen. Every table shown on interaction is held to it too.
+test("tables that open on a tap fit their panel or show that they scroll, at 320, 390 and 720 px", async ({
+  page,
+}) => {
+  const block = chain.blocks[106];
+  const txid = (n: number) => n.toString(16).padStart(64, "a");
+  // A block the server audited: its totals in the summary, and the list behind the button.
+  await page.route(/\/regtest\/app\/blocks\/summary\?/, async (route) => {
+    const reply = await route.fetch();
+    const all = (await reply.json()) as Record<string, unknown>[];
+    for (const one of all) if (one["id"] === block) one["audit"] = AUDIT;
+    await route.fulfill({ response: reply, json: all });
+  });
+  await page.route(new RegExp(`/regtest/app/block/${block}/audit$`), (route) =>
+    route.fulfill({
+      json: {
+        ...AUDIT,
+        id: block,
+        height: 106,
+        time: 1_767_225_600,
+        seen_at: 1_767_225_600,
+        complete: true,
+        txs: Array.from({ length: 30 }, (_, i) => ({
+          txid: txid(i + 1),
+          kind: "missing",
+          vsize: 1_234_567,
+          rate: 12_345_678,
+          first_seen: 1_767_225_000,
+        })),
+      },
+    }),
+  );
+  for (const width of [320, 390, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/regtest/block/${block}`);
+    await page.getByRole("button", { name: "Show the transactions that differ" }).click();
+    await expect(page.locator(".audit-list tbody tr").first()).toBeVisible();
+    await tablesFit(page, `the audit's list at ${width} px`);
+    // The column it is sorted by is in sight, not behind a scroll.
+    const inSight = await page.locator(".audit-list .table-scroll").evaluate((scroller) => {
+      const header = [...scroller.querySelectorAll("th")].find((th) =>
+        (th.textContent ?? "").includes("sat/vB"),
+      );
+      if (!header) return false;
+      return header.getBoundingClientRect().right <= scroller.getBoundingClientRect().right + 1;
+    });
+    expect(inSight, `the audit's fee rate at ${width} px`).toBe(true);
+    // The figures behind each chart.
+    for (const path of [
+      "/regtest/mempool?interval=2h",
+      "/regtest/mining?period=all",
+      `/regtest/address/${chain.addresses.p2tr}`,
+    ]) {
+      await page.goto(path);
+      const figures = page.locator(".chart__figures > summary");
+      await expect(figures.first()).toBeVisible({ timeout: 30_000 });
+      for (const f of await figures.all()) if (await f.isVisible()) await f.click();
+      await expect(page.locator(".chart__figures table").first()).toBeVisible();
+      await tablesFit(page, `${path}'s figures at ${width} px`);
+    }
+  }
 });
