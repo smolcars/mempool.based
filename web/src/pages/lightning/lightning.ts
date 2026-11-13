@@ -2,7 +2,7 @@
 // pages say about them. Pure. Aliases are gossip, chosen by whoever runs the node (SECURITY.md
 // rule 14): they reach the page only as text, through cleanAlias.
 import { formatMoment } from "../../components/chart/scale";
-import { groupDigits } from "../../lib/format";
+import { formatBtcShort, groupDigits } from "../../lib/format";
 
 export type State = "off" | "starting" | "syncing" | "synced" | "failed" | "stopped";
 
@@ -431,6 +431,20 @@ export const count = (n: number, one: string, many = `${one}s`): string =>
 export const ppm = (n: number): string => `${groupDigits(n)} ppm`;
 /** Millisatoshis: `1 000 msat`. */
 export const msat = (n: number): string => `${groupDigits(n)} msat`;
+
+/**
+ * Millisatoshis in magnitude, as a reader compares limits: msat under a sat (`900 msat`), sats
+ * under a million (`1 sat`, `1.5 sats`, `958 366 sats`), then BTC (`0.190 BTC`, `21 000 000 BTC`).
+ * The exact figure is {@link msat}.
+ */
+export function msatShort(n: number): string {
+  if (!Number.isFinite(n) || n < 1000) return msat(n);
+  const sats = n / 1000;
+  if (sats >= 1_000_000) return `${formatBtcShort(Math.round(sats))} BTC`;
+  const whole = Number.isInteger(sats);
+  const text = whole ? groupDigits(sats) : sats.toFixed(3).replace(/0+$/, "");
+  return `${text} ${sats === 1 ? "sat" : "sats"}`;
+}
 
 /** A channel id as the API writes it: `811984x2037x0`; or the 64-bit one in decimal. */
 export function isChannelId(v: string): boolean {

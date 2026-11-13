@@ -71,8 +71,10 @@
       background-color var(--dur-quick) var(--ease-out),
       color var(--dur-quick) var(--ease-out);
   }
-  .mining-periods__item:hover {
-    color: var(--color-text);
+  @media (hover: hover) {
+    .mining-periods__item:hover {
+      color: var(--color-text);
+    }
   }
   .mining-periods__item[aria-current="page"] {
     color: var(--color-text);
@@ -142,9 +144,21 @@
     );
   }
 
-  /* A chart's whole height is held while its code and data load. */
+  /* A chart's whole height is held while its code and data load: the plot, the readout and the
+     caption. On a phone each reading has a line of 1.5625rem (a gap included), and "Show the
+     figures" is a 44 px target; a slot that does not know its chart's lines holds three. */
+  .mining-chart,
+  .mining-slot {
+    --readout: 5.75rem;
+  }
+  @media (max-width: 640px) {
+    .mining-chart,
+    .mining-slot {
+      --readout: calc(var(--lines, 3) * 1.5625rem + 3.5rem);
+    }
+  }
   .mining-chart {
-    min-height: calc(var(--h) + 5.75rem);
+    min-height: calc(var(--h) + var(--readout));
   }
   .mining-slot {
     min-height: var(--reserve);
@@ -192,7 +206,7 @@
   .mining-share__fill {
     position: absolute;
     inset: 0;
-    background: var(--color-text);
+    background: var(--series-1);
     transform-origin: left;
     transform: scaleX(var(--p));
   }
@@ -200,9 +214,92 @@
     margin-top: var(--space-3);
   }
 
+  /* The period's shares in one bar: series-1 shades, darkest for the biggest pool. */
+  .mining-period-shares__bar {
+    display: flex;
+    height: 28px;
+    overflow: hidden;
+    border-radius: var(--radius-m);
+    background: var(--color-surface-sunken);
+  }
+  .mining-period-shares__bar .mining-period-shares__part {
+    flex: var(--p) 0 0;
+    min-width: 2px;
+    border-right: 2px solid var(--color-surface);
+  }
+  /* The pools' own colours, the rest neutral; the key beside it names each. */
+  .mining-period-shares__part {
+    background: var(--pool-other);
+  }
+  .mining-period-shares__part--1 {
+    background: var(--pool-1);
+  }
+  .mining-period-shares__part--2 {
+    background: var(--pool-2);
+  }
+  .mining-period-shares__part--3 {
+    background: var(--pool-3);
+  }
+  .mining-period-shares__part--4 {
+    background: var(--pool-4);
+  }
+  .mining-period-shares__part--5 {
+    background: var(--pool-5);
+  }
+  .mining-period-shares__part--6 {
+    background: var(--pool-6);
+  }
+  .mining-period-shares__part--7 {
+    background: var(--pool-7);
+  }
+  .mining-period-shares__part--8 {
+    background: var(--pool-8);
+  }
+  .mining-period-shares__part--9 {
+    background: var(--pool-9);
+  }
+  .mining-period-shares__part--10 {
+    background: var(--pool-10);
+  }
+  .mining-period-shares__part--11 {
+    background: var(--pool-11);
+  }
+  .mining-period-shares__part--12 {
+    background: var(--pool-12);
+  }
+  /* Each name with its share beside it, wrapping as a row of entries: a wide panel spaces the
+     entries, never a name from its figure. */
+  .mining-period-shares__key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-5);
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+  }
+  .mining-period-shares__key li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .mining-period-shares__name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mining-period-shares__swatch {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border-radius: var(--radius-s);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+  }
+
+  /* Figures side by side; two to a row on a phone, never one long column. */
+  /* As many columns as hold a whole figure (a pool's 21 000 000 BTC), one on the narrowest phone. */
   .mining-rewards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
     gap: var(--space-4);
   }
   .mining-tabs {
@@ -247,13 +344,15 @@
     color: inherit;
     transition: border-color var(--dur-quick) var(--ease-out);
   }
-  .mining-tile__body:hover {
-    color: inherit;
-    border-color: var(--color-text);
+  @media (hover: hover) {
+    .mining-tile__body:hover {
+      color: inherit;
+      border-color: var(--color-text);
+    }
   }
   .mining-tile__height {
     font-size: var(--text-lg);
-    font-weight: var(--weight-heavy);
+    font-weight: var(--weight-bold);
     line-height: var(--leading-tight);
   }
   .mining-tile__fee {
@@ -263,13 +362,20 @@
   .mining-tile__fee .unit {
     font-size: var(--text-xs);
   }
+  /* The block's capacity as a box, its fee layers settled from the floor: the room above is room
+     the block left. */
   .mining-tile__strata {
+    --strata-seam: var(--color-surface-sunken);
     position: relative;
     flex: 1;
     display: flex;
     align-items: flex-end;
     min-height: 0;
     margin: var(--space-2) 0 var(--space-1);
+    border-radius: var(--radius-s);
+    background: var(--color-surface-sunken);
+    box-shadow: inset 0 0 0 1px var(--color-line);
+    overflow: hidden;
   }
   .mining-tile__fill {
     width: 100%;
@@ -301,8 +407,9 @@
   }
 
   /* A pool's page. Its figures' height, a coverage note's included, is held while they load. */
-  .pool-stats {
-    min-height: 12rem;
+  /* Held only while the figures load: loaded, the panel ends where they do. */
+  .pool-stats:has(> .mining-rewards[aria-busy="true"]) {
+    min-height: 9rem;
   }
   .mining-pool-title {
     overflow-wrap: anywhere;
@@ -314,14 +421,6 @@
   .mining-pool-link {
     font-size: var(--text-sm);
     overflow-wrap: anywhere;
-  }
-  .mining-recognised {
-    margin: var(--space-4) 0;
-    font-size: var(--text-sm);
-  }
-  .mining-recognised > summary {
-    cursor: pointer;
-    color: var(--color-text-muted);
   }
   .mining-tags {
     display: flex;
@@ -336,7 +435,6 @@
     border-radius: var(--radius-s);
     background: var(--color-surface-sunken);
     font-family: var(--font-mono);
-    font-variation-settings: var(--mono-on);
     overflow-wrap: anywhere;
   }
 
@@ -346,10 +444,19 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+  /* A day or a week: one bar, not a chart, so it goes above the table, the panel's width, rather
+     than beside it over empty space. */
+  .mining-pools--bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+  .mining-pools--bar .mining-pools__shares {
+    order: -1;
+  }
   @media (max-width: 640px) {
     .mining {
       --tile-w: 7.5rem;
-      --tile-h: 9.25rem;
+      --tile-h: 10rem;
       gap: var(--space-6);
     }
     .mining-share__bar {
@@ -361,8 +468,8 @@
     .mining-share__bar {
       display: none;
     }
-    .pool-stats {
-      min-height: 42rem;
+    .pool-stats:has(> .mining-rewards[aria-busy="true"]) {
+      min-height: 16rem;
     }
     /* Stacked, so a long name arriving cannot push its neighbour onto a new line. */
     .mining-head {

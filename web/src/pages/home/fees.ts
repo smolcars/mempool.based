@@ -105,8 +105,12 @@ export function createFees(
   const grace = setTimeout(() => setSilent(true), TOPIC_GRACE_MS);
   onCleanup(() => clearTimeout(grace));
 
+  // Where the answer on screen came from: the socket's last word stands until a reply replaces it;
+  // an HTTP answer the next ask cannot confirm in time is taken down (`doubt`).
+  let fromTopic = false;
   useTopic(feesTopic, {
     message: (m) => {
+      fromTopic = true;
       setHeard(true);
       setAnswer(m.type === "fees" ? m.answer : null);
     },
@@ -118,10 +122,11 @@ export function createFees(
   const down = () => status() === "reconnecting" || status() === "offline";
   createEffect(
     () => down() || (!heard() && silent()),
-    (polling, was) => {
+    (polling) => {
       if (!polling) return undefined;
-      // An answer heard before the socket dropped can be withdrawn without our hearing it.
-      if (was === false) setAnswer(undefined);
+      // The last answer heard stays while the page reconnects (a tab back from the background):
+      // the snapshot after reconnecting replaces it, and an ask that cannot confirm it in time
+      // takes it down (`doubt`).
       const controller = new AbortController();
       let asking = false;
       let doubt: ReturnType<typeof setTimeout> | undefined;
@@ -130,11 +135,16 @@ export function createFees(
         if (asking) return;
         asking = true;
         // Only a number is taken down: "no answer" stays until there is one.
-        doubt = setTimeout(() => setAnswer((now) => (now ? undefined : now)), FEES_CONFIRM_MS);
+        doubt = setTimeout(
+          () => setAnswer((now) => (now && !fromTopic ? undefined : now)),
+          FEES_CONFIRM_MS,
+        );
         const settle = (a: FeeAnswer | null) => {
           clearTimeout(doubt);
           asking = false;
-          if (!controller.signal.aborted) setAnswer(a);
+          if (controller.signal.aborted) return;
+          fromTopic = false;
+          setAnswer(a);
         };
         fetchStamped<unknown>(network, "/v1/fees/precise", { signal: controller.signal }).then(
           (r) => settle(fromPrecise(r) ?? null),
@@ -153,4 +163,69 @@ export function createFees(
     },
   );
   return answer;
+}
+
+/** The four levels as the panel shows them, slowest first. */
+export const PRIORITIES: readonly { level: LevelName; name: string; when: string }[] = [
+  { level: "no_rush", name: "No rush", when: "within a day" },
+  { level: "low", name: "Low", when: "within an hour" },
+  { level: "medium", name: "Medium", when: "within 30 min" },
+  { level: "high", name: "High", when: "next block" },
+];
+
+/** One answer the panel shows: levels next to each other that print the same rate read as one. */
+export interface FeeGroup {
+  /** "No rush", "No rush or low", "Any wait". */
+  name: string;
+  /** The fastest wait among them: paying the rate buys that. */
+  when: string;
+  /** How many of the four levels it stands for. */
+  span: number;
+  /** sat/vB; undefined when the answer has no rate for these levels. */
+  rate: number | undefined;
+}
+
+/**
+ * Groups the four levels, slowest first, merging neighbours whose rates print the same. The panel
+ * lays them out two by two in the same two rows whatever the grouping, so a live update never moves
+ * what follows it: Low and Medium alone are never merged, as that pair is not a row.
+ */
+export function groupLevels(
+  answer: FeeAnswer | undefined,
+  print: (rate: number) => string,
+): FeeGroup[] {
+  const groups: { members: (typeof PRIORITIES)[number][]; rate: number | undefined }[] = [];
+  for (const p of PRIORITIES) {
+    const rate = answer?.levels.find((l) => l.name === p.level)?.rate;
+    const last = groups.at(-1);
+    if (last && rate !== undefined && last.rate !== undefined && print(last.rate) === print(rate))
+      last.members.push(p);
+    else groups.push({ members: [p], rate });
+  }
+  // Low and Medium merged with neither neighbour would straddle the two rows: keep them apart.
+  if (groups.length === 3 && groups[1]?.members.length === 2) {
+    const [first, pair, last] = groups;
+    if (first !== undefined && pair !== undefined && last !== undefined) {
+      groups.splice(
+        0,
+        3,
+        first,
+        ...pair.members.map((m) => ({
+          members: [m],
+          rate: answer?.levels.find((l) => l.name === m.level)?.rate,
+        })),
+        last,
+      );
+    }
+  }
+  return groups.map(({ members, rate }) => {
+    const names = members.map((m, i) => (i === 0 ? m.name : m.name.toLowerCase()));
+    const name =
+      members.length === PRIORITIES.length
+        ? "Any wait"
+        : names.length === 1
+          ? (names[0] ?? "")
+          : `${names.slice(0, -1).join(", ")} or ${names.at(-1) ?? ""}`;
+    return { name, when: members.at(-1)?.when ?? "", span: members.length, rate };
+  });
 }

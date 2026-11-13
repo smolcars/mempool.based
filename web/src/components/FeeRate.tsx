@@ -1,27 +1,31 @@
-import { For } from "solid-js";
-import { FEE_KEY_BOUNDS, feeColor, formatFeeRate, formatFeeRatePrecise } from "../lib/format";
+import { For, Show } from "solid-js";
+import { FEE_KEY_BOUNDS, feeColor, formatFeeRate, formatFeeRateUp } from "../lib/format";
 import "./FeeRate.css";
 
 /**
- * A fee rate with its band's swatch. The color is taken from the printed value, so it always
- * agrees with the number. `approx` prefixes `~` for projected values. `precise` prints a
- * recommendation at the node's resolution ({@link formatFeeRatePrecise}). `unit={false}` hides the
+ * A fee rate. `swatch` puts its band's colour beside it, only where it is the key to a drawing (a
+ * square's tooltip): a number already says the rate, and colour belongs to the drawings. The colour
+ * is taken from the printed value, so it always agrees with the number. `approx` prefixes `~` for projected values. `up` prints a
+ * recommendation rounded up ({@link formatFeeRateUp}). `unit={false}` hides the
  * unit from sight only, as for {@link Amount}.
  */
 export function FeeRate(props: {
   rate: number;
   unit?: boolean;
   approx?: boolean;
-  precise?: boolean;
+  up?: boolean;
+  swatch?: boolean;
 }) {
-  const print = () => (props.precise ? formatFeeRatePrecise : formatFeeRate);
+  const print = () => (props.up ? formatFeeRateUp : formatFeeRate);
   return (
     <span class="fee">
-      <span
-        class="fee__swatch"
-        style={{ "--swatch": feeColor(props.rate, print()) }}
-        aria-hidden="true"
-      />
+      <Show when={props.swatch}>
+        <span
+          class="fee__swatch"
+          style={{ "--swatch": feeColor(props.rate, print()) }}
+          aria-hidden="true"
+        />
+      </Show>
       <span class="num">
         {props.approx ? "~" : ""}
         {print()(props.rate)}

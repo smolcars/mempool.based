@@ -1,12 +1,12 @@
 // One Lightning node: its name (a claim), its key (its identity), what it announces and its
 // channels, paged.
 import { useParams } from "@solidjs/router";
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, Match, Show, Switch } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { HashFull } from "../../components/Hash";
-import { Link } from "../../components/Link";
 import { Pagination } from "../../components/Pagination";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -28,7 +28,17 @@ import {
   type NodeDetail,
   STATE_WORDS,
 } from "./lightning";
-import { ask, BlockLink, ChannelLink, closesInWords, Gate, NodeName, Stat } from "./parts";
+import {
+  ask,
+  BlockLink,
+  ChannelLink,
+  closesInWords,
+  Gate,
+  NodeName,
+  Stat,
+  LightningNav,
+  rememberList,
+} from "./parts";
 
 export default function NodePage() {
   const params = useParams<{ key: string }>();
@@ -36,9 +46,7 @@ export default function NodePage() {
   const key = () => (params.key ?? "").toLowerCase();
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="detail" />
       <Show
         when={isPublicKey(key())}
         fallback={<NotFound title="Not a node's public key" text={BAD_KEY} />}
@@ -97,6 +105,11 @@ function Body(props: { node: NodeDetail; network: Network }) {
   const title = () => (name() === null ? null : cut(name() ?? "", NAME_IN_TITLE));
   const [whole, setWhole] = createSignal(false);
   usePageTitle(() => `Lightning node ${title()?.text ?? props.node.id.slice(0, 20)}`);
+  // A channel opened from here leads back here, by the node's name, not to the list before it.
+  createEffect(
+    () => [props.node.id, title()?.text ?? "Unnamed node"] as const,
+    ([id, label]) => rememberList(paths.lightningNode(id), label),
+  );
   const c = () => props.node.channels;
   return (
     <>
@@ -124,9 +137,8 @@ function Body(props: { node: NodeDetail; network: Network }) {
           </div>
         </Show>
         <HashFull value={props.node.id} copyLabel="Copy public key" />
-        <p>
-          The name is whatever the node's operator announced, and any node can announce any name,
-          another's included. The public key above is the node's identity.
+        <p class="ln-aside">
+          The public key is the node's identity: any node can announce any name.
         </p>
       </header>
 
@@ -134,7 +146,7 @@ function Body(props: { node: NodeDetail; network: Network }) {
         <SectionHeader title="Channels and capacity" id="ln-node-now-title" />
         <dl class="ln-stats">
           <Stat label="Capacity">
-            <Amount sats={props.node.capacity} />
+            <Amount sats={props.node.capacity} short />
           </Stat>
           <Stat label="Open channels" sub={`${groupDigits(c().active)} active`}>
             <span class="num">{groupDigits(c().open)}</span>
@@ -197,10 +209,13 @@ function Body(props: { node: NodeDetail; network: Network }) {
             </dd>
           </div>
         </dl>
-        <p class="ln-aside">
-          Addresses are where the node says it can be reached; nothing here checks them, and they
-          are not links.
-        </p>
+        <More label="About these">
+          <p>
+            Addresses are where the node says it can be reached; nothing here checks them, and they
+            are not links. The name above is whatever the node's operator announced, another node's
+            included.
+          </p>
+        </More>
       </section>
 
       <Channels node={props.node} network={props.network} />
@@ -300,7 +315,7 @@ function ChannelList(props: { rows: NodeChannel[]; closed: boolean }) {
     {
       header: "Capacity, BTC",
       numeric: true,
-      cell: (c) => <Amount sats={c.capacity} unit={false} />,
+      cell: (c) => <Amount sats={c.capacity} unit={false} short />,
     },
     ...(props.closed
       ? [
@@ -342,6 +357,7 @@ function ChannelList(props: { rows: NodeChannel[]; closed: boolean }) {
           : "Its open channels, largest first"
       }
       columns={columns()}
+      rowHref={(c) => paths.lightningChannel(c.id)}
       rows={props.rows}
       empty={
         <Empty title={props.closed ? "No close seen" : "No open channel"}>

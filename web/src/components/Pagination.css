@@ -9,5 +9,18 @@
   .pagination__status {
     color: var(--color-text-muted);
     font-size: var(--text-sm);
+    white-space: nowrap;
+  }
+  /* A phone: the page and its count on a line of their own, so a long count never breaks or
+     squeezes the buttons, which keep the row under it. */
+  @media (max-width: 420px) {
+    .pagination {
+      flex-wrap: wrap;
+    }
+    .pagination__status {
+      order: -1;
+      flex-basis: 100%;
+      text-align: center;
+    }
   }
 }

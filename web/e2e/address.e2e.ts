@@ -1,11 +1,11 @@
 import type { Page } from "@playwright/test";
 import { chain, expect, test } from "./fixtures";
 
+const box = (page: Page, label: string) =>
+  page.locator(".address-stat", { has: page.getByText(label, { exact: true }) });
+/** The figure a total shows: in magnitude for an amount, the exact one a tap away. */
 const stat = (page: Page, label: string) =>
-  page
-    .locator(".address-stat", { has: page.getByText(label, { exact: true }) })
-    .locator("dd")
-    .first();
+  box(page, label).locator("dd .amount, dd > .num").first();
 
 test("a taproot address shows its totals, history and unspent outputs from the chain", async ({
   page,
@@ -14,9 +14,9 @@ test("a taproot address shows its totals, history and unspent outputs from the c
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Address");
   await expect(page.getByText("P2TR", { exact: true })).toBeVisible();
   // Block 106 paid it 1 BTC and block 107 0.49 BTC; the RBF replacement in the mempool pays it 0.25.
-  await expect(stat(page, "Balance")).toHaveText("1.49000000 BTC");
-  await expect(stat(page, "Received")).toHaveText("1.49000000 BTC");
-  await expect(stat(page, "Sent")).toHaveText("0.00000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("1.49 BTC");
+  await expect(stat(page, "Received")).toHaveText("1.49 BTC");
+  await expect(stat(page, "Sent")).toHaveText("0 BTC");
   await expect(stat(page, "Transactions")).toHaveText("3");
   await expect(stat(page, "Unconfirmed")).toHaveText("+0.25000000 BTC");
 
@@ -62,8 +62,8 @@ test("a taproot address shows its totals, history and unspent outputs from the c
 
 test("a spend and a receive net out per transaction", async ({ page }) => {
   await page.goto(`/regtest/address/${chain.addresses.p2sh}`);
-  await expect(stat(page, "Balance")).toHaveText("0.00000000 BTC");
-  await expect(stat(page, "Sent")).toHaveText("0.50000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("0 BTC");
+  await expect(stat(page, "Sent")).toHaveText("0.500 BTC");
   const rows = page.getByRole("table").locator("tbody tr");
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText("−0.50000000");
@@ -84,7 +84,7 @@ test("unconfirmed payments are marked and agree with the node's own figures", as
     await request.get(`/regtest/api/address/${address}/txs/summary`)
   ).json()) as { txid: string; value: number }[];
   await page.goto(`/regtest/address/${address}`);
-  await expect(stat(page, "Balance")).toHaveText("91.00000000 BTC");
+  await expect(stat(page, "Balance")).toHaveText("91.00 BTC");
   const pending = stats.mempool_stats.funded_txo_sum - stats.mempool_stats.spent_txo_sum;
   await expect(stat(page, "Unconfirmed")).toHaveText(`+${(pending / 1e8).toFixed(8)} BTC`);
 
@@ -123,4 +123,148 @@ test("an address of another network and a malformed one are named as such", asyn
 
   await page.goto("/regtest/address/bcrt1qnotanaddress");
   await expect(page.getByText("This is not a valid address")).toBeVisible();
+});
+
+// The live line (or "Not live" and why) once sat over the address's second line on a phone.
+test("the live line never sits on the address, however many lines the address takes", async ({
+  page,
+}) => {
+  for (const address of [chain.addresses.p2wpkh, chain.addresses.p2tr]) {
+    for (const width of [320, 390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/regtest/address/${address}`);
+      const live = page.locator(".address-live");
+      await expect(live).toBeVisible();
+      const a = await page.locator(".address-head .hash--full").boundingBox();
+      const b = await live.boundingBox();
+      if (!a || !b) throw new Error("missing address or live line");
+      expect(b.y, `${address.slice(0, 6)} at ${width} px`).toBeGreaterThanOrEqual(a.y + a.height);
+    }
+  }
+});
+
+test.describe("an address with more history than the server adds up", () => {
+  test.use({ consoleErrorsAllowed: [/status of 503/] });
+
+  test("says so once, names what is missing, and draws nothing below", async ({ page }) => {
+    const address = chain.addresses.p2wpkh;
+    // The node's refusal of a huge address, as the server passes it on (docs/API.md).
+    await page.route(new RegExp(`/regtest/api/address/${address}$`), (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "address history too large for this server" }),
+      }),
+    );
+    await page.goto(`/regtest/address/${address}`);
+    const main = page.getByRole("main");
+    await expect(
+      main.getByText("This address has more history than this server adds up"),
+    ).toBeVisible();
+    await expect(main).toContainText("balance, totals, balance chart and transactions");
+    await expect(main.getByText(/not available for this address/)).toHaveCount(0);
+    await expect(main.getByText(/Reload/)).toHaveCount(0);
+    await expect(main.getByRole("tab")).toHaveCount(0);
+    await expect(main.getByRole("table")).toHaveCount(0);
+  });
+});
+
+// Summary totals read in magnitude, the exact amount a tap away and what its copy button copies.
+test("a total reads in magnitude, on one line on a phone, and opens to the exact amount", async ({
+  page,
+}) => {
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    for (const label of ["Balance", "Received", "Sent"]) {
+      const figure = stat(page, label);
+      await expect(figure).toHaveText(/^[\d.\s\u202F]+ BTC$/);
+      // Number and unit share one line.
+      const lines = await figure.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+      });
+      expect(lines, `${label} at ${width} px`).toBe(1);
+    }
+  }
+  const balance = box(page, "Balance");
+  const exact = balance.locator(".address-total__exact");
+  await expect(exact).toBeHidden();
+  await expect(balance.locator(".address-total")).toHaveAttribute("title", "1.49000000 BTC");
+  await balance.getByRole("button", { name: /show the exact amount/ }).click();
+  await expect(exact).toBeVisible();
+  await expect(exact).toContainText("1.49000000");
+  await exact.getByRole("button", { name: "Copy the exact balance" }).click();
+  await expect(exact.locator(".copy__note")).toHaveText("Copied");
+});
+
+test.describe("an address page's requests", () => {
+  // The refusals below are the test's own, which the browser logs as failed loads.
+  test.use({ consoleErrorsAllowed: [/status of 429/] });
+
+  test("asks once for each part, and not again when the live status arrives", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path.startsWith("/regtest/api/address/")) asked.push(path);
+    });
+    // The address topic's first message: the status a refetch would follow.
+    const topic = `"address:${chain.addresses.p2tr.toLowerCase()}"`;
+    let heard = false;
+    page.on("websocket", (ws) =>
+      ws.on("framereceived", ({ payload }) => {
+        if (typeof payload === "string" && payload.includes(topic)) heard = true;
+      }),
+    );
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    await expect(page.getByText("Live", { exact: true })).toBeVisible();
+    await expect(page.getByRole("table").locator("tbody tr")).toHaveCount(3);
+    // The first status starts the watch; the page has just asked, so it does not ask again. A
+    // moment after it is heard is long enough for a request it set off to go out.
+    await expect.poll(() => heard).toBe(true);
+    await page.waitForTimeout(300);
+    const totals = asked.filter((p) => p === `/regtest/api/address/${chain.addresses.p2tr}`);
+    expect(totals).toHaveLength(1);
+  });
+
+  test("a refusal reads as busy, retried, and never as an error", async ({ page }) => {
+    let refused = 0;
+    await page.route(/\/regtest\/api\/address\/[^/]+$/, async (route) => {
+      if (refused < 2) {
+        refused++;
+        await route.fulfill({
+          status: 429,
+          headers: { "retry-after": "1" },
+          json: { error: "too many requests" },
+        });
+      } else await route.continue();
+    });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    await expect(
+      page.getByText("The server is busy for a moment, so this page is waiting"),
+    ).toBeVisible();
+    await expect(stat(page, "Balance")).toHaveText("1.49 BTC", { timeout: 15_000 });
+    await expect(page.getByText(/busy for a moment/)).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+});
+
+// An address that wraps once left a last line of two characters; its lines are balanced now.
+test("a wrapped address breaks into lines of even length", async ({ page }) => {
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`/regtest/address/${chain.addresses.p2tr}`);
+    const text = page.locator("h1 + * .hash__text, .address-head .hash__text").first();
+    await expect(text).toBeVisible();
+    const widths = await text.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return [...range.getClientRects()].map((r) => r.width).filter((w) => w > 0);
+    });
+    if (widths.length < 2) continue;
+    const first = widths[0] ?? 0;
+    const last = widths.at(-1) ?? 0;
+    expect(last, `last line at ${width} px`).toBeGreaterThan(first / 3);
+  }
 });

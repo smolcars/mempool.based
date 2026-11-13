@@ -19,6 +19,8 @@ import {
   niceStep,
   scale,
   timeTicks,
+  endLabels,
+  readoutLines,
 } from "./scale";
 
 const DAY = 86_400;
@@ -72,7 +74,22 @@ describe("value ticks", () => {
   });
 });
 
+describe("a narrow readout", () => {
+  it("takes a line for the time, each reading and all the fee bands together", () => {
+    expect(readoutLines({ series: [1], notes: [1, 2], layers: [{ fee: 1 }, { fee: 2 }] })).toBe(5);
+    expect(readoutLines({ series: [1], layers: [{}, {}] })).toBe(4);
+    expect(readoutLines({})).toBe(1);
+  });
+});
+
 describe("time ticks", () => {
+  it("names the ends with their years, or months and years where there is little room", () => {
+    const from = utc(2020, 11, 2, 0);
+    const to = utc(2026, 11, 9, 0);
+    expect(endLabels(from, to)).toStrictEqual(["2 Nov 2020", "9 Nov 2026"]);
+    expect(endLabels(from, to, 136)).toStrictEqual(["Nov 2020", "Nov 2026"]);
+    expect(endLabels(utc(2026, 11, 2, 0), to, 136)).toStrictEqual(["2 Nov", "9 Nov"]);
+  });
   it("steps by hours over a day", () => {
     const from = utc(2026, 11, 11, 13);
     const { ticks, label } = timeTicks(from, from + DAY, 8);
@@ -161,6 +178,38 @@ describe("gaps", () => {
         10,
       ),
     ).toBe("M0 5L1 6L1 0L0 0Z");
+  });
+  it("changes a layer on a vertical edge at a join, never across the minute before it", () => {
+    // The layer arrives at 8 to 2 just before x 1, then is 6 to 2 at x 1: one vertical edge.
+    const joins = new Map([[1, { in: { hi: 8, lo: 2 } }]]);
+    expect(
+      areaPath(
+        [0, 1, 2],
+        [8, 6, 6],
+        [2, 2, 2],
+        (x) => x,
+        (y) => y,
+        10,
+        0,
+        joins,
+      ),
+    ).toBe("M0 8L1 8L1 6L2 6L2 2L1 2L1 2L0 2Z");
+  });
+  it("leaves a point on a vertical edge at a join that changes after it", () => {
+    // The layer is 8 to 2 at x 1, then leaves it at 6 to 2: the edge is at x 1, not across.
+    const joins = new Map([[1, { out: { hi: 6, lo: 2 } }]]);
+    expect(
+      areaPath(
+        [0, 1, 2],
+        [8, 8, 6],
+        [2, 2, 2],
+        (x) => x,
+        (y) => y,
+        10,
+        0,
+        joins,
+      ),
+    ).toBe("M0 8L1 8L1 6L2 6L2 2L1 2L1 2L0 2Z");
   });
   it("shows a lone point in an area as a sliver when asked, and as nothing otherwise", () => {
     const area = (sliver?: number) =>

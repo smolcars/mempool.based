@@ -13,6 +13,7 @@ import {
   RETRY_ATTEMPTS,
   retryDelay,
   withRetry,
+  isBusy,
 } from "./api";
 
 function reply(status: number, body: string, headers: Record<string, string> = {}) {
@@ -168,6 +169,12 @@ describe("retries", () => {
       { status: "rejected", reason: { status: 503, retryAfter: 1 } },
     ]);
     expect(fetch).toHaveBeenCalledTimes(RETRY_ATTEMPTS + 1);
+    // Out of retries, but still busy, not broken: the page says so calmly.
+    const [result] = await settled;
+    const reason: unknown = result?.status === "rejected" ? result.reason : undefined;
+    expect(isBusy(reason)).toBe(true);
+    expect(retryDelay(reason, 0)).toBeUndefined();
+    expect(isBusy(new ApiError(503, "Mempool is switched off.", 1))).toBe(false);
     vi.useRealTimers();
   });
 

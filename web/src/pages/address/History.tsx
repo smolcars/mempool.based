@@ -26,7 +26,7 @@ import {
   sortUtxos,
   txFeeRate,
 } from "./address";
-import { Notice, Skeleton, settled, UnconfirmedMark } from "./parts";
+import { Skeleton, settled, UnconfirmedMark } from "./parts";
 
 /** Confirmed transactions per page of address history; the first page adds the unconfirmed ones. */
 export const PAGE = 25;
@@ -290,10 +290,10 @@ export function History(props: {
         >
           <Switch>
             <Match when={statsFailure() === "too-large"}>
-              <Notice title="Unspent outputs are not available for this address">
+              <Empty title="Unspent outputs are not available for this address">
                 The node refuses to list them for the same reason it refuses the totals: the address
                 has too much history.
-              </Notice>
+              </Empty>
             </Match>
             <Match when={true}>
               <Unspent
@@ -345,7 +345,7 @@ function Transactions(props: {
       cell: (tx) =>
         tx ? (
           <span class="address-txcell">
-            <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" />
+            <Hash value={tx.txid} href={paths.tx(tx.txid)} copyLabel="Copy transaction ID" fit />
             {/* Phones drop the time column, so the time moves under the txid. */}
             <span class="address-txcell__when">
               <When tx={tx} />
@@ -384,10 +384,11 @@ function Transactions(props: {
   return (
     <Switch>
       <Match when={props.tooLarge}>
-        <Notice title="Transactions are not available for this address">
+        {/* A refusal that is no failure: said as the other empty states inside a panel are. */}
+        <Empty title="Transactions are not available for this address">
           The server does not list them for the same reason the node refuses the totals: the address
           has too much history.
-        </Notice>
+        </Empty>
       </Match>
       <Match when={props.first.state === "errored"}>
         <ErrorState
@@ -408,6 +409,7 @@ function Transactions(props: {
             caption="Transactions of this address, newest first"
             columns={columns}
             rows={props.shown ?? placeholders(props.total)}
+            rowHref={(t) => (t ? paths.tx(t.txid) : undefined)}
             rowClass={props.rowClass}
           />
           <Show when={props.shown === undefined}>
@@ -519,6 +521,7 @@ function Unspent(props: {
               sorted()?.slice((current() - 1) * UTXO_STEP, current() * UTXO_STEP) ??
               placeholders(undefined)
             }
+            rowHref={(u) => (u ? paths.tx(u.txid) : undefined)}
           />
         </div>
         <Show when={pageCount() > 1}>

@@ -1,10 +1,12 @@
 import { For } from "solid-js";
-import { FEE_KEY_BOUNDS, formatFeeRate, formatSize } from "../lib/format";
+import { FEE_KEY_BOUNDS, formatFeeRate, formatSize, widenBands } from "../lib/format";
 import "./Strata.css";
 
-/** One layer: its fee band (1–10), and where it sits as fractions of the frame's height. */
+/** One layer: its fee band (1–12), and where it sits as fractions of the frame's height. */
 export interface Layer {
   band: number;
+  /** Band 1 of a block stored before the lowest band was split: everything under 0.2 sat/vB. */
+  unsplit: boolean;
   /** Bottom edge, from the frame's floor. */
   y: number;
   /** Thickness. */
@@ -23,7 +25,8 @@ export interface Layer {
  * size: the fill height stays honest, and bands too small to see are deliberately not drawn
  * thicker. Empty bands get no layer.
  */
-export function strataLayers(bands: readonly number[], fill: number, min: number): Layer[] {
+export function strataLayers(given: readonly number[], fill: number, min: number): Layer[] {
+  const { bands, unsplit } = widenBands(given);
   const held = bands
     .map((vsize, i) => ({ band: i + 1, vsize: Number.isFinite(vsize) && vsize > 0 ? vsize : 0 }))
     .filter((b) => b.vsize > 0);
@@ -45,7 +48,13 @@ export function strataLayers(bands: readonly number[], fill: number, min: number
   let y = 0;
   return held.map((b, i) => {
     const thick = h[i] ?? 0;
-    const layer = { band: b.band, y, h: thick, thin: thick < hairline * 2 };
+    const layer = {
+      band: b.band,
+      unsplit: unsplit && b.band === 1,
+      y,
+      h: thick,
+      thin: thick < hairline * 2,
+    };
     y += layer.h;
     return layer;
   });
@@ -58,7 +67,8 @@ export const strataTop = (layers: readonly Layer[]): number => {
 };
 
 /** A band's range in words: `under 0.20 sat/vB`, `0.50 to 1.00 sat/vB`, `10.0 sat/vB and up`. */
-export function bandRange(band: number): string {
+export function bandRange(band: number, unsplit = false): string {
+  if (unsplit && band === 1) return "under 0.20 sat/vB";
   const from = FEE_KEY_BOUNDS[band - 1];
   const to = FEE_KEY_BOUNDS[band];
   if (from === undefined) return "";
@@ -68,14 +78,15 @@ export function bandRange(band: number): string {
 }
 
 /** The strata as text, one line per band that holds anything: what a screen reader gets. */
-export function describeBands(bands: readonly number[]): string[] {
+export function describeBands(given: readonly number[]): string[] {
+  const { bands, unsplit } = widenBands(given);
   const total = bands.reduce((sum, v) => sum + (Number.isFinite(v) && v > 0 ? v : 0), 0);
   if (total === 0) return [];
   return bands.flatMap((vsize, i) => {
     if (!(vsize > 0)) return [];
     const share = vsize / total;
     const pct = share < 0.01 ? "under 1%" : `${Math.round(share * 100)}%`;
-    return [`${bandRange(i + 1)}: ${formatSize(vsize)}, ${pct}`];
+    return [`${bandRange(i + 1, unsplit)}: ${formatSize(vsize)}, ${pct}`];
   });
 }
 

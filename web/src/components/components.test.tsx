@@ -1,3 +1,4 @@
+import { createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../lib/api";
 import { NNBSP } from "../lib/format";
@@ -36,10 +37,11 @@ describe("Amount", () => {
 });
 
 describe("FeeRate", () => {
-  it("colors the swatch by the printed value", () => {
-    const el = mount(() => <FeeRate rate={0.1996} />);
+  it("shows a swatch only when asked, colored by the printed value", () => {
+    expect(mount(() => <FeeRate rate={0.1996} />).querySelector(".fee__swatch")).toBeNull();
+    const el = mount(() => <FeeRate rate={0.1996} swatch />);
     expect(el.textContent).toBe("0.20 sat/vB");
-    expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-2)");
+    expect(q(el, ".fee__swatch").style.getPropertyValue("--swatch")).toBe("var(--fee-4)");
     expect(mount(() => <FeeRate rate={0.64} approx />).textContent).toBe("~0.64 sat/vB");
   });
 
@@ -60,12 +62,25 @@ describe("FeeRate", () => {
     ).not.toContain("visually-hidden");
   });
 
-  it("has ten bands in the key", () => {
+  it("has twelve bands in the key", () => {
     const el = mount(() => <FeeKey />);
     const labels = [...el.querySelectorAll(".feekey__label")].map((l) => l.textContent);
-    expect(labels).toStrictEqual(["0.1", "0.2", "0.3", "0.5", "1", "1.5", "2", "3", "5", "10+"]);
-    const last = el.querySelectorAll<HTMLElement>(".feekey__swatch")[9];
-    expect(last?.style.getPropertyValue("--swatch")).toBe("var(--fee-10)");
+    expect(labels).toStrictEqual([
+      "0.1",
+      "0.12",
+      "0.15",
+      "0.2",
+      "0.3",
+      "0.5",
+      "1",
+      "1.5",
+      "2",
+      "3",
+      "5",
+      "10+",
+    ]);
+    const last = el.querySelectorAll<HTMLElement>(".feekey__swatch")[11];
+    expect(last?.style.getPropertyValue("--swatch")).toBe("var(--fee-12)");
   });
 });
 
@@ -94,7 +109,9 @@ describe("Hash", () => {
     button.click();
     await vi.waitFor(() => expect(button.dataset["copied"]).toBeDefined());
     expect(writeText).toHaveBeenCalledWith(txid);
-    expect(button.textContent).toBe("Copied");
+    // Once in sight beside the icon, once for a screen reader.
+    expect(q(button, ".copy__note").textContent).toBe("Copied");
+    expect(q(button, "[aria-live]").textContent).toBe("Copied");
   });
 
   it("renders chain data as text, never as markup", () => {
@@ -172,6 +189,14 @@ describe("Pagination", () => {
     expect(q(el, ".pagination__status").textContent).toBe("Page 1 of 3");
     next?.click();
     expect(onPage).toHaveBeenCalledWith(2);
+  });
+
+  it("follows a total that changes", () => {
+    const [count, setCount] = createSignal(3);
+    const el = mount(() => <Pagination page={1} pageCount={count()} onPage={() => {}} label="P" />);
+    setCount(5);
+    flush();
+    expect(q(el, ".pagination__status").textContent).toBe("Page 1 of 5");
   });
 
   it("works without a total", () => {

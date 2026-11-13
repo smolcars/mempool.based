@@ -67,10 +67,10 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 
 | Table | Migration | Holds | Rebuildable |
 |---|---|---|---|
-| [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column) | One row per block on the best chain | Yes, by backfill |
+| [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column), `0012_split_lowest_band.sql` (the [split](#fee-bands)) | One row per block on the best chain | Yes, by backfill |
 | `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
-| [`mempool_history`](#mempool_history) | `0004_mempool_history.sql` | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
+| [`mempool_history`](#mempool_history) | `0004_mempool_history.sql`, `0012_split_lowest_band.sql` (the [split](#fee-bands)) | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
 | [`replacements`](#replacements) | `0005_replacements.sql`, `0008_replacement_blocks.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
 | [`ln_channels`](#ln_channels) | `0006_lightning.sql`, `0007_lightning_lookups.sql` (`open_txid` and the lookup indexes) | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
 | [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
@@ -79,6 +79,12 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | `totals_dirty` | `0010_block_totals.sql` | The buckets a write has touched; always empty once it commits | Yes |
 | `totals_pending` | `0010_block_totals.sql` | One row while rows from before the totals are still being totalled ([Filling](#filling-the-totals)) | Yes |
 | [`fee_samples`, `fee_blocks`](#fee_samples-and-fee_blocks) | `0011_fee_score.sql` | What the fee recommendations served every 30 s, and every block's clearing rate: the score the server keeps of itself | No: observed live, lost with the file |
+
+### Fee bands
+
+`blocks` and `mempool_history` hold virtual size in the design's 12 fee bands ([`DESIGN.md`](DESIGN.md#fee-scale)) as ten columns and a split. `band0` … `band9` are the ten bands the store first had: `band0` is everything under 0.2 sat/vB, then 0.2–0.3 up to 10 and over. `band0_12_15` and `band0_15_20` are the parts of `band0` in [0.12, 0.15) and [0.15, 0.2), so under 0.12 is `band0` minus both. A row stored before `0012_split_lowest_band.sql` has them `NULL`, and so does a sum of rows not all of which knew them; nothing guesses at a split that was not recorded, and `band0` always keeps its meaning.
+
+**Served as 12 or 10.** Every route and topic that sends a stored row's bands (`fee_bands` of the block facts, `bands` of `/app/mempool/history`) sends 12 numbers, cheapest first, when the split is known, and the ten stored bands when it is not. A client reads the length: 10 means the lowest band is not split. `engine::projected::Bands` is that rule in code. Bands from the live projection (the `mempool` and `projected` topics) are always 12.
 
 ### Adding a table
 
@@ -139,7 +145,8 @@ One row per block on the best chain: what the mining dashboard and the history c
 | `payouts` | blob | The coinbase's outputs paying more than zero, at most 8, each at most 128 bytes, as a length byte and the script: pool attribution by payout address. Longer scripts are no address and are left out |
 | `rated` | integer, 0 or 1 | Completeness: 1 once the columns below are known |
 | `fee_min` … `fee_max` | real, nullable | Size-weighted fee-rate percentiles in sat/vB, unrounded (min, p10, p25, median, p75, p90, max). Null until rated, and for a rated block that holds only its coinbase |
-| `band0` … `band9` | integer, nullable | Virtual size paying in each of the design's ten fee bands; they sum to the paying transactions' virtual size |
+| `band0` … `band9` | integer, nullable | Virtual size paying in each of the ten stored [fee bands](#fee-bands), `band0` all under 0.2 sat/vB; they sum to the paying transactions' virtual size |
+| `band0_12_15`, `band0_15_20` | integer, nullable | The parts of `band0` in [0.12, 0.15) and [0.15, 0.2) sat/vB. Written with every rating since `0010`; `NULL` for a block rated before it |
 | `pool` | integer, indexed | Who mined the block, by the rules in [`API.md`](API.md#mining): the pool list's id, 0 for Unknown. Set when the row is written. The index gives a pool's blocks by height |
 
 The coinbase tag and scripts are written by whoever mined the block. They are stored as bytes, bounded as above, and never turned into text here; a page renders them as text ([`SECURITY.md`](SECURITY.md) rule 14). Pool attribution reads them only as bytes to compare with the pool list.
@@ -337,10 +344,11 @@ So a gap in the table is the truth: the engine was off, the node was failing, or
 | `samples` | integer | Minutes sampled in the row: 1 for a minute, at most 60 for an hour and 1,440 for a day. The coverage the routes report |
 | `count`, `vsize`, `fees` | integer | Transactions, sigop-adjusted virtual size and base fees (sats) in the mempool |
 | `min_fee` | integer | `mempoolminfee` in sat per 1,000 vB |
-| `band0` … `band9` | integer | Virtual size in each of the design's ten fee bands, by effective rate as the projected blocks band it; they sum to `vsize` |
+| `band0` … `band9` | integer | Virtual size in each of the ten stored [fee bands](#fee-bands), `band0` all under 0.2 sat/vB, by effective rate as the projected blocks band it; they sum to `vsize` |
 | `in_count`, `in_vsize`, `out_count`, `out_vsize`, `mined_count`, `mined_vsize` | integer | The flow over the minute before the sample: entered, left for any reason, and confirmed |
+| `band0_12_15`, `band0_15_20` | integer, nullable | The parts of `band0` in [0.12, 0.15) and [0.15, 0.2) sat/vB. `NULL` for a minute sampled before `0010`, and for any row or point summed from one |
 
-**Every value is a sum over the row's `samples`.** A minute row holds its values as they are; an hour row the sum of its minutes. So rolling up adds rows together with nothing lost (a mean is the sum over `samples`, and flows are totals), and two roll-ups of the same period merge.
+**Every value is a sum over the row's `samples`.** A minute row holds its values as they are; an hour row the sum of its minutes. So rolling up adds rows together with nothing lost (a mean is the sum over `samples`, and flows are totals), and two roll-ups of the same period merge. The split columns sum only when every row summed has them (`CASE WHEN count(c) = count(*) THEN sum(c) END`), and a merge into a row without them stays without (`NULL + x` is `NULL`): an hour holding one minute from before the split does not know its split.
 
 **Retention.** Minutes for 8 days, hours to 400 days, days after that. The 8 days cover a week of ten-minute points, the 400 a year of eight-hour points: no interval mixes rows coarser than its points ([`API.md`](API.md#mempool-statistics)). Neither is a setting; nothing needs it.
 

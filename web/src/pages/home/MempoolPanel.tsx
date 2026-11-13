@@ -1,14 +1,20 @@
-import { createMemo, createSignal, Show, For } from "solid-js";
+import { createMemo, Show, For } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
-import { FeeKey, FeeRate } from "../../components/FeeRate";
+import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { ErrorState } from "../../components/States";
-import { formatFeeRate, formatSize, groupDigits } from "../../lib/format";
+import { formatSize, groupDigits } from "../../lib/format";
 import { paths } from "../../lib/network";
 import type { Feed } from "./feeds";
-import { type FeeBandShare, type MempoolFigures, sharesOf } from "./mempool";
+import {
+  depthRows,
+  type FeeBandShare,
+  type MempoolFigures,
+  nextBlockReach,
+  sharesOf,
+} from "./mempool";
 
 const BLOCK_VSIZE = 1_000_000;
 
@@ -19,26 +25,29 @@ export function blocksOf(vsize: number): string {
   return `≈ ${groupDigits(n)} ${n === 1 ? "block" : "blocks"}`;
 }
 
-function rangeText(b: FeeBandShare): string {
-  if (b.to === null) return `${formatFeeRate(b.from)} sat/vB and up`;
-  if (b.band === 1) return `under ${formatFeeRate(b.to)} sat/vB`;
-  return `${formatFeeRate(b.from)} to ${formatFeeRate(b.to)} sat/vB`;
+/** A band's range in sat/vB, as short as a row allows: `10+`, `0.5–1`, `< 0.2`. */
+export function rangeLabel(b: FeeBandShare): string {
+  if (b.to === null) return `${b.from}+`;
+  if (b.band === 1) return `< ${b.to}`;
+  return `${b.from}–${b.to}`;
 }
 
-const percent = (share: number) =>
-  share > 0 && share < 0.01 ? "under 1%" : `${Math.round(share * 100)}%`;
+/** How deep the queue is, in blocks: `< 0.1`, `0.4`, `31`. */
+function deepText(deep: number): string {
+  if (deep <= 0) return "–";
+  if (deep < 0.1) return "< 0.1";
+  return deep < 10 ? deep.toFixed(1) : groupDigits(deep);
+}
 
-/** Mempool: four figures and the bar of waiting transactions by fee band. */
+/**
+ * Mempool: four figures, the fee rate the next block's worth reaches down to, then each fee band,
+ * dearest first: its size against one block (a band past a block fills its bar) and how many
+ * blocks deep the queue is by its end.
+ */
 export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
   const m = () => props.feed.data();
-  const bands = createMemo(() => m()?.bands ?? sharesOf([]));
-  // Index, not object: bands are recomputed on every poll, and the open detail follows its band.
-  const [tipAt, setTipAt] = createSignal<number>();
-  const [focused, setFocused] = createSignal(false);
-  const tip = () => {
-    const i = tipAt();
-    return i === undefined ? undefined : bands()[i];
-  };
+  const rows = createMemo(() => depthRows(m()?.bands ?? sharesOf([])));
+  const wide = typeof matchMedia === "function" && matchMedia("(min-width: 641px)").matches;
 
   return (
     <section class="home-mempool" aria-labelledby="mempool-title">
@@ -70,7 +79,7 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
             </Show>
           </Stat>
           <Stat label="Fees waiting">
-            <Show when={m()}>{(s) => <Amount sats={s().fees} />}</Show>
+            <Show when={m()}>{(s) => <Amount sats={s().fees} short />}</Show>
           </Stat>
           <Stat label="Lowest accepted">
             <Show when={m()}>
@@ -87,83 +96,81 @@ export function MempoolPanel(props: { feed: Feed<MempoolFigures> }) {
             </Show>
           </Stat>
         </dl>
-        <figure class="home-feebar">
-          <div class="home-feebar__frame">
-            <ul
-              class="home-feebar__bar"
-              aria-label="Waiting transactions by fee rate, cheapest first"
-            >
-              <For keyed={false} each={bands()}>
-                {(b, i) => (
-                  // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- each bar takes focus and hover to show its tooltip
-                  <li
-                    class="home-feebar__seg"
-                    style={{
-                      "--x": String(b().x),
-                      "--w": String(b().share),
-                      "--c": `var(--fee-${b().band})`,
-                    }}
-                    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focus shows the bar's tooltip
-                    tabindex={b().share > 0 ? 0 : undefined}
-                    aria-hidden={b().share > 0 ? undefined : "true"}
-                    aria-label={`${rangeText(b())}: ${formatSize(b().vsize)}, ${percent(b().share)}`}
-                    onPointerEnter={() => {
-                      setFocused(false);
-                      setTipAt(i);
-                    }}
-                    onPointerLeave={() => setTipAt(undefined)}
-                    onFocus={() => {
-                      setFocused(true);
-                      setTipAt(i);
-                    }}
-                    onBlur={() => setTipAt(undefined)}
-                  />
-                )}
-              </For>
-            </ul>
-            <Show when={m() && m()?.vsize === 0}>
-              <p class="home-feebar__empty">
-                Nothing is waiting. The next block would hold only its coinbase.
-              </p>
-            </Show>
-            <Show when={tip()}>
-              {(b) => (
-                <>
-                  <span
-                    class={["home-feebar__ring", { "home-feebar__ring--focus": focused() }]}
-
-                    style={{ "--x": String(b().x), "--w": String(b().share) }}
-                  />
-                  <p
-                    class="home-feebar__tip"
-                    aria-hidden="true"
-                    ref={(el) => {
-                      // Centered on the band, kept inside the bar so it never widens the page.
-                      queueMicrotask(() => {
-                        const frame = el.parentElement?.clientWidth ?? 0;
-                        const left = (b().x + b().share / 2) * frame - el.offsetWidth / 2;
-                        el.style.setProperty(
-                          "--left",
-                          `${Math.max(0, Math.min(frame - el.offsetWidth, left))}px`,
-                        );
-                      });
-                    }}
-                  >
-                    <strong>{rangeText(b())}</strong>
-                    <span class="num">
-                      {formatSize(b().vsize)}, {percent(b().share)} of the mempool
-                    </span>
-                  </p>
-                </>
+        <div class="home-depth" aria-busy={m() ? "false" : "true"}>
+          <p class="home-depth__answer">
+            <Show when={m()} fallback={<span class="home-bone" />}>
+              {(s) => (
+                <Show
+                  when={nextBlockReach(rows())}
+                  fallback={
+                    s().vsize === 0
+                      ? "Nothing is waiting. The next block would hold only its coinbase."
+                      : "All of it would fit in the next block."
+                  }
+                >
+                  {(reach) => (
+                    <>
+                      The next block's worth reaches down to{" "}
+                      <strong class="num">{rangeLabel(reach())} sat/vB</strong>.
+                    </>
+                  )}
+                </Show>
               )}
             </Show>
-          </div>
-          <figcaption class="home-feebar__caption">
-            Waiting transactions by fee rate, cheapest on the left. Hover or focus a band for
-            detail.
-          </figcaption>
-        </figure>
-        <FeeKey />
+          </p>
+          {/* Open on wide screens; a phone shows the answer and keeps the rows one tap away. */}
+          <details class="home-depth__more" open={wide}>
+            <summary class="home-depth__summary">By fee rate</summary>
+            <table class="home-depth__table">
+              <caption class="visually-hidden">
+                Waiting by fee rate, dearest first, each band's size and how many blocks deep the
+                queue is by its end
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">sat/vB</th>
+                  <th scope="col">
+                    <span class="visually-hidden">Size against one block, log scale</span>
+                  </th>
+                  <th scope="col" class="home-depth__num">
+                    Size
+                  </th>
+                  <th scope="col" class="home-depth__num">
+                    Blocks deep
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={rows()}>
+                  {(r) => (
+                    <tr
+                      class={[
+                        "home-depth__row",
+                        {
+                          "home-depth__row--none": r.vsize === 0,
+                          "home-depth__row--full": r.blocks > 1,
+                        },
+                      ]}
+                      style={{ "--w": String(r.bar), "--c": `var(--fee-${r.band})` }}
+                    >
+                      <td class="home-depth__range num">{rangeLabel(r)}</td>
+                      <td class="home-depth__barcell" aria-hidden="true">
+                        <span class="home-depth__bar" />
+                      </td>
+                      <td class="home-depth__num num">
+                        {m() ? (r.vsize > 0 ? formatSize(r.vsize) : "–") : ""}
+                      </td>
+                      <td class="home-depth__num num">{m() ? deepText(r.deep) : ""}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+            <p class="home-depth__note">
+              Bars on a log scale, from 100 vB to one block's worth, which fills a bar.
+            </p>
+          </details>
+        </div>
       </Show>
     </section>
   );

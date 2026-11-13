@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::history::{self, Interval, MINUTE, Point, Series};
 use engine::mempool::Tracker;
-use engine::projected::{BANDS, Projector};
+use engine::projected::{Projector, STORED_BANDS};
 use engine::store;
 use logging::events::{
     MempoolHistoryFailed, MempoolHistoryResumed, MempoolHistoryRolledUp, MempoolHistorySkipped,
@@ -40,13 +40,15 @@ const CACHE: &str = "public, max-age=1";
 /// sampled and the next, whose sample may still be on its way.
 const FRESH: u64 = 2 * MINUTE;
 
-/// The reference's ranges are whole sat/vB with these lower bounds; ours are the design's ten
-/// bands. Each band goes, whole, to the range holding its lower bound: bands 0 to 3 (under 1)
+/// The reference's ranges are whole sat/vB with these lower bounds; ours are the ten stored bands
+/// (`Bands::stored`), whose first is all under 0.2 whether or not its split is known, so a point
+/// maps the same before and after the split; summing its three parts instead could round a range
+/// differently. Each band goes, whole, to the range holding its lower bound: bands 0 to 3 (under 1)
 /// to `[0, 1)`, 4 and 5 (1 to 2) to `[1, 2)`, 6 to `[2, 3)`, 7 (3 to 5) to `[3, 4)`, 8 (5 to
 /// 10) to `[5, 6)` and 9 (10 and up) to `[10, 12)`. Totals at 1, 2, 3, 5 and 10 sat/vB are
 /// exact; the ranges inside a band read 0 (`docs/API.md`).
 const REFERENCE_RANGES: usize = 39;
-const BAND_RANGE: [usize; BANDS] = [0, 0, 0, 0, 1, 1, 2, 3, 5, 8];
+const BAND_RANGE: [usize; STORED_BANDS] = [0, 0, 0, 0, 1, 1, 2, 3, 5, 8];
 
 /// One network's history answers, held in [`NetworkContext`].
 #[derive(Debug, Default)]
@@ -254,7 +256,7 @@ fn reference(s: &Series, interval: Interval) -> Vec<ReferencePoint> {
 fn reference_point(p: &Point, short: bool) -> ReferencePoint {
     let t = &p.sums;
     let mut vsizes = [0.0; REFERENCE_RANGES];
-    for (band, sum) in t.bands.iter().enumerate() {
+    for (band, sum) in t.bands.stored.iter().enumerate() {
         if let Some(v) = BAND_RANGE.get(band).and_then(|r| vsizes.get_mut(*r)) {
             *v += mean(p, *sum);
         }
@@ -298,7 +300,7 @@ fn app(s: &Series, interval: Interval) -> Value {
         .iter()
         .map(|p| {
             let (t, f) = (&p.sums, &p.sums.flow);
-            let bands: Vec<Value> = t.bands.iter().map(|b| num(mean(p, *b))).collect();
+            let bands: Vec<Value> = t.bands.list().iter().map(|b| num(mean(p, *b))).collect();
             json!({
                 "time": p.time,
                 "samples": p.samples,
@@ -403,19 +405,24 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use engine::history::{Flow, Totals};
+    use engine::projected::{BANDS, Bands};
 
     use super::*;
 
-    fn point(samples: u64, bands: [u64; BANDS]) -> Point {
+    /// A point stored before the lowest band was split: the ten stored bands alone.
+    fn point(samples: u64, stored: [u64; STORED_BANDS]) -> Point {
         Point {
             time: 1_800_000_000,
             samples,
             sums: Totals {
                 count: 3 * samples,
-                vsize: bands.iter().sum(),
+                vsize: stored.iter().sum(),
                 fees: 10 * samples,
                 min_fee: 100 * samples,
-                bands,
+                bands: Bands {
+                    stored,
+                    split: None,
+                },
                 flow: Flow {
                     in_vsize: 120 * samples,
                     ..Flow::default()
@@ -494,5 +501,33 @@ mod tests {
         let a = app(&series(vec![point(3, bands)]), Interval::Week);
         assert_eq!(a["points"][0]["bands"][9], json!(2.333));
         assert_eq!(a["points"][0]["samples"], json!(3));
+    }
+
+    #[test]
+    fn the_reference_answer_is_the_same_whether_the_lowest_band_is_split_or_not() {
+        // The same mempool, sampled with the split and without it, over awkward sample counts
+        // whose means do not divide evenly.
+        for samples in [1, 3, 6, 7, 1_440] {
+            let twelve: [u64; BANDS] = [
+                1_000_001, 333_333, 166_667, 5, 7, 11, 13, 17, 19, 23, 29, 31,
+            ]
+            .map(|b| b * samples);
+            let unsplit = point(samples, Bands::new(twelve).stored);
+            let mut split = unsplit;
+            split.sums.bands = Bands::new(twelve);
+            assert_eq!(
+                split.sums.bands.stored[0],
+                twelve[0] + twelve[1] + twelve[2]
+            );
+            for interval in [Interval::TwoHours, Interval::Week] {
+                let one = |p: Point| serde_json::to_string(&reference(&series(vec![p]), interval));
+                assert_eq!(one(split).unwrap(), one(unsplit).unwrap(), "{samples}");
+            }
+            // Ours sends the 12 bands when the split is known and the ten when it is not.
+            let a = app(&series(vec![split, unsplit]), Interval::TwoHours);
+            assert_eq!(a["points"][0]["bands"].as_array().unwrap().len(), 12);
+            assert_eq!(a["points"][1]["bands"].as_array().unwrap().len(), 10);
+            assert_eq!(a["points"][0]["bands"][1], json!(333_333));
+        }
     }
 }

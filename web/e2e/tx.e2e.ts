@@ -12,8 +12,11 @@ test("a confirmed transaction names every output type and links where the money 
   );
 
   const outputs = page.getByRole("list", { name: "Outputs" });
+  // A phone's card leads with the amount and where it went; its type waits in the inspector.
+  const wide = (page.viewportSize()?.width ?? 0) > 640;
   for (const type of ["P2PKH", "P2SH", "P2WPKH", "P2WSH", "P2TR", "Pay to anchor"]) {
-    await expect(outputs.getByText(type, { exact: true }).first()).toBeVisible();
+    const named = outputs.getByText(type, { exact: true }).first();
+    await (wide ? expect(named).toBeVisible() : expect(named).toBeAttached());
   }
   await expect(outputs).toContainText("OP_RETURN “mempool.based regtest”Unspendable");
   // Amounts keep their unit for screen readers, though the cards show bare numbers.
@@ -84,7 +87,7 @@ test.describe("transactions the node no longer has", () => {
       originalTxid,
     );
     await page.goto(`/regtest/tx/${originalTxid}`);
-    await expect(page.getByText("Unconfirmed", { exact: true })).toBeVisible();
+    await expect(page.getByText("Unconfirmed", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Yes, until it confirms")).toBeVisible();
     // The server takes it in at its next cycle; the page then says where it waits.
     await expect(page.getByRole("link", { name: "In the next block" }).first()).toBeVisible({
@@ -156,4 +159,69 @@ test("a parent shows the rate its child lifts it to, and links the child", async
     "href",
     `/regtest/tx/${chain.txs.cpfp_child}`,
   );
+});
+
+// Widening a page from a phone's width once left the flow with the tall box it was drawn at,
+// a screen of empty space, until a reload. However the width was reached, the flow is the same.
+test("the flow is as tall after a widening as after a reload", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/regtest/tx/${chain.txs.script_types}`);
+  const flow = page.locator(".tx-flow");
+  await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Let the resize observer redraw, then settle.
+  await expect.poll(async () => (await flow.boundingBox())?.width ?? 0).toBeGreaterThan(600);
+  await page.waitForTimeout(300);
+  const widened = (await flow.boundingBox())?.height ?? 0;
+  await page.reload();
+  await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
+  await page.waitForTimeout(300);
+  const reloaded = (await flow.boundingBox())?.height ?? 0;
+  expect(
+    Math.abs(widened - reloaded),
+    `${widened} after widening, ${reloaded} after reload`,
+  ).toBeLessThan(2);
+});
+
+test("a confirmed transaction opens with its status, amount, fee and block", async ({ page }) => {
+  await page.goto(`/regtest/tx/${chain.txs.script_types}`);
+  const summary = page.getByRole("definition").first().locator("xpath=ancestor::dl[1]");
+  await expect(summary).toContainText("Confirmed");
+  await expect(summary).toContainText("Amount");
+  await expect(summary).toContainText("sat/vB");
+  await expect(summary.getByRole("link")).toHaveAttribute("href", /\/regtest\/block\//);
+  // The steps shrink to one line once it has confirmed.
+  await expect(page.getByRole("list", { name: "Status" })).toHaveClass(/tx-timeline--line/);
+});
+
+test("copy and expand are a thumb's target each, apart from the address they sit beside", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/regtest/tx/${chain.txs.script_types}`);
+  const outputs = page.getByRole("list", { name: "Outputs" });
+  await expect(outputs).toBeVisible();
+  const targets = [
+    page.getByRole("button", { name: "Copy transaction ID" }),
+    outputs.getByRole("button").first(),
+  ];
+  for (const target of targets) {
+    const box = await target.boundingBox();
+    expect(box && Math.min(box.width, box.height)).toBeGreaterThanOrEqual(43.5);
+  }
+  // The expand button and the address link under it never overlap.
+  const expand = await outputs.getByRole("button").first().boundingBox();
+  const address = await outputs
+    .getByRole("listitem")
+    .first()
+    .getByRole("link")
+    .first()
+    .boundingBox();
+  if (!expand || !address) throw new Error("missing expand button or address");
+  const apart =
+    expand.y + expand.height <= address.y + 1 ||
+    address.y + address.height <= expand.y + 1 ||
+    expand.x + expand.width <= address.x + 1 ||
+    address.x + address.width <= expand.x + 1;
+  expect(apart).toBe(true);
 });

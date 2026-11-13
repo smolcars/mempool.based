@@ -895,7 +895,7 @@ mod tests {
                 vsize: 0,
                 weight: 0,
                 fee_rate: None,
-                fee_bands: [0; 10],
+                fee_bands: engine::projected::Bands::default(),
                 miner: engine::blocks::Miner::UNKNOWN,
             },
             txs: vec![0; records].into(),

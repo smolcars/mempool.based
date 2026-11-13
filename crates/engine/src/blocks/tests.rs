@@ -101,7 +101,7 @@ fn mock_facts(height: u32, hash: BlockHash) -> Facts {
             p90: r,
             max: r,
         }),
-        fee_bands: [u64::from(height); 10],
+        fee_bands: crate::projected::Bands::new([u64::from(height); 12]),
         miner: Miner::UNKNOWN,
     }
 }
@@ -328,7 +328,7 @@ fn a_rated_row_gives_the_facts_the_route_serves() {
     row.rates = Some(Rated::from(&f));
     row.paying_weight = f.weight;
     let mut want = f;
-    want.vsize = want.fee_bands.iter().sum();
+    want.vsize = want.fee_bands.stored.iter().sum();
     want.tx_count = row.tx_count as usize;
     assert_eq!(row.facts(), Some(want));
     // The miner comes from the stored coinbase: a listed tag names its pool.
@@ -344,10 +344,25 @@ async fn rows_round_trip_and_read_by_height_hash_and_page() {
     let mut rows: Vec<Row> = (0..30).map(|h| mock_row(&header(0, h, 0))).collect();
     rows[3].rates = Some(Rated {
         fee_rate: None,
-        fee_bands: [0; 10],
+        fee_bands: crate::projected::Bands::default(),
     });
     rows[4].rates = Some(Rated::from(&mock_facts(4, rows[4].hash)));
+    // As a block rated before the lowest band was split: its split reads back unknown.
+    rows[5].rates = Some(Rated {
+        fee_rate: None,
+        fee_bands: crate::projected::Bands {
+            stored: [5; 10],
+            split: None,
+        },
+    });
     insert(&t.store, rows.clone()).await;
+    let old = by_height(&t.store, 5).await.unwrap().unwrap();
+    assert_eq!(old, rows[5]);
+    let json = serde_json::to_value(old.facts().unwrap()).unwrap();
+    assert_eq!(json["fee_bands"], serde_json::json!(vec![5; 10]));
+    let json =
+        serde_json::to_value(by_height(&t.store, 4).await.unwrap().unwrap().facts()).unwrap();
+    assert_eq!(json["fee_bands"], serde_json::json!(vec![4; 12]));
 
     assert_eq!(
         by_height(&t.store, 4).await.unwrap().as_ref(),
@@ -1554,7 +1569,10 @@ async fn table_reads_benchmark() {
     });
     let rated = next.rates.unwrap_or(Rated {
         fee_rate: None,
-        fee_bands: [0; 10],
+        fee_bands: crate::projected::Bands {
+            stored: [0; 10],
+            split: None,
+        },
     });
     time!("rating it", {
         store
@@ -1648,7 +1666,10 @@ fn random_rates(rng: &mut Rng, tx_count: u32) -> Rated {
             p90: r[5],
             max: r[6],
         }),
-        fee_bands: std::array::from_fn(|_| rng.below(100_000)),
+        fee_bands: crate::projected::Bands {
+            stored: std::array::from_fn(|_| rng.below(100_000)),
+            split: None,
+        },
     }
 }
 
@@ -1948,7 +1969,15 @@ async fn totals_are_filled_for_rows_stored_before_them() {
         .filter(|h| h % 501 != 7)
         .map(|h| random_row(&mut rng, 0, h))
         .collect();
-    write_rows(&store, db::INSERT_NEW, rows).await;
+    // The insert as a store at 0009 ran it, before the lowest band's split columns (0012): the
+    // split's two parameters stay numbered, unused.
+    let insert_0009: &'static str = Box::leak(
+        db::INSERT_NEW
+            .replace(", band0_12_15, band0_15_20", "")
+            .replace("?32, ?33, ?34)", "?34)")
+            .into_boxed_str(),
+    );
+    write_rows(&store, insert_0009, rows).await;
     store.close().await;
 
     let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();

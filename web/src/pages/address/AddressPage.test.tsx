@@ -18,9 +18,33 @@ type Reply = Handler | object | string | number;
 let calls: string[] = [];
 
 const disposers: (() => void)[] = [];
+/** Whether the balance chart is in view: a stand-in observer reports it, or holds it back. */
+let inView = true;
+const observers: { report: () => void }[] = [];
+class FakeObserver {
+  readonly #notify: (entries: { isIntersecting: boolean }[]) => void;
+  constructor(notify: (entries: { isIntersecting: boolean }[]) => void) {
+    this.#notify = notify;
+  }
+  observe() {
+    const report = () => {
+      if (!this.#stopped) this.#notify([{ isIntersecting: true }]);
+    };
+    if (inView) report();
+    else observers.push({ report });
+  }
+  disconnect() {
+    this.#stopped = true;
+  }
+  #stopped = false;
+}
+
 beforeEach(() => {
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("IntersectionObserver", FakeObserver);
+  inView = true;
+  observers.length = 0;
 });
 afterEach(() => {
   for (const d of disposers.splice(0)) d();
@@ -170,14 +194,26 @@ describe("address page", () => {
     });
     const el = open(`/address/${ME}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(3));
-    const values = [...el.querySelectorAll(".address-stat__value")].map((e) => text(e));
-    expect(values).toStrictEqual([
-      "1.00000000 BTC",
-      "1.50000000 BTC",
-      "0.50000000 BTC",
+    // Totals in magnitude; the exact amount behind each, a tap away, with its own copy button.
+    const shown = [
+      ...el.querySelectorAll(".address-stat__value .amount, .address-stat__value > .num"),
+    ];
+    expect(shown.map((e) => text(e))).toStrictEqual([
+      "1.00 BTC",
+      "1.50 BTC",
+      "0.500 BTC",
       "4",
       "+0.00050000 BTC",
     ]);
+    const exact = [...el.querySelectorAll<HTMLElement>(".address-total__exact")];
+    expect(exact.map((e) => [e.hidden, text(e.querySelector(".num") as Element)])).toStrictEqual([
+      [true, "1.00000000"],
+      [true, "1.50000000"],
+      [true, "0.50000000"],
+    ]);
+    el.querySelector<HTMLButtonElement>(".address-total")?.click();
+    await until(() => expect(exact[0]?.hidden).toBe(false));
+    expect(el.querySelector(".address-total")?.getAttribute("aria-expanded")).toBe("true");
     const rows = [...el.querySelectorAll("tbody tr")];
     const change = rows.map((r) => text(r.querySelectorAll("td")[2] as Element));
     expect(change).toStrictEqual(["+0.00050000 BTC", "−0.00040210 BTC", "−0.00000210 BTC"]);
@@ -212,16 +248,15 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(1));
     expect(FakeSocket.last().url).toContain("/app/ws");
     const asked = () => calls.filter((c) => c.endsWith("/txs")).length;
-    // The history loaded before the node watched the address: one more look after the first status.
+    // The first status starts the watch and asks nothing: the page has just loaded.
     status("s1");
-    await until(() => expect(asked()).toBe(2));
-    expect(text(el.querySelector(".address-live") as Element)).toBe("Live");
+    await until(() => expect(text(el.querySelector(".address-live") as Element)).toBe("Live"));
     // The same status again is no change.
     status("s1");
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(asked()).toBe(2);
+    expect(asked()).toBe(1);
     page = [tx(2, [[OTHER, 9000]], [[ME, 8000]], false), ...page];
     status("s2");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(2));
@@ -290,6 +325,10 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
     heard({ type: "refused", reason: "server_full" });
     await until(() => expect(text(el)).toContain("watching as many addresses as it can"));
+    // Opening addresses too fast is this visitor's own limit, not the server being full.
+    heard({ type: "refused", reason: "follow_rate" });
+    await until(() => expect(text(el)).toContain("Too many addresses were opened at once"));
+    expect(text(el)).not.toContain("watching as many addresses as it can");
     heard({ state: "unavailable" });
     await until(() => expect(text(el)).toContain("lost touch with its node"));
     heard({ state: "refused", reason: "no_index" });
@@ -320,7 +359,9 @@ describe("address page", () => {
     status("before");
     status(`after ${String(firstPage.length)}`);
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(51));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual(range(0, 50).map((t) => `/tx/${t.txid}`));
   });
 
@@ -353,7 +394,9 @@ describe("address page", () => {
     release(Response.json(range(56, 80)));
     // The stale page is dropped; the page the reader asked for comes after the new rows.
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual(range(1, 50).map((t) => `/tx/${t.txid}`));
   });
 
@@ -382,6 +425,7 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     const more = () => [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more");
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
+    status("s0");
     more()?.click();
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(50));
     more()?.click();
@@ -394,7 +438,9 @@ describe("address page", () => {
     );
     release(Response.json(range(51, 75)));
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(76));
-    const ids = [...el.querySelectorAll("tbody tr a")].map((a) => a.getAttribute("href"));
+    const ids = [...el.querySelectorAll("tbody tr a:not(.table__rowlink)")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(ids).toStrictEqual([payment, ...range(1, 75)].map((t) => `/tx/${t.txid}`));
   });
 
@@ -417,8 +463,9 @@ describe("address page", () => {
     await until(() => expect(el.querySelectorAll("tbody tr .hash")).toHaveLength(25));
     [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
     await until(() => expect(calls.some((c) => c.includes("after_txid"))).toBe(true));
-    // The first status, which the page answers with one more look: the same history, though the
+    // A change heard, which the page answers with one more look: the same history, though the
     // node lists it in another order.
+    status("s0");
     reorder = true;
     status("s1");
     await until(() => expect(calls.filter((c) => c.endsWith("/txs"))).toHaveLength(2));
@@ -464,7 +511,7 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     await until(() => expect(text(el)).toContain("This address has never been used"));
     expect(el.querySelector('[role="alert"]')).toBeNull();
-    expect(text(el.querySelector(".address-stat__value") as Element)).toBe("0.00000000 BTC");
+    expect(text(el.querySelector(".address-stat__value .amount") as Element)).toBe("0 BTC");
   });
 
   it("answers a malformed address without asking the server, as text", async () => {
@@ -507,22 +554,27 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("This server does not serve Mainnet."));
   });
 
-  it("asks nothing more of an address too large to total, and says why", async () => {
+  it("asks nothing more of an address too large to total, and says why once", async () => {
     serve({
       [`/address/${ME}`]: refused(503, "address history too large for this server"),
       [`/address/${ME}/txs`]: [tx(1, [[OTHER, 2000]], [[ME, 1000]])],
     });
     const el = open(`/address/${ME}?view=unspent`);
-    await until(() => expect(text(el)).toContain("Totals are not available for this address"));
-    expect(text(el)).toContain("exchange and mining pool addresses");
-    expect(text(el)).toContain("Unspent outputs are not available for this address");
-    expect(text(el)).toContain("There is no balance chart for this address");
-    expect(el.querySelector('[role="alert"]')).toBeNull();
-    const tab = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')][0];
-    tab?.click();
+    // Said once, at the top, naming what is missing; nothing below repeats it or promises a reload.
     await until(() =>
-      expect(text(el)).toContain("Transactions are not available for this address"),
+      expect(text(el)).toContain("This address has more history than this server adds up"),
     );
+    expect(text(el)).toContain("says nothing about how much it holds");
+    for (const repeat of [
+      "Totals are not available",
+      "no balance chart",
+      "not available for this address",
+      "Reload",
+    ]) {
+      expect(text(el)).not.toContain(repeat);
+    }
+    expect(el.querySelector('[role="tab"]')).toBeNull();
+    expect(el.querySelector('[role="alert"]')).toBeNull();
     // Past the wait for the totals too: a page of its history can keep the node busy for a minute.
     await sleep(1200);
     // Not its history, its balance history or its unspent outputs: only the totals were asked.
@@ -590,7 +642,7 @@ describe("address page", () => {
     up = true;
     const retry = [...el.querySelectorAll("button")].find((b) => text(b) === "Try again");
     retry?.click();
-    await until(() => expect(text(el)).toContain("1.00000000 BTC"));
+    await until(() => expect(text(el)).toContain("1.00 BTC"));
     expect(text(el)).not.toContain("Could not load");
   });
 
@@ -750,14 +802,14 @@ describe("balance chart", () => {
     expect(chart.getAttribute("aria-valuemax")).toBe("2");
     // The latest step first: the time, the balance, the block and what it changed.
     expect(chart.getAttribute("aria-valuetext")).toBe(
-      "2026-11-06 21:40:00 UTC: Balance 0.00030000 BTC, Block 102, Change +0.00030000 BTC",
+      "6 Nov 2026, 21:40 UTC: Balance 0.00030000 BTC, Block 102, Change +0.00030000 BTC",
     );
     key(chart, "ArrowLeft");
     expect(chart.getAttribute("aria-valuetext")).toContain(
       "Balance 0.00000000 BTC, Block 101, Change −0.00050000 BTC",
     );
     key(chart, "Home");
-    expect(chart.getAttribute("aria-valuetext")).toContain("21:20:00 UTC: Balance 0.00050000 BTC");
+    expect(chart.getAttribute("aria-valuetext")).toContain("21:20 UTC: Balance 0.00050000 BTC");
     key(chart, "Escape");
     expect(chart.getAttribute("aria-valuetext")).toContain("Block 102");
     // The plot starts 66 px in, with the first step at its left edge: left of that is the first.
@@ -794,6 +846,19 @@ describe("balance chart", () => {
     });
     expect(summaries()).toStrictEqual([]);
     release(Response.json([]));
+    await until(() => expect(summaries()).toHaveLength(1));
+  });
+
+  it("asks for its history only when it is about to be seen", async () => {
+    inView = false;
+    serve({ [`/address/${ME}`]: stats(), [`/address/${ME}/txs`]: [] });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("Balance over time"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(summaries()).toStrictEqual([]);
+    for (const o of observers) o.report();
     await until(() => expect(summaries()).toHaveLength(1));
   });
 
@@ -848,8 +913,12 @@ describe("balance chart", () => {
       timeout: 2000,
     });
     expect(chart.getAttribute("aria-valuemax")).toBe("1");
+    // The first status asks nothing; a change asks for one summary page.
     status("s1");
-    await until(() => expect(summaries()).toHaveLength(2));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(summaries()).toHaveLength(1);
     rows = [sum(3, 25_000, 102), ...rows];
     status("s2");
     await until(() => expect(chart.getAttribute("aria-valuemax")).toBe("2"));

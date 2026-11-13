@@ -88,3 +88,188 @@ test("the Unknown pool's page lists the chain's blocks, linked", async ({ page }
     `/regtest/block/${chain.tip.hash}`,
   );
 });
+
+// The Pools caption once kept the first period's count while the table moved on.
+test("the pools caption follows the period through every switch", async ({ page }) => {
+  const periods = [
+    ["24 h", "the last 24 hours"],
+    ["1 w", "the last week"],
+    ["1 m", "the last 30 days"],
+    ["1 y", "the last year"],
+    ["All", "all time"],
+  ] as const;
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/regtest/mining?period=all");
+    const pools = page.getByRole("region", { name: "Pools" });
+    const caption = pools.locator(".section__head");
+    await expect(caption).toContainText(/blocks? in all time/, { timeout: 30_000 });
+    for (const [label, words] of periods) {
+      await page
+        .getByRole("navigation", { name: "Period" })
+        .getByRole("link", { name: new RegExp(`: ${words}$`) })
+        .click();
+      await expect(caption).toContainText(new RegExp(`^Pools[\\d\\s\\u202f]+blocks? in ${words}$`));
+      const count = Number(
+        /^Pools([\d\s\u202F]+) block/
+          .exec((await caption.textContent()) ?? "")?.[1]
+          ?.replaceAll(/\D/g, ""),
+      );
+      if (count === 0) {
+        await expect(pools.getByText(`No blocks stored for ${words}`)).toBeVisible();
+        continue;
+      }
+      const table = pools.getByRole("table", { name: `Pools ranked by blocks found in ${words}` });
+      const all = pools.getByRole("button", { name: /^Show all \d+ pools$/ });
+      if (await all.isVisible()) await all.click();
+      const column = (await table.locator("thead th").allInnerTexts()).indexOf("Blocks");
+      const cells = await table.locator(`tbody td:nth-child(${column + 1})`).allInnerTexts();
+      const sum = cells.reduce((total, c) => total + Number(c.replaceAll(/\D/g, "")), 0);
+      expect(sum, `${label} at ${width} px`).toBe(count);
+    }
+  }
+});
+
+// Colours once followed rank, so F2Pool was gold one day and lavender the next week; then a fixed
+// six left a bigger pool in the grey. Now each period draws its own six largest, each in its own.
+test("the share graphics draw each period's six largest pools, each in its own colour throughout", async ({
+  page,
+}) => {
+  // Regtest has no pools: each period answers with eight in its own order.
+  const orders: Record<string, string[]> = {
+    "24h": [
+      "F2Pool",
+      "AntPool",
+      "Luxor",
+      "Foundry USA",
+      "SpiderPool",
+      "ViaBTC",
+      "MARA Pool",
+      "Ocean.xyz",
+    ],
+    "1w": [
+      "AntPool",
+      "Foundry USA",
+      "F2Pool",
+      "SpiderPool",
+      "MARA Pool",
+      "ViaBTC",
+      "Luxor",
+      "SecPool",
+    ],
+    "1m": [
+      "Foundry USA",
+      "SpiderPool",
+      "AntPool",
+      "Luxor",
+      "F2Pool",
+      "Ocean.xyz",
+      "ViaBTC",
+      "MARA Pool",
+    ],
+    "1y": [
+      "Luxor",
+      "F2Pool",
+      "Foundry USA",
+      "AntPool",
+      "SpiderPool",
+      "SecPool",
+      "MARA Pool",
+      "ViaBTC",
+    ],
+    all: [
+      "Foundry USA",
+      "AntPool",
+      "F2Pool",
+      "ViaBTC",
+      "Poolin",
+      "BTC.com",
+      "Binance Pool",
+      "Luxor",
+    ],
+  };
+  const period = (url: string) => /\/(24h|1w|1m|1y|all)$/.exec(url)?.[1] ?? "1w";
+  const count = (i: number) => 80 - i * 9;
+  await page.route(/\/api\/v1\/mining\/pools\/\w+$/, (route) => {
+    const names = orders[period(route.request().url())] ?? [];
+    const pools = names.map((name, i) => ({
+      poolId: i + 1,
+      name,
+      link: "",
+      blockCount: count(i),
+      rank: i + 1,
+      emptyBlocks: 0,
+      slug: name.toLowerCase().replaceAll(/[ .]/g, ""),
+      avgMatchRate: null,
+      avgFeeDelta: null,
+      poolUniqueId: i + 1,
+    }));
+    const blockCount = names.reduce((sum, _, i) => sum + count(i), 0);
+    return route.fulfill({
+      json: { pools, blockCount, lastEstimatedHashrate: 1e18, lastEstimatedHashrate1w: 1e18 },
+    });
+  });
+  await page.route(/\/api\/v1\/mining\/hashrate\/pools\/\w+$/, (route) => {
+    const names = orders[period(route.request().url())] ?? [];
+    const which = period(route.request().url());
+    // A year's second week is small, with the seventh pool in most of it: summed weekly shares
+    // would rank it above the sixth, which has more blocks. The chart follows the table's blocks.
+    const share = (i: number, second: boolean) =>
+      which === "1y" && second && i >= 5 ? (i === 6 ? 0.3 : 0.001) : count(i) / 500;
+    const weeks = [1_790_000_000, 1_790_604_800].flatMap((timestamp, w) =>
+      names.map((poolName, i) => ({
+        timestamp,
+        avgHashrate: 1e18,
+        share: share(i, w === 1),
+        poolName,
+      })),
+    );
+    return route.fulfill({ json: weeks });
+  });
+  const seen = new Map<string, string>();
+  for (const id of ["24h", "1w", "1m", "1y", "all"]) {
+    await page.goto(`/regtest/mining?period=${id}`);
+    const pools = page.getByRole("region", { name: "Pools" });
+    // A day and a week show one bar; longer periods the weekly chart, read out above it.
+    const keys =
+      id === "24h" || id === "1w"
+        ? pools.locator(".mining-period-shares__key li")
+        : pools.locator(".chart__value");
+    await expect(keys.first()).toBeVisible({ timeout: 30_000 });
+    const swatches = await keys.evaluateAll((items) =>
+      items.map((li) => {
+        const swatch = li.querySelector(".mining-period-shares__swatch, .chart__key");
+        const name = li.querySelector(".mining-period-shares__name, .chart__name")?.textContent;
+        return [name ?? "", swatch ? getComputedStyle(swatch).backgroundColor : ""] as const;
+      }),
+    );
+    // The pools drawn on their own are the table's first six, in its order.
+    const table = pools.getByRole("table", { name: /^Pools ranked by blocks found/ });
+    const top = (await table.locator("tbody tr").allInnerTexts())
+      .slice(0, 6)
+      .map((row) => (orders[id] ?? []).find((n) => row.includes(n)) ?? "");
+    const drawn = swatches.map(([name]) => name).filter((name) => name !== "Other pools");
+    expect(drawn, `pools drawn at ${id}`).toStrictEqual(top);
+    expect(swatches.at(-1)?.[0], `the rest at ${id}`).toBe("Other pools");
+    // A pool under the pointer keeps its own colour, the one its key shows.
+    if (id === "1m") {
+      const plot = pools.getByRole("slider");
+      await expect(plot.locator("path.chart__layer").first()).toBeAttached();
+      const box = await plot.boundingBox();
+      if (box) await plot.hover({ position: { x: box.width * 0.75, y: box.height * 0.7 } });
+      const on = pools.locator(".chart__layer--on");
+      await expect(on).toHaveCount(1);
+      const fill = await on.evaluate((l) => getComputedStyle(l).fill);
+      expect(swatches.map(([, c]) => c)).toContain(fill);
+      await page.mouse.move(0, 0);
+    }
+    for (const [name, colour] of swatches) {
+      expect(colour, `${name} at ${id}`).not.toBe("");
+      expect(colour, `${name} at ${id}`).toBe(seen.get(name) ?? colour);
+      seen.set(name, colour);
+    }
+  }
+  // Every pool drawn has a colour no other pool has, and "Other pools" its own grey.
+  expect(new Set(seen.values()).size).toBe(seen.size);
+  expect([...seen.keys()]).toContain("Poolin");
+});

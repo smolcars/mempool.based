@@ -8,6 +8,7 @@ import ChannelPage from "./ChannelPage";
 import LightningPage from "./LightningPage";
 import NodePage from "./NodePage";
 import RankingsPage from "./RankingsPage";
+import { LightningNav } from "./parts";
 import SearchPage from "./SearchPage";
 import { TxLightning } from "./TxLightning";
 import {
@@ -161,9 +162,12 @@ describe("the overview", () => {
 
   it("draws ten minutes of history from where it starts, hatching before", async () => {
     const el = mount(() => <LightningPage />, "/lightning");
-    await shows(el, "This server has recorded the network since 12 Nov 2026, 18:30 UTC");
+    await shows(el, "Everything recorded, since 12 Nov 2026, 18:30 UTC");
     await vi.waitFor(() => expect(el.querySelector("[role=slider] svg")).not.toBeNull());
-    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("1 w: the last week");
+    // Fitted to what is recorded: "Recorded" is the choice marked, never "1 w" for a narrower view.
+    expect(el.querySelector(".ln-picker [aria-current=page]")?.textContent).toBe(
+      "Recorded: since this server began recording",
+    );
   });
 
   it("draws a missing ten minutes as a gap, never a line across it", async () => {
@@ -190,7 +194,7 @@ describe("a node", () => {
     await shows(el, "Open channels1 807");
     expect(el.querySelector("h1")?.textContent).toBe("ACINQ");
     expect(text(el)).toContain("03864ef0");
-    expect(text(el)).toContain("The public key above is the node's identity");
+    expect(text(el)).toContain("The public key is the node's identity");
     expect(text(el)).toContain("First seen26 Feb 2019");
     expect(text(el)).toContain(
       "of7husrflx7sforh3fw6yqlpwstee3wg5imvvmkp4bz6rbjxtg5nljad.onion:9735",
@@ -337,6 +341,10 @@ describe("search and rankings", () => {
     const el = mount(() => <SearchPage />, "/lightning/search?q=811984x2037x0");
     await shows(el, "Closed");
     expect(links(el)).toContain("/lightning/channel/811984x2037x0");
+    // A result opened from here leads back to the search, query and all.
+    const nav = mount(() => <LightningNav here="detail" />);
+    expect(nav.querySelector(".ln-nav__back")?.textContent).toBe("← Search results");
+    expect(links(nav)).toContain("/lightning/search?q=811984x2037x0");
   });
 
   it("says when nothing matches, and refuses a search too short to ask", async () => {
@@ -371,7 +379,7 @@ describe("search and rankings", () => {
     replies["/app/lightning/rankings/age?limit=100"] = json({ by: "age", nodes: top });
     const el = mount(() => <RankingsPage />, "/lightning/rankings?by=age");
     await shows(el, "Binance");
-    expect(el.querySelector("[aria-current=page]")?.textContent).toBe("Age");
+    expect(el.querySelector(".ln-picker [aria-current=page]")?.textContent).toBe("Age");
     expect(text(el)).toContain("27 Nov 2019");
   });
 });

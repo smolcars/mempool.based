@@ -1,0 +1,46 @@
+@layer components {
+  .more {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .more__summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--touch);
+    cursor: pointer;
+    list-style: none;
+    color: var(--color-text-muted);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 0.2em;
+  }
+  .more__summary::-webkit-details-marker {
+    display: none;
+  }
+  /* A chevron that turns when the notes are open. */
+  .more__summary::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform var(--dur-quick) var(--ease-out);
+  }
+  .more[open] > .more__summary::before {
+    transform: rotate(45deg);
+  }
+  @media (hover: hover) {
+    .more__summary:hover {
+      color: var(--color-text);
+    }
+  }
+  .more__body {
+    display: grid;
+    gap: var(--space-2);
+    max-width: 72ch;
+    padding-bottom: var(--space-2);
+  }
+}

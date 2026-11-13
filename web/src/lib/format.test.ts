@@ -7,7 +7,7 @@ import {
   feeRate,
   formatBtc,
   formatFeeRate,
-  formatFeeRatePrecise,
+  formatFeeRateUp,
   formatPowerOfTen,
   formatRelative,
   formatSats,
@@ -113,19 +113,24 @@ describe("BTC and sats", () => {
   });
 });
 
-describe("formatFeeRatePrecise", () => {
-  it("prints the node's resolution, rounding up, never down", () => {
-    expect(formatFeeRatePrecise(0.1)).toBe("0.100");
-    expect(formatFeeRatePrecise(0.101)).toBe("0.101");
-    expect(formatFeeRatePrecise(12.501)).toBe("12.501");
-    expect(formatFeeRatePrecise(0.1004)).toBe("0.101");
-    expect(formatFeeRatePrecise(Number.NaN)).toBe(MISSING);
+describe("formatFeeRateUp", () => {
+  it("prints as a fee rate prints, rounding up, never down", () => {
+    expect(formatFeeRateUp(0.1)).toBe("0.10");
+    expect(formatFeeRateUp(0.101)).toBe("0.11");
+    expect(formatFeeRateUp(0.133)).toBe("0.14");
+    expect(formatFeeRateUp(1.001)).toBe("1.01");
+    expect(formatFeeRateUp(9.991)).toBe("10.0");
+    expect(formatFeeRateUp(12.501)).toBe("12.6");
+    expect(formatFeeRateUp(99.95)).toBe("100");
+    expect(formatFeeRateUp(150.2)).toBe("151");
+    expect(formatFeeRateUp(Number.NaN)).toBe(MISSING);
   });
 
   it("bands a rate as it prints, when asked to", () => {
-    expect(feeBand(0.199)).toBe(2);
-    expect(feeBand(0.199, formatFeeRatePrecise)).toBe(1);
-    expect(feeColor(0.2, formatFeeRatePrecise)).toBe("var(--fee-2)");
+    expect(feeBand(0.199)).toBe(4);
+    expect(feeBand(0.191, formatFeeRateUp)).toBe(4);
+    expect(feeBand(0.181, formatFeeRateUp)).toBe(3);
+    expect(feeColor(0.2, formatFeeRateUp)).toBe("var(--fee-4)");
   });
 });
 
@@ -183,22 +188,27 @@ describe("feeBand", () => {
     FEE_BOUNDS.forEach((bound, i) => {
       expect(feeBand(bound)).toBe(i + 2);
     });
-    expect(feeBand(1000)).toBe(10);
+    expect(feeBand(1000)).toBe(12);
   });
 
   it("puts values just under a bound in the band below", () => {
-    expect(feeBand(0.19)).toBe(1);
-    expect(feeBand(0.99)).toBe(4);
-    expect(feeBand(9.99)).toBe(9);
+    expect(feeBand(0.11)).toBe(1);
+    expect(feeBand(0.14)).toBe(2);
+    expect(feeBand(0.19)).toBe(3);
+    expect(feeBand(0.99)).toBe(6);
+    expect(feeBand(9.99)).toBe(11);
   });
 
   it("bands the rate as printed, so the color never disagrees with the number", () => {
-    // 0.1996 prints as 0.20, so it is band 2 although the raw value is below 0.2.
-    expect(feeBand(0.1996)).toBe(2);
-    expect(feeBand(0.1949)).toBe(1);
-    expect(feeBand(0.995)).toBe(5);
-    expect(feeBand(9.996)).toBe(10);
-    expect(feeColor(0.1996)).toBe("var(--fee-2)");
+    // 0.1996 prints as 0.20, so it is band 4 although the raw value is below 0.2.
+    expect(feeBand(0.1996)).toBe(4);
+    expect(feeBand(0.1949)).toBe(3);
+    // 0.1196 prints as 0.12: the 0.12 to 0.15 band, as the server bands it.
+    expect(feeBand(0.1196)).toBe(2);
+    expect(feeBand(0.1149)).toBe(1);
+    expect(feeBand(0.995)).toBe(7);
+    expect(feeBand(9.996)).toBe(12);
+    expect(feeColor(0.1996)).toBe("var(--fee-4)");
   });
 
   it("puts nonsense in the first band instead of failing", () => {
@@ -275,8 +285,12 @@ describe("time", () => {
     expect(formatRelative(t, t + 13 * 60 + 59)).toBe("13 min ago");
     expect(formatRelative(t, t + 3600)).toBe("1 h ago");
     expect(formatRelative(t, t + 2 * 3600 + 5 * 60)).toBe("2 h 5 min ago");
-    expect(formatRelative(t, t + 47 * 3600 + 59 * 60)).toBe("47 h 59 min ago");
+    expect(formatRelative(t, t + 23 * 3600 + 59 * 60)).toBe("23 h 59 min ago");
+    // From a day on, days lead, never "47 h 54 min".
+    expect(formatRelative(t, t + 24 * 3600 + 23 * 60)).toBe("1 day ago");
+    expect(formatRelative(t, t + 47 * 3600 + 54 * 60)).toBe("1 day 23 h ago");
     expect(formatRelative(t, t + 48 * 3600)).toBe("2 days ago");
+    expect(formatRelative(t, t + 9 * 86_400 + 5 * 3600)).toBe("9 days ago");
   });
 
   it("drops the suffix on request and never goes negative", () => {

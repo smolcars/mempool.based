@@ -11,6 +11,7 @@ import {
   Switch,
   untrack,
 } from "solid-js";
+import { Amount } from "../../components/Amount";
 import { FeeRate } from "../../components/FeeRate";
 import { Link } from "../../components/Link";
 import { type Layer, Strata, strataLayers } from "../../components/Strata";
@@ -647,13 +648,21 @@ function MinedTile(props: {
             fallback={<span class="home-tile__bone home-tile__bone--line home-tile__bone--short" />}
           >
             <Match when={rates()}>
-              {(r) => `${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}
+              {(r) => <>{`${formatFeeRate(r().min)} – ${formatFeeRate(r().max)}`}</>}
             </Match>
             <Match when={guessing() && projected}>
-              {(p) => `${formatFeeRate(p().minRate)} – ${formatFeeRate(p().maxRate)}`}
+              {(p) => <>{`${formatFeeRate(p().minRate)} – ${formatFeeRate(p().maxRate)}`}</>}
             </Match>
             <Match when={summary()}>Coinbase only</Match>
             <Match when={facts() === "failed"}>{fullness(b().weight)}</Match>
+          </Switch>
+        </span>
+        <span class="home-tile__fees">
+          <Switch>
+            <Match when={summary()}>{(f) => <Amount sats={f().fees} short />}</Match>
+            <Match when={guessing() && projected}>
+              {(p) => <Amount sats={p().fees} short approx />}
+            </Match>
           </Switch>
         </span>
         <span class="home-tile__strata" aria-hidden="true">

@@ -2,25 +2,36 @@
   .network {
     display: inline-flex;
   }
+  /* A 44 px tall button; the pill a reader sees is drawn inside it, 34 px tall. */
   .network__button {
+    position: relative;
+    isolation: isolate;
     anchor-name: --network-switch;
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 32px;
-    padding: 3px var(--space-3) 3px 10px;
-    border: 1px solid var(--color-line-strong);
-    border-radius: var(--radius-pill);
-    background: var(--color-surface-sunken);
+    min-height: var(--touch);
+    padding: 0 var(--space-3) 0 10px;
+    border: 0;
+    background: none;
     font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
+    font-weight: var(--weight-medium);
     white-space: nowrap;
     cursor: pointer;
+  }
+  .network__button::before {
+    content: "";
+    position: absolute;
+    inset: 5px 0;
+    z-index: -1;
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
   }
   .network__button--static {
     cursor: default;
   }
-  :root:not([data-network="mainnet"]) .network__button {
+  :root:not([data-network="mainnet"]) .network__button::before {
     border-color: var(--color-network);
     box-shadow: inset 0 0 0 1px var(--color-network);
   }
@@ -46,7 +57,10 @@
   }
 
   /* Without anchor positioning the menu opens centred, like a small dialog. */
+  /* Absolute, not the popover's own fixed box: iOS Safari treated a fixed layer as a bar and left a
+     plain band behind its toolbar while the menu was open. It still sits by its button. */
   .network__menu {
+    position: absolute;
     position-anchor: --network-switch;
     position-area: bottom span-right;
     position-try-fallbacks: flip-inline;
@@ -63,15 +77,18 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    min-height: var(--touch);
     padding: var(--space-2) var(--space-3);
     border-radius: 4px;
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
     text-decoration: none;
   }
-  .network__option:hover {
-    color: inherit;
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .network__option:hover {
+      color: inherit;
+      background: var(--color-surface-sunken);
+    }
   }
   .network__option[aria-current="true"] {
     font-weight: var(--weight-bold);

@@ -304,25 +304,65 @@ export function hashrateSeries(h: Hashrates): {
   };
 }
 
-/** The most pools drawn as their own layer; the rest are one. */
-export const TOP_LAYERS = 7;
 export const OTHER_POOLS = "Other pools";
 
 /**
- * Weekly pool shares as stacked layers, the biggest pool over the period at the bottom: the top
- * `top` pools by blocks found (Unknown among them, ranked like any pool), then the rest as one.
+ * Pools with a colour of their own, the same at every period and in every share graphic, so a
+ * colour always names one pool: the twelve that reach a period's top six, over the last year and
+ * all of history, as of November 2026. A period draws its own six largest of them, so the share
+ * graphics agree with the table's top rows, and counts every other pool in "Other pools", in
+ * grey; the table names them all.
+ * shortcut: a fixed list, revise it when a pool outside it reaches a period's top six.
+ */
+export const COLOURED_POOLS = [
+  "Foundry USA",
+  "AntPool",
+  "F2Pool",
+  "ViaBTC",
+  "SpiderPool",
+  "MARA Pool",
+  "Luxor",
+  "SecPool",
+  "Ocean.xyz",
+  "Poolin",
+  "BTC.com",
+  "Binance Pool",
+] as const;
+
+/** How many pools a share graphic draws on their own; the rest are "Other pools". */
+export const SHARES_DRAWN = 6;
+
+/** A pool's colour, 1–12, or 0 for the grey every other pool shares. */
+export function poolColour(name: string): number {
+  return (COLOURED_POOLS as readonly string[]).indexOf(name) + 1;
+}
+
+/**
+ * Weekly pool shares as stacked layers: the period's six largest pools that have a colour, the
+ * biggest at the bottom, then every other pool as one grey layer. `ranked` is the period's table,
+ * largest first, by blocks: when given, it picks and orders the six, so the chart agrees with the
+ * table even where weeks of different sizes would rank the summed weekly shares otherwise.
  */
 export function poolLayers(
   weeks: readonly PoolWeek[],
-  top = TOP_LAYERS,
-): { x: number[]; layers: { name: string; values: number[] }[] } {
+  ranked?: readonly string[],
+): {
+  x: number[];
+  layers: { name: string; values: number[]; pool: number }[];
+} {
   const x = sorted(new Set(weeks.map((w) => w.timestamp)), (a, b) => a - b);
   const at = new Map(x.map((t, i) => [t, i]));
   const totals = new Map<string, number>();
   for (const w of weeks) totals.set(w.poolName, (totals.get(w.poolName) ?? 0) + w.share);
-  const ranked = sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const named = ranked.slice(0, ranked.length > top + 1 ? top : top + 1).map(([name]) => name);
-  const layers = named.map((name) => ({ name, values: x.map(() => 0) }));
+  const order =
+    ranked ??
+    sorted(totals.entries(), (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([n]) => n);
+  const named = order.filter((name) => poolColour(name) > 0).slice(0, SHARES_DRAWN);
+  const layers = named.map((name) => ({
+    name,
+    values: x.map(() => 0),
+    pool: poolColour(name),
+  }));
   const index = new Map(named.map((n, i) => [n, i]));
   const rest = x.map(() => 0);
   for (const w of weeks) {
@@ -331,7 +371,10 @@ export function poolLayers(
     if (layer) layer.values[i] = (layer.values[i] ?? 0) + w.share;
     else rest[i] = (rest[i] ?? 0) + w.share;
   }
-  if (ranked.length > named.length) layers.push({ name: OTHER_POOLS, values: rest });
+  // Any pool in the weeks but not drawn: the table can name a pool the weeks do not hold.
+  if ([...totals.keys()].some((name) => !index.has(name))) {
+    layers.push({ name: OTHER_POOLS, values: rest, pool: 0 });
+  }
   return { x, layers };
 }
 

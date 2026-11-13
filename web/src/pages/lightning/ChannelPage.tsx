@@ -1,10 +1,11 @@
 // One Lightning channel: its ends and what each charges, where it was funded, and how it closed
 // and how sure that is (docs/LIGHTNING.md "How a close is classified").
 import { useParams } from "@solidjs/router";
-import { Match, Show, Switch } from "solid-js";
+import { createUniqueId, For, Match, Show, Switch } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount, Sats } from "../../components/Amount";
 import { Hash } from "../../components/Hash";
-import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo, TimeUtc } from "../../components/Time";
@@ -19,12 +20,11 @@ import {
   type End,
   isChannelDetail,
   isChannelId,
-  msat,
   ppm,
   STATE_WHY,
   STATE_WORDS,
 } from "./lightning";
-import { ask, BlockLink, Gate, NodeName, Stat } from "./parts";
+import { ask, BlockLink, Gate, NodeName, Msat, Stat, LightningNav } from "./parts";
 
 export default function ChannelPage() {
   const params = useParams<{ id: string }>();
@@ -33,9 +33,7 @@ export default function ChannelPage() {
   usePageTitle(() => `Lightning channel ${id()}`);
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="detail" />
       <Show
         when={isChannelId(id())}
         fallback={
@@ -104,6 +102,7 @@ function When(props: { block: BlockRef }) {
 
 function Body(props: { channel: ChannelDetail }) {
   const c = () => props.channel;
+  const ids = createUniqueId();
   return (
     <>
       <header class="ln-identity">
@@ -125,6 +124,12 @@ function Body(props: { channel: ChannelDetail }) {
           <Stat label="Capacity">
             <Amount sats={c().capacity} />
           </Stat>
+          <Stat label="Between">
+            <span class="ln-between">
+              <NodeName node={c().node_one} />
+              <NodeName node={c().node_two} />
+            </span>
+          </Stat>
         </dl>
         <dl class="ln-facts">
           <div class="ln-fact">
@@ -135,10 +140,7 @@ function Body(props: { channel: ChannelDetail }) {
                 fallback={
                   <>
                     Not looked up yet
-                    <span class="ln-fact__sub">
-                      This server asks the node for each channel's funding transaction in the
-                      background.
-                    </span>
+                    <span class="ln-fact__sub">Asked of the node in the background.</span>
                   </>
                 }
               >
@@ -163,10 +165,12 @@ function Body(props: { channel: ChannelDetail }) {
             <dt>Checked against the chain</dt>
             <dd>
               Yes
-              <span class="ln-fact__sub">
-                Its funding output pays the two keys the channel was announced with; the capacity is
-                that output's value.
-              </span>
+              <More label="What this checks">
+                <p>
+                  Its funding output pays the two keys the channel was announced with; the capacity
+                  is that output's value.
+                </p>
+              </More>
             </dd>
           </div>
         </dl>
@@ -184,10 +188,12 @@ function Body(props: { channel: ChannelDetail }) {
                 </p>
                 <p>{words().why}</p>
                 <Show when={x().kind === "force" && c().penalty === null}>
-                  <p class="ln-aside">
-                    Had the other end cheated, its penalty would show here once swept, if that
-                    happens within 2 016 blocks while this server watches.
-                  </p>
+                  <More label="About penalties">
+                    <p>
+                      Had the other end cheated, its penalty would show here once swept, if that
+                      happens within 2 016 blocks while this server watches.
+                    </p>
+                  </More>
                 </Show>
               </div>
               <dl class="ln-facts">
@@ -248,67 +254,96 @@ function Body(props: { channel: ChannelDetail }) {
             )}
           </Show>
         </SectionHeader>
-        <div class="ln-sides">
-          <Side end={c().node_one} other={c().node_two} closed={c().closed !== null} />
-          <Side end={c().node_two} other={c().node_one} closed={c().closed !== null} />
+        {/* One table read across, a column for each end. Each term's name is a row of its own
+            above its two figures, so the two ends have the width between them on a phone and
+            equal terms line up; each figure names its term and its end (`headers`). */}
+        <div class="table-scroll">
+          <table class="table ln-policies">
+            <caption class="visually-hidden">What each end charges to forward a payment</caption>
+            <thead>
+              <tr>
+                <th scope="col" id={`${ids}-one`}>
+                  <NodeName node={c().node_one} />
+                </th>
+                <th scope="col" id={`${ids}-two`}>
+                  <NodeName node={c().node_two} />
+                </th>
+              </tr>
+            </thead>
+            <For each={POLICY_ROWS}>
+              {(row, i) => (
+                <tbody>
+                  <tr class="ln-policies__term">
+                    <th colspan={2} id={`${ids}-term-${i()}`}>
+                      {row.label}
+                    </th>
+                  </tr>
+                  <tr>
+                    <td headers={`${ids}-term-${i()} ${ids}-one`}>
+                      {policyCell(c().node_one, row, c().closed !== null)}
+                    </td>
+                    <td headers={`${ids}-term-${i()} ${ids}-two`}>
+                      {policyCell(c().node_two, row, c().closed !== null)}
+                    </td>
+                  </tr>
+                </tbody>
+              )}
+            </For>
+          </table>
         </div>
-        <p class="ln-aside">
-          Each end sets its own policy: what it charges to forward a payment across the channel to
-          the other end.
-        </p>
+        <More label="About these">
+          <p>
+            Each end sets its own policy: what it charges to forward a payment across the channel to
+            the other end.
+          </p>
+        </More>
       </section>
     </>
   );
 }
 
-function Side(props: { end: End; other: End; closed: boolean }) {
+type Policy = NonNullable<End["policy"]>;
+
+/** The terms an end sets, as the rows of the two ends' table. */
+const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }[] = [
+  { label: "Fee rate", value: (p) => <span class="num">{ppm(p.fee_rate)}</span> },
+  { label: "Base fee", value: (p) => <Msat msat={p.base_fee_msat} /> },
+  {
+    label: "Time lock delta",
+    value: (p) => <span class="num">{groupDigits(p.cltv_delta)} blocks</span>,
+  },
+  {
+    label: "Payments forwarded",
+    value: (p) => (
+      // Each figure whole on its line: two ends' equal limits look equal.
+      <span class="ln-range">
+        <Msat msat={p.min_htlc_msat} />
+        <span class="ln-range__to">to</span>
+        <Msat msat={p.max_htlc_msat} />
+      </span>
+    ),
+  },
+  {
+    label: "Forwarding",
+    value: (p) => (
+      <>
+        {p.enabled ? "Enabled" : "Disabled"}
+        <span class="ln-fact__sub">
+          Updated <TimeAgo time={p.last_update} />
+        </span>
+      </>
+    ),
+  },
+];
+
+/** One end's term, or why it has none: said once, in the first row. */
+function policyCell(end: End, row: (typeof POLICY_ROWS)[number], closed: boolean): JSX.Element {
+  const p = end.policy;
+  if (p) return row.value(p);
+  if (row !== POLICY_ROWS[0]) return <span class="muted">–</span>;
   return (
-    <div class="ln-side">
-      <h3>
-        <NodeName node={props.end} />
-      </h3>
-      <Show
-        when={props.end.policy}
-        fallback={
-          <p class="ln-aside">
-            {props.closed
-              ? "A closed channel has no policy."
-              : "This end has sent no policy that this server holds."}
-          </p>
-        }
-      >
-        {(p) => (
-          <dl class="ln-facts">
-            <div class="ln-fact">
-              <dt>Fee rate</dt>
-              <dd class="num">{ppm(p().fee_rate)}</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Base fee</dt>
-              <dd class="num">{msat(p().base_fee_msat)}</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Time lock delta</dt>
-              <dd class="num">{groupDigits(p().cltv_delta)} blocks</dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Payments forwarded</dt>
-              <dd class="num">
-                {msat(p().min_htlc_msat)} to {msat(p().max_htlc_msat)}
-              </dd>
-            </div>
-            <div class="ln-fact">
-              <dt>Forwarding</dt>
-              <dd>
-                {p().enabled ? "Enabled" : "Disabled"}
-                <span class="ln-fact__sub">
-                  Updated <TimeAgo time={p().last_update} />
-                </span>
-              </dd>
-            </div>
-          </dl>
-        )}
-      </Show>
-    </div>
+    <span class="muted">
+      {closed ? "None: the channel is closed" : "None sent that this server holds"}
+    </span>
   );
 }

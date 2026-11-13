@@ -2,7 +2,7 @@
 import { lazy, Loading as Pending, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import type { ChartProps } from "../../components/chart/Chart";
-import { formatSi } from "../../components/chart/scale";
+import { formatSi, readoutLines } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import type { Coverage } from "../../lib/api";
@@ -14,13 +14,19 @@ import { coverageNote, type Period } from "./mining";
 /** The chart loads only on pages that draw one. */
 export const Chart = lazy(() => import("../../components/chart/Chart"));
 
-/** A chart's whole height, `h` px of plot: what a section holding one reserves. */
-export const chartHeight = (h: number): string => `calc(${h}px + 5.75rem)`;
+/**
+ * A chart's whole height, `h` px of plot: what a section holding one reserves. The readout's part
+ * (`--readout`, MiningPage.css) grows with its lines on a phone, where each reading has its own.
+ */
+export const chartHeight = (h: number): string => `calc(${h}px + var(--readout))`;
 
 /** A chart, its space held while its code loads, so nothing below moves. */
 export function ChartSlot(props: ChartProps) {
   return (
-    <div class="mining-chart" style={{ "--h": `${props.height ?? 240}px` }}>
+    <div
+      class="mining-chart"
+      style={{ "--h": `${props.height ?? 240}px`, "--lines": readoutLines(props) }}
+    >
       <Pending>
         <Chart {...props} />
       </Pending>

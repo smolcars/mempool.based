@@ -139,10 +139,10 @@ function Adjustment(props: { network: Network; tip: Accessor<string | undefined>
         </div>
         <figcaption class="difficulty__caption">
           <span class="num difficulty__count">
-            <Show when={d()}>{(a) => periodText(a())}</Show>
+            <Show when={d()}>{(a) => <>{periodText(a())}</>}</Show>
           </span>
           <span class="difficulty__pace-text">
-            <Show when={d()}>{(a) => paceText(a())}</Show>
+            <Show when={d()}>{(a) => <>{paceText(a())}</>}</Show>
           </span>
         </figcaption>
       </figure>

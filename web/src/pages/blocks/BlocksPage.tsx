@@ -8,18 +8,19 @@ import { Hash } from "../../components/Hash";
 import { Link } from "../../components/Link";
 import { ErrorState } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
-import { createApi } from "../../lib/api";
+import { createApi, createRequest, fetchApi } from "../../lib/api";
 import type { Block } from "../../lib/esplora";
 import { formatSize, groupDigits, MISSING, NNBSP, truncateMiddle } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { type BlockSummary, fetchSummaries, knownSummary } from "../../lib/summary";
-import { fullness, parseHeight, shownParam } from "../block/chain";
+import { parseHeight, shownParam } from "../block/chain";
 import { failed, ready, Skel } from "../block/parts";
 import "./BlocksPage.css";
 
-/** The API answers ten blocks per page. */
-const PAGE = 10;
+/** Blocks on a page: the API answers ten at a time, so a page is three of its answers, cut. */
+const PAGE = 25;
+const API_PAGE = 10;
 /** Summary requests in flight at once on this page. */
 const IN_FLIGHT = 2;
 
@@ -31,37 +32,53 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Height",
     cell: (b: Block | null) =>
       b ? (
-        <Link class="blocks-height num" href={paths.block(b.id)}>
-          {groupDigits(b.height)}
-        </Link>
+        <span class="blocks-heightcell">
+          <Link class="blocks-height num" href={paths.block(b.id)}>
+            {groupDigits(b.height)}
+          </Link>
+          {/* Phones drop the Mined column, so the age moves under the height; each is hidden
+              with display, so a screen reader hears whichever is shown. */}
+          <span class="blocks-heightcell__age">
+            <TimeAgo time={b.timestamp} suffix={false} />
+          </span>
+        </span>
       ) : (
         <Skel size="s" />
       ),
   },
   {
-    header: "Hash",
-    optional: true,
-    cell: (b: Block | null) =>
-      b ? (
-        <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
-      ) : (
-        <span class="blocks-hash-skel">
-          <Skel />
-        </span>
-      ),
-  },
-  {
     header: "Mined",
+    optional: true,
+    // When a block was found reads before what it paid: the fee total goes first (step 5).
+    drop: 6,
     cell: (b: Block | null) => (b ? <TimeAgo time={b.timestamp} /> : <Skel size="s" />),
   },
   {
+    header: "Miner",
+    cell: (b: Block | null) => {
+      const f = b ? factsOf(b.id) : undefined;
+      if (f === undefined) return <Skel size="s" />;
+      const m = f === "failed" ? undefined : f.miner;
+      return m ? (
+        <Link class="blocks-miner" href={paths.pool(m.slug)} title={m.name}>
+          {m.name}
+        </Link>
+      ) : (
+        MISSING
+      );
+    },
+  },
+  {
     header: "Transactions",
+    short: "Txs",
     numeric: true,
-    optional: true,
+    // The last to go, and only where even the phone's columns are too wide (320 px, wide faces).
+    drop: 7,
     cell: (b: Block | null) => (b ? groupDigits(b.tx_count) : <Skel size="s" />),
   },
   {
     header: "Median fee rate, sat/vB",
+    short: "Median, sat/vB",
     numeric: true,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
@@ -70,10 +87,12 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       return f.fee_rate ? <FeeRate rate={f.fee_rate.median} unit={false} /> : "None";
     },
   },
-  // Blank for a block without an audit: most old blocks, and never an error.
+  // A dash for a block without an audit: most old blocks, and never an error.
   {
     header: "Match rate, %",
     numeric: true,
+    optional: true,
+    drop: 4,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;
@@ -84,7 +103,10 @@ const columns = (factsOf: (id: string) => RowFacts) => [
           <span class="visually-hidden">%</span>
         </>
       ) : (
-        ""
+        <>
+          {MISSING}
+          <span class="visually-hidden">no audit</span>
+        </>
       );
     },
   },
@@ -92,6 +114,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Total fees, BTC",
     numeric: true,
     optional: true,
+    drop: 5,
     cell: (b: Block | null) => {
       const f = b ? factsOf(b.id) : undefined;
       if (f === undefined) return <Skel size="s" />;
@@ -103,34 +126,56 @@ const columns = (factsOf: (id: string) => RowFacts) => [
     header: "Size",
     numeric: true,
     optional: true,
+    drop: 3,
     cell: (b: Block | null) => (b ? formatSize(b.size, "B") : <Skel size="s" />),
   },
   {
     header: "Weight",
     numeric: true,
     optional: true,
+    drop: 2,
+    cell: (b: Block | null) => (b ? formatSize(b.weight, "WU") : <Skel size="s" />),
+  },
+  {
+    header: "Hash",
+    optional: true,
+    drop: 1,
     cell: (b: Block | null) =>
       b ? (
-        <span class="blocks-weight" title={`${Math.round(fullness(b.weight) * 100)}% of the limit`}>
-          <span class="blocks-weight__bar" aria-hidden="true">
-            <span class="blocks-weight__fill" style={{ "--fill": String(fullness(b.weight)) }} />
-          </span>
-          {formatSize(b.weight, "WU")}
-        </span>
+        <Hash value={b.id} href={paths.block(b.id)} copyLabel="Copy block hash" />
       ) : (
-        <Skel size="s" />
+        <span class="blocks-hash-skel">
+          <Skel />
+        </span>
       ),
   },
 ];
 
-/** `/blocks` and `/blocks/:from`: recent blocks, newest first, ten to a page. */
+/** `/blocks` and `/blocks/:from`: recent blocks, newest first, 25 to a page. */
 export default function BlocksPage() {
   const params = useParams<{ from?: string }>();
   const from = createMemo(() => (params.from === undefined ? undefined : parseHeight(params.from)));
-  const [blocks, blocksCtl] = createApi<Block[]>(() => {
-    const f = from();
-    return f !== null && (f === undefined ? "/blocks" : `/blocks/${f}`);
-  });
+  const network0 = useNetwork();
+  const [blocks, blocksCtl] = createRequest(
+    () => {
+      const f = from();
+      return f !== null && { from: f, network: network0() };
+    },
+    async ({ from: f, network: n }, signal) => {
+      // Ten at a time, each answer continuing below the last, until a page's worth or the genesis.
+      const out: Block[] = [];
+      let path = f === undefined ? "/blocks" : `/blocks/${f}`;
+      while (out.length < PAGE) {
+        // oxlint-disable-next-line no-await-in-loop -- each answer says where the next starts
+        const part = await fetchApi<Block[]>(n, path, { signal });
+        out.push(...part);
+        const last = part.at(-1);
+        if (part.length < API_PAGE || last === undefined || last.height === 0) break;
+        path = `/blocks/${last.height - 1}`;
+      }
+      return out.slice(0, PAGE);
+    },
+  );
   const [tip] = createApi<string>(() => "/blocks/tip/height", { as: "text" });
   usePageTitle(() => "Blocks");
   const network = useNetwork();
@@ -214,11 +259,14 @@ export default function BlocksPage() {
             />
           }
         >
-          <DataTable
-            caption="Recent blocks, newest first"
-            columns={table}
-            rows={list() ?? Array.from({ length: PAGE }, () => null)}
-          />
+          <div class="panel">
+            <DataTable
+              caption="Recent blocks, newest first"
+              columns={table}
+              rows={list() ?? Array.from({ length: PAGE }, () => null)}
+              rowHref={(b) => (b ? paths.block(b.id) : undefined)}
+            />
+          </div>
           <nav class="blocks-pager" aria-label="Block pages">
             <Show
               when={!atTip()}

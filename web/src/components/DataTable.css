@@ -15,37 +15,98 @@
     color: var(--color-text-muted);
     padding-bottom: var(--space-2);
   }
+  /* Every column keeps a gutter on both sides, so a right-aligned figure never meets the text of
+     the column after it ("0.17000000Active"); only the table's outer edges have none. */
   .table th {
     text-align: left;
     font-weight: var(--weight-medium);
     color: var(--color-text-muted);
-    padding: 0 var(--space-3) var(--space-2) 0;
+    padding: 0 var(--space-2) var(--space-2);
     white-space: nowrap;
   }
   .table td {
-    padding: var(--space-2) var(--space-3) var(--space-2) 0;
+    padding: var(--space-2);
     border-top: 1px solid var(--color-line);
     white-space: nowrap;
     font-variant-numeric: tabular-nums slashed-zero;
   }
+  .table :is(th, td):first-child {
+    padding-left: 0;
+  }
+  .table :is(th, td):last-child {
+    padding-right: 0;
+  }
   .table .table__num {
     text-align: right;
-    padding-right: 0;
-    padding-left: var(--space-3);
+  }
+  /* Numeric columns in the monospace, so figures line up digit for digit. */
+  .table td.table__num {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
   }
   .table tbody tr {
     transition: background-color var(--dur-quick) var(--ease-out);
   }
-  .table tbody tr:hover {
-    background: var(--color-surface-sunken);
+  @media (hover: hover) {
+    .table tbody tr:hover {
+      background: var(--color-surface-sunken);
+    }
+  }
+  /* A row that leads somewhere is one target: an empty link covers it, under the cells' own
+     links and buttons, which keep their place on top. */
+  .table--rows tbody tr {
+    position: relative;
+  }
+  .table__rowlink {
+    position: absolute;
+    inset: 0;
+  }
+  .table--rows tbody :is(a:not(.table__rowlink), button) {
+    position: relative;
+    z-index: 1;
+  }
+  /* A row's links are a thumb's height on touch screens. */
+  @media (pointer: coarse) {
+    .table td {
+      padding-block: var(--space-3);
+    }
+  }
+  .table__short {
+    display: none;
+  }
+  /* Dropped to fit the panel (DataTable's `drop`); the item's own page has every figure. */
+  .table .table__gone {
+    display: none;
   }
   @media (max-width: 640px) {
     .table .table__optional {
       display: none;
     }
+    /* The full header stays for screen readers; the short one is what fits. */
+    .table__long {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .table__short {
+      display: inline;
+    }
+    /* Narrower gutters, still two of them, so four columns fit a 320 px phone. */
+    .table th,
+    .table td {
+      padding-inline: 6px;
+    }
+    .table td.table__num {
+      font-size: var(--text-xs);
+    }
     /* A header such as "Fee rate, sat/vB" wraps rather than widen its column past a phone's width. */
     .table th {
       white-space: normal;
+      overflow-wrap: normal;
+      hyphens: none;
     }
   }
 }

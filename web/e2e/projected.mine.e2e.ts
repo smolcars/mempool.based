@@ -8,7 +8,7 @@ test("the next block's page says when the block is found, offers it, and carries
 }) => {
   await page.goto("/regtest/block/next");
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  const lede = page.getByText(/^If it were mined now, block \d+/);
+  const lede = page.getByText(/^What block \d+ would hold if it were mined now/);
   await expect(lede).toBeVisible();
   const before = Number(/block (\d+)/.exec((await lede.textContent()) ?? "")?.[1]);
 
@@ -27,7 +27,7 @@ test("the next block's page says when the block is found, offers it, and carries
   ).toBeAttached();
   // Still the next block, now on top of the one just found.
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Next block");
-  await expect(page.getByText(`If it were mined now, block ${before + 1}`)).toBeVisible();
+  await expect(page.getByText(`What block ${before + 1} would hold`)).toBeVisible();
   await page.getByRole("link", { name: `Open block ${before}` }).click();
   await expect(page).toHaveURL(`/regtest/block/${hash}`);
 });

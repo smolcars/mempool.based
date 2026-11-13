@@ -12,29 +12,39 @@
   .skip:focus {
     top: var(--space-3);
   }
-  .skip:hover {
-    color: var(--color-on-accent);
+  @media (hover: hover) {
+    .skip:hover {
+      color: var(--color-on-accent);
+    }
   }
 
-  /* Test networks only: a hatched band nobody can miss. */
+  /* Test networks only: a slim band in the network's colour, with the warning in words and a short
+     hatched mark before it. The logo tile and the network switch carry the colour too. */
   .network-band {
-    padding: var(--space-1) var(--gutter);
-    text-align: center;
-    background:
-      repeating-linear-gradient(-45deg, var(--color-network) 0 10px, transparent 10px 20px),
-      var(--color-bg);
+    padding-block: var(--space-1);
+    padding-inline: max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));
+    background: color-mix(in srgb, var(--color-network) 12%, var(--color-surface));
+    border-bottom: 2px solid var(--color-network);
   }
   .network-band__text {
-    display: inline-block;
-    padding: 2px var(--space-3);
-    /* A pill on one line; a rounded panel when it wraps on narrow phones. */
-    border-radius: var(--radius-l);
-    background: var(--color-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    max-width: var(--page-max);
+    margin-inline: auto;
     color: var(--color-text);
-    text-wrap: balance;
-    box-shadow: inset 0 0 0 2px var(--color-network);
     font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
+    font-weight: var(--weight-medium);
+    text-wrap: balance;
+  }
+  .network-band__text::before {
+    content: "";
+    flex: none;
+    width: 18px;
+    height: 12px;
+    border-radius: var(--radius-s);
+    background: repeating-linear-gradient(-45deg, var(--color-network) 0 3px, transparent 3px 6px);
   }
 
   /* At least a screen tall, so the footer starts below the fold and a page that loads after the

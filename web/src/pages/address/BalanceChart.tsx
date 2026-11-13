@@ -10,10 +10,11 @@ import {
   untrack,
 } from "solid-js";
 import "../../components/SectionHeader.css";
+import { formatMoment } from "../../components/chart/scale";
 import { Loading, ErrorState } from "../../components/States";
 import { type ApiResource, fetchStamped, type Stamped } from "../../lib/api";
 import type { AddressStats } from "../../lib/esplora";
-import { formatBtc, formatUtc, groupDigits } from "../../lib/format";
+import { formatBtc, groupDigits } from "../../lib/format";
 import { useNetwork } from "../../lib/page";
 import { refusal } from "./address";
 import { advance, type History, loadHistory, points, readRows } from "./balance";
@@ -125,8 +126,25 @@ export function BalanceChart(props: {
     if (!busy) follow();
   });
   const statsLoading = () => props.stats.state === "unresolved" || props.stats.state === "pending";
+  // Its pages are most of an address page's requests, against a per-client allowance: they wait
+  // until the chart is about to be seen.
+  const [near, setNear] = createSignal(typeof IntersectionObserver === "undefined");
+  const watchNear = (el: HTMLElement) => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px 0px" },
+    );
+    observer.observe(el);
+    onCleanup(() => observer.disconnect());
+  };
   createEffect(
-    () => props.after && (count() ?? 0) > 0,
+    () => props.after && near() && (count() ?? 0) > 0,
     (go) => {
       if (!go || started) return;
       started = true;
@@ -162,7 +180,7 @@ export function BalanceChart(props: {
         </p>
       </Match>
       <Match when={statsLoading() || (count() ?? 0) > 0}>
-        <section class="address-balance" aria-labelledby="address-balance-title">
+        <section class="address-balance" aria-labelledby="address-balance-title" ref={watchNear}>
           <div class="section__head">
             <h2 id="address-balance-title">Balance over time</h2>
             <div class="section__meta">{meta()}</div>
@@ -201,7 +219,7 @@ export function BalanceChart(props: {
                         },
                         { name: "Change", values: v().pts.map((p) => p.change), format: signedBtc },
                       ]}
-                      time={formatUtc}
+                      time={formatMoment}
                     />
                   </Pending>
                 )}

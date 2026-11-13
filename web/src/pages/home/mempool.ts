@@ -1,6 +1,6 @@
 // What the home page computes from the mempool summary, and where the fee ladder puts its pins.
 import type { MempoolSummary, RecentTx } from "../../lib/esplora";
-import { FEE_BOUNDS, feeBand } from "../../lib/format";
+import { FEE_BANDS, FEE_BOUNDS, feeBand } from "../../lib/format";
 import type { MempoolState } from "../../lib/mempool-topics";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
@@ -35,7 +35,7 @@ export function isRecentList(v: unknown): v is RecentTx[] {
 
 /** One of the ten fee bands of the mempool bar. */
 export interface FeeBandShare {
-  /** 1–10, as `feeBand` numbers them. */
+  /** 1–12, as `feeBand` numbers them. */
   band: number;
   /** Lower bound in sat/vB; band 1 starts at 0. */
   from: number;
@@ -53,7 +53,7 @@ export interface FeeBandShare {
  * lower bound, banded as printed. An entry that straddles a band boundary lands wholly below it.
  */
 export function bandShares(histogram: readonly (readonly [number, number])[]): FeeBandShare[] {
-  const vsize = Array.from({ length: 10 }, () => 0);
+  const vsize = Array.from({ length: FEE_BANDS }, () => 0);
   for (const [rate, size] of histogram) {
     const i = feeBand(rate) - 1;
     vsize[i] = (vsize[i] ?? 0) + size;
@@ -65,7 +65,7 @@ export function bandShares(histogram: readonly (readonly [number, number])[]): F
 export function sharesOf(vsize: readonly number[]): FeeBandShare[] {
   const total = vsize.reduce((a, b) => a + b, 0);
   let x = 0;
-  return Array.from({ length: 10 }, (_, i) => {
+  return Array.from({ length: FEE_BANDS }, (_, i) => {
     const v = vsize[i] ?? 0;
     const share = total > 0 ? v / total : 0;
     const band = {
@@ -84,57 +84,6 @@ export function sharesOf(vsize: readonly number[]): FeeBandShare[] {
 /** The cheapest fee rate waiting: the last histogram entry's lower bound. */
 export function lowestRate(histogram: readonly (readonly [number, number])[]): number | undefined {
   return histogram.length > 0 ? histogram.at(-1)?.[0] : undefined;
-}
-
-/** The fee ladder's log scale, 0.1 to 20 sat/vB: where a rate sits, 0–1, clamped at the ends. */
-export const LADDER_MIN = 0.1;
-export const LADDER_MAX = 20;
-export function ladderPos(rate: number): number {
-  const lo = Math.log10(LADDER_MIN);
-  const hi = Math.log10(LADDER_MAX);
-  return (Math.log10(Math.min(LADDER_MAX, Math.max(LADDER_MIN, rate))) - lo) / (hi - lo);
-}
-
-/**
- * Stacks pin labels into rows so no two collide. A pin's stem rises from the scale to its label's
- * row; where it can, a label also keeps clear of every stem, and a stem of every label. Pins are
- * placed right to left, each in the lowest row that works; a label flips to the left of its pin
- * when it would run past the end. When no row keeps clear of the stems (close pins near the end),
- * the label only keeps clear of the other labels, so `n` pins never need more than `n` rows, and
- * the stem passes behind it (the panel draws lower rows on top). Positions and widths in px; rows
- * count up from the scale.
- */
-export function stackLabels(
-  pins: readonly { x: number; width: number }[],
-  trackWidth: number,
-  gap = 12,
-): { row: number; flip: boolean }[] {
-  const placed: { x: number; from: number; to: number; row: number }[] = [];
-  const out: { row: number; flip: boolean }[] = pins.map(() => ({ row: 0, flip: false }));
-  // oxlint-disable-next-line unicorn/no-array-sort -- sorts a fresh array; toSorted is newer than the browsers we build for
-  const order = pins.map((_, i) => i).sort((a, b) => (pins[b]?.x ?? 0) - (pins[a]?.x ?? 0));
-  for (const i of order) {
-    const { x, width } = pins[i] ?? { x: 0, width: 0 };
-    const flip = x + width + gap > trackWidth;
-    const [from, to] = flip ? [x - width - gap, x] : [x, x + width + gap];
-    const fits = (row: number, clear: boolean) =>
-      placed.every(
-        (p) =>
-          !(p.row === row && p.from < to && from < p.to) &&
-          (!clear || !(p.row >= row && p.x > from && p.x < to)) &&
-          (!clear || !(p.row <= row && x > p.from && x < p.to)),
-      );
-    let row = 0;
-    while (row < pins.length && !fits(row, true)) row++;
-    if (row === pins.length) {
-      // Each placed label rules out one row at most, so one of the first `n` is free.
-      row = 0;
-      while (!fits(row, false)) row++;
-    }
-    placed.push({ x, from, to, row });
-    out[i] = { row, flip };
-  }
-  return out;
 }
 
 /** What the mempool panel shows, from the `mempool` topic or the polled `/mempool`. */
@@ -185,4 +134,39 @@ export function enqueueTxs<T extends { txid: string }>(
   // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
   const fresh = incoming.filter((t) => !known.has(t.txid)).reverse();
   return [...queue, ...fresh].slice(-max);
+}
+
+/** vB in one block's worth: what the depth rows measure in. */
+export const BLOCK_VSIZE = 1_000_000;
+
+/** One band's row in the home page's breakdown, dearest first. */
+export interface DepthRow extends FeeBandShare {
+  /** Its size in blocks' worth. */
+  blocks: number;
+  /** Blocks' worth from the dearest down to the end of this band: how deep the queue is here. */
+  deep: number;
+  /** The bar's length, 0–1, on a log scale from 100 vB to one block: past a block it is full. */
+  bar: number;
+}
+
+/**
+ * The bands as rows, dearest first, each measured against one block so they can be compared: the
+ * bar is on a log scale from 100 vB to a block, so a band of a few kvB shows beside one of 30 MvB,
+ * which fills its bar and is labelled. `deep` is what a reader at that rate has ahead.
+ */
+export function depthRows(bands: readonly FeeBandShare[]): DepthRow[] {
+  let deep = 0;
+  // oxlint-disable-next-line unicorn/no-array-reverse -- reverses a fresh array; toReversed is newer than the browsers we build for
+  return [...bands].reverse().map((b) => {
+    const blocks = b.vsize / BLOCK_VSIZE;
+    deep += blocks;
+    const bar = b.vsize > 0 ? Math.min(1, Math.max(0, Math.log10(b.vsize / 100) / 4)) : 0;
+    const { band, from, to, vsize, x, share } = b;
+    return { band, from, to, vsize, x, share, blocks, deep, bar };
+  });
+}
+
+/** The band in which the dearest block's worth runs out: the next block reaches down to it. */
+export function nextBlockReach(rows: readonly DepthRow[]): DepthRow | undefined {
+  return rows.find((r) => r.deep >= 1) ?? undefined;
 }

@@ -1,9 +1,10 @@
 // The 100 largest, best-connected or oldest Lightning nodes (docs/API.md "Rankings").
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { formatDay } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
+import { More } from "../../components/More";
 import { ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
 import { createRequest } from "../../lib/api";
@@ -11,7 +12,7 @@ import { groupDigits } from "../../lib/format";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isRankings, parseRanking, RANKINGS, type RankedNode } from "./lightning";
-import { ask, Gate, nodeColumns, VERIFIED_NOTE } from "./parts";
+import { ask, Gate, nodeColumns, VERIFIED_NOTE, LightningNav, rememberList } from "./parts";
 
 export default function RankingsPage() {
   const [search] = useSearchParams();
@@ -20,9 +21,7 @@ export default function RankingsPage() {
   usePageTitle(() => `Lightning nodes ${by().words}`);
   return (
     <div class="wrap ln">
-      <p class="ln-back">
-        <Link href={paths.lightning()}>Lightning</Link>
-      </p>
+      <LightningNav here="rankings" />
       <header class="ln-head">
         <h1>Lightning nodes</h1>
         <nav class="ln-picker" aria-label="Ranked by">
@@ -33,7 +32,7 @@ export default function RankingsPage() {
                   <Link
                     class="ln-picker__item"
                     href={paths.lightningRankings(r.id)}
-                    aria-current={r.id === by().id ? "page" : undefined}
+                    aria-current={r.id === by().id ? "page" : "false"}
                   >
                     {r.label}
                   </Link>
@@ -55,22 +54,28 @@ export default function RankingsPage() {
 }
 
 function Ranked(props: { network: Network; by: string }) {
+  createEffect(
+    () => props.by,
+    (by) => rememberList(paths.lightningRankings(by), `Nodes ${parseRanking(by).words}`),
+  );
   const [ranked, { refetch }] = createRequest(
     () => props.by,
     (by, signal) => ask(props.network, `/rankings/${by}?limit=100`, isRankings, signal),
   );
   // A function, so switching the ranking re-picks which columns a phone keeps.
   const columns = (): Column<RankedNode>[] => [
-    { header: "Rank", numeric: true, optional: true, cell: (_, i) => groupDigits(i + 1) },
-    ...nodeColumns(props.by === "channels" ? "channels" : "capacity"),
+    { header: "Rank", numeric: true, optional: true, drop: 2, cell: (_, i) => groupDigits(i + 1) },
+    ...nodeColumns(props.by === "channels" || props.by === "age" ? props.by : "capacity"),
     {
       header: "First seen",
       optional: props.by !== "age",
+      drop: props.by === "age" ? undefined : 3,
       cell: (n) => (typeof n.first_seen === "number" ? formatDay(n.first_seen) : "–"),
     },
     {
       header: "Last announced",
       optional: true,
+      drop: 1,
       cell: (n) => (typeof n.last_update === "number" ? <TimeAgo time={n.last_update} /> : "–"),
     },
   ];
@@ -81,18 +86,21 @@ function Ranked(props: { network: Network; by: string }) {
       </Match>
       <Match when={ranked.latest}>
         {(r) => (
-          <section>
+          <section class="panel">
             <div class="ln-busy" aria-busy={r().by === props.by ? "false" : "true"}>
               <DataTable
                 caption={`The 100 nodes ${parseRanking(r().by).words}`}
                 columns={columns()}
                 rows={r().nodes}
+                rowHref={(n) => paths.lightningNode(n.id)}
               />
             </div>
-            <p class="ln-aside">
-              {VERIFIED_NOTE} First seen is the oldest funding block among a node's channels this
-              server has seen.
-            </p>
+            <More>
+              <p>
+                {VERIFIED_NOTE} First seen is the oldest funding block among a node's channels this
+                server has seen.
+              </p>
+            </More>
           </section>
         )}
       </Match>

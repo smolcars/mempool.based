@@ -64,8 +64,9 @@ test("the blocks list pages back and forward", async ({ page }) => {
   const firstHeight = page.getByRole("table").getByRole("row").nth(1).getByRole("link").first();
   await expect(firstHeight).toHaveText(String(chain.tip.height));
   await page.getByRole("link", { name: /Older/ }).click();
-  await expect(page).toHaveURL(`/regtest/blocks/${chain.tip.height - 10}`);
-  await expect(firstHeight).toHaveText(String(chain.tip.height - 10));
+  // 25 to a page.
+  await expect(page).toHaveURL(`/regtest/blocks/${chain.tip.height - 25}`);
+  await expect(firstHeight).toHaveText(String(chain.tip.height - 25));
   await page.getByRole("link", { name: /Newer/ }).click();
   await expect(page).toHaveURL("/regtest/blocks");
   await firstHeight.click();

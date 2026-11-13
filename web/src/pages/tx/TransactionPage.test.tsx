@@ -379,6 +379,50 @@ describe("TransactionPage", () => {
     expect(group.querySelector("a")?.getAttribute("href")).toBe(`/tx/${SPENDER}`);
   });
 
+  it("lists a large group eight at a time, itself always among them, and the rest on asking", async () => {
+    serve(payment({ confirmed: false }));
+    const kids = Array.from({ length: 11 }, (_, i) => (i + 1).toString(16).padStart(64, "c"));
+    replies[`/app/tx/${TXID}/relatives`] = {
+      status: 200,
+      body: {
+        txid: TXID,
+        stale: false,
+        chunk: 0,
+        parents: [],
+        children: kids,
+        // Itself last in mining order, past the first eight.
+        chunks: [{ fee: 30_000, vsize: 1500, rate: 20_000, txs: [...kids, TXID] }],
+        txs: [
+          ...kids.map((k) => ({
+            txid: k,
+            chunk: 0,
+            time: 1,
+            fee: 2700,
+            vsize: 120,
+            block: 0,
+            parents: [TXID],
+          })),
+          { txid: TXID, chunk: 0, time: 1, fee: 141, vsize: 141, block: 0, parents: [] },
+        ],
+      },
+    };
+    const el = page(`/tx/${TXID}`);
+    await settle();
+    FakeSocket.last().hello({ network: "mainnet" });
+    FakeSocket.last().receive(mempoolMsg(0, {}, 20_000));
+    await settle();
+    const group = el.querySelector(".tx-group") as Element;
+    const rows = () => group.querySelectorAll('[aria-label^="Mined together"] li');
+    expect(rows()).toHaveLength(9);
+    expect(text(group)).toContain(TXID.slice(-8));
+    const more = group.querySelector(".tx-group__more") as HTMLButtonElement;
+    expect(text(more)).toBe("Show all 12");
+    more.click();
+    await settle();
+    expect(rows()).toHaveLength(12);
+    expect(group.querySelector(".tx-group__more")).toBeNull();
+  });
+
   it("names what replaced it and follows the chain to the newest version", async () => {
     serve(payment({ confirmed: false }));
     const el = page(`/tx/${TXID}`);

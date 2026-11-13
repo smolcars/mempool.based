@@ -28,6 +28,7 @@ use bitcoin::{Amount, BlockHash, ScriptBuf, Transaction, TxOut};
 use node::rpc::model::BlockTotals;
 
 pub use crate::mempool::SourceError;
+use crate::projected::Bands;
 use crate::store;
 pub use backfill::{Event, Options, Progress, backfill};
 pub use db::{
@@ -99,7 +100,7 @@ pub struct Coinbase {
 pub struct Rated {
     /// `None` for a block holding only its coinbase.
     pub fee_rate: Option<Rates>,
-    pub fee_bands: [u64; 10],
+    pub fee_bands: Bands,
 }
 
 impl From<&Facts> for Rated {
@@ -142,7 +143,7 @@ impl Row {
             height: self.height,
             tx_count: self.tx_count as usize,
             fees: self.fees,
-            vsize: r.fee_bands.iter().sum(),
+            vsize: r.fee_bands.stored.iter().sum(),
             weight: self.paying_weight,
             fee_rate: r.fee_rate,
             fee_bands: r.fee_bands,

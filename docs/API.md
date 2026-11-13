@@ -142,7 +142,7 @@ The node refuses an address's totals and unspent outputs at once when it has mor
 - **The threshold is the node's own `--max-sh-creates`.** An address the node totals has its history served as before, at the cap included; one create above, the node refuses its totals and the server its history. Every above-cap address measured took 10 to 42 s for its first page, past the 5 s below. One whose newest 25 transactions all fall within a few hundred blocks could still have answered in time: the server refuses it anyway, because it cannot tell without asking, and asking is what costs the node. A size refusal counts only once the totals or unspent outputs have been asked: a history request that comes first is served, or times out.
 - **5 s for a page of history** counts from when the node call starts, not the wait for a slot. Ordinary pages answer in 0.3 to 0.5 s on mainnet; every slower page measured took over 10 s, so a reader gains nothing from waiting longer. A page slowed by a moment of load (a 261-transaction address's fifth page once timed out while the node served a backfill) is refused for 5 minutes, then asked again.
 - **Memory is bounded.** Per network at most 4,096 verdicts of about 100 bytes, each kept 5 minutes; when full, expired ones go first, then the one closest to expiring. Each verdict is learned from a node call, so the cost limit bounds how fast the table fills, and many distinct huge addresses cost one cheap totals call each.
-- **The frontend** asks for an address's first history page once its totals have answered (or after a second), and never after a "too large" totals answer; it says in a sentence that the transactions are not available ([`FRONTEND.md`](FRONTEND.md#live-data)).
+- **The frontend** asks for an address's first history page once its totals have answered (or after a second), and never after a "too large" totals answer; it then says once, at the top, that the address has more history than the server adds up and draws none of the sections it cannot fill ([`FRONTEND.md`](FRONTEND.md#live-data)).
 - **Logged** as refusals, counted in `requests_refused` with the reasons `history_too_large` and `history_slow`, never one line per request ([`LOGGING.md`](LOGGING.md#refusals)).
 - **The `/api/v1/ws` address follow** reads the same first page ([`WS.md`](WS.md#the-mempoolspace-shaped-socket-apiv1ws)). It skips an address with a verdict, and a read of its that runs past 5 s teaches one, so following a huge address there does not make the node read it again and again. Starting that read, or a node subscription, on either socket takes a token from the client's budget for new addresses, with the numbers of this cost limit in a bucket of its own ([`WS.md`](WS.md#following-a-transaction-or-an-address)).
 
@@ -548,7 +548,7 @@ The mempool through time, from the history table ([`STORE.md`](STORE.md#mempool_
 | Route | Answer |
 |---|---|
 | `GET /api/v1/statistics/:interval` | `[{added, count, vbytes_per_second, mempool_byte_weight, total_fee, min_fee, vsizes}]`, newest first, the reference's shape (below) |
-| `GET /app/mempool/history/:interval` | Our own shape for our chart, with our ten bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)) |
+| `GET /app/mempool/history/:interval` | Our own shape for our chart, with our bands and the flow ([`FRONTEND.md`](FRONTEND.md#mempool-history)). A point's `bands` is 12 numbers, or 10 when its lowest band's split was not recorded ([`STORE.md`](STORE.md#fee-bands)) |
 
 Each new sample is also pushed as `live-2h-chart` on `/api/v1/ws`, serialized by the same function as a `/statistics/2h` point, and its inflow is that socket's `vBytesPerSecond` ([`WS.md`](WS.md#what-the-server-sends)).
 
@@ -575,18 +575,18 @@ Points are aligned to multiples of the step in UTC (Unix time), and the period s
 
 Whole numbers are written as integers and means to three decimals, as the reference writes its long intervals' averages.
 
-**The fee ranges.** The reference's `vsizes` are 39 whole-sat/vB ranges, read from its answers: they open `[0, 1)`, `[1, 2)`, `[2, 3)`, `[3, 4)`, `[4, 5)`, `[5, 6)`, `[6, 8)`, `[8, 10)`, `[10, 12)`, and widen from there. We keep the design's ten bands ([`DESIGN.md`](DESIGN.md#fee-scale)), with six of their nine edges under 2 sat/vB. Each band goes whole to the range that holds its lower edge:
+**The fee ranges.** The reference's `vsizes` are 39 whole-sat/vB ranges, read from its answers: they open `[0, 1)`, `[1, 2)`, `[2, 3)`, `[3, 4)`, `[4, 5)`, `[5, 6)`, `[6, 8)`, `[8, 10)`, `[10, 12)`, and widen from there. We keep the design's 12 bands ([`DESIGN.md`](DESIGN.md#fee-scale)), with eight of their eleven edges at 2 sat/vB or under. Each band goes whole to the range that holds its lower edge:
 
 | Our bands (sat/vB) | Range |
 |---|---|
-| under 0.2, 0.2–0.3, 0.3–0.5, 0.5–1 | `[0, 1)`, index 0 |
+| under 0.12, 0.12–0.15, 0.15–0.2, 0.2–0.3, 0.3–0.5, 0.5–1 | `[0, 1)`, index 0 |
 | 1–1.5, 1.5–2 | `[1, 2)`, index 1 |
 | 2–3 | `[2, 3)`, index 2 |
 | 3–5 | `[3, 4)`, index 3 |
 | 5–10 | `[5, 6)`, index 5 |
 | 10 and up | `[10, 12)`, index 8 |
 
-Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat/vB is exact, the ranges sum to the whole mempool, and nothing is split by a guess; but a chart of the reference's ranges shows the 3-to-5, 5-to-10 and over-10 vbytes at their lowest range. On rbitcoin's mempool that is little: in the reference's own answers for the last day, the vbytes this moves (paying 4 to 5, 6 to 10, or 12 sat/vB and up) were 0.03 % to 0.6 % of the mempool; in a nearly empty mempool (its oldest point, 0.4 MvB) 3.4 %. Ranges under 1 sat/vB, where most of it is, are one range there and four bands here; use `/app` for those. A rate is banded as it prints, at two decimals, so 0.996 sat/vB counts in `[1, 2)`; and by its effective rate (its chunk's), as the projected blocks place it.
+Every other range reads 0. So the virtual size at or above 1, 2, 3, 5 and 10 sat/vB is exact, the ranges sum to the whole mempool, and nothing is split by a guess; but a chart of the reference's ranges shows the 3-to-5, 5-to-10 and over-10 vbytes at their lowest range. On rbitcoin's mempool that is little: in the reference's own answers for the last day, the vbytes this moves (paying 4 to 5, 6 to 10, or 12 sat/vB and up) were 0.03 % to 0.6 % of the mempool; in a nearly empty mempool (its oldest point, 0.4 MvB) 3.4 %. Ranges under 1 sat/vB, where most of it is, are one range there and six bands here; use `/app` for those. The ranges are summed from the stored bands, whose `band0` is all under 0.2 whether or not its split was recorded ([`STORE.md`](STORE.md#fee-bands)), so a point answers the same before and after the split. A rate is banded as it prints, at two decimals, so 0.996 sat/vB counts in `[1, 2)`; and by its effective rate (its chunk's), as the projected blocks place it.
 
 **Coverage.** History begins when the server first ran with the engine on, and has holes wherever it did not sample ([`STORE.md`](STORE.md#mempool_history) says when). The answer says so in the mining routes' headers ([above](#coverage)):
 

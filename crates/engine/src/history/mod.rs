@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 
 use bitcoin::Amount;
 
-use crate::projected::{BANDS, Projection};
+use crate::projected::{BANDS, Bands, Projection};
 
 pub const MINUTE: u64 = 60;
 pub const HOUR: u64 = 3_600;
@@ -63,7 +63,7 @@ pub struct Totals {
     /// The node's `mempoolminfee`, sat per 1,000 vB.
     pub min_fee: u64,
     /// Virtual size in each fee band of `docs/DESIGN.md`, by effective rate, cheapest first.
-    pub bands: [u64; BANDS],
+    pub bands: Bands,
     pub flow: Flow,
 }
 
@@ -84,9 +84,7 @@ impl Totals {
         ] {
             *a = a.saturating_add(b);
         }
-        for (a, b) in self.bands.iter_mut().zip(o.bands) {
-            *a = a.saturating_add(b);
-        }
+        self.bands.add(&o.bands);
     }
 }
 
@@ -108,15 +106,17 @@ pub fn sample(time: u64, p: &Projection, min_fee: Amount, flow: Flow) -> Point {
         flow,
         ..Totals::default()
     };
+    let mut bands = [0; BANDS];
     for b in &p.blocks {
         let s = &b.summary;
         t.count += u64::from(s.txs);
         t.vsize += s.vsize;
         t.fees += s.fees;
-        for (total, v) in t.bands.iter_mut().zip(s.bands) {
+        for (total, v) in bands.iter_mut().zip(s.bands) {
             *total += v;
         }
     }
+    t.bands = Bands::new(bands);
     Point {
         time,
         samples: 1,

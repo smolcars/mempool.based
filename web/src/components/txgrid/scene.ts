@@ -1,6 +1,6 @@
 // The squares in motion: where each one comes from, goes to and when, as one instance record each
 // for the GPU. Pure, so changes can be tested without a browser.
-import { feeBand } from "../../lib/format";
+import { FEE_BANDS, feeBand } from "../../lib/format";
 import { type GridTx, type Layout, rateOf } from "./layout";
 
 /** A CSS `cubic-bezier(x1, y1, x2, y2)`. */
@@ -24,10 +24,13 @@ export interface Motion {
   inOut: Bezier;
 }
 
-/** Floats per square: from (x, y, side, alpha), to (x, y, side, alpha), start, duration, curve, color. */
-export const STRIDE = 12;
+/**
+ * Floats per rectangle: from (x, y, w, h), to (x, y, w, h), start, duration, curve, color, then
+ * alpha from and to.
+ */
+export const STRIDE = 14;
 /** Color slot of the coinbase, after the ten fee bands. */
-export const COINBASE_COLOR = 10;
+export const COINBASE_COLOR = FEE_BANDS;
 const SETTLE = 0;
 const IN_OUT = 1;
 
@@ -83,8 +86,8 @@ export class Scene {
     this.epoch = epoch;
   }
 
-  /** Where square `i` is at `now` (ms after the epoch): x, y, side, alpha. */
-  sample(i: number, now: number, motion: Motion): [number, number, number, number] {
+  /** Where rectangle `i` is at `now` (ms after the epoch): x, y, w, h, alpha. */
+  sample(i: number, now: number, motion: Motion): [number, number, number, number, number] {
     const o = i * STRIDE;
     const d = this.data;
     const dur = d[o + 9] ?? 0;
@@ -93,7 +96,8 @@ export class Scene {
     const fadeP = Math.min(1, p * 1.6);
     const mix = (k: number, w: number) =>
       (d[o + k] ?? 0) + ((d[o + 4 + k] ?? 0) - (d[o + k] ?? 0)) * w;
-    return [mix(0, e), mix(1, e), mix(2, e), mix(3, fadeP)];
+    const alpha = (d[o + 12] ?? 0) + ((d[o + 13] ?? 0) - (d[o + 12] ?? 0)) * fadeP;
+    return [mix(0, e), mix(1, e), mix(2, e), mix(3, e), alpha];
   }
 
   /**
@@ -119,8 +123,10 @@ export class Scene {
     ) => {
       const o = ids.length * STRIDE;
       ids.push(id);
-      out.set(from, o);
-      out.set(to, o + 4);
+      out.set(from.slice(0, 4), o);
+      out.set(to.slice(0, 4), o + 4);
+      out[o + 12] = from[4] ?? 1;
+      out[o + 13] = to[4] ?? 1;
       out[o + 8] = start;
       out[o + 9] = dur;
       out[o + 10] = curve;
@@ -131,7 +137,7 @@ export class Scene {
     for (let r = 0; r < n; r++) {
       const tx = txs[l.order[r] ?? 0];
       if (!tx) continue;
-      const to = [l.x[r] ?? 0, l.y[r] ?? 0, l.side[r] ?? 0, 1];
+      const to = [l.x[r] ?? 0, l.y[r] ?? 0, l.w[r] ?? 0, l.h[r] ?? 0, 1];
       const color = colorOf(tx);
       const old = was.get(tx.id);
       if (old !== undefined) was.delete(tx.id);
@@ -150,8 +156,8 @@ export class Scene {
             : (r / Math.max(1, n)) * motion.stagger * 4;
       if (old === undefined || arrival === "pour") {
         const from = reduced
-          ? [to[0] ?? 0, to[1] ?? 0, to[2] ?? 0, 0]
-          : [to[0] ?? 0, (to[1] ?? 0) - drop, to[2] ?? 0, 0];
+          ? [to[0] ?? 0, to[1] ?? 0, to[2] ?? 0, to[3] ?? 0, 0]
+          : [to[0] ?? 0, (to[1] ?? 0) - drop, to[2] ?? 0, to[3] ?? 0, 0];
         push(tx.id, from, to, now + lag, reduced ? motion.fade : motion.slow, SETTLE, color);
         continue;
       }
@@ -164,9 +170,9 @@ export class Scene {
     // Gone: fade and shrink where they are. Those already faded are dropped.
     for (const [id, i] of was) {
       const from = this.sample(i, now, motion);
-      if (from[3] <= 0.001 || arrival === "snap") continue;
-      const [x, y, s] = from;
-      const to = reduced ? [x, y, s, 0] : [x + s * 0.25, y + s * 0.25, s * 0.5, 0];
+      if (from[4] <= 0.001 || arrival === "snap") continue;
+      const [x, y, w, h] = from;
+      const to = reduced ? [x, y, w, h, 0] : [x + w * 0.25, y + h * 0.25, w * 0.5, h * 0.5, 0];
       push(
         id,
         from,
