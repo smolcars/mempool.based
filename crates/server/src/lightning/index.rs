@@ -6,8 +6,8 @@
 //! millisecond or so for it, and indexed off the lock on a blocking thread that never sees the peer. Requests read
 //! the finished index through an `Arc` and never touch the graph, the peer or the node.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use engine::lightning::{self as store_ln, Announcement, GraphChannel, GraphNode, Index, Past};
@@ -159,6 +159,17 @@ pub(crate) async fn keep(
                 .await;
                 if let Ok((index, copied, took, hold)) = built {
                     let first = l.index().is_none();
+                    if first {
+                        // One read of the whole graph, as a snapshot takes, once per start.
+                        let sums = peer.read(super::totals);
+                        let time = store_ln::unix_now();
+                        *l.live.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(store_ln::Point {
+                                time,
+                                samples: 1,
+                                sums,
+                            });
+                    }
                     let (nodes, channels) = index.len();
                     l.set_index(index);
                     l.index_ms.store(

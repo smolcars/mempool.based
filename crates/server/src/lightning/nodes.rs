@@ -666,7 +666,7 @@ async fn app_overview(State(ctx): State<Arc<NetworkContext>>, uri: axum::http::U
         return Err(ApiError::bad_request("no query parameters here"));
     }
     let (index, l, store) = graph(&ctx)?;
-    let latest = store_ln::latest(store).await.map_err(|e| store_error(&e))?;
+    let latest = super::newest(l, store).await?;
     let opened = store_ln::opened(store, 10)
         .await
         .map_err(|e| store_error(&e))?;

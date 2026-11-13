@@ -345,7 +345,7 @@ Both are written with `try_write`: when the store's queue is full the Lightning 
 
 ### What is served
 
-The peer's status, the latest statistics and the series over an interval, the newest opens and closes, and nodes, channels, search and rankings ([Routes](#routes)), under `/app/lightning/…` and in the reference's shapes under `/api/v1/lightning/…` ([`API.md`](API.md#lightning)). Every answer comes from the store or the server's memory; none asks the node, and none takes the graph's lock.
+The peer's status, the latest statistics (until the first snapshot after a start is stored, up to ten minutes after the sync, the totals taken once when the first index is built: one read of the whole graph, as a snapshot is) and the series over an interval, the newest opens and closes, and nodes, channels, search and rankings ([Routes](#routes)), under `/app/lightning/…` and in the reference's shapes under `/api/v1/lightning/…` ([`API.md`](API.md#lightning)). Every answer comes from the store or the server's memory; none asks the node, and none takes the graph's lock.
 
 ### Routes
 
@@ -463,6 +463,40 @@ cargo test -p ln -- --ignored --nocapture hostile::regtest          # needs dev/
 - **Private channels are invisible,** as on every explorer.
 - **Tor-only nodes cannot be peers.** Their gossip still arrives through clearnet peers.
 - **No world map.** That needs a GeoIP database and is out of scope.
+
+## Test networks
+
+Signet and testnet4 run the same code as mainnet: the network decides only the chain hash, which every gossip message and peer must carry, and that mainnet alone has default peers.
+
+**What is needed:** `{NET}_LIGHTNING_ENABLED=true`, `DATA_DIR`, the network's node configured as for its blocks, and `{NET}_LIGHTNING_PEERS` ([`CONFIG.md`](CONFIG.md#lightning)). Without a peer list the server does not start: `config_invalid` with `SIGNET_LIGHTNING_PEERS must list 1 to 64 peers as <pubkey>@<ip>:<port>, comma-separated (only mainnet has defaults)`.
+
+**Finding peers.** Any public Lightning node of that network that announces a clearnet address and answers from your host; your own node on that network is the best one. Public explorers' node rankings for the network list candidates; take the address the node announces itself, and check that a TCP connection to it opens. List four or five: three are kept connected, and an unreachable one gives its slot to the next ([Peers](#peers)).
+
+**A peer on the wrong network** is told apart by the chains it names when it connects (BOLT 1 `init` `networks`): one that names only others, a mainnet node in a signet list for one, is disconnected at once, `lightning_peer_wrong_chain` names its key (once per peer), and `lightning_peer_unreachable` follows as it is redialled after the backoff ([`LOGGING.md`](LOGGING.md#lightning)). Nothing it sends is stored. A peer that names no chain cannot be told apart: it stays connected, and its gossip for another chain is refused as `wrong_chain`.
+
+### Signet, measured
+
+2026-11-13, the release server on an Apple M4, signet only, read-only against a synced rbitcoin signet node on the same private network, four public signet peers.
+
+| | First start, empty directory | Restart from its files |
+|---|---|---|
+| Graph | 1,065 channels and 218 nodes 20 s after start; `synced` at 44 s (the 30 s without a new channel). None refused | 1,065 channels from the graph file (1 MB, loaded in 3 ms), `synced` after 1 s |
+| Node load | 45 requests for 1,065 funding outputs; the funding txids after, at most 4 a second | No lookup: the saved answers covered every channel |
+| Gossip | 2.3 MB | 70 kB in the first minute |
+| Footprint | 34 MB | 53 MB |
+
+**A small graph looks thin, and that is right.** Of 218 nodes, 112 announced no address and many no name (LND's default alias is its key's first 20 hex digits); many nodes have one or two channels, so the rankings' lower half is near ties; many channels are inactive; closes are rare (none in the hours watched). The statistics start at the first sync ([`API.md`](API.md#lightning)) and the history at the first snapshot, so the charts have minutes of data on the first day.
+
+**Against the reference.** mempool.space's public signet API read 223 channels and 44 nodes in its newest statistics, dated 2024-09-09, and its node records were last updated between 2024 and December 2025. Sampled on 2026-11-13, a node's channel list there and here differed both ways, and every differing channel was checked against the node:
+
+- **Listed there, not here** (18 sampled): every one an unspent P2WSH output of the listed value. Their last policy there is from 2024 or early 2025: their nodes went silent without closing them, so no peer gossips them now, and a channel no one has updated for two weeks is not kept ([Limits](#limits)). They are real outputs but not live channels.
+- **Listed here, not there:** channels opened after its data stops, such as 330627x13x0 from the day before, which it does not know. Four older ones missing from its paged list of the same node were known to it by id.
+
+So the counts differ because the reference's graph stopped in 2024–2025 and keeps silent channels, not because either checks less. At the first sync, 38 of the 1,045 channels walked here (4 %) had no policy in either direction yet; LDK drops a channel with no update two weeks after receiving it, so expect the count to fall by about that much in the first two weeks.
+
+### Testnet4
+
+Not run: no public testnet4 Lightning node was known to answer, and mempool.space serves no testnet4 Lightning API (`404`) to find one through. The code path is signet's with testnet4's chain hash (from the `bitcoin` crate, whose own test checks it against the genesis block). Trying it needs one or more testnet4 peers as `<pubkey>@<ip>:<port>` and a synced testnet4 node configured for the server.
 
 ## Switch
 

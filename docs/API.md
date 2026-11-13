@@ -694,7 +694,7 @@ What the Lightning peer knows ([`LIGHTNING.md`](LIGHTNING.md#in-the-server)), fr
 | Route | Answer |
 |---|---|
 | `GET /app/lightning/status` | The peer from memory: `state` (`starting`, `syncing`, `synced`, `failed`, `stopped`, or `off`), `peers_configured`, `peers_connected`, `synced`, `nodes`, `channels`, `at_ceiling`, `validation` (`verified`, `unchecked`, `pending`, `early`, `rejected`, `caught_up`: how far a sync has come), `closes` (the newest block read, `caught_up`, outputs `watched`, the `catch_up` backlog, closes since start by kind, `reorgs`) and `history` (records stored, last sequence number). Fields that need a running peer are `null` without one |
-| `GET /app/lightning/statistics/latest` | The newest snapshot: `time`, `samples`, `channels`, `nodes`, `capacity`, `avg_capacity`, `med_capacity`, the four node kinds, `policies`, `avg_fee_rate` (ppm), `avg_base_fee_msat`, `med_fee_rate`, `med_base_fee_msat`, whole numbers. `404` before the first snapshot |
+| `GET /app/lightning/statistics/latest` | The newest snapshot: `time`, `samples`, `channels`, `nodes`, `capacity`, `avg_capacity`, `med_capacity`, the four node kinds, `policies`, `avg_fee_rate` (ppm), `avg_base_fee_msat`, `med_fee_rate`, `med_base_fee_msat`, whole numbers. Between the graph's first sync and the first snapshot stored (up to ten minutes), and after a restart until a snapshot newer than the sync is stored, the totals taken at the sync, with their own `time`. `404` only before the graph has synced and with no snapshot stored |
 | `GET /app/lightning/statistics/:interval` | `{interval, from, to, step, first, slots, sampled, complete, points}`, each point the snapshot above as a mean over its `samples`, oldest first |
 | `GET /app/lightning/channels/opened` | The newest channels by funding position, closed ones included |
 | `GET /app/lightning/channels/closed` | The newest closes by closing height |
@@ -738,7 +738,7 @@ What the Lightning pages read; one request for each page's main content. Real ma
 
 | Route | Answer |
 |---|---|
-| `GET /overview` | `{statistics, top_capacity, top_channels, opened, closed}`: the newest snapshot as `statistics/latest` gives it (`null` before the first), the top 10 nodes by capacity and by open channels (`{id, alias, capacity, channels}`), and the 10 newest opens and closes as in the channel lists above |
+| `GET /overview` | `{statistics, top_capacity, top_channels, opened, closed}`: the newest totals as `statistics/latest` gives them (`null` where it answers `404`), the top 10 nodes by capacity and by open channels (`{id, alias, capacity, channels}`), and the 10 newest opens and closes as in the channel lists above |
 | `GET /search?q=` | `{nodes: [{id, alias, capacity, channels}], channels: [{id, scid, capacity, state}]}` |
 | `GET /rankings/:by` | `by` is `capacity`, `channels` or `age` (oldest first funding first); `{by, nodes: [{id, alias, capacity, channels, first_seen, last_update}]}`, `?limit=` up to 100 |
 | `GET /nodes/:key` | The node page: below |
