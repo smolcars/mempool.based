@@ -988,7 +988,9 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
     let asked = if late { 2 } else { 1 };
     assert_eq!(honest.script.scid_queries.load(Ordering::Relaxed), asked);
     assert_eq!(h.script.scid_queries.load(Ordering::Relaxed), 1);
-    assert_eq!(totals(&peer).withheld, 1);
+    // The hostile peer's batch, once. Not the total: the honest peer's batch also counts if it
+    // outlasts the tests' 2 s timeout, as it may on a loaded machine.
+    assert_eq!(peer.gossip().withheld_of(&h.addr.node_id), 1);
     wait_for("both still up", || {
         up(&peer, h.addr) && up(&peer, honest.addr)
     })
@@ -1740,4 +1742,64 @@ fn withholding_loses_its_turn(leaves: bool) {
     }
     asked.sort_unstable();
     assert_eq!(asked, (2001..=8000).collect::<Vec<u64>>());
+}
+
+/// A batch that timed out, then its end marker arriving late, while the next batch is out: the
+/// late marker is the first batch's, so it ends nothing, and the peer is counted once. (The batch
+/// is aged past its timeout by hand: the order is forced, not waited for.)
+#[test]
+fn a_late_end_marker_does_not_end_the_next_batch() {
+    let h = handler(100_000);
+    let slow = key(7).public_key(&Secp256k1::new());
+    let mut features = InitFeatures::empty();
+    features.set_gossip_queries_optional();
+    let init = Init {
+        features,
+        networks: None,
+        remote_network_address: None,
+    };
+    let end = || ReplyShortChannelIdsEnd {
+        chain_hash: chain(),
+        full_information: true,
+    };
+    let queries = || -> Vec<Vec<u64>> {
+        h.gossip
+            .get_and_clear_pending_msg_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                MessageSendEvent::SendShortIdsQuery { msg, .. } => Some(msg.short_channel_ids),
+                _ => None,
+            })
+            .collect()
+    };
+    h.gossip.peer_connected(slow, &init, false).unwrap();
+    let list = ReplyChannelRange {
+        chain_hash: chain(),
+        first_blocknum: 0,
+        number_of_blocks: u32::MAX,
+        sync_complete: true,
+        short_channel_ids: (1..=2001).collect(),
+    };
+    h.gossip.handle_reply_channel_range(slow, list).unwrap();
+    assert_eq!(queries(), [(1..=2000).collect::<Vec<u64>>()]);
+    // Its first batch times out: counted once, and the next is asked.
+    h.gossip.expire_batches();
+    h.gossip.range_tick();
+    assert_eq!(queries(), [vec![2001]]);
+    assert_eq!(h.gossip.withheld_of(&slow), 1);
+    // The first batch's end marker, late: the second batch is still out.
+    h.gossip
+        .handle_reply_short_channel_ids_end(slow, end())
+        .unwrap();
+    assert_eq!(h.gossip.withheld_of(&slow), 1);
+    // The second batch is answered and ended: still counted once.
+    h.gossip
+        .handle_channel_announcement(Some(slow), &channel(2001, 1, 2))
+        .unwrap();
+    h.gossip
+        .handle_reply_short_channel_ids_end(slow, end())
+        .unwrap();
+    assert_eq!(h.gossip.withheld_of(&slow), 1);
+    assert_eq!(crate::peer::totals(&h.gossip).withheld, 1);
+    assert_eq!(h.gossip.range_pending(), 0);
 }
