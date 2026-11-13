@@ -343,6 +343,22 @@ describe("difficulty adjustments and block health", () => {
     expect(h.height).toStrictEqual([200, 203, 204, 206, 208]);
     expect(h.audited).toStrictEqual([2, 2, 2, 2, 2]);
     expect(healthSeries([]).x).toStrictEqual([]);
+    // A block without an audit inside a run still breaks the line, after that run.
+    const holed = healthSeries(
+      Array.from({ length: 1002 }, (_, k) => [k * 600, k, 99] as const).filter(
+        ([, k]) => k !== 501,
+      ),
+    );
+    expect(holed.per).toBe(2);
+    const gap = holed.rate.indexOf(null);
+    expect(holed.height[gap - 1]).toBe(500);
+    expect(holed.audited[gap - 1]).toBe(1);
+    expect(holed.rate.filter((r) => r === null)).toHaveLength(1);
+  });
+
+  it("finds the first audit in a record longer than a call takes arguments", () => {
+    const many = Array.from({ length: 200_000 }, (_, i) => [1_000 + i, i, 100] as const);
+    expect(healthSeries(many).first).toBe(1_000);
   });
 
   it("says what share of the period's blocks have an audit, and from when", () => {

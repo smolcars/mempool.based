@@ -504,8 +504,8 @@ export interface Health {
 /**
  * The match rate per block, in height order, with a gap wherever a block between two audited
  * ones has no audit. Past `max` blocks, each point is the lowest of a run of `per` heights, so a
- * bad block still shows. A block stamped before the one below it is drawn at that one's time,
- * since times must ascend.
+ * bad block still shows, and a run missing a block breaks the line after it. A block stamped
+ * before the one below it is drawn at that one's time, since times must ascend.
  */
 export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS): Health {
   const by = sorted(points, (a, b) => a[1] - b[1]);
@@ -519,7 +519,11 @@ export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS)
     audited: [],
     per,
     count: by.length,
-    first: by.length > 0 ? Math.min(...by.map((p) => p[0])) : undefined,
+    // A loop, not a spread: a long record has more audits than a call takes arguments.
+    first: by.reduce<number | undefined>(
+      (m, p) => (m === undefined || p[0] < m ? p[0] : m),
+      undefined,
+    ),
   };
   const push = (x: number, rate: number | null, height: number | null, n: number | null) => {
     out.x.push(Math.max(x, out.x.at(-1) ?? x));
@@ -531,7 +535,12 @@ export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS)
   const close = () => {
     if (run) push(run.t, run.r, run.h, run.n);
   };
+  let below: number | undefined;
+  /** A height with no audit since the last break: the line breaks after the point holding it. */
+  let hole = false;
   for (const [t, h, r] of by) {
+    if (below !== undefined && h > below + 1) hole = true;
+    below = h;
     const g = Math.floor(h / per);
     if (run && g === run.g) {
       run.n += 1;
@@ -539,9 +548,9 @@ export function healthSeries(points: readonly Prediction[], max = HEALTH_POINTS)
       continue;
     }
     close();
-    // A run with no audited block between two that have one: a gap, drawn as a break.
-    if (run && g > run.g + 1)
-      push((Math.max(run.t, out.x.at(-1) ?? run.t) + t) / 2, null, null, null);
+    // A block with no audit between two that have one: a gap, drawn as a break.
+    if (run && hole) push((Math.max(run.t, out.x.at(-1) ?? run.t) + t) / 2, null, null, null);
+    hole = false;
     run = { g, t, h, r, n: 1 };
   }
   close();
