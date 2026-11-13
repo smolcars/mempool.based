@@ -33,6 +33,7 @@ import {
   createRequest,
   fetchApi,
   fetchApp,
+  fetchStamped,
   isNotFound,
   type Stamped,
 } from "../../lib/api";
@@ -231,8 +232,18 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
   const [block, blockCtl] = createApi<Block>(at(""));
   // Stamped: confirmations and "the newest block" both come from this one reply's tip, so they can
   // never disagree the way a separate tip request could when a block lands between the two. The
-  // newest block asks again when the next is found (NextListener).
-  const [status, statusCtl] = createApi<BlockStatus>(at("/status"), { stamped: true });
+  // newest block asks again when the next is found (NextListener), from the server; each reply
+  // names its block, so the previous block's never stands for this one's while it loads.
+  let statusOf: string | undefined;
+  const [status, statusCtl] = createRequest(
+    () => (props.hash ? { hash: props.hash, network: network() } : undefined),
+    async ({ hash, network: n }, signal) => {
+      const fresh = statusOf === hash;
+      statusOf = hash;
+      const reply = await fetchStamped<BlockStatus>(n, `/block/${hash}/status`, { signal, fresh });
+      return { hash, reply };
+    },
+  );
   const [first, firstCtl] = createApi<Transaction[]>(at("/txs/0"));
   // Retried quietly while the server is busy (503) or this client has asked for a lot (429).
   const [summary, summaryCtl] = createRequest(
@@ -269,9 +280,9 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
 
   const b = () => ready(block);
   // Kept while it is asked again for the same block, so the pager does not blink on a new block.
-  const kept = createMemo((was?: { hash: string | undefined; reply: Stamped<BlockStatus> }) => {
-    const reply = ready(status);
-    if (reply) return { hash: props.hash, reply };
+  const kept = createMemo((was?: { hash: string; reply: Stamped<BlockStatus> }) => {
+    const now = ready(status);
+    if (now?.hash === props.hash) return now;
     return was?.hash === props.hash ? was : undefined;
   });
   const s = () => kept()?.reply.value;

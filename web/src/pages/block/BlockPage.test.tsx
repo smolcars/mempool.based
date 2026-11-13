@@ -561,6 +561,39 @@ describe("BlockPage", () => {
     );
   });
 
+  it("follows the newest block opened from an older one, through a block found meanwhile", async () => {
+    let answer: (r: Reply) => void = () => undefined;
+    serve({
+      ...normal(),
+      [`/block/${PREV}`]: { body: { ...block, id: PREV, height: block.height - 1 } },
+      [`/block/${PREV}/status`]: status({ height: block.height - 1, next_best: HASH }),
+      [`/block/${PREV}/txs/0`]: { body: [coinbase] },
+      [`/block/${HASH}/status`]: (n) =>
+        n === 1
+          ? new Promise<Reply>((resolve) => {
+              answer = resolve;
+            })
+          : status(),
+    });
+    const el = open(`/block/${PREV}`);
+    await until(() =>
+      expect(text(el.querySelector(".block-pager") as Element)).toContain("Next: 975 411"),
+    );
+    const ws = await until(() => FakeSocket.last());
+    ws.hello({ network: "mainnet" });
+    history.set({ value: `/block/${HASH}` });
+    await until(() => expect(calls).toContain(`/block/${HASH}/status`));
+    // The older block's "next" is this block: it must not stand for this one's while it loads.
+    const next = () => el.querySelector(".block-pager a[rel=next]")?.getAttribute("href");
+    expect(next()).toBeUndefined();
+    ws.receive({ topic: "blocks", type: "block", block: { ...block, id: NEXT, height: 975_412 } });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    answer(status({ next_best: null }));
+    await until(() => expect(next()).toBe(`/block/${NEXT}`));
+  });
+
   it("asks nothing more for an older block, whatever the topic says", async () => {
     serve(normal());
     const el = open(`/block/${HASH}`);
