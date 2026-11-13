@@ -86,10 +86,14 @@ test("the balance chart steps with each block and follows a new payment", async 
   await page.route(summary, (route) =>
     route.fulfill({ contentType: "application/json", body: stale }),
   );
+  // A body the browser dropped (an answer a newer request replaced) is not the one awaited.
   const newTotals = page.waitForResponse(
     async (r) =>
       new URL(r.url()).pathname === totals &&
-      ((await r.json()) as Stats).chain_stats.tx_count > counted.chain_stats.tx_count,
+      (await r.json().then(
+        (b: Stats) => b.chain_stats.tx_count > counted.chain_stats.tx_count,
+        () => false,
+      )),
   );
   await block(await pay(rpc, chain.addresses.p2sh, 20_000_000n));
   await newTotals;
