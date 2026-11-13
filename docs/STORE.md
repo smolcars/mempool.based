@@ -67,10 +67,10 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 
 | Table | Migration | Holds | Rebuildable |
 |---|---|---|---|
-| [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column), `0010_split_lowest_band.sql` (the [split](#fee-bands)) | One row per block on the best chain | Yes, by backfill |
+| [`blocks`](#blocks) | `0001_blocks.sql`, `0002_pools.sql` (the `pool` column), `0011_split_lowest_band.sql` (the [split](#fee-bands)) | One row per block on the best chain | Yes, by backfill |
 | `pool_list` | `0002_pools.sql` | One row: the version of the pool list and rules the `pool` column was last fully computed with | Yes: a missing or other version redoes the column |
 | [`audits`](#audits) | `0003_audits.sql` | One row per block we watched arrive: how it compared with the block we expected | **No:** observed live |
-| [`mempool_history`](#mempool_history) | `0004_mempool_history.sql`, `0010_split_lowest_band.sql` (the [split](#fee-bands)) | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
+| [`mempool_history`](#mempool_history) | `0004_mempool_history.sql`, `0011_split_lowest_band.sql` (the [split](#fee-bands)) | The mempool sampled once a minute, rolled into hours and days as it ages | No: observed live, lost with the file |
 | [`replacements`](#replacements) | `0005_replacements.sql`, `0008_replacement_blocks.sql` | The replacement record: what replaced what, as the mempool tracker saw it | No: observed live, lost with the file |
 | [`ln_channels`](#ln_channels) | `0006_lightning.sql`, `0007_lightning_lookups.sql` (`open_txid` and the lookup indexes) | Every public channel the Lightning peer verified, with its close | **No:** gossip forgets a channel once it closes |
 | [`ln_statistics`](#ln_statistics) | `0006_lightning.sql` | The Lightning network's totals every ten minutes, rolled into hours and days as they age | No: observed live |
@@ -78,7 +78,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 
 ### Fee bands
 
-`blocks` and `mempool_history` hold virtual size in the design's 12 fee bands ([`DESIGN.md`](DESIGN.md#fee-scale)) as ten columns and a split. `band0` … `band9` are the ten bands the store first had: `band0` is everything under 0.2 sat/vB, then 0.2–0.3 up to 10 and over. `band0_12_15` and `band0_15_20` are the parts of `band0` in [0.12, 0.15) and [0.15, 0.2), so under 0.12 is `band0` minus both. A row stored before `0010_split_lowest_band.sql` has them `NULL`, and so does a sum of rows not all of which knew them; nothing guesses at a split that was not recorded, and `band0` always keeps its meaning.
+`blocks` and `mempool_history` hold virtual size in the design's 12 fee bands ([`DESIGN.md`](DESIGN.md#fee-scale)) as ten columns and a split. `band0` … `band9` are the ten bands the store first had: `band0` is everything under 0.2 sat/vB, then 0.2–0.3 up to 10 and over. `band0_12_15` and `band0_15_20` are the parts of `band0` in [0.12, 0.15) and [0.15, 0.2), so under 0.12 is `band0` minus both. A row stored before `0011_split_lowest_band.sql` has them `NULL`, and so does a sum of rows not all of which knew them; nothing guesses at a split that was not recorded, and `band0` always keeps its meaning.
 
 **Served as 12 or 10.** Every route and topic that sends a stored row's bands (`fee_bands` of the block facts, `bands` of `/app/mempool/history`) sends 12 numbers, cheapest first, when the split is known, and the ten stored bands when it is not. A client reads the length: 10 means the lowest band is not split. `engine::projected::Bands` is that rule in code. Bands from the live projection (the `mempool` and `projected` topics) are always 12.
 
