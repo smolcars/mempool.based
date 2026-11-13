@@ -152,3 +152,99 @@ export async function exactsInside(page: Page, label: string) {
   }
   await expect(page.locator(".exact:not([hidden])")).toHaveCount(0);
 }
+
+/**
+ * Every copy control on screen, and each in an exact amount's pop-up, pressed one at a time: its
+ * "Copied" (or "Not copied") wholly in sight, nothing over it and not cut by the screen's edge, and
+ * clear of the value it copied. Beside the button it once hid the decimals it had just copied.
+ * The page must answer the copy (`navigator.clipboard` stood in for).
+ */
+export async function copyNotesClear(page: Page, label: string) {
+  const { faults, checked } = await page.evaluate(async () => {
+    const frame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    const out: string[] = [];
+    let count = 0;
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>("main button.copy")];
+    for (const b of buttons) {
+      const pop = b.closest<HTMLElement>(".exact");
+      const figure = pop?.previousElementSibling;
+      const opens = figure instanceof HTMLButtonElement ? figure : undefined;
+      // Shown, or a tap away in a pop-up; a control on a panel that is shut is not checked.
+      if (!opens && b.getClientRects().length === 0) continue;
+      (opens ?? b).scrollIntoView({ block: "center" });
+      await frame();
+      if (opens) {
+        opens.click();
+        await frame();
+      }
+      const value =
+        b.closest(".hash")?.querySelector(".hash__text") ??
+        pop?.querySelector(".num") ??
+        b.closest(".tx-code")?.querySelector(".tx-code__text");
+      const name = b.title;
+      if (!value) {
+        out.push(`"${name}": a copy control whose value this check does not know`);
+        continue;
+      }
+      b.click();
+      let note: HTMLElement | null = null;
+      for (let i = 0; i < 30 && !note; i++) {
+        await frame();
+        note = b.querySelector<HTMLElement>(".copy__note");
+      }
+      count += 1;
+      if (!note) {
+        out.push(`"${name}": no note showed`);
+        continue;
+      }
+      const n = note.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(value);
+      const over = [...range.getClientRects()].some(
+        (r) =>
+          Math.min(r.right, n.right) - Math.max(r.left, n.left) > 0.5 &&
+          Math.min(r.bottom, n.bottom) - Math.max(r.top, n.top) > 0.5,
+      );
+      if (over) out.push(`"${name}": "${note.textContent}" covers the value it copied`);
+      const w = document.documentElement.clientWidth;
+      const h = document.documentElement.clientHeight;
+      if (n.left < 0 || n.top < 0 || n.right > w || n.bottom > h) {
+        out.push(`"${name}": "${note.textContent}" runs off the screen`);
+      }
+      // Its corners and middle are its own: nothing covers it and no scroller cuts it.
+      // Inside its rounded corners, where a hit test would reach whatever lies under them.
+      const [cx, cy] = [(n.left + n.right) / 2, (n.top + n.bottom) / 2];
+      const points = [
+        [n.left + 8, cy],
+        [n.right - 8, cy],
+        [cx, n.top + 3],
+        [cx, n.bottom - 3],
+        [cx, cy],
+      ] as const;
+      for (const [x, y] of points) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit === null || !note.contains(hit)) {
+          const by =
+            hit === null
+              ? "the screen edge"
+              : hit === b
+                ? "its own button"
+                : `${hit.tagName} ${hit.className} in ${hit.parentElement?.className ?? ""} ${hit.getAttribute("title") ?? ""}`;
+          out.push(
+            `"${name}": "${note.textContent}" is under ${by} at ${Math.round(x)},${Math.round(y)}`,
+          );
+          break;
+        }
+      }
+      // Out of the way of the next control's note; the button takes its own away after 1.4 s.
+      note.style.visibility = "hidden";
+      if (pop) document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    }
+    return { faults: out, checked: count };
+  });
+  expect(faults, label).toStrictEqual([]);
+  expect(checked, `${label}: copy controls checked`).toBeGreaterThan(0);
+}

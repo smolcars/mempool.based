@@ -307,7 +307,7 @@ type Policy = NonNullable<End["policy"]>;
 /** The terms an end sets, as the rows of the two ends' table. */
 const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }[] = [
   { label: "Fee rate", value: (p) => <span class="num">{ppm(p.fee_rate)}</span> },
-  { label: "Base fee", value: (p) => <Msat msat={p.base_fee_msat} /> },
+  { label: "Base fee", value: (p) => <Msat msat={p.base_fee_msat} what="base fee" /> },
   {
     label: "Time lock delta",
     value: (p) => <span class="num">{groupDigits(p.cltv_delta)} blocks</span>,
@@ -317,9 +317,9 @@ const POLICY_ROWS: readonly { label: string; value: (p: Policy) => JSX.Element }
     value: (p) => (
       // Each figure whole on its line: two ends' equal limits look equal.
       <span class="ln-range">
-        <Msat msat={p.min_htlc_msat} />
+        <Msat msat={p.min_htlc_msat} what="smallest payment" />
         <span class="ln-range__to">to</span>
-        <Msat msat={p.max_htlc_msat} />
+        <Msat msat={p.max_htlc_msat} what="largest payment" />
       </span>
     ),
   },

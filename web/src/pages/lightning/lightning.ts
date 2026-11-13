@@ -2,7 +2,7 @@
 // pages say about them. Pure. Aliases are gossip, chosen by whoever runs the node (SECURITY.md
 // rule 14): they reach the page only as text, through cleanAlias.
 import { formatMoment } from "../../components/chart/scale";
-import { formatBtcShort, groupDigits } from "../../lib/format";
+import { formatBtcShort, groupDigits, MISSING } from "../../lib/format";
 
 export type State = "off" | "starting" | "syncing" | "synced" | "failed" | "stopped";
 
@@ -473,6 +473,10 @@ export const btcAxis = (sats: number): string => {
 };
 
 export const msat = (n: number): string => `${groupDigits(n)} msat`;
+
+/** Millisatoshis as a program reads them: digits only, no grouping or unit. Exact past 2^53. */
+export const plainMsat = (n: number): string =>
+  Number.isFinite(n) ? BigInt(Math.round(n)).toString() : MISSING;
 
 /**
  * Millisatoshis in magnitude, as a reader compares limits: msat under a sat (`900 msat`), sats
