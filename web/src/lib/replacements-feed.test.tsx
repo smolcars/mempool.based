@@ -7,6 +7,8 @@ import { createReplacements, type Replacements } from "./replacements";
 
 let asks: number[];
 let feeds: Replacements[];
+/** How long the server takes to answer, as a retry after a refusal would. */
+let delay = 0;
 
 function Probe() {
   feeds.push(createReplacements("regtest", () => false, { gapMs: 1500 }));
@@ -22,8 +24,12 @@ beforeEach(() => {
   feeds = [];
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
+  delay = 0;
   vi.stubGlobal("fetch", async () => {
     asks.push(Date.now());
+    await new Promise((resolve) => {
+      setTimeout(resolve, delay);
+    });
     return Response.json([]);
   });
 });
@@ -63,5 +69,25 @@ describe("createReplacements", () => {
     // made on a fake clock that ran ahead.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(feeds[0]?.stories()).toStrictEqual([]);
+  });
+
+  it("waits from the answer, not the ask, when the answer was slow", async () => {
+    await vi.advanceTimersByTimeAsync(10_000);
+    delay = 3000;
+    mount(() => <Probe />, "/regtest/");
+    FakeSocket.last().hello();
+    version(1);
+    await vi.waitFor(() => expect(asks).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(3000);
+    delay = 0;
+    // The record changes just after the slow answer came: its cache window is still open.
+    await vi.advanceTimersByTimeAsync(200);
+    version(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(asks).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(asks).toHaveLength(2);
+    // The answer took 3 s, then its 1.5 s wait.
+    expect((asks[1] ?? 0) - (asks[0] ?? 0)).toBeGreaterThanOrEqual(4500);
   });
 });

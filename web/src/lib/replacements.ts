@@ -158,9 +158,10 @@ export const replacementsTopic: Topic<ReplacementsMessage> = {
 };
 
 /**
- * When each list was last asked for, by any feed on the page. The reply is `max-age=1`: an ask
- * sooner after another, a feed's own or another's (the home panel's before the reader opened
- * `/rbf`), would be answered from the browser's cache with the list from before the change.
+ * When each list was last asked for or answered, by any feed on the page. The reply is
+ * `max-age=1`: an ask sooner after another's answer, a feed's own or another's (the home panel's
+ * before the reader opened `/rbf`), would be read from the browser's cache, the list from before
+ * the change.
  */
 const asked = new Map<string, number>();
 
@@ -256,6 +257,8 @@ export function createReplacements(
           setOff(true);
         } else setError(e);
       } finally {
+        // The browser's cache window opens when the answer comes, which a retry can delay.
+        asked.set(key, Date.now());
         if (controller === c) {
           controller = undefined;
           if (again) {
