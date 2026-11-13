@@ -409,7 +409,7 @@ What the scorer leaves out, and how it says how sure it is:
 
 - **Outages.** A gap between two recorded blocks longer than two hours (`MAX_GAP_SECS`; on a live chain about once in 450 years) means the recorder's node lost the network. Samples whose horizon reaches into that gap, or into the 30 minutes after it while the method's arrivals still hold the quiet and the mempool refills, are left out and counted.
 - **Blocks we never saw.** A block none of whose transactions our projection held has no clearing rate. A sample whose whole horizon is such blocks is counted apart (`unsc.`), not scored as a miss.
-- **One block decides many samples.** Every sample waiting for the same block shares its fate, so 2,000 samples over 100 blocks are nearer 100 outcomes than 2,000. Each met share has a 95% interval clustered on the block the samples waited for.
+- **One block decides many samples.** Every sample waiting for the same block shares its fate, so 2,000 samples over 100 blocks are nearer 100 outcomes than 2,000. Each met share has a 95% interval: the wider of one clustered on the block the samples waited for, and Wilson's for as many outcomes as blocks, so a share all met over four blocks is shown as 51–100%, not certain.
 - **Fast and slow horizons.** Each met share is also split by whether the `N`-th block came within `N` × 10 minutes of the sample.
 
 ```bash
@@ -438,15 +438,15 @@ At the five moments the reference was asked, ours met the next block 4 times in 
 
 | Level | Source | Samples | Met the horizon | 95% interval | Mean overpay when met | Median overpay | Mean shortfall when missed | Met when the blocks came faster / slower than `N` × 10 min |
 |---|---|---|---|---|---|---|---|---|
-| next block | ours | 2,225 | 72.3% | 63.6–81.0% | 0.659 sat/vB | 0.679 | 0.799 | 99.1% / 28.6% |
-| | the node's estimate | 2,225 | 93.3% | 88.2–98.3% | 1.634 | 1.694 | 0.534 | 100% / 82.2% |
-| | the reference | 112 | 75.9% | 69.0–82.8% | 1.001 | 0.879 | 0.626 | 94.1% / 47.7% |
+| next block | ours | 2,225 | 72.3% | 62.8–81.0% | 0.659 sat/vB | 0.679 | 0.799 | 99.1% / 28.6% |
+| | the node's estimate | 2,225 | 93.3% | 86.6–98.3% | 1.634 | 1.694 | 0.534 | 100% / 82.2% |
+| | the reference | 112 | 75.9% | 64.5–84.5% | 1.001 | 0.879 | 0.626 | 94.1% / 47.7% |
 | 3 blocks | ours | 2,164 | 71.2% | 60.3–82.1% | 0.442 | 0.314 | 0.678 | 97.0% / 42.0% |
 | | the node's estimate | 2,164 | 68.9% | 55.6–82.1% | 0.398 | 0.323 | 0.977 | 89.5% / 45.5% |
-| | the reference | 109 | 84.4% | 77.3–91.5% | 0.758 | 0.663 | 0.592 | 100% / 67.9% |
+| | the reference | 109 | 84.4% | 73.8–91.5% | 0.758 | 0.663 | 0.592 | 100% / 67.9% |
 | 6 blocks | ours | 2,063 | 64.7% | 52.0–77.4% | 0.243 | 0.008 | 0.709 | 87.8% / 40.3% |
 | | the node's estimate | 2,063 | 82.5% | 70.5–94.5% | 0.428 | 0.329 | 1.085 | 100% / 63.9% |
-| | the reference | 103 | 73.8% | 63.2–84.4% | 0.442 | 0.271 | 0.538 | 96.1% / 51.9% |
+| | the reference | 103 | 73.8% | 61.7–84.4% | 0.442 | 0.271 | 0.538 | 96.1% / 51.9% |
 
 At the moments the reference was asked, ours met the next block 75.0% of the time, 3 blocks 67.9% and 6 blocks 61.2%. Left in, the outage flatters every level (76.8%, 76.6%, 73.9%): through it ours sat one step above the mempool's floor, and the catch-up blocks cleared at that floor.
 
@@ -466,9 +466,9 @@ At the moments the reference was asked, ours met the next block 75.0% of the tim
 
 **The change.** Arrivals are counted up to the 90% quantile of the time to the `N`-th block instead of the 80% one, and only the busiest minute is left out of them, not the busiest quarter. Both terms were tested, and nothing else was changed, because the misses above point at them and nowhere else.
 
-**How it was tested.** The 24-hour recording holds our answers, not the mempool and arrivals they were computed from, so a changed method cannot be replayed on it. One more recording was made for that: three hours on mainnet, read-only, 2026-11-13 10:04 to 12:59 UTC (`INPUTS=1`, a sample every 10 s), 1,020 samples with our own answer, 13 blocks (975,661 to 975,673) that came slowly, 13.5 minutes apart on average with one gap of 40 minutes. `REPLAY` runs it through the method at 18 tunings: 6 confidences, from 80% to 99%, and leaving out a quarter of the minutes, one or none. The replay of the tuning that was served follows what was served to 0.015 sat/vB on average. The difference comes from smoothing over samples 10 s apart rather than ticks 2 s apart.
+**How it was tested.** The 24-hour recording holds our answers, not the mempool and arrivals they were computed from, so a changed method cannot be replayed on it. One more recording was made for that: three hours on mainnet, read-only, 2026-11-13 10:04 to 12:59 UTC (`INPUTS=1`, a sample every 10 s), 1,020 samples with our own answer, 13 blocks (975,661 to 975,673) that came slowly, 13.5 minutes apart on average with one gap of 40 minutes. `REPLAY` runs it through the method at 18 tunings: 6 confidences, from 80% to 99%, and leaving out a quarter of the minutes, one or none. The replay of the tuning that was served follows what was served to 0.015 sat/vB on average. The difference comes from smoothing over samples 10 s apart rather than ticks 2 s apart. The projection was never stale during the run. Recordings now mark when it is, and the replay then throws the arrivals away and restarts the warm-up, as the server does.
 
-- **Fit:** the first half (samples before 11:31:35 UTC, waiting on 8 blocks), the 24-hour recording's waiting times, and the arrivals themselves. The rule, written down before the second half was scored: leave out one minute, and take the lowest confidence at which every level met at least 90% on the first half. That gave 90%.
+- **Fit:** the first half (samples before 11:31:35 UTC whose whole horizon ended before it, 7 blocks), the 24-hour recording's waiting times, and the arrivals themselves. The rule, written down before the second half was scored: leave out one minute, and take the lowest confidence at which every level met at least 90% on the first half. That gave 90% (97.3%, 100% and 90.6%). At 80% and 85% the 6-block level met 63% and 64%.
 - **Report:** the second half, 6 blocks, never looked at while choosing.
 
 Leaving out a quarter of the minutes undercounted what then arrived. Over the three hours, the next 30 minutes brought 21 to 39% more than the mean of the quieter three quarters of the last 30 had predicted, depending on the rate. With the busiest minute left out it was 0 to 19% more, and with nothing left out between 5% less and 14% more. One minute keeps the guard against a single burst for a few points of bias.
@@ -479,12 +479,12 @@ Leaving out a quarter of the minutes undercounted what then arrived. Over the th
 |---|---|---|---|---|---|---|
 | next block | ours before | 475 | 54.1% | 14.0–94.2% | 0.660 sat/vB | 1.013 sat/vB |
 | | ours after | 475 | 67.4% | 28.2–100% | 1.018 | 0.841 |
-| | the node's estimate | 475 | 85.9% | 69.0–100% | 1.519 | 0.334 |
-| | the reference | 16 | 68.8% | 31.7–100% | 1.045 | 0.937 |
-| 3 blocks | ours before | 348 | 59.2% | 34.3–84.1% | 0.099 | 0.540 |
-| | ours after | 348 | 98.6% | 97.3–99.8% | 0.369 | 0.374 |
+| | the node's estimate | 475 | 85.9% | 46.0–100% | 1.519 | 0.334 |
+| | the reference | 16 | 68.8% | 31.6–100% | 1.045 | 0.937 |
+| 3 blocks | ours before | 348 | 59.2% | 20.0–89.4% | 0.099 | 0.540 |
+| | ours after | 348 | 98.6% | 49.6–100% | 0.369 | 0.374 |
 | | the node's estimate | 348 | 25.9% | 0–83.1% | 0.260 | 0.217 |
-| | the reference | 12 | 75.0% | 52.9–97.1% | 0.778 | 0.259 |
+| | the reference | 12 | 75.0% | 30.1–97.1% | 0.778 | 0.259 |
 | 6 blocks | ours before | 16 | 0% | one outcome | | 0.035 |
 | | ours after | 16 | 100% | one outcome | 0.840 | |
 
@@ -494,9 +494,9 @@ Over the whole three hours, the fit half included (13 blocks):
 
 | Level | Ours before | Ours after | The node's estimate | The reference |
 |---|---|---|---|---|
-| next block | 68.5%, 0.617 sat/vB | 83.0% (57.7–100%), 1.110 | 93.1%, 1.535 | 71.9% of 32, 1.092 |
-| 3 blocks | 76.3%, 0.094 | 99.4% (98.5–100%), 0.578 | 55.3%, 0.178 | 82.1% of 28, 0.694 |
-| 6 blocks | 36.2%, 0.000 | 97.7% (94.5–100%), 0.437 | 100%, 0.118 | 88.2% of 17, 0.213 |
+| next block | 68.5%, 0.617 sat/vB | 83.0% (56.0–100%), 1.110 | 93.1%, 1.535 | 71.9% of 32, 1.092 |
+| 3 blocks | 76.3%, 0.094 | 99.4% (73.2–100%), 0.578 | 55.3%, 0.178 | 82.1% of 28, 0.694 |
+| 6 blocks | 36.2%, 0.000 | 97.7% (64.5–100%), 0.437 | 100%, 0.118 | 88.2% of 17, 0.213 |
 
 On the 24-hour recording the new allowance would have covered 88.6% of the next-block horizons, 83.8% of the 3-block ones and 85.2% of the 6-block ones, against 77.7%, 73.1% and 72.9% for the old. That is the term that explained most misses. What share would then have been met cannot be known without a replay.
 
