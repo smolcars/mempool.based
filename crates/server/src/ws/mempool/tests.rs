@@ -81,6 +81,8 @@ struct Node {
     history: Vec<Txid>,
     /// The node's minimum accepted rate, sat per 1,000 vB.
     min_fee: u64,
+    /// Requests answered or refused, by method.
+    calls: HashMap<&'static str, usize>,
 }
 
 #[derive(Clone, Default)]
@@ -246,8 +248,9 @@ impl Mock {
         self.node().down = down;
     }
 
-    fn check(&self) -> Result<std::sync::MutexGuard<'_, Node>, SourceError> {
-        let n = self.node();
+    fn check(&self, method: &'static str) -> Result<std::sync::MutexGuard<'_, Node>, SourceError> {
+        let mut n = self.node();
+        *n.calls.entry(method).or_default() += 1;
         if n.down {
             return Err(SourceError::Failed(
                 "rpc unavailable: connection refused".into(),
@@ -259,7 +262,7 @@ impl Mock {
 
 impl Source for Mock {
     async fn mempool_info(&self) -> Result<MempoolInfo, SourceError> {
-        let n = self.check()?;
+        let n = self.check("mempool_info")?;
         Ok(MempoolInfo {
             loaded: true,
             size: n.txs.len() as u64,
@@ -278,7 +281,7 @@ impl Source for Mock {
     }
 
     async fn listing(&self) -> Result<RawMempool, SourceError> {
-        let n = self.check()?;
+        let n = self.check("listing")?;
         Ok(RawMempool {
             mempool_sequence: n.sequence,
             txids: n.txs.iter().map(|t| t.tx.compute_txid()).collect(),
@@ -289,7 +292,7 @@ impl Source for Mock {
         &self,
         txids: &[Txid],
     ) -> Result<Vec<Option<(MempoolEntry, Transaction)>>, SourceError> {
-        let n = self.check()?;
+        let n = self.check("details")?;
         let by_id: HashMap<Txid, &MockTx> =
             n.txs.iter().map(|t| (t.tx.compute_txid(), t)).collect();
         Ok(txids
@@ -328,11 +331,11 @@ impl Source for Mock {
     }
 
     async fn tip(&self) -> Result<ChainTip, SourceError> {
-        self.check()?.tip.ok_or(SourceError::Busy)
+        self.check("tip")?.tip.ok_or(SourceError::Busy)
     }
 
     async fn block(&self, hash: BlockHash) -> Result<Block, SourceError> {
-        self.check()?
+        self.check("block")?
             .blocks
             .get(&hash)
             .cloned()
@@ -346,7 +349,7 @@ impl Source for Mock {
 
 impl ClusterSource for Mock {
     async fn clusters(&self, txids: &[Txid]) -> Result<Vec<Option<Cluster>>, SourceError> {
-        let n = self.check()?;
+        let n = self.check("clusters")?;
         Ok(txids.iter().map(|t| n.clusters.get(t).cloned()).collect())
     }
 
@@ -1443,4 +1446,145 @@ async fn found_blocks_keep_every_client_equal_to_the_server() {
             assert_eq!(a.json["projected"]["tip"]["height"], tip.height);
         }
     }
+}
+
+/// The fee score's `/app/fees/score` body for `query`, and its status.
+async fn fee_score(ctx: &Arc<NetworkContext>, query: &str) -> (u16, Value) {
+    let uri: axum::http::Uri = format!("/app/fees/score{query}").parse().unwrap();
+    let res = crate::ws::fees::score::route(axum::extract::State(Arc::clone(ctx)), uri).await;
+    let status = res.status().as_u16();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn the_fee_score_asks_the_node_nothing_and_survives_a_restart() {
+    let mock = Mock::new();
+    let s = Server::start(&mock, Duration::from_millis(10));
+    // A fees task warmed up as after five quiet minutes, so ours is served.
+    let ctx = context(true, Duration::from_millis(10));
+    let mut rec = engine::fees::Recommender::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rec.gap(now - 400);
+    let engines = crate::ws::fees::Engines {
+        tracker: s.tracker.clone(),
+        projector: s.projector.clone(),
+    };
+    let fees = tokio::spawn(crate::ws::fees::run(Arc::clone(&ctx), Some(engines), rec));
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-fee-score-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = Arc::new(engine::store::Store::open(&dir, "regtest", Default::default()).unwrap());
+    store.set_gate(engine::store::Gate::Open);
+    // The keeper and its writer, sampling every 20 ms.
+    let keep = || {
+        let (tx, rx) = mpsc::channel(64);
+        let score = crate::ws::fees::score::run(
+            Arc::clone(&ctx),
+            s.tracker.clone(),
+            s.projector.clone(),
+            Some(Arc::clone(&store)),
+            Some(tx),
+            Duration::from_millis(20),
+        );
+        let write = crate::ws::fees::score::write(Arc::clone(&ctx), Arc::clone(&store), rx);
+        [tokio::spawn(score), tokio::spawn(write)]
+    };
+    let mut keeper = keep();
+    let stored = || async {
+        engine::fees::db::load(&store, now)
+            .await
+            .unwrap()
+            .1
+            .into_iter()
+            .map(|b| (b.height, b.clearing))
+            .collect::<Vec<_>>()
+    };
+    let wait_for = |want: Vec<(u32, Option<u32>)>| async move {
+        let deadline = Instant::now() + WAIT;
+        while stored().await != want {
+            assert!(
+                Instant::now() < deadline,
+                "blocks stored: {:?}",
+                stored().await
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    // Six transactions at 5 sat/vB fill the next block; three at 2 sat/vB wait.
+    for _ in 0..6 {
+        mock.add(500_000, 100_000);
+    }
+    for _ in 0..3 {
+        mock.add(200_000, 100_000);
+    }
+    s.settle().await;
+    while ctx
+        .fees
+        .current()
+        .is_none_or(|a| a.source != crate::ws::fees::Source::Projected)
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Sampling and scoring, some fifty times over, ask the node for nothing beyond the
+    // tracker's own polling: no block, no transaction, no cluster. Times are whole seconds, so
+    // this also puts the samples a second before the block.
+    let calls = |m| mock.node().calls.get(m).copied().unwrap_or(0);
+    let asked = |c: &dyn Fn(&'static str) -> usize| ["block", "details", "clusters"].map(c);
+    let idle = asked(&calls);
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert_eq!(asked(&calls), idle);
+
+    // A block takes the 5 sat/vB transactions: it cleared at 5 sat/vB, and the only block
+    // fetched is the tracker's own.
+    mock.mine(6);
+    s.settle().await;
+    wait_for(vec![(1, Some(5_000))]).await;
+    assert_eq!(calls("block"), idle[0] + 1);
+    // The answers are rebuilt at the next sample.
+    let deadline = Instant::now() + WAIT;
+    let body = loop {
+        let (status, body) = fee_score(&ctx, "?window=24h").await;
+        assert_eq!(status, 200);
+        if body["levels"][0]["scored"].as_u64() > Some(0) {
+            break body;
+        }
+        assert!(Instant::now() < deadline, "never scored: {body}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let high = &body["levels"][0];
+    assert_eq!(high["outcomes"], 1);
+    // One block is no evidence: no share is given.
+    assert_eq!(
+        (&high["enough"], &high["met"]),
+        (&Value::Bool(false), &Value::Null)
+    );
+    assert_eq!(body["min_blocks"], 30);
+
+    // Stopped, a block comes, and started again: the history is still there, and the block
+    // mined while it was down is recorded without a clearing rate.
+    for t in &keeper {
+        t.abort();
+    }
+    mock.mine(3);
+    s.settle().await;
+    keeper = keep();
+    wait_for(vec![(1, Some(5_000)), (2, None)]).await;
+    let (_, again) = fee_score(&ctx, "").await;
+    assert_eq!(again["window"], "all");
+    assert!(again["levels"][0]["scored"].as_u64() >= high["scored"].as_u64());
+
+    for bad in ["?window=2h", "?window=1w&window=1w", "?limit=1", "?window="] {
+        assert_eq!(fee_score(&ctx, bad).await.0, 400, "{bad}");
+    }
+    for t in keeper {
+        t.abort();
+    }
+    fees.abort();
+    let _ = std::fs::remove_dir_all(&dir);
 }

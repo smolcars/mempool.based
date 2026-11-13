@@ -133,6 +133,7 @@ pub(crate) fn run(
     ctx.track.attach(tracker, projector);
     let (kept, writer) = crate::replacements::writer(ctx).unzip();
     let mut tasks: Vec<JoinHandle<()>> = writer.into_iter().collect();
+    tasks.extend(super::fees::score::start(ctx, tracker, projector));
     tasks.extend([
         tokio::spawn(super::track::follow_txs(
             Arc::clone(&ctx.track),

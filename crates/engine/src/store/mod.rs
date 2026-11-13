@@ -100,6 +100,8 @@ pub enum Read {
     Audit,
     MempoolHistory,
     Replacements,
+    /// The fee score's samples and blocks, read once at start.
+    FeeScore,
     Lightning,
     /// The rows that show which chain a file from before `chain` was written for.
     Chain,
@@ -116,6 +118,7 @@ impl Read {
             Self::Audit => "audit",
             Self::MempoolHistory => "mempool_history",
             Self::Replacements => "replacements",
+            Self::FeeScore => "fee_score",
             Self::Lightning => "lightning",
             Self::Chain => "chain",
         }
