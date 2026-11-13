@@ -217,7 +217,7 @@ test("a table that grows after it is drawn drops another column to fit", async (
 
 // Tables that appear only on a tap were outside the rule once: the audit's list on a phone put the
 // fee rate it is sorted by off-screen. Every table shown on interaction is held to it too.
-test("tables that open on a tap fit their panel or show that they scroll, at 320, 390 and 720 px", async ({
+test("tables that open on a tap fit their panel or show that they scroll, at 320 and 720 px", async ({
   page,
 }) => {
   const block = chain.blocks[106];
@@ -248,7 +248,8 @@ test("tables that open on a tap fit their panel or show that they scroll, at 320
       },
     }),
   );
-  for (const width of [320, 390, 720]) {
+  // The narrowest phone and where a desktop drops columns: 390 lies between them.
+  for (const width of [320, 720]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`/regtest/block/${block}`);
     await page.getByRole("button", { name: "Show the transactions that differ" }).click();

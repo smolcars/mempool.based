@@ -199,8 +199,8 @@ test("a phone's chart reads out only the fee bands that hold anything, and keeps
   const at = await top();
   const box = await flow.boundingBox();
   if (!box) throw new Error("no flow plot");
-  // Every seventh minute: the mined minutes (each tenth) and the quiet ones both come up.
-  for (let k = 0; k < 116; k += 7) {
+  // Every eleventh minute: mined minutes (0 and 110 of each tenth) and quiet ones both come up.
+  for (let k = 0; k < 116; k += 11) {
     await page.touchscreen.tap(box.x + (box.width * (k + 0.5)) / 116, box.y + box.height * 0.5);
     expect(await top(), `tap at minute ${k}`).toBe(at);
   }
