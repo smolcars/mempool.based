@@ -11,7 +11,7 @@ A PR that adds a slower step must make room for it or move it out of the PR path
 | Job | Limit | Warm, 2026-11-13 |
 |---|---|---|
 | `rust` | 135 s | 92 to 121 s |
-| `e2e`, each of its three shards | 145 s | 62 to 93 s |
+| `e2e`, each of its four shards | 145 s | 62 to 93 s with three; 68 to 106 s with four, on 2026-11-14 ([below](#browser-test-shards)) |
 | `web` | 60 s | 30 to 39 s |
 
 The job's last step, [`.github/job-limit.sh`](../.github/job-limit.sh), writes the job's time to the run's summary and fails a pull request's job that went over, when its Rust cache was a warm, exact hit. A cold run (a new lockfile or toolchain) and a `master` push only warn: failing them would stop `rust-cache` from saving the cache that makes the next run warm. The `rust` and `e2e` jobs also list their ten slowest tests in the summary ([`.github/slowest.py`](../.github/slowest.py), from nextest's and Playwright's JUnit reports).
@@ -33,7 +33,7 @@ Make room in the same pull request; never raise a limit to pass. In order: shrin
 7. **Slow waits overlap.** The `e2e` job starts the regtest node and the browser download in the background, then compiles while the node mines.
 8. **Lean debug builds.** CI builds without full debug info to cut compile time and cache size. One dependency is optimised even there: secp256k1's C library, which at `-O0` made signature checks most of the Lightning tests' time (a test of 1,500 announcements took 6.9 s; optimised, 0.3 s). It builds once into the cache.
 9. **The test binaries run at once.** [cargo-nextest](https://nexte.st) runs every test as its own process, eight at a time on the runner's four cores, since most slow tests wait on a socket or a timer ([`.config/nextest.toml`](../.config/nextest.toml)). `cargo test` ran the 28 test binaries one after another, each waiting for its slowest test. nextest is a prebuilt binary checked against a pinned checksum; it adds nothing to the product or the lockfile. Doc tests, which nextest does not run, run after it with `cargo test --doc`. Examples are not built for the tests: clippy already checks they compile.
-10. **Browser tests run as three shards, each on its runner's four cores.** The `e2e` job is a matrix of three runners. Each builds the server and frontend, starts its own node and server, and runs a third of the tests with four Playwright workers (`E2E_SHARD=i/n` in [`web/scripts/e2e.sh`](../web/scripts/e2e.sh), passed to Playwright's `--shard`). Playwright runs a project another depends on whole in every shard, so the script runs Playwright twice: the tests that share the node, sharded, then the tests that mine, sharded and with `--no-deps`. Each run writes a JUnit report, and the summary reads both.
+10. **Browser tests run as four shards, each on its runner's four cores.** The `e2e` job is a matrix of four runners. Each builds the server and frontend, starts its own node and server, and runs a quarter of the tests with four Playwright workers (`E2E_SHARD=i/n` in [`web/scripts/e2e.sh`](../web/scripts/e2e.sh), passed to Playwright's `--shard`). Playwright runs a project another depends on whole in every shard, so the script runs Playwright twice: the tests that share the node, sharded, then the tests that mine, sharded and with `--no-deps`. Each run writes a JUnit report, and the summary reads both.
 11. **Every job has a timeout of 10 minutes.** A hung job fails fast; a test past 30 s fails too (nextest's `slow-timeout`).
 
 ## Jobs
@@ -43,7 +43,7 @@ Make room in the same pull request; never raise a limit to pass. In order: shrin
 | `changes` | always | Decides which jobs below run. Pull requests run only the jobs their paths need; a `master` push runs every job when it touches code and none when it touches only docs |
 | `rust` | Rust (`crates/`, and the load generator in `dev/load/`), lockfile, `.config/nextest.toml` or workflow changes | Format check, clippy with warnings denied, tests with nextest, doc tests |
 | `web` | `web/`, the files the frontend imports from `design/` (`tokens.css`, `logo.svg`, `fonts/`) or workflow changes | Type check (both tsconfigs), `oxlint` with type-aware rules and the `oxfmt` format check, unit tests, production build, bundle-size check |
-| `e2e` | anything `rust` or `web` runs for, or `dev/regtest/` | `bun run e2e` ([`FRONTEND.md`](FRONTEND.md#browser-tests)): the server and frontend built from the PR, a regtest node with the known chain, Playwright in headless Chromium. Three shards, each on a runner of its own |
+| `e2e` | anything `rust` or `web` runs for, or `dev/regtest/` | `bun run e2e` ([`FRONTEND.md`](FRONTEND.md#browser-tests)): the server and frontend built from the PR, a regtest node with the known chain, Playwright in headless Chromium. Four shards, each on a runner of its own |
 | `image` | anything `web` runs for, `Dockerfile` or `.dockerignore`; pull requests only | Builds the Docker image's frontend stage, so a Dockerfile that cannot build the frontend fails before merge. The Rust stage is left to the post-merge build |
 | `ci-ok` | always | Fails if any job above failed |
 
@@ -157,5 +157,14 @@ In `e2e`, setup takes 16 to 24 s, the build and the regtest node are both ready 
 Each shard pays the job's fixed cost again, so sharding divides only the tests' time. Setup takes 14 to 16 s (`rustup toolchain install` 8 to 10 s, the cache 2 to 3 s, bun 2 s). Then `e2e.sh` logs each wait: the browser is ready at 4 to 8 s, the node at 11 to 25 s and the build at 20 to 28 s, so the build is the last to finish, by 1 to 15 s. Playwright then starts twice, about 1.5 s each. That makes about 40 s before the first test and 45 s in all. The tests that share the node take 20 to 42 s on a shard and the tests that mine 2.5 to 9.5 s: the shard holding `tables.e2e.ts`, the slowest file, runs longest.
 
 Two shards would leave too little room. Their slowest was 97 s, and a limit with 40 % to spare (about 160 s), plus `changes` and `ci-ok`, takes the whole three minutes. Three shards' slowest was 93 s, 64 % of a 145 s limit, which leaves room for the pages in progress to add their tests; a higher limit would leave the whole run too little of its three minutes. A fourth would save about 10 s more for another runner's 45 s. Little of the fixed cost is cheap to cut: `rustup` also installs `rustfmt` and `clippy`, which `e2e` does not use, for a second or two; the build already starts from the cache; and sharing one build across shards would chain jobs (rule 3).
+
+**A fourth shard, measured 2026-11-14**, 301 browser tests, warm. By then the first shard went over its limit on pull requests that touch no browser test: 150 to 162 s, its tests 232 to 368 s of summed time, against 157 to 204 s in each of the others. Making room came first ([#143](https://github.com/smolcars/rbitcoin-space/pull/143)): the accessibility sweep's keyboard walk noted its stops in the page instead of a round trip each, three tests that waited out real polls moved to a paused clock, and the seeder became a binary built with the server, which had compiled the engine a second time. Its tests then took 165 to 250 s of summed time, but every shard still took 98 to 133 s of its 145, with its tests about half of that: setup is 20 to 25 s, and the server is ready 15 to 25 s into `e2e.sh`. So three shards left the first 20 to 46 s of room, and four left it 52 to 56 s. Three runs of each, each set of one commit whose changes include Rust, so every job ran:
+
+| | Three shards | Four shards |
+|---|---|---|
+| `e2e`, each shard | 99, 98 and 121 s; 125, 108 and 99 s; 109, 107 and 103 s | 93, 98, 74 and 95 s; 89, 100, 68 and 106 s; 93, 104, 80 and 93 s |
+| Whole run | 134, 135 and 133 s | 122, 127 and 126 s |
+
+The cut by count was not what made the first shard heavy: its slow file was. With four, the first shard's tests took 132 to 151 s of summed time and the others' 92 to 181 s, which shard is heaviest changing from run to run. The tests that mine run one at a time after the rest, so the shard holding `live.mine.e2e.ts` adds 20 to 25 s.
 
 **Cold** (no cache: a new lockfile, toolchain or `rust-cache` key), `rust` took 165 s and `e2e` 107 to 150 s, so a run that rebuilds its dependencies can pass three minutes. The limits are not enforced on it; the next `master` push saves the cache.
