@@ -1138,6 +1138,101 @@ async fn fees_follow_the_projection_and_are_withdrawn_while_it_is_stale() {
     task.abort();
 }
 
+/// The first answer `ctx`'s fees task serves.
+async fn served(ctx: &NetworkContext) -> crate::ws::fees::Answer {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(a) = ctx.fees.current() {
+            return a;
+        }
+        assert!(Instant::now() < deadline, "never served");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// The restart sequence of `docs/MEMPOOL.md`, "When ours cannot be served": while warming up,
+/// the node's estimates are not served until a whole minute of arrivals was watched, then no
+/// higher than our method on what was watched. Each phase is a fees task of its own whose
+/// arrivals were watched as the phase says, against a node whose next-block estimate is 4.3 sat/vB.
+#[tokio::test]
+async fn after_a_restart_the_nodes_estimates_wait_for_a_minute_of_arrivals_and_go_no_higher() {
+    use crate::ws::fees::tests as f;
+    let mock = Mock::new();
+    let s = Server::start(&mock, Duration::from_millis(10));
+    // A quiet mempool: three payments of 200 vB at 3 sat/vB.
+    for _ in 0..3 {
+        mock.add(600, 200);
+    }
+    s.settle().await;
+    let (node_addr, node) = f::fake_node().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // A fees task with `rec`, its routes, and a subscriber to `fees`.
+    let start = |rec: engine::fees::Recommender| {
+        let ctx = f::context(true, Some(&node_addr));
+        let engines = crate::ws::fees::Engines {
+            tracker: s.tracker.clone(),
+            projector: s.projector.clone(),
+        };
+        let (conn, rx) = conn(1024);
+        ctx.hub.subscribe(Topic::Fees, &conn);
+        let task = tokio::spawn(crate::ws::fees::run(Arc::clone(&ctx), Some(engines), rec));
+        (ctx, task, rx, conn)
+    };
+
+    // Just restarted, nothing watched: the node is asked, but its answer is not served.
+    let (ctx, task, mut rx, _conn) = start(engine::fees::Recommender::default());
+    let deadline = Instant::now() + WAIT;
+    while node.hits.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "the node was never asked");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(ctx.fees.current().is_none());
+    let addr = f::serve(&ctx).await;
+    let r = f::get_path(&addr, "/api/v1/fees/recommended").await;
+    assert_eq!(r.status, 503);
+    assert!(r.body.contains("not ready yet; retry"), "{}", r.body);
+    let mut last = Value::Null;
+    latest_fees(&mut rx, &mut last);
+    assert_eq!(last["type"], "unavailable");
+    task.abort();
+
+    // A quiet minute watched: the mempool and the arrivals need the minimum, so the node's
+    // 4.3 sat/vB is served as the minimum, still marked as the node's.
+    let mut rec = engine::fees::Recommender::default();
+    rec.gap(now - 70);
+    let (ctx, task, mut rx, _conn) = start(rec);
+    let a = served(&ctx).await;
+    assert_eq!(a.source, crate::ws::fees::Source::Node);
+    assert_eq!((a.rates.levels, a.rates.minimum), ([1_000; 4], 1_000));
+    let addr = f::serve(&ctx).await;
+    let r = f::get_path(&addr, "/api/v1/fees/precise").await;
+    assert_eq!(
+        r.body,
+        r#"{"fastestFee":1.0,"halfHourFee":1.0,"hourFee":1.0,"economyFee":1.0,"minimumFee":1.0}"#
+    );
+    assert_eq!(r.header("x-fee-source"), Some("node"));
+    latest_fees(&mut rx, &mut last);
+    assert_eq!(
+        (&last["source"], &last["tip"]),
+        (&Value::from("node"), &Value::Null)
+    );
+    task.abort();
+
+    // A busy minute watched, 3 MvB at 10 sat/vB: the node's estimates as they are.
+    let mut rec = engine::fees::Recommender::default();
+    rec.gap(now - 70);
+    rec.arrived(now - 65, 30_000_000, 3_000_000);
+    let (ctx, task, _rx, _conn) = start(rec);
+    let a = served(&ctx).await;
+    assert_eq!(a.source, crate::ws::fees::Source::Node);
+    assert_eq!(a.rates.levels, [4_299, 1_799, 1_597, 1_000]);
+    task.abort();
+}
+
 /// A fees task of its own on `s`'s engines, warmed up, publishing on an interval long enough
 /// that only a block or a hold's deadline explains a message, with a subscriber to `fees` and
 /// `blocks` on its context.

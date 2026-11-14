@@ -392,18 +392,42 @@ Why each part is as it is:
 - **Never an absurd rate.** One transaction paying 10,000 sat/vB adds its own size, at most 100 kvB, to the depth of every rate below it: it cannot fill a block. The answer is the minimum or one step above a rate some transaction pays, and only where more than the level's room pays that rate or more; it is never above one step over the highest rate seen. A test puts one in the mempool and one in the arrivals and shows nothing moves.
 - **Never below the node's minimum.** Every level is at least `mempoolminfee` and at least 0.1 sat/vB, rbitcoin's relay floor, and a faster level is never below a slower one. The construction already guarantees both; the result is still put in order, as a guard.
 - **Stable.** Recomputed every 2 s, each level is the highest of the last 60 seconds since the tip last moved: it rises at once and falls only after a minute, so it does not flicker with every arrival at a block's edge. The cost is freshness on the way down: after the mempool thins, a level can stay up to 60 seconds too high. A new block clears the history, because it changes the picture for real.
-- **Five minutes of warm-up.** Until five whole minutes of arrivals were watched, the arrival term cannot be trusted, and the node's estimates are served instead. Only time with a current projection counts: after the projection was stale or missing for a minute or more (the node was down), the arrivals are thrown away and the warm-up starts over, so an outage is never taken for quiet minutes.
+- **Five minutes of warm-up.** Until five whole minutes of arrivals were watched, the arrival term cannot be trusted, and the node's estimates stand in, no higher than the mempool and the arrivals watched so far justify ([below](#while-warming-up)). Only time with a current projection counts: after the projection was stale or missing for a minute or more (the node was down), the arrivals are thrown away and the warm-up starts over, so an outage is never taken for quiet minutes.
 
 ### When ours cannot be served
 
 | Condition | Served | Why |
 |---|---|---|
-| The first five minutes after start | The node's estimates | Arrivals not yet known |
+| The first minute of a warm-up: after start, after an outage, or before the first projection | Nothing: `503 not ready yet; retry`, and the topic says `unavailable` | Nothing watched yet to tell a sensible estimate of the node's from one a hundred times too high |
+| The rest of the warm-up, to five minutes | The node's estimates, each level no higher than our method on the minutes watched so far | Arrivals partly known: enough to bound the node, not to stand alone |
 | The projection is stale (the node is failing) | The node's estimates, when it still answers them | An old projection is not the mempool now |
 | `{NET}_MEMPOOL_ENABLED=false` | The node's estimates | No projection at all |
 | The node's estimates older than 90 s, or never received | Nothing: `503`, and the topic says `unavailable` | An old recommendation presented as current costs money; a wallet that gets nothing uses its own |
 
 The node's estimates are rbitcoin's `/fee-estimates` (a ten-minute inclusion product, not Bitcoin Core's historical estimator, [`RBITCOIN.md`](RBITCOIN.md)): targets 1, 3, 6 and 144 blocks (or the next longer target the node gives), lifted to its minimum (`getmempoolinfo`, asked with them, since the tracker's copy is as old as its last good cycle) and put in order, and marked as the node's everywhere they appear. While they are served they are also lifted to any higher minimum the tracker sees in the meantime. The task waits at most 5 s for them, and withdraws whatever it served before it starts waiting, so a hanging node cannot keep an old answer up; the routes themselves refuse estimates past 90 s, and the topic withdraws them at the next tick after they expire, or at the moment they expire while a refresh is pending. They are asked every 30 s, and only while they are what is served and someone wants them: a fee route was requested in the last ten minutes, or the `fees` topic has a subscriber. So nobody asking means no node call, and the first request after a quiet spell is a `503` that the next one, a moment later, does not get.
+
+#### While warming up
+
+**Why the node's estimates alone will not do.** On the live site's first minute after a restart (2026-11-14) the node's next-block estimate was 94 sat/vB on signet and 362 on testnet4, where ours a few minutes later was the minimum; on mainnet it was 5 against our 6. A wallet reading `/api/v1/fees/recommended` then would have paid a hundred times what was needed. It is not the restart: those networks' estimates stay there (89 and 361 sat/vB an hour later, with 3 to 6 blocks at 1 sat/vB). rbitcoin v0.9.2 builds its estimate (`crates/rbitcoin-mempool/src/fee_est.rs`) as a blend of a cold quote, from the history of past blocks' rates, and a warm one, from the transactions it sees arrive, weighted by how full its inflow meter is. On a quiet network the meter never fills, so the estimate stays the cold quote; for one block that is a very high quantile of old blocks, which one block of spam keeps high. The node knows: its own `estimatesmartfee` answers target 1 with target 2 while the meter is not full. Esplora's `/fee-estimates`, which we read, does not.
+
+**What is served instead, and why.** The mempool is known as soon as the projection is current; only the arrivals are not. So from the first whole minute of arrivals watched on a current projection, each of the node's levels is served no higher than our own method gives on the minutes watched so far (`Recommender::cap`), smoothed as ours is. Under five minutes the method leaves no minute out, so a burst counts in full. Before that minute nothing is served. The other choices:
+
+- *The node's estimates, bounded by the mempool alone* (no arrivals): on the recorded mainnet moment (`fixtures/fees/mainnet.json`) that gives 1.101 sat/vB for the next block against our 2.008 with arrivals, so it would underpay where the node was right.
+- *The last answer stored before the restart:* only with a data directory, and a claim about a mempool up to five minutes and a restart old. And it is neither ours now nor the node's, so it would need a third `source` that every client must learn.
+- *Nothing until our own answer:* honest, but five minutes of `503` after every restart, on every network, where the bounded estimate is already sound after one.
+
+A minute is enough on the evidence we have. On the recorded mainnet moment, the cap from its first one to four minutes of arrivals is at or above our answer from all thirty, on every level: 2.034 to 2.398 sat/vB for the next block against 2.008. Where it bites there (the next block, 2.664 lowered to between 2.0 and 2.4), the estimate stays at or above ours. That is one recording, not a guarantee: a minute is a small sample, and a quiet first minute followed by a rising flow can cap a sound estimate below what ours says at five minutes (a mempool under a block, nothing arriving in the first minute, then 100 kvB a minute at 2 sat/vB: the cap is the minimum, ours at five minutes 2.001). The cap follows each new minute, so such a gap lasts until the arrivals show it. On a quiet network it takes the next block from 89 to the minimum. `503` for that first minute costs a wallet nothing it cannot recover: it retries (`Retry-After: 1`) or uses its own estimate, which beats paying a hundred times too much.
+
+**From the first second** after start, with the engine on and the node answering:
+
+| Time | Routes (`/api/v1/fees/recommended`, `/precise`) | `fees` topic |
+|---|---|---|
+| Until the projection is current (the tracker's first sync: about 10 s on mainnet) | `503 not ready yet; retry` | `unavailable` |
+| Until one whole minute of arrivals was watched on it | `503 not ready yet; retry` | `unavailable` |
+| To five minutes | The node's estimates, capped as above, `X-Fee-Source: node` | `source: "node"`, `tip: null` |
+| From five minutes | Ours, `X-Fee-Source: projected` | `source: "projected"`, with its `tip` |
+
+Before this rule the node's estimates were served from the moment they came (seconds after the first request) until five minutes. A tick of the fee task (2 s) puts each change in place; the node is asked as before, and the cap asks it nothing.
 
 ### Against the blocks that followed
 

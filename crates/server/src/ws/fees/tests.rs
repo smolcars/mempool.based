@@ -25,7 +25,7 @@ use crate::Config;
 use crate::ws::Sockets;
 
 /// A network whose node is nowhere (`127.0.0.1:1`) unless `node` names a fake one.
-fn context(mempool: bool, node: Option<&str>) -> Arc<NetworkContext> {
+pub(crate) fn context(mempool: bool, node: Option<&str>) -> Arc<NetworkContext> {
     let (rpc_port, esplora) = node.map_or(("1".to_owned(), "http://127.0.0.1:1".to_owned()), |a| {
         (
             a.rsplit(':').next().unwrap().to_owned(),
@@ -54,7 +54,7 @@ fn context(mempool: bool, node: Option<&str>) -> Arc<NetworkContext> {
 }
 
 /// Serves the `/api/v1` routes for `ctx` on port 0.
-async fn serve(ctx: &Arc<NetworkContext>) -> String {
+pub(crate) async fn serve(ctx: &Arc<NetworkContext>) -> String {
     let app = crate::api_v1::routes().with_state(Arc::clone(ctx));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
@@ -62,21 +62,21 @@ async fn serve(ctx: &Arc<NetworkContext>) -> String {
     addr
 }
 
-struct Reply {
-    status: u16,
+pub(crate) struct Reply {
+    pub(crate) status: u16,
     head: String,
-    body: String,
+    pub(crate) body: String,
 }
 
 impl Reply {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.head
             .lines()
             .find_map(|l| l.strip_prefix(&format!("{name}: ")))
     }
 }
 
-async fn get_path(addr: &str, path: &str) -> Reply {
+pub(crate) async fn get_path(addr: &str, path: &str) -> Reply {
     let mut s = TcpStream::connect(addr).await.unwrap();
     let req = format!("GET {path} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n");
     s.write_all(req.as_bytes()).await.unwrap();
@@ -236,11 +236,11 @@ fn the_topic_names_each_level_and_its_horizon() {
 
 /// A node that answers `getmempoolinfo` and `/fee-estimates`, counting requests.
 #[derive(Clone, Default)]
-struct FakeNode {
-    hits: Arc<AtomicUsize>,
+pub(crate) struct FakeNode {
+    pub(crate) hits: Arc<AtomicUsize>,
 }
 
-async fn fake_node() -> (String, FakeNode) {
+pub(crate) async fn fake_node() -> (String, FakeNode) {
     async fn estimates(State(n): State<FakeNode>) -> String {
         n.hits.fetch_add(1, Ordering::SeqCst);
         r#"{"1":4.299,"2":2.453,"3":1.799,"6":1.597,"144":0.128,"1008":0.128}"#.to_owned()

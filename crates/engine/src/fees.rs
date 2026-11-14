@@ -120,6 +120,14 @@ impl Rates {
         self.ordered()
     }
 
+    /// No level higher than `cap`'s, then put in order again: the minimum is kept.
+    pub fn at_most(mut self, cap: &Rates) -> Self {
+        for (l, c) in self.levels.iter_mut().zip(cap.levels) {
+            *l = (*l).min(c);
+        }
+        self.ordered()
+    }
+
     /// Every level at least the minimum, and a faster level never below a slower one.
     fn ordered(mut self) -> Self {
         let mut below = self.minimum;
@@ -196,7 +204,7 @@ impl Depth {
 pub const INFLOW_MINUTES: usize = 30;
 
 /// Whole minutes observed before the inflow is trusted: until then, recommendations are the
-/// node's own ([`Inflow::ready`]).
+/// node's own, no higher than [`Recommender::cap`] ([`Inflow::ready`]).
 pub const WARM_UP_MINUTES: usize = 5;
 
 /// Transactions that entered the mempool, per minute, over the last [`INFLOW_MINUTES`]: the
@@ -387,6 +395,8 @@ pub struct Recommender {
     smoother: Smoother,
     /// Since when the projection has been stale or missing: arrivals are not being watched.
     unobserved: Option<u64>,
+    /// While warming up: [`Recommender::cap`].
+    cap: Option<Rates>,
 }
 
 /// An outage at least this long throws the arrivals away and starts the warm-up over: its
@@ -416,6 +426,7 @@ impl Recommender {
         if p.stale || p.tip.is_none() {
             self.unobserved.get_or_insert(now);
             self.smoother.reset();
+            self.cap = None;
             return None;
         }
         if let Some(since) = self.unobserved.take()
@@ -425,8 +436,18 @@ impl Recommender {
         }
         self.inflow.roll(now);
         if !self.inflow.ready() {
-            self.smoother.reset();
+            self.cap = None;
+            if self.inflow.minutes() == 0 {
+                self.smoother.reset();
+            } else {
+                // Under five minutes the method leaves no minute out: a burst counts in full.
+                let cap = recommend(&Depth::of(p), &self.inflow, floor);
+                self.cap = Some(self.smoother.push(now, p.tip, cap));
+            }
             return None;
+        }
+        if self.cap.take().is_some() {
+            self.smoother.reset();
         }
         let raw = recommend(&Depth::of(p), &self.inflow, floor);
         Some(self.smoother.push(now, p.tip, raw))
@@ -434,6 +455,15 @@ impl Recommender {
 
     pub fn inflow(&self) -> &Inflow {
         &self.inflow
+    }
+
+    /// While warming up, from the first whole minute of arrivals watched on a current
+    /// projection: our method on the minutes watched so far, smoothed as ours is. The node's
+    /// estimates are served no higher than this, since what the mempool holds and what was seen
+    /// arriving cannot justify more. `None` before that minute, while the projection is stale or
+    /// missing, and once ours is served.
+    pub fn cap(&self) -> Option<Rates> {
+        self.cap
     }
 }
 
