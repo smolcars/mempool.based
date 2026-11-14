@@ -101,6 +101,7 @@ describe("SearchField", () => {
   });
 
   it("explains an unrecognised query as text, and closes on Escape", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve(reply(200, { state: "off" })));
     const { el, input, type, enter } = setup();
     type('<img src=x onerror="alert(1)">');
     enter();
@@ -211,5 +212,166 @@ describe("SearchField and navigation", () => {
     expect(input.value).toBe("");
     expect(el.querySelector(".search__reading")?.textContent).toBe("");
     dispose();
+  });
+});
+
+describe("SearchField and Lightning", () => {
+  const KEY = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
+  const OTHER = `02${"ab".repeat(32)}`;
+  /** A server whose Lightning is `state`, finding two nodes for any name (one for a name with
+   * "one" in it); records each path. */
+  function server(state: string) {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      const path = new URL(url, "http://x").pathname + new URL(url, "http://x").search;
+      asked.push(path);
+      if (path.endsWith("/lightning/status")) return Promise.resolve(reply(200, { state }));
+      const nodes = [
+        { id: KEY, alias: "<b>ACINQ</b>", capacity: 27_383_219_285, channels: 1807 },
+        { id: OTHER, alias: null, capacity: 5000, channels: 1 },
+      ];
+      return Promise.resolve(
+        reply(200, { nodes: path.includes("one") ? nodes.slice(1) : nodes, channels: [] }),
+      );
+    });
+    return asked;
+  }
+  const key = (input: HTMLInputElement, k: string) => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    flush();
+  };
+
+  it("suggests nodes as a name is typed, names as text with their keys, and opens one by keyboard", async () => {
+    const asked = server("synced");
+    const { el, input, path, type } = setup("/signet/");
+    type("ac");
+    type("aci");
+    type("acinq");
+    const list = () => el.querySelector('[role="listbox"]');
+    await vi.waitFor(() => expect(list()).not.toBeNull());
+    // One status, then one search: the edits before the pause asked nothing.
+    expect(asked).toStrictEqual([
+      "/signet/app/lightning/status",
+      "/signet/app/lightning/search?q=acinq",
+    ]);
+    const options = [...el.querySelectorAll('[role="option"]')];
+    expect(options.map((o) => o.textContent)).toStrictEqual([
+      `<b>ACINQ</b>273.83 BTC${KEY.slice(0, 10)}…${KEY.slice(-10)}`,
+      `No name0.0000500 BTC${OTHER.slice(0, 10)}…${OTHER.slice(-10)}`,
+      "All results for “acinq”",
+    ]);
+    expect(list()?.querySelector("b")).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(el.querySelector(".search__reading")?.textContent).toBe("Node nameEnter");
+    key(input, "ArrowUp");
+    expect(input.getAttribute("aria-activedescendant")).toBe(options[2]?.id);
+    key(input, "ArrowDown");
+    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+    key(input, "Enter");
+    await vi.waitFor(() => expect(path()).toBe(`/signet/lightning/node/${KEY}`));
+    expect(input.value).toBe("");
+  });
+
+  it("opens the results page for a name on Enter, and closes the list on Escape", async () => {
+    server("synced");
+    const { el, input, path, type, enter } = setup("/signet/");
+    type("noderunner");
+    await vi.waitFor(() => expect(el.querySelector('[role="listbox"]')).not.toBeNull());
+    key(input, "Escape");
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    enter();
+    await vi.waitFor(() => expect(path()).toBe("/signet/lightning/search"));
+  });
+
+  it("goes straight to a node or a channel by its id", async () => {
+    const asked = server("synced");
+    const { path, type, enter } = setup("/signet/");
+    type(KEY);
+    enter();
+    await vi.waitFor(() => expect(path()).toBe(`/signet/lightning/node/${KEY}`));
+    type("811984x2037x0");
+    enter();
+    await vi.waitFor(() => expect(path()).toBe("/signet/lightning/channel/811984x2037x0"));
+    expect(asked).toStrictEqual([]);
+  });
+
+  it("never searches a network without Lightning, where a name is still not recognised", async () => {
+    const asked = server("off");
+    const { el, type, enter } = setup();
+    type("noderunner");
+    await vi.waitFor(() => expect(asked).toStrictEqual(["/app/lightning/status"]));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 400);
+    });
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+    expect(el.querySelector(".search__reading")?.textContent).toBe("Not recognised");
+    enter();
+    await vi.waitFor(() =>
+      expect(el.querySelector(".search__panel")?.textContent).toContain("Nothing matches"),
+    );
+    expect(asked).toStrictEqual(["/app/lightning/status"]);
+  });
+
+  const pause = (ms: number) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  it("never opens a list the reader closed before it answered", async () => {
+    const asked = server("synced");
+    const { el, input, type } = setup("/signet/");
+    type("acinq");
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await pause(400);
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+    expect(asked).toStrictEqual([]);
+    // Escape while a newer list is on its way keeps it closed too.
+    type("acinq");
+    await vi.waitFor(() => expect(el.querySelector('[role="listbox"]')).not.toBeNull());
+    type("acinqs");
+    key(input, "Escape");
+    await pause(400);
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+    // Escape before any list has come, and focus leaving for nowhere, close it too.
+    type("acinqss");
+    key(input, "Escape");
+    await pause(400);
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+    type("acinq");
+    await vi.waitFor(() => expect(el.querySelector('[role="listbox"]')).not.toBeNull());
+    input.blur();
+    flush();
+    expect(el.querySelector('[role="listbox"]')).toBeNull();
+  });
+
+  it("drops the highlight when a newer list replaces the one it was on", async () => {
+    server("synced");
+    const { el, input, type } = setup("/signet/");
+    type("acinq");
+    await vi.waitFor(() => expect(el.querySelectorAll('[role="option"]')).toHaveLength(3));
+    type("someone");
+    key(input, "ArrowUp");
+    expect(input.getAttribute("aria-activedescendant")).toMatch(/option-2$/);
+    await vi.waitFor(() => expect(el.querySelectorAll('[role="option"]')).toHaveLength(2));
+    expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+  });
+
+  it("brings the highlighted option into view", async () => {
+    server("synced");
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const { el, input, type } = setup("/signet/");
+      type("acinq");
+      await vi.waitFor(() => expect(el.querySelector('[role="listbox"]')).not.toBeNull());
+      key(input, "ArrowUp");
+      await vi.waitFor(() => expect(scrolled.at(-1)?.textContent).toContain("All results"));
+    } finally {
+      // @ts-expect-error -- jsdom has none; the stand-in goes with the test
+      delete Element.prototype.scrollIntoView;
+    }
   });
 });

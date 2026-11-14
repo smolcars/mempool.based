@@ -90,7 +90,10 @@ test.describe("without the web font", () => {
       ["/regtest/mining?period=all", (p) => p.locator("main table a")],
       ["/regtest/mempool", (p) => p.getByRole("slider")],
       ["/regtest/lightning", (p) => p.getByText("Lightning is switched off on Regtest")],
-      ["/regtest/no/such/page", (p) => p.getByRole("main").getByRole("searchbox")],
+      [
+        "/regtest/no/such/page",
+        (p) => p.getByRole("main").getByRole("combobox", { name: "Search" }),
+      ],
     ];
     for (const [path, ready] of pages) {
       await page.goto(path);

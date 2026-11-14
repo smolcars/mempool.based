@@ -1,7 +1,7 @@
 // Pieces every Lightning page shares: the gate that says whether there is anything to show,
-// names from gossip, links, figures and the section's own search.
-import { useLocation, useNavigate } from "@solidjs/router";
-import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
+// names from gossip, links and figures.
+import { useLocation } from "@solidjs/router";
+import { Match, onSettled, Show, Switch } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { CopyButton } from "../../components/CopyButton";
@@ -11,7 +11,7 @@ import { Link } from "../../components/Link";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { ApiError, createRequest, fetchApp } from "../../lib/api";
 import { groupDigits, truncateMiddle } from "../../lib/format";
-import { NETWORK_NAMES, type Network, onNetwork, paths } from "../../lib/network";
+import { NETWORK_NAMES, type Network, paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
 import {
   type BlockRef,
@@ -25,7 +25,6 @@ import {
   type NodeRef,
   plainMsat,
   type RankedNode,
-  searchProblem,
   type Status,
 } from "./lightning";
 import "./Lightning.css";
@@ -240,58 +239,6 @@ export function nodeColumns(by: "capacity" | "channels" | "age"): Column<RankedN
       cell: (n) => groupDigits(n.channels),
     },
   ];
-}
-
-/**
- * The section's own search: names, public keys and channel ids, answered by the server's index
- * (docs/API.md "Search"). Separate from the header's, which leads to one page per query.
- */
-export function LightningSearch(props: { value?: string }) {
-  const network = useNetwork();
-  const navigate = useNavigate();
-  const [problem, setProblem] = createSignal<string>();
-  let input: HTMLInputElement | undefined;
-  const submit = (e: SubmitEvent) => {
-    e.preventDefault();
-    const q = (input?.value ?? "").trim();
-    const why = searchProblem(q);
-    setProblem(why);
-    if (why === undefined) navigate(onNetwork(network(), paths.lightningSearch(q)));
-  };
-  return (
-    <search class="ln-search">
-      <form class="ln-search__form" onSubmit={submit}>
-        <label class="ln-search__label" for="ln-search">
-          Find a node or channel
-        </label>
-        <div class="ln-search__row">
-          <input
-            id="ln-search"
-            class="ln-search__input"
-            ref={(el) => (input = el)}
-            type="search"
-            name="q"
-            value={props.value ?? ""}
-            maxlength="66"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="Name, public key or channel id"
-            aria-describedby={problem() === undefined ? undefined : "ln-search-problem"}
-          />
-          <button class="btn" type="submit">
-            Search
-          </button>
-        </div>
-      </form>
-      <Show when={problem()}>
-        {(p) => (
-          <p class="ln-search__problem" id="ln-search-problem" role="alert">
-            {p()}
-          </p>
-        )}
-      </Show>
-    </search>
-  );
 }
 
 /** One line under a section's figures, saying what makes them ours. */

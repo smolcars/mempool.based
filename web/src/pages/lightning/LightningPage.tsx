@@ -38,7 +38,6 @@ import {
   BlockLink,
   ChannelLink,
   Gate,
-  LightningSearch,
   NodeName,
   nodeColumns,
   LightningNav,
@@ -60,7 +59,6 @@ export default function LightningPage() {
       <LightningNav here="overview" />
       <header class="ln-head">
         <h1>Lightning</h1>
-        <LightningSearch />
       </header>
       {/* Everything belongs to one network: switching networks starts it afresh. */}
       <Show when={network()} keyed>

@@ -10,15 +10,7 @@ import { createRequest } from "../../lib/api";
 import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { isSearchResult, type SearchResult, searchProblem, STATE_WORDS } from "./lightning";
-import {
-  ask,
-  ChannelLink,
-  Gate,
-  LightningSearch,
-  nodeColumns,
-  LightningNav,
-  rememberList,
-} from "./parts";
+import { ask, ChannelLink, Gate, nodeColumns, LightningNav, rememberList } from "./parts";
 
 export default function SearchPage() {
   const [search] = useSearchParams();
@@ -27,17 +19,22 @@ export default function SearchPage() {
     const v: unknown = search["q"];
     return typeof v === "string" ? v.trim() : "";
   });
-  usePageTitle(() => "Lightning search");
+  // A query the index refuses (too long, say) is not repeated back.
+  const asked = () => (searchProblem(q()) === undefined ? q() : "");
+  usePageTitle(() => (asked() === "" ? "Lightning search" : `Lightning search: ${asked()}`));
   return (
     <div class="wrap ln">
       <LightningNav here="search" />
       <header class="ln-head">
-        <h1>Search Lightning</h1>
-        <LightningSearch value={q()} />
+        <h1>{asked() === "" ? "Lightning search" : `Results for “${asked()}”`}</h1>
       </header>
       <Show
         when={searchProblem(q()) === undefined}
-        fallback={<Empty title="Nothing searched for">{searchProblem(q())}</Empty>}
+        fallback={
+          <Empty title="Nothing searched for">
+            {searchProblem(q())} Type it into the search at the top of the page.
+          </Empty>
+        }
       >
         <Show when={{ network: network(), q: q() }} keyed>
           {(k) => (
@@ -77,7 +74,8 @@ function Found(props: { r: SearchResult; q: string }) {
       fallback={
         <Empty title="Nothing matches">
           No node's name or public key holds this, and it is no channel this server knows. Names are
-          matched anywhere in them, keys from their start.
+          matched anywhere in them, keys from their start: try part of a name in the search at the
+          top of the page.
         </Empty>
       }
     >

@@ -435,7 +435,7 @@ test("Escape closes the network menu, an exact amount and the search's answer", 
   await expect(copy).toBeHidden();
   await expect(exact).toBeFocused();
 
-  const search = page.getByRole("searchbox", { name: "Search" });
+  const search = page.getByRole("combobox", { name: "Search" });
   await search.fill("nothing like an id");
   await search.press("Enter");
   // The answer is said, and Tab reaches its links.

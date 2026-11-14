@@ -1,9 +1,10 @@
 // What the search field loads on first use: what a query looks like as it is typed, and where it
 // leads on Enter. Kept out of the first load (components/SearchField.tsx imports it lazily).
 import { TYPE_NAMES } from "../lib/address";
-import { fetchApi, isNotFound } from "../lib/api";
+import { fetchApi, fetchApp, isNotFound } from "../lib/api";
 import { groupDigits } from "../lib/format";
 import { NETWORK_NAMES, type Network, paths } from "../lib/network";
+import { cleanAlias, isSearchResult, isStatus, searchProblem } from "../pages/lightning/lightning";
 import { classify, type HashKind, MAX_QUERY, type Query } from "./query";
 
 export type { Query } from "./query";
@@ -22,8 +23,11 @@ export function networkNames(list: readonly Network[]): string {
 
 const HASH_LABELS: Record<HashKind, string> = { block: "Block hash", tx: "Transaction" };
 
-export function describe(raw: string, network: Network): Reading {
+/** `lightning`: the network has Lightning on, so a name or a key's start searches its nodes. */
+export function describe(raw: string, network: Network, lightning = false): Reading {
   const q = classify(raw);
+  if (q?.kind === "node") return { label: "Lightning node", ready: true };
+  if (q?.kind === "channel") return { label: "Lightning channel", ready: true };
   if (q?.kind === "height") return { label: `Block ${groupDigits(q.height)}`, ready: true };
   if (q?.kind === "hash") {
     return { label: q.as ? HASH_LABELS[q.as] : "Transaction or block", ready: true };
@@ -34,9 +38,10 @@ export function describe(raw: string, network: Network): Reading {
     return { label: `${theirs ?? TYPE_NAMES[type].short} address`, ready: true };
   }
   if (raw.length > MAX_QUERY) return { label: "Too long", ready: false };
+  const named = lightning && searchProblem(raw) === undefined;
   const hex = /^(?:0x)?([0-9a-f]{1,63})$/i.exec(raw.trim())?.[1];
-  if (hex !== undefined) return { label: `${hex.length} of 64 characters`, ready: false };
-  return { label: "Not recognised", ready: false };
+  if (hex !== undefined) return { label: `${hex.length} of 64 characters`, ready: named };
+  return named ? { label: "Node name", ready: true } : { label: "Not recognised", ready: false };
 }
 
 export type Outcome =
@@ -69,6 +74,8 @@ export async function resolve(query: Query | null, probe: Probe): Promise<Outcom
   if (query === null) return { kind: "missing", query };
   if (query.kind === "height") return { kind: "go", path: paths.block(query.height) };
   if (query.kind === "address") return { kind: "go", path: paths.address(query.address.address) };
+  if (query.kind === "node") return { kind: "go", path: paths.lightningNode(query.key) };
+  if (query.kind === "channel") return { kind: "go", path: paths.lightningChannel(query.id) };
   const { hash } = query;
   for (const kind of probeOrder(hash, query.as)) {
     try {
@@ -85,25 +92,66 @@ export async function resolve(query: Query | null, probe: Probe): Promise<Outcom
 export type Get = (network: Network, path: string, signal: AbortSignal) => Promise<unknown>;
 
 const get: Get = (network, path, signal) => fetchApi(network, path, { signal });
+const getApp: Get = (network, path, signal) => fetchApp(network, path, { signal });
+
+/** A node the Lightning index matched, ready to show: its name is gossip, cleaned, never markup. */
+export interface Suggestion {
+  key: string;
+  name: string | null;
+  capacity: number;
+  path: string;
+}
+
+/** What the index matched, and whether the network has Lightning (unknown when not asked). */
+export interface Suggestions {
+  lightning: boolean | undefined;
+  nodes: Suggestion[];
+}
 
 /**
- * One search at a time: starting a search, or cancelling, aborts the one in flight, whose `run`
- * then answers undefined so a slow answer can never replace a newer one.
+ * One search and one suggestion request at a time: starting either, or cancelling, aborts the one
+ * in flight, whose promise then answers undefined so a slow answer can never replace a newer one.
+ * Whether a network has Lightning is asked once (its status route, which always answers); a
+ * network without it is never asked to search.
  */
-export function createSearch(fetch: Get = get) {
+export function createSearch(fetch: Get = get, app: Get = getApp) {
   let current: AbortController | undefined;
   const cancel = () => {
     current?.abort();
     current = undefined;
   };
-  const run = async (raw: string, network: Network): Promise<Outcome | undefined> => {
+  const start = () => {
     cancel();
-    const controller = new AbortController();
-    current = controller;
+    current = new AbortController();
+    return current;
+  };
+  const known = new Map<Network, Promise<boolean>>();
+  // Not tied to a search's signal: one status answers every search after it.
+  const lightning = (network: Network): Promise<boolean> => {
+    let on = known.get(network);
+    if (!on) {
+      on = app(network, "/lightning/status", new AbortController().signal).then(
+        (v) => isStatus(v) && v.state !== "off",
+        () => {
+          known.delete(network);
+          return false;
+        },
+      );
+      known.set(network, on);
+    }
+    return on;
+  };
+
+  const run = async (raw: string, network: Network): Promise<Outcome | undefined> => {
+    const controller = start();
     const { signal } = controller;
     let outcome: Outcome;
     try {
-      outcome = await resolve(classify(raw), (path) => fetch(network, path, signal));
+      const query = classify(raw);
+      outcome =
+        query === null && searchProblem(raw) === undefined && (await lightning(network))
+          ? { kind: "go", path: paths.lightningSearch(raw.trim()) }
+          : await resolve(query, (path) => fetch(network, path, signal));
     } catch (error) {
       outcome = { kind: "failed", error };
     }
@@ -111,7 +159,37 @@ export function createSearch(fetch: Get = get) {
     current = undefined;
     return outcome;
   };
-  return { run, cancel };
+
+  /** Nodes whose name or key matches what is typed; none for an id, or without Lightning. */
+  const suggest = async (raw: string, network: Network): Promise<Suggestions | undefined> => {
+    const controller = start();
+    const { signal } = controller;
+    const none = (on?: boolean) => (signal.aborted ? undefined : { lightning: on, nodes: [] });
+    if (classify(raw) !== null || searchProblem(raw) !== undefined) return none();
+    if (!(await lightning(network))) return none(false);
+    if (signal.aborted) return undefined;
+    let found: unknown;
+    try {
+      found = await app(network, `/lightning/search?q=${encodeURIComponent(raw.trim())}`, signal);
+    } catch {
+      // Syncing, or unreachable: the field offers nothing, and Enter still opens the results page.
+      return none(true);
+    }
+    if (signal.aborted) return undefined;
+    current = undefined;
+    if (!isSearchResult(found)) return none(true);
+    return {
+      lightning: true,
+      nodes: found.nodes.map((n) => ({
+        key: n.id,
+        name: cleanAlias(n.alias),
+        capacity: n.capacity,
+        path: paths.lightningNode(n.id),
+      })),
+    };
+  };
+
+  return { run, suggest, cancel };
 }
 
 /** What the field gets from this module once it loads. */

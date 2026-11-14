@@ -72,16 +72,51 @@ test("the overview, a node and a channel, from mainnet's answers", async ({ page
   );
 });
 
-test("the section's search finds a node by name", async ({ page }) => {
+test("the header's search suggests nodes by name, on a phone too, and opens one", async ({
+  page,
+}) => {
   await serve(page, mainnet());
   await page.goto("/regtest/lightning");
-  await page.getByLabel("Find a node or channel").fill("acinq");
-  await page.getByRole("button", { name: "Search" }).click();
+  const field = page.getByRole("search").getByRole("combobox", { name: "Search" });
+  const list = page.getByRole("listbox", { name: "Lightning nodes" });
+  // Escape closes the list and keeps the query.
+  await field.fill("acinq");
+  await expect(list).toBeVisible();
+  await field.press("Escape");
+  await expect(list).toBeHidden();
+  await expect(field).toHaveValue("acinq");
+  await field.fill("acinq");
+  await expect(list.getByRole("option")).toHaveText([
+    /^ACINQ.*03864ef025/,
+    "All results for “acinq”",
+  ]);
+  await field.press("ArrowDown");
+  await expect(field).toHaveAttribute("aria-activedescendant", /option-0$/);
+  await field.press("Enter");
+  await expect(page).toHaveURL(`/regtest/lightning/node/${ACINQ}`);
+
+  // Enter on a name, with no suggestion picked, opens every result.
+  await field.fill("acinq");
+  await expect(list).toBeVisible();
+  await field.press("Enter");
   await expect(page).toHaveURL("/regtest/lightning/search?q=acinq");
-  await expect(page.getByRole("link", { name: "ACINQ" })).toHaveAttribute(
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Results for “acinq”");
+  await expect(page.getByRole("main").getByRole("link", { name: "ACINQ" })).toHaveAttribute(
     "href",
     `/regtest/lightning/node/${ACINQ}`,
   );
+
+  // A phone: the list spans the searching row, inside the screen, and a press opens a node.
+  await page.setViewportSize({ width: 320, height: 640 });
+  await field.fill("acinq");
+  const box = await list.boundingBox();
+  expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+  expect((box?.x ?? 0) + (box?.width ?? 999)).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await list.getByRole("option").first().click();
+  await expect(page).toHaveURL(`/regtest/lightning/node/${ACINQ}`);
 });
 
 test("hostile names stay inert text and never widen the page", async ({ page }) => {
