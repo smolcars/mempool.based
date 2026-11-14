@@ -58,9 +58,10 @@
 
   /* ---- Status timeline: a real sequence, so its steps are numbered ---- */
   /* ---- The answer first ---- */
+  /* Equal columns, each at least as wide as its figure: a wider face widens it, not overruns it. */
   .tx-summary {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(min-content, 1fr));
     gap: var(--space-4);
   }
   .tx-summary__item {
@@ -353,8 +354,11 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
+  /* A script's words wrap in a narrow card, where an address is cut with its whole in a title. */
   .tx-flow__label {
     color: var(--color-text-muted);
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .tx-flow__meta {
     display: flex;
@@ -661,6 +665,10 @@
   .tx-where__text,
   .tx-group__text {
     font-size: var(--text-sm);
+  }
+  /* A sentence with figures in it: tabular digits, free to wrap between its words. */
+  .tx-where__text--figures {
+    font-variant-numeric: tabular-nums slashed-zero;
   }
   .tx-where__note,
   .tx-group__why {

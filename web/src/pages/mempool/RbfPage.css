@@ -29,7 +29,8 @@
   .rbf-slot {
     position: relative;
   }
-  .rbf-slot > .state {
+  /* Only "loading" lies over the bones; "none yet" takes its own room, above what follows. */
+  .rbf-slot > .state--loading {
     position: absolute;
     inset: var(--space-7) 0 auto;
     z-index: 2;

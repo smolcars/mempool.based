@@ -11,4 +11,10 @@
   .amount__short {
     display: none;
   }
+  .amount--tight .amount__exact {
+    display: none;
+  }
+  .amount--tight::before {
+    content: attr(data-short);
+  }
 }

@@ -153,7 +153,9 @@ export function endLabels(from: number, to: number, room = Infinity): [string, s
   const day = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()] ?? ""}`;
   const hm = (d: Date) => `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
   if (to - from < 2 * 86_400) {
-    return [`${day(a)} ${hm(a)}`, a.getUTCDate() === b.getUTCDate() ? hm(b) : `${day(b)} ${hm(b)}`];
+    if (a.getUTCDate() === b.getUTCDate()) return [`${day(a)} ${hm(a)}`, hm(b)];
+    // Two days and times need about 170 px in a wide face too: a phone's plot names the days.
+    return room < 170 ? [day(a), day(b)] : [`${day(a)} ${hm(a)}`, `${day(b)} ${hm(b)}`];
   }
   if (a.getUTCFullYear() !== b.getUTCFullYear()) {
     // Two whole dates need about 150 px in a wide face: a narrower plot (a pool's, between two axes) names months.

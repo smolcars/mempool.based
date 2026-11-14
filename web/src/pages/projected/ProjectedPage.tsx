@@ -341,9 +341,13 @@ function ProjectedView(props: { index: number }) {
               value={
                 block() &&
                 (paying() ? (
-                  <span class="num">
-                    ~{formatFeeRate(block()?.minRate ?? 0)} – {formatFeeRate(block()?.maxRate ?? 0)}
-                    <span class="unit"> sat/vB</span>
+                  // Two figures: the range may wrap after its dash, never inside a figure or its unit.
+                  <span>
+                    <span class="num">~{formatFeeRate(block()?.minRate ?? 0)}&nbsp;–</span>{" "}
+                    <span class="num">
+                      {formatFeeRate(block()?.maxRate ?? 0)}
+                      <span class="unit">&nbsp;sat/vB</span>
+                    </span>
                   </span>
                 ) : (
                   MISSING

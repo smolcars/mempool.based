@@ -641,6 +641,38 @@ Write browser tests so they hold in every engine:
 - **A test that depends on width checks it** (`page.viewportSize()`), as the home page's test does for the note a phone hides.
 - **Phone screenshots for a UI change come from WebKit** as an iPhone, besides Chromium: the owner's first device is a phone.
 
+### Other systems' fonts
+
+Prose is set in the reader's system font, and most readers are not on a Mac ([`DESIGN.md`](DESIGN.md#type)). The browser tests can set prose in a stand-in for another system's font instead, on any machine, with nothing installed and no font file in the product: `e2e/fixtures.ts` registers local faces (`FontFace` with `local()`) before the app runs and points `--font-sans` at them, keeping "Recursive Gap" first as the real stack does. A run whose machine has none of a stand-in's faces fails, rather than measure in the wrong font.
+
+| Stand-in | Faces, the first this system has | Stands for |
+|---|---|---|
+| `wide` | DejaVu Sans (Linux), Verdana (Mac, Windows) | DejaVu Sans, Linux's usual default and the widest measured |
+| `narrow` | Liberation Sans (Linux), Arial (Mac, Windows) | Roboto, Cantarell, Segoe UI and other narrow faces |
+
+Widths of 20 of the site's own strings ("Fees waiting", "0.0000426 BTC", "Lowest accepted", the section names, a fee rate, a sentence), 16 px, in Chromium, against San Francisco; the Linux fonts measured in an Ubuntu 24.04 container (2026-11):
+
+| Font | Regular | Bold (600) |
+|---|---|---|
+| DejaVu Sans | +10.0% | +18.6% |
+| Verdana (the `wide` stand-in on a Mac) | +10.2%, each string within −1.4 to +3.2% of DejaVu's | +18.4%, within −1.7 to +4.9% |
+| Noto Sans | +2.8% | +4.5% |
+| Roboto | −2.1% | −5.3% |
+| Cantarell | −2.2% | −3.6% |
+| Liberation Sans, Arial (`narrow`) | −2.7% | −0.2% |
+
+Segoe UI, Windows' default, could not be measured here (it is not free to install); its published metrics put it among the narrow faces.
+
+```sh
+E2E_PROSE=wide bun run e2e tables.e2e.ts amounts.e2e.ts shell.e2e.ts   # the rule tests in a stand-in
+E2E_SWEEP=1 bun run e2e fonts.e2e.ts                                   # the whole sweep, wide
+E2E_SWEEP=1 E2E_PROSE=narrow bun run e2e fonts.e2e.ts                  # or narrow, or system
+```
+
+`fonts.e2e.ts` loads every page type once and resizes it through the widths, checking at each that no text runs into other text, nothing is cut, on any edge, by a box that scrolling cannot move (a cut name or hash keeps its whole in its title), no control's label wraps when it has room to grow, no figure wraps or leaves its field (`amountsIntact`), every table fits or shows that it scrolls (`tablesFit`), and the page is no wider than the window (`layoutFaults` in `e2e/layout.ts`). It lists every fault of a run at once. With `E2E_SWEEP=1` it takes the design's widths, 640 and 1040 either side, and every 40 px from 320 to 1440, each in both schemes: about 5 s a page. Pull requests run it in the wide stand-in at the widths where it found faults, 320, 400, 641 and 1100 px, one scheme each: about half a second a page.
+
+To see the real fonts rather than a stand-in, run the same tests in a Linux container with `fonts-dejavu-core` and `fonts-noto-core` and Playwright 1.64.1's Chromium, with `E2E_PROSE=system` and `E2E_BASE_URL` pointing at a `bun run e2e`-style server the container can reach. On 2026-11-13, in that container (Ubuntu 24.04, Chromium), the whole sweep on the build before the fixes failed in all ten places the `wide` stand-in found on a Mac with DejaVu Sans as the system font, and in six of them with Noto Sans; after the fixes it passed with both.
+
 ### Adding a test
 
 Put it beside the others as `web/e2e/<page>.e2e.ts` (the `.e2e.ts` suffix keeps Vitest away from it), and import from `./fixtures`, never from `@playwright/test`:

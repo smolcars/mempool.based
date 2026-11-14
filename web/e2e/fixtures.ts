@@ -31,7 +31,69 @@ let started = 0;
 // What a handler answers, told from pages and static files as the server's limiter does.
 const HANDLED = /^\/(?:healthz|readyz)(?:\/|$)|^\/(?:[^/]*\/)?(?:api|app)(?:\/|$)/;
 
+/**
+ * Stand-ins for the prose fonts other systems have, as local faces any machine has one of
+ * (docs/FRONTEND.md "Other systems' fonts"). Each entry is a regular face and its bold.
+ * `wide` is DejaVu Sans, Linux's usual default and the widest measured; where it is missing,
+ * Verdana, within 3% of it on the site's own strings. `narrow` is Arial's metrics (Liberation
+ * Sans is drawn to them), as narrow as Roboto, Cantarell and San Francisco or narrower.
+ */
+const PROSE_STAND_INS = {
+  wide: [
+    ["DejaVu Sans", "DejaVu Sans Bold"],
+    ["Verdana", "Verdana Bold"],
+  ],
+  narrow: [
+    ["Liberation Sans", "Liberation Sans Bold"],
+    ["Arial", "Arial Bold"],
+  ],
+} as const;
+export type Prose = "system" | keyof typeof PROSE_STAND_INS;
+
+const proseFromEnv = process.env["E2E_PROSE"] ?? "system";
+if (proseFromEnv !== "system" && !(proseFromEnv in PROSE_STAND_INS)) {
+  throw new Error(`E2E_PROSE is ${proseFromEnv}: use system, wide or narrow`);
+}
+
+/** Sets prose in the first of `faces` this system has, before the app's own script runs. */
+function useProseStandIn(faces: readonly (readonly [string, string])[]) {
+  const families: string[] = [];
+  const loads: Promise<boolean>[] = [];
+  for (const [i, [regular, bold]] of faces.entries()) {
+    families.push(`"Prose stand-in ${i}"`);
+    for (const [name, weight] of [
+      [regular, "1 550"],
+      [bold, "551 1000"],
+    ] as const) {
+      const face = new FontFace(`Prose stand-in ${i}`, `local("${name}")`, { weight });
+      document.fonts.add(face);
+      loads.push(
+        face.load().then(
+          () => true,
+          () => false,
+        ),
+      );
+    }
+  }
+  // The digit-group gap stays ours, as in the real stack.
+  const stack = `"Recursive Gap", ${families.join(", ")}`;
+  const apply = () => document.documentElement.style.setProperty("--font-sans", stack);
+  // An init script can run before the document has its root element.
+  if ((document.documentElement as HTMLElement | null) !== null) apply();
+  // Before the app's module runs, which reads the stack.
+  document.addEventListener("readystatechange", apply, { once: true });
+  void Promise.all(loads).then((loaded) => {
+    // A regular face, the first of each pair, or the page is measured in the wrong font.
+    if (!loaded.some((ok, i) => ok && i % 2 === 0)) {
+      // oxlint-disable-next-line no-console -- the console is how the test hears of it
+      console.error(`prose stand-in: no face of ${JSON.stringify(faces)} on this system`);
+    }
+  });
+}
+
 export const test = base.extend<{
+  prose: Prose;
+  proseStandIn: undefined;
   consoleErrorsAllowed: RegExp[];
   noConsoleErrors: undefined;
   regtestRpc: RegtestRpc | null;
@@ -39,6 +101,16 @@ export const test = base.extend<{
   mine: (blocks: number) => Promise<string[]>;
 }>({
   regtestRpc: [null, { option: true }],
+  // The prose font: the system's, or a stand-in for another system's. `E2E_PROSE` sets it for a
+  // run; a test sets it with `test.use({ prose: "wide" })`.
+  prose: [proseFromEnv as Prose, { option: true }],
+  proseStandIn: [
+    async ({ context, prose }, use) => {
+      if (prose !== "system") await context.addInitScript(useProseStandIn, PROSE_STAND_INS[prose]);
+      await use(undefined);
+    },
+    { auto: true },
+  ],
   // Each test is a visitor of its own, as its fresh browser context is: e2e.sh trusts
   // X-Forwarded-For from 127.0.0.1, so the server keys every per-client limit on this address and
   // the suite runs at the defaults. It reaches pages, files, API calls, WebSockets and `request`.

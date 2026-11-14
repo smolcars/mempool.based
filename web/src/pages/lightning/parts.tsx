@@ -160,7 +160,8 @@ export function Alias(props: { alias: string | null; max?: number }) {
       {(name) => {
         const shown = () => cut(name(), props.max ?? NAME_IN_LIST);
         return (
-          <bdi class="ln-alias" title={shown().more ? cut(name(), 512).text : undefined}>
+          // Always titled: a narrow column can cut a name its length did not.
+          <bdi class="ln-alias" title={cut(name(), 512).text}>
             {shown().text}
           </bdi>
         );
