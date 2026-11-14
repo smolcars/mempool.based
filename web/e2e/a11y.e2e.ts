@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
+import { LARGE, stubLarge } from "./large-address";
 import { ACINQ, mainnet, serve } from "./lightning-answers";
 
 // axe-core is a development dependency only: read from node_modules and run in the page through
@@ -217,6 +218,12 @@ const PAGES: PageType[] = [
     ready: (p) => p.getByRole("button", { name: /show the exact amount/ }).first(),
   },
   {
+    name: "address above the node's cap",
+    path: `/regtest/address/${LARGE}`,
+    ready: (p) => p.getByRole("table", { name: /^Unconfirmed transactions/ }).getByRole("link"),
+    before: (p) => stubLarge(p),
+  },
+  {
     name: "projected block",
     path: "/regtest/block/next",
     ready: (p) => p.getByRole("heading", { level: 1, name: "Next block" }),
@@ -288,7 +295,8 @@ async function open(page: Page, t: PageType) {
 }
 
 test.describe("every page type", () => {
-  test.use({ reducedMotion: "reduce" });
+  // The address above the cap is refused its totals (a stand-in 503), as the node does.
+  test.use({ reducedMotion: "reduce", consoleErrorsAllowed: [/status of 503/] });
   for (const t of PAGES) {
     test(`${t.name}: no checker finding in either theme, a keyboard walk, and no movement under reduced motion`, async ({
       page,

@@ -14,7 +14,7 @@ const plural = (n: number, one: string, many: string) =>
   `${groupDigits(n)}${n === 1 ? ` ${one}` : ` ${many}`}`;
 
 /** One figure: label, value and a sub-line. Both lines hold a bar until `ready`, so nothing moves. */
-function Stat(props: {
+export function Stat(props: {
   label: string;
   ready: boolean;
   value: JSX.Element;

@@ -87,6 +87,25 @@
     }
   }
 
+  /* An address above the node's cap: its count of outputs leads, the cap and the unconfirmed
+     change follow, and what is not shown closes the panel. */
+  .address-stats--large {
+    grid-template-columns: repeat(3, max-content);
+    column-gap: var(--space-8);
+  }
+  .address-unshown {
+    max-width: 48rem;
+    margin-top: var(--space-4);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+  .address-stats + .address-unshown {
+    margin-top: var(--space-5);
+  }
+  .section__meta .address-live {
+    margin-top: 0;
+  }
+
   /* Balance over time: the chart's whole height is held while its code and data load. */
   .address-balance {
     margin-top: var(--space-7);
@@ -164,7 +183,8 @@
 
   /* Fixed column widths, so columns stay put when rows replace their placeholders. */
   .address-txs .table,
-  .address-utxos .table {
+  .address-utxos .table,
+  .address-pool .table {
     table-layout: fixed;
   }
   /* A header wider than its fixed column, in a wide face, wraps rather than run into the next. */
@@ -182,15 +202,19 @@
   .address-txs th:nth-child(4) {
     width: 23%;
   }
-  .address-utxos th:nth-child(1) {
+  .address-utxos th:nth-child(1),
+  .address-pool th:nth-child(1) {
     width: 50%;
   }
   /* Placeholder rows as tall as real ones, whose copy button sets their height. */
-  .address-txs td {
+  .address-txs td,
+  .address-pool td {
     height: calc(28px + 2 * var(--space-2));
   }
   .address-utxos th:nth-child(2),
-  .address-utxos th:nth-child(3) {
+  .address-pool th:nth-child(2),
+  .address-utxos th:nth-child(3),
+  .address-pool th:nth-child(3) {
     width: 25%;
   }
 
@@ -334,6 +358,9 @@
     .address-stats {
       grid-template-columns: repeat(4, minmax(min-content, 1fr));
     }
+    .address-stats--large {
+      grid-template-columns: repeat(2, minmax(min-content, 1fr));
+    }
     .address-stat--balance {
       grid-column: 1 / -1;
     }
@@ -369,10 +396,12 @@
     .address-txs th:nth-child(3) {
       width: 42%;
     }
-    .address-utxos th:nth-child(1) {
+    .address-utxos th:nth-child(1),
+    .address-pool th:nth-child(1) {
       width: 58%;
     }
-    .address-utxos th:nth-child(2) {
+    .address-utxos th:nth-child(2),
+    .address-pool th:nth-child(2) {
       width: 42%;
     }
     .address-txs td {

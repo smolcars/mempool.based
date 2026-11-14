@@ -26,7 +26,7 @@ use hyper::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
 
 pub use crate::http::Endpoint;
-pub use error::Error;
+pub use error::{Error, ScriptSize};
 pub use route::{
     BlockTxsStart, MAX_OUT_POSITIONS, OutPosition, OutPositions, Route, ScriptHash, ScriptRef,
 };

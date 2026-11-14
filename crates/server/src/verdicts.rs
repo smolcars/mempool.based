@@ -6,11 +6,16 @@
 //! of a script's history ran past the history deadline (that page is not asked again).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::header::CACHE_CONTROL;
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use bitcoin::{BlockHash, Txid};
-use node::esplora::{Route, ScriptHash, ScriptRef};
+use node::esplora::{Route, ScriptHash, ScriptRef, ScriptSize};
 
 /// How long a verdict holds. Long enough that reloads and other visitors in the meantime cost the
 /// node nothing; short enough that a page slowed by a moment of load is asked again soon.
@@ -19,10 +24,35 @@ pub const REMEMBER: Duration = Duration::from_secs(300);
 /// address routes' cost limit already bounds how fast the table fills.
 pub const MAX_REMEMBERED: usize = 4096;
 
+/// `GET /app/address/:address/size`: how many outputs an address has received and the node's cap,
+/// as the node's last refusal of its totals said (docs/API.md, "Very large addresses"). Read from
+/// memory only, never from the node; `404 size not known` when the server holds no such refusal.
+pub async fn size_route(
+    State(ctx): State<Arc<crate::NetworkContext>>,
+    Path(address): Path<String>,
+) -> Result<Response, crate::ApiError> {
+    let address = crate::esplora::address(&address, ctx.config.network)?;
+    let script = ScriptHash::from_script(&address.script_pubkey());
+    let size = ctx
+        .api
+        .verdicts
+        .size(script, Instant::now())
+        .ok_or(crate::ApiError::new(
+            StatusCode::NOT_FOUND,
+            "size not known",
+        ))?;
+    let body = serde_json::json!({ "creates": size.creates, "cap": size.cap });
+    let mut res = (StatusCode::OK, Json(body)).into_response();
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(res)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// The node refused the script's totals as above its `--max-sh-creates`.
-    TooLarge,
+    /// The node refused the script's totals as above its `--max-sh-creates`, with the counts its
+    /// refusal gave when it gave them.
+    TooLarge(Option<ScriptSize>),
     /// This page of the history ran past the history deadline.
     Slow,
 }
@@ -87,6 +117,14 @@ impl Verdicts {
             .map(|(v, _)| *v)
     }
 
+    /// The size the node gave when it last refused this script's totals, if that is still known.
+    pub fn size(&self, script: ScriptHash, now: Instant) -> Option<ScriptSize> {
+        match self.check(script, None, now) {
+            Some(Verdict::TooLarge(size)) => size,
+            _ => None,
+        }
+    }
+
     pub fn learn(&self, script: ScriptHash, page: Page, verdict: Verdict, now: Instant) {
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         let key = (script, page);
@@ -132,13 +170,16 @@ mod tests {
     fn a_size_verdict_covers_every_page_and_a_slow_one_only_its_own() {
         let v = Verdicts::default();
         let now = Instant::now();
-        v.learn(script(1), None, Verdict::TooLarge, now);
+        v.learn(script(1), None, Verdict::TooLarge(None), now);
         let later = Some((Some(Txid::all_zeros()), None));
         assert_eq!(
             v.check(script(1), first_page(), now),
-            Some(Verdict::TooLarge)
+            Some(Verdict::TooLarge(None))
         );
-        assert_eq!(v.check(script(1), later, now), Some(Verdict::TooLarge));
+        assert_eq!(
+            v.check(script(1), later, now),
+            Some(Verdict::TooLarge(None))
+        );
         v.learn(script(2), first_page(), Verdict::Slow, now);
         assert_eq!(v.check(script(2), first_page(), now), Some(Verdict::Slow));
         assert_eq!(v.check(script(2), later, now), None);
@@ -149,11 +190,11 @@ mod tests {
     fn verdicts_expire() {
         let v = Verdicts::default();
         let now = Instant::now();
-        v.learn(script(1), None, Verdict::TooLarge, now);
+        v.learn(script(1), None, Verdict::TooLarge(None), now);
         let edge = now + REMEMBER;
         assert_eq!(
             v.check(script(1), first_page(), edge - Duration::from_millis(1)),
-            Some(Verdict::TooLarge)
+            Some(Verdict::TooLarge(None))
         );
         assert_eq!(v.check(script(1), first_page(), edge), None);
     }
@@ -167,17 +208,17 @@ mod tests {
             v.learn(
                 script(i),
                 None,
-                Verdict::TooLarge,
+                Verdict::TooLarge(None),
                 start + Duration::from_millis(u64::from(i)),
             );
         }
         assert_eq!(v.len(), MAX_REMEMBERED);
         // Full of live verdicts: the oldest goes.
         let now = start + Duration::from_secs(10);
-        v.learn(script(n), None, Verdict::TooLarge, now);
+        v.learn(script(n), None, Verdict::TooLarge(None), now);
         assert_eq!(v.len(), MAX_REMEMBERED);
         assert_eq!(v.check(script(0), None, now), None);
-        assert_eq!(v.check(script(1), None, now), Some(Verdict::TooLarge));
+        assert_eq!(v.check(script(1), None, now), Some(Verdict::TooLarge(None)));
         // Once they have expired, a new one sweeps them all out.
         let much_later = start + REMEMBER + Duration::from_secs(20);
         v.learn(script(n + 1), None, Verdict::Slow, much_later);

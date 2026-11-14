@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "../../lib/api";
 import type { Transaction, Utxo, Vin, Vout } from "../../lib/esplora";
 import {
+  arrivals,
   confirmations,
   keptAfterRefresh,
   mergePages,
   netChange,
   pageIsFull,
+  readSize,
   refusal,
   sortUtxos,
   txFeeRate,
@@ -186,5 +188,45 @@ describe("keptAfterRefresh", () => {
     const fresh = [u(1), ...range(0, 24)];
     const shown = [u(2), ...range(1, 25), u(3), c(26)];
     expect(ids(keptAfterRefresh(fresh, shown, 25))).toStrictEqual(["c25", "c26"]);
+  });
+});
+
+describe("readSize", () => {
+  it("takes two whole numbers with more creates than the cap, and nothing else", () => {
+    expect(readSize({ creates: 3_665_660, cap: 10_000 })).toStrictEqual({
+      creates: 3_665_660,
+      cap: 10_000,
+    });
+    for (const bad of [
+      undefined,
+      null,
+      "3665660",
+      [3_665_660, 10_000],
+      {},
+      { creates: 3_665_660 },
+      { creates: "3665660", cap: 10_000 },
+      { creates: 1.5, cap: 1 },
+      { creates: 2 ** 60, cap: 10_000 },
+      { creates: Number.NaN, cap: 10_000 },
+      { creates: 10_000, cap: 10_000 },
+      { creates: 5, cap: -10 },
+    ]) {
+      expect(readSize(bad)).toBeUndefined();
+    }
+  });
+});
+
+describe("arrivals", () => {
+  const t = (n: number) => tx([], [], { txid: n.toString(16).padStart(64, "0") });
+  it("puts newcomers first, keeps the rows shown, and drops what left", () => {
+    const first = arrivals(undefined, [t(1), t(2)]);
+    expect(first.list.map((x) => x.txid)).toStrictEqual([t(1).txid, t(2).txid]);
+    expect(first.fresh.size).toBe(0);
+    // The node lists them in no fixed order; t(1) confirmed, t(3) arrived.
+    const next = arrivals(first.list, [t(3), t(2)]);
+    expect(next.list.map((x) => x.txid)).toStrictEqual([t(3).txid, t(2).txid]);
+    expect(next.list[1]).toBe(first.list[1]);
+    expect([...next.fresh]).toStrictEqual([t(3).txid]);
+    expect(arrivals(next.list, []).list).toStrictEqual([]);
   });
 });

@@ -143,31 +143,7 @@ test("the live line never sits on the address, however many lines the address ta
   }
 });
 
-test.describe("an address with more history than the server adds up", () => {
-  test.use({ consoleErrorsAllowed: [/status of 503/] });
-
-  test("says so once, names what is missing, and draws nothing below", async ({ page }) => {
-    const address = chain.addresses.p2wpkh;
-    // The node's refusal of a huge address, as the server passes it on (docs/API.md).
-    await page.route(new RegExp(`/regtest/api/address/${address}$`), (route) =>
-      route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "address history too large for this server" }),
-      }),
-    );
-    await page.goto(`/regtest/address/${address}`);
-    const main = page.getByRole("main");
-    await expect(
-      main.getByText("This address has more history than this server adds up"),
-    ).toBeVisible();
-    await expect(main).toContainText("balance, totals, balance chart and transactions");
-    await expect(main.getByText(/not available for this address/)).toHaveCount(0);
-    await expect(main.getByText(/Reload/)).toHaveCount(0);
-    await expect(main.getByRole("tab")).toHaveCount(0);
-    await expect(main.getByRole("table")).toHaveCount(0);
-  });
-});
+// An address above the node's cap: address-large.e2e.ts.
 
 // Summary totals read in magnitude, the exact amount a tap away and what its copy button copies.
 test("a total reads in magnitude, on one line on a phone, and opens to the exact amount", async ({

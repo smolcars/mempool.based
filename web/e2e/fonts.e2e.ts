@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { Page } from "@playwright/test";
 import { type Prose, chain, expect, stubRetargets, test } from "./fixtures";
 import { frames, layoutFaults } from "./layout";
+import { LARGE, stubLarge } from "./large-address";
 import { amountsIntact, tablesFit } from "./rows";
 
 // The wide stand-in unless the run names another (`E2E_PROSE`, checked in fixtures.ts).
@@ -55,6 +56,7 @@ const PAGES: { path: string; stub?: (page: Page) => Promise<void> }[] = [
   { path: `/regtest/tx/${chain.txs.script_types}` },
   { path: `/regtest/tx/${chain.txs.cpfp_child}` },
   { path: `/regtest/address/${chain.addresses.p2tr}` },
+  { path: `/regtest/address/${LARGE}`, stub: (page) => stubLarge(page) },
   { path: "/regtest/mining", stub: stubRetargets },
   { path: "/regtest/mining/pool/unknown" },
   { path: "/regtest/mempool" },

@@ -939,7 +939,7 @@ async fn an_address_history_the_node_will_not_finish_is_not_read_again() {
     let sh = script_of(&address(2)).to_string().parse().unwrap();
     ctx.api
         .verdicts
-        .learn(sh, None, Verdict::TooLarge, std::time::Instant::now());
+        .learn(sh, None, Verdict::TooLarge(None), std::time::Instant::now());
     send(&mut s, &json!({"track-addresses": [address(2)]}));
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(history.reads.load(Ordering::Relaxed), 1);

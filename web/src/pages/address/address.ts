@@ -97,3 +97,40 @@ export function keptAfterRefresh(
   const i = shown.findIndex((t) => t.txid === edge);
   return i === -1 ? [] : shown.slice(i + 1).filter((t) => t.status.confirmed);
 }
+
+/** What the node said when it refused an address's totals: outputs received, and its cap. */
+export interface Size {
+  creates: number;
+  cap: number;
+}
+
+/**
+ * `/app/address/:a/size`, checked: two whole numbers, more creates than the cap. Anything else is
+ * undefined, and the page says what it can without them.
+ */
+export function readSize(value: unknown): Size | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const { creates, cap } = value as Record<string, unknown>;
+  if (typeof creates !== "number" || typeof cap !== "number") return undefined;
+  if (!Number.isSafeInteger(creates) || !Number.isSafeInteger(cap)) return undefined;
+  return cap >= 0 && creates > cap ? { creates, cap } : undefined;
+}
+
+/**
+ * The unconfirmed list after a new answer: newcomers first, then what was already shown in its
+ * order, without what has left. Rows already shown keep their objects, so their table rows stay
+ * as they are (and keep focus). `fresh` names the newcomers, none on the first answer.
+ */
+export function arrivals(
+  shown: readonly Transaction[] | undefined,
+  answer: readonly Transaction[],
+): { list: Transaction[]; fresh: Set<string> } {
+  const now = new Set(answer.map((t) => t.txid));
+  const before = new Set(shown?.map((t) => t.txid));
+  const newcomers = answer.filter((t) => !before.has(t.txid));
+  const kept = shown?.filter((t) => now.has(t.txid)) ?? [];
+  return {
+    list: [...newcomers, ...kept],
+    fresh: new Set(shown === undefined ? [] : newcomers.map((t) => t.txid)),
+  };
+}

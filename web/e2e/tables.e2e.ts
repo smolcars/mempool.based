@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
 import { AUDIT } from "../src/components/audit/fakes";
 import { ACINQ, mainnet, ONE, recorded, serve } from "./lightning-answers";
+import { LARGE, stubLarge } from "./large-address";
 import { tablesFit, tapRow, wideFaces } from "./rows";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
@@ -131,6 +132,12 @@ const LISTS: { path: string; table: string | RegExp; stub?: (page: Page) => Prom
   {
     path: `/regtest/address/${chain.addresses.p2wpkh}?view=unspent`,
     table: "Unspent outputs of this address, newest first",
+  },
+  // Above the node's cap: its unconfirmed transactions only.
+  {
+    path: `/regtest/address/${LARGE}`,
+    table: /^Unconfirmed transactions of this address/,
+    stub: (page) => stubLarge(page),
   },
   { path: "/regtest/mining?period=all", table: /^Pools ranked by blocks found/ },
   { path: "/regtest/mining/pool/unknown", table: /^Blocks found by/ },

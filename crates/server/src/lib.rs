@@ -218,6 +218,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/tx/{txid}/relatives", get(relatives::route))
         .route("/app/tx/{txid}/replacements", get(replacements::route))
         .route("/app/fees/score", get(ws::fees::score::route))
+        .route("/app/address/{address}/size", get(verdicts::size_route))
         .merge(statistics::app_routes())
         .merge(api_v1::routes())
         .merge(audits::routes())
