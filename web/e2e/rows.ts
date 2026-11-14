@@ -32,10 +32,40 @@ export async function tapRow(page: Page, table: Locator, label: string) {
  * takes the keyboard. No header is cut, mid-word or otherwise.
  */
 export async function tablesFit(page: Page, label: string) {
-  // A table fits and marks its edge a frame after it changes: give it a moment to settle.
-  await expect(async () => {
-    await tablesFitNow(page, label);
-  }).toPass({ timeout: 3000 });
+  await tablesSettled(page);
+  await tablesFitNow(page, label);
+}
+
+/**
+ * Waits until the page has fitted and marked its tables: they do that in the frame after a
+ * ResizeObserver notice, so this waits for two frames in a row with no notice on what they
+ * watch. Frames, not a clock: a busy runner's WebKit at phone width once took over 3 s for one.
+ */
+function tablesSettled(page: Page): Promise<void> {
+  return page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        let quiet = 0;
+        // Its first notice comes in the first frame, so it cannot settle before the page's do.
+        const observer = new ResizeObserver(() => {
+          quiet = 0;
+        });
+        for (const s of document.querySelectorAll(".table-scroll")) {
+          observer.observe(s);
+          if (s.firstElementChild) observer.observe(s.firstElementChild);
+        }
+        const tick = () => {
+          quiet += 1;
+          if (quiet < 3) {
+            requestAnimationFrame(tick);
+            return;
+          }
+          observer.disconnect();
+          resolve();
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
 }
 
 async function tablesFitNow(page: Page, label: string) {
