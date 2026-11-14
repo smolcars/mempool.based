@@ -101,7 +101,7 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
     Ok(sql
         .prepare(concat!(
             "SELECT s.funded_count, s.funded_sum, s.spent_count, s.spent_sum, s.tx_count, ",
-            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script ",
+            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script, s.filled ",
             "FROM ledger_scripts s, ",
             "(SELECT height, hash, time FROM ledger_chain ORDER BY height DESC LIMIT 1) c ",
             "WHERE s.sh = ?1"
@@ -118,6 +118,7 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
                 },
                 seeded_height: int(r, 5)?,
                 seeded_time: int(r, 6)?,
+                filled: r.get(11)?,
                 at: At {
                     height: int(r, 7)?,
                     hash: BlockHash::from_byte_array(blob32(r, 8)?),
@@ -433,6 +434,8 @@ pub struct NewScript {
     pub totals: Totals,
     pub anchor: At,
     pub rows: Vec<TxRow>,
+    /// The node's page before the anchor was asked for (`rows` holds it).
+    pub filled: bool,
     pub since: Vec<(At, Effect)>,
     pub now: u64,
 }
@@ -475,8 +478,8 @@ pub fn insert(
     let t = &new.totals;
     sql.prepare(concat!(
         "INSERT INTO ledger_scripts (sh, script, funded_count, funded_sum, spent_count, ",
-        "spent_sum, tx_count, seeded_height, seeded_time, viewed) ",
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+        "spent_sum, tx_count, seeded_height, seeded_time, viewed, seeded_tx_count, filled) ",
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?7, ?11)"
     ))?
     .execute(params![
         sh_bytes(new.sh),
@@ -488,7 +491,8 @@ pub fn insert(
         sql_int(t.tx_count)?,
         new.anchor.height,
         new.anchor.time,
-        sql_int(new.now)?
+        sql_int(new.now)?,
+        new.filled
     ])?;
     insert_rows(sql, new.sh, &new.rows)?;
     point(sql, new.sh, new.anchor)?;
@@ -498,4 +502,148 @@ pub fn insert(
         }
     }
     Ok(Some(evicted))
+}
+
+/// The scripts still to be filled.
+pub fn unfilled(sql: &Sql<'_>) -> Result<Vec<ScriptHash>, Error> {
+    let mut stmt = sql.prepare("SELECT sh FROM ledger_scripts WHERE filled = 0")?;
+    let rows = stmt.query_map([], |r| Ok(ScriptHash::from_byte_array(blob32(r, 0)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// What [`super::fill`] needs to know of a script.
+#[derive(Debug, Clone)]
+pub struct ToFill {
+    pub script: ScriptBuf,
+    pub seeded_height: u32,
+    pub filled: bool,
+    /// Why no page can be joined, when none can: `full` (the window holds [`WINDOW`] rows since
+    /// the seed) or `gap` (rows since the seed may be missing, so the page would not join them).
+    pub skip: Option<&'static str>,
+    /// The seed block's hash, while the ledger's chain still holds it.
+    pub seed_block: Option<BlockHash>,
+    /// The ledger's tip.
+    pub tip: Option<At>,
+}
+
+pub fn to_fill(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<ToFill>, Error> {
+    let row = sql
+        .prepare(concat!(
+            "SELECT s.script, s.seeded_height, s.filled, s.tx_count, s.seeded_tx_count, ",
+            "(SELECT count(*) FROM ledger_txs t WHERE t.sh = s.sh), ",
+            "(SELECT hash FROM ledger_chain c WHERE c.height = s.seeded_height) ",
+            "FROM ledger_scripts s WHERE s.sh = ?1"
+        ))?
+        .query_row(params![sh_bytes(sh)], |r| {
+            let seed_block: Option<Vec<u8>> = r.get(6)?;
+            let seed_block = match seed_block {
+                Some(b) => Some(BlockHash::from_byte_array(
+                    <[u8; 32]>::try_from(b.as_slice()).map_err(|e| {
+                        SqlError::FromSqlConversionFailure(6, Type::Blob, Box::new(e))
+                    })?,
+                )),
+                None => None,
+            };
+            let seeded_tx_count: Option<i64> = r.get(4)?;
+            Ok((
+                ScriptBuf::from_bytes(r.get(0)?),
+                int::<u32>(r, 1)?,
+                r.get::<_, bool>(2)?,
+                int::<u64>(r, 3)?,
+                seeded_tx_count.and_then(|v| u64::try_from(v).ok()),
+                int::<u64>(r, 5)?,
+                seed_block,
+            ))
+        })
+        .optional()?;
+    let Some((script, seeded_height, filled, tx_count, seeded_tx_count, kept, seed_block)) = row
+    else {
+        return Ok(None);
+    };
+    // Every row kept is from a block after the seed. They are all of its transactions since
+    // exactly when there are as many as the totals counted since: a window cut at WINDOW and
+    // then shortened by a reorg holds fewer.
+    let since = seeded_tx_count.and_then(|s| tx_count.checked_sub(s));
+    let skip = if kept >= WINDOW as u64 {
+        Some("full")
+    } else if since != Some(kept) {
+        Some("gap")
+    } else {
+        None
+    };
+    Ok(Some(ToFill {
+        script,
+        seeded_height,
+        filled,
+        skip,
+        seed_block,
+        tip: tip(sql)?,
+    }))
+}
+
+/// What [`fill`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filled {
+    /// The page at the seed block, `height`, was joined below the kept rows; `rows` of it stayed
+    /// in the window. `tip` is the ledger's.
+    Joined {
+        height: u32,
+        rows: usize,
+        tip: Option<At>,
+    },
+    /// Marked done without a page, for the reason given (as [`ToFill::skip`]).
+    Skipped {
+        height: u32,
+        reason: &'static str,
+        tip: Option<At>,
+    },
+    /// Not tracked any more, done already, or seeded again at another block: nothing written.
+    Nothing,
+}
+
+/// Joins `page`'s rows, the node's newest page at block `hash` at the script's seed height, below
+/// the rows kept since, and marks the script filled; with no page, marks it filled when it cannot
+/// take one. Decided again here, in the write: the script must still be the one seeded at that
+/// block, and its rows since the seed all there.
+pub fn fill(
+    sql: &Sql<'_>,
+    sh: ScriptHash,
+    seeded_height: u32,
+    page: Option<(BlockHash, &[TxRow])>,
+) -> Result<Filled, Error> {
+    let Some(s) = to_fill(sql, sh)? else {
+        return Ok(Filled::Nothing);
+    };
+    // Seeded again since, at another block: that seed is filled on its own.
+    let other = page.is_some_and(|(hash, _)| s.seed_block.is_some_and(|h| h != hash));
+    if s.filled || s.seeded_height != seeded_height || other {
+        return Ok(Filled::Nothing);
+    }
+    let done = match (s.skip, page) {
+        (Some(reason), _) => Filled::Skipped {
+            height: seeded_height,
+            reason,
+            tip: s.tip,
+        },
+        // It can take a page after all: left for the next fill.
+        (None, None) => return Ok(Filled::Nothing),
+        (None, Some((_, rows))) => {
+            let before = count_rows(sql, sh)?;
+            insert_rows(sql, sh, rows)?;
+            Filled::Joined {
+                height: seeded_height,
+                rows: count_rows(sql, sh)?.saturating_sub(before),
+                tip: s.tip,
+            }
+        }
+    };
+    sql.prepare("UPDATE ledger_scripts SET filled = 1 WHERE sh = ?1")?
+        .execute(params![sh_bytes(sh)])?;
+    Ok(done)
+}
+
+fn count_rows(sql: &Sql<'_>, sh: ScriptHash) -> Result<usize, Error> {
+    Ok(sql
+        .prepare("SELECT count(*) FROM ledger_txs WHERE sh = ?1")?
+        .query_row(params![sh_bytes(sh)], |r| int(r, 0))?)
 }

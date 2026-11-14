@@ -28,6 +28,8 @@ export type Ledger =
       seeded: { height: number; time: number };
       /** The most newest transactions the server keeps. */
       window: number;
+      /** The server has yet to add the newest transactions from before `seeded`. */
+      filling: boolean;
       txs: LedgerTx[];
       points: LedgerPoint[];
     }
@@ -93,8 +95,11 @@ export function readLedger(v: unknown): Ledger {
       const txs = all(r["txs"], tx);
       const points = all(r["points"], point);
       const window = r["window"];
-      if (!at || !seeded || !txs || !points || !count(window)) return NONE;
-      return { state: "tracked", at, seeded, window, txs, points };
+      const filling = r["filling"];
+      if (!at || !seeded || !txs || !points || !count(window) || typeof filling !== "boolean") {
+        return NONE;
+      }
+      return { state: "tracked", at, seeded, window, filling, txs, points };
     }
     case "queued": {
       return count(r["position"]) ? { state: "queued", position: r["position"] } : NONE;

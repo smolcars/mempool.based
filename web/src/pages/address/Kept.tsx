@@ -167,9 +167,16 @@ function KeptTransactions(props: { ledger: Tracked }) {
       </SectionHeader>
       <Switch>
         <Match when={txs().length === 0}>
-          <Empty title="No confirmed transactions yet">
-            This server lists the transactions of the blocks after it began keeping this address, at
-            block {groupDigits(props.ledger.seeded.height)}. They show here as blocks confirm them.
+          <Empty title="No confirmed transactions kept yet">
+            This server began keeping this address at block{" "}
+            {groupDigits(props.ledger.seeded.height)}{" "}
+            <Show
+              when={props.ledger.filling}
+              fallback="and keeps none of its transactions from before it."
+            >
+              and asks its node once for the transactions before it.
+            </Show>{" "}
+            New ones show here as blocks confirm them.
           </Empty>
         </Match>
         <Match when={true}>
@@ -189,8 +196,13 @@ function KeptTransactions(props: { ledger: Tracked }) {
             </div>
           </Show>
           <p class="address-unshown">
-            This server keeps the newest {groupDigits(props.ledger.window)} confirmed transactions
-            of this address, not its older history or its unspent outputs.
+            This server keeps at most the newest {groupDigits(props.ledger.window)} confirmed
+            transactions of this address, not its older history or its unspent outputs.
+            <Show when={props.ledger.filling}>
+              {" "}
+              Those from before block {groupDigits(props.ledger.seeded.height)}, when it began
+              keeping this address, are added once its node has listed them.
+            </Show>
           </p>
         </Match>
       </Switch>

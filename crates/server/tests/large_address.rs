@@ -82,6 +82,17 @@ impl Node {
             })
             .count()
     }
+
+    /// History pages asked for any script, with their query.
+    fn pages(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.contains("/txs/summary"))
+            .cloned()
+            .collect()
+    }
 }
 
 fn hash(h: u32) -> BlockHash {
@@ -459,6 +470,18 @@ async fn a_large_address_is_added_up_from_its_answer_and_then_served_from_the_le
     assert_eq!(v["chain_stats"]["funded_txo_count"], 50_000);
     assert_eq!(v["at"]["height"], TIP);
     assert_eq!(v["seeded"]["height"], TIP);
+    // Taken from an answer, without a page: the page before its seed block follows once, in the
+    // lane, pinned to that block.
+    wait_for("filled", || async {
+        ledger(&s, 1, &a).await["filling"] == false
+    })
+    .await;
+    let pages = s.node.pages();
+    assert_eq!(pages.len(), 1, "{pages:?}");
+    assert!(
+        pages[0].ends_with(&format!("?asof={}", hash(TIP))),
+        "{pages:?}"
+    );
     // From the ledger, in the node's shape, stamped with the ledger's block; the node's own
     // totals route is not asked again.
     let r = get(&s.addr, 2, &format!("/regtest/api/address/{a}")).await;
@@ -492,6 +515,7 @@ async fn a_large_address_is_added_up_from_its_answer_and_then_served_from_the_le
     let r = get(&s.addr, 2, &format!("/regtest/api/address/{a}/txs")).await;
     assert_eq!((r.status, r.body["error"].as_str()), (503, Some(TOO_LARGE)));
     assert_eq!(s.node.totals_calls(&a), 1);
+    assert_eq!(s.node.pages().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

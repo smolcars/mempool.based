@@ -9,6 +9,7 @@ const tracked = {
   at: { height: 110, hash: "00", time: 1_767_291_600 },
   seeded: { height: 100, time: 1_767_285_600 },
   window: 200,
+  filling: false,
   txs: [{ txid: TXID, height: 110, position: 1, value: -5, time: 1_767_291_600 }],
   points: [{ height: 100, time: 1_767_285_600, balance: 10 }],
 };
@@ -20,6 +21,7 @@ describe("readLedger", () => {
       at: { height: 110, time: 1_767_291_600 },
       seeded: { height: 100, time: 1_767_285_600 },
       window: 200,
+      filling: false,
       txs: [{ txid: TXID, height: 110, position: 1, value: -5, time: 1_767_291_600 }],
       points: [{ height: 100, time: 1_767_285_600, balance: 10 }],
     });
@@ -56,6 +58,7 @@ describe("readLedger", () => {
       { state: "seeding", seconds: 1.5 },
       { ...tracked, at: null },
       { ...tracked, window: "200" },
+      { ...tracked, filling: undefined },
       { ...tracked, txs: [{ ...tracked.txs[0], txid: "<script>" }] },
       { ...tracked, txs: [...tracked.txs, { txid: TXID }] },
       { ...tracked, points: [{ height: 1, time: 1, balance: Number.MAX_VALUE }] },
