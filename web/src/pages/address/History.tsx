@@ -68,11 +68,19 @@ export function History(props: {
   retryFirst: () => void;
   /** Hands the page a function that refreshes what this section loaded on its own. */
   onRefresh: (refresh: () => void) => void;
+  /**
+   * An address whose whole history the server keeps (docs/API.md, "Paging a kept history"):
+   * `first` is its newest confirmed page from `/txs/chain`, later pages follow it there, and there
+   * is no unspent outputs view, which the server does not keep. Its unconfirmed transactions are
+   * listed apart.
+   */
+  kept?: boolean;
 }) {
   const network = useNetwork();
   const path = `/address/${encodeURIComponent(props.address)}`;
   const [search, setSearch] = useSearchParams<{ view: string }>();
-  const view = (): View => (search.view === "unspent" ? "unspent" : "transactions");
+  const view = (): View =>
+    search.view === "unspent" && props.kept !== true ? "unspent" : "transactions";
   const tabs: HTMLButtonElement[] = [];
 
   const select = (id: View, focus = false) => {
@@ -107,7 +115,10 @@ export function History(props: {
   const first = () => settled(props.first);
   const total = () => {
     const s = settled(props.stats);
-    return s ? s.chain_stats.tx_count + s.mempool_stats.tx_count : undefined;
+    if (!s) return undefined;
+    return props.kept === true
+      ? s.chain_stats.tx_count
+      : s.chain_stats.tx_count + s.mempool_stats.tx_count;
   };
 
   // When a refresh brings a new first page, what was loaded after it stays only where it still
@@ -162,7 +173,9 @@ export function History(props: {
         // oxlint-disable-next-line no-await-in-loop -- one page at a time, after the last row shown
         const page = await fetchApi<Transaction[]>(
           network(),
-          `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
+          props.kept === true
+            ? `${path}/txs/chain/${encodeURIComponent(last.txid)}`
+            : `${path}/txs?after_txid=${encodeURIComponent(last.txid)}`,
           { signal: controller.signal },
         );
         // A refresh while this was in flight may have changed the history it continues (new
@@ -224,35 +237,40 @@ export function History(props: {
   return (
     <section class="address-history" aria-label="History">
       <div class="section__head address-history__head">
-        {/* oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take focus (roving tabindex); the list only handles their arrow keys */}
-        <div class="address-tabs" role="tablist" aria-label="Show" onKeyDown={onKeyDown}>
-          <For each={VIEWS}>
-            {(v, i) => (
-              <button
-                ref={(el) => {
-                  tabs[i()] = el;
-                }}
-                type="button"
-                role="tab"
-                class="address-tab tap"
-                id={`address-tab-${v.id}`}
-                aria-controls="address-panel"
-                aria-selected={view() === v.id ? "true" : "false"}
-                tabindex={view() === v.id ? 0 : -1}
-                onClick={() => select(v.id)}
-              >
-                {v.label}
-              </button>
-            )}
-          </For>
-        </div>
+        <Show
+          when={props.kept !== true}
+          fallback={<h2 id="address-history-title">Transactions</h2>}
+        >
+          {/* oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take focus (roving tabindex); the list only handles their arrow keys */}
+          <div class="address-tabs" role="tablist" aria-label="Show" onKeyDown={onKeyDown}>
+            <For each={VIEWS}>
+              {(v, i) => (
+                <button
+                  ref={(el) => {
+                    tabs[i()] = el;
+                  }}
+                  type="button"
+                  role="tab"
+                  class="address-tab tap"
+                  id={`address-tab-${v.id}`}
+                  aria-controls="address-panel"
+                  aria-selected={view() === v.id ? "true" : "false"}
+                  tabindex={view() === v.id ? 0 : -1}
+                  onClick={() => select(v.id)}
+                >
+                  {v.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <span class="section__meta num">{meta()}</span>
       </div>
       <div
         class="address-panel"
-        role="tabpanel"
+        role={props.kept === true ? undefined : "tabpanel"}
         id="address-panel"
-        aria-labelledby={`address-tab-${view()}`}
+        aria-labelledby={props.kept === true ? "address-history-title" : `address-tab-${view()}`}
       >
         <Show
           when={view() === "unspent"}

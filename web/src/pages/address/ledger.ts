@@ -12,6 +12,9 @@ export interface LedgerTx {
   time: number;
 }
 
+export type LedgerHistory = "none" | "taking" | "whole" | "refused" | "dropped";
+const HISTORIES: readonly LedgerHistory[] = ["none", "taking", "whole", "refused", "dropped"];
+
 export interface LedgerPoint {
   height: number;
   time: number;
@@ -30,6 +33,9 @@ export type Ledger =
       window: number;
       /** The server has yet to add the newest transactions from before `seeded`. */
       filling: boolean;
+      /** Where the address's whole history stands: kept whole, its list being or to be taken,
+       * refused by the node, or dropped to keep the server's store within its bound. */
+      history: LedgerHistory;
       txs: LedgerTx[];
       points: LedgerPoint[];
     }
@@ -99,7 +105,9 @@ export function readLedger(v: unknown): Ledger {
       if (!at || !seeded || !txs || !points || !count(window) || typeof filling !== "boolean") {
         return NONE;
       }
-      return { state: "tracked", at, seeded, window, filling, txs, points };
+      // Anything else reads as not kept whole: the page then shows the newest transactions.
+      const history = HISTORIES.find((h) => h === r["history"]) ?? "none";
+      return { state: "tracked", at, seeded, window, filling, history, txs, points };
     }
     case "queued": {
       return count(r["position"]) ? { state: "queued", position: r["position"] } : NONE;

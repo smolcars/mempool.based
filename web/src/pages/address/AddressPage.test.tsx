@@ -1062,4 +1062,86 @@ describe("balance chart", () => {
       "3 confirmed transactions",
     );
   });
+
+  describe("a kept address", () => {
+    const keptLedger = (history: string) => ({
+      state: "tracked",
+      chain_stats: part(150_000_000, 50_000_000, 30),
+      balance: 100_000_000,
+      at: { height: 900_000, hash: "00", time: 1_700_000_000 },
+      seeded: { height: 899_000, time: 1_699_000_000 },
+      window: 200,
+      filling: false,
+      history,
+      txs: [{ txid: txid(7), height: 899_500, position: 3, value: 5000, time: 1_699_500_000 }],
+      points: [],
+    });
+    const chain = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => tx(from + i, [[OTHER, 6000]], [[ME, 5000]]));
+
+    it("pages every confirmed transaction once its whole history is kept", async () => {
+      const first = chain(1, 25);
+      serve({
+        [`/app/address/${ME}/ledger`]: keptLedger("whole"),
+        [`/address/${ME}`]: stats(part(150_000_000, 50_000_000, 30)),
+        [`/address/${ME}/txs/chain`]: first,
+        [`/address/${ME}/txs/chain/${txid(25)}`]: chain(26, 5),
+        [`/address/${ME}/txs/mempool`]: [],
+      });
+      const el = open(`/address/${ME}`);
+      await until(() => expect(el.querySelectorAll(".address-txs tbody tr")).toHaveLength(25));
+      expect(el.querySelector("#address-history-title")?.textContent).toBe("Transactions");
+      expect(el.querySelector('[role="tablist"]')).toBeNull();
+      expect(text(el)).toContain("25 of 30");
+      expect(text(el)).not.toContain("newest 200");
+      [...el.querySelectorAll("button")].find((b) => text(b) === "Show 25 more")?.click();
+      await until(() => expect(el.querySelectorAll(".address-txs tbody tr")).toHaveLength(30));
+      expect(calls).toContain(`/api/address/${ME}/txs/chain/${txid(25)}`);
+      // Neither the node's mixed first page nor the unspent outputs, which are not kept.
+      expect(calls.some((c) => c.endsWith("/txs") || c.includes("/utxo"))).toBe(false);
+    });
+
+    it("shows the whole history once the server has it, while the page is open", async () => {
+      let history = "taking";
+      serve({
+        [`/app/address/${ME}/ledger`]: () => Response.json(keptLedger(history)),
+        [`/address/${ME}`]: stats(part(150_000_000, 50_000_000, 30)),
+        [`/address/${ME}/txs/chain`]: chain(1, 25),
+        [`/address/${ME}/txs/mempool`]: [],
+      });
+      const el = open(`/address/${ME}`, false);
+      heard({ state: "ledger", height: 900_000 });
+      await until(() => expect(text(el)).toContain("is getting this address's whole history"));
+      expect(calls.some((c) => c.includes("/txs/chain"))).toBe(false);
+      // The server is done: it tells the address's followers, and the page asks again.
+      history = "whole";
+      heard({ state: "ledger", height: 900_000 });
+      await until(() => expect(el.querySelectorAll(".address-txs tbody tr")).toHaveLength(25));
+      expect(el.querySelector("#address-history-title")?.textContent).toBe("Transactions");
+      expect(text(el)).not.toContain("is getting this address's whole history");
+    });
+
+    it("says truthfully why it lists only the newest transactions", async () => {
+      for (const [history, says] of [
+        ["taking", "is getting this address's whole history from its node"],
+        ["none", "is getting this address's whole history from its node"],
+        ["refused", "Its node declines to list this address's whole history"],
+        ["dropped", "does not fit beside the others"],
+      ] as const) {
+        serve({
+          [`/app/address/${ME}/ledger`]: keptLedger(history),
+          [`/address/${ME}`]: stats(part(150_000_000, 50_000_000, 30)),
+          [`/address/${ME}/txs/mempool`]: [],
+        });
+        const el = open(`/address/${ME}`);
+        await until(() => expect(text(el)).toContain(says));
+        expect(text(el)).toContain("newest 200 confirmed transactions");
+        expect(calls.some((c) => c.includes("/txs/chain"))).toBe(false);
+        for (const d of disposers.splice(0)) d();
+        clearApiCache();
+        calls = [];
+        document.body.replaceChildren();
+      }
+    });
+  });
 });

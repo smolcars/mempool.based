@@ -63,6 +63,8 @@ struct Node {
     txs: Mutex<HashMap<String, (u32, String)>>,
     /// The node says these blocks left its best chain: a reorg the ledger has not followed yet.
     orphaned: Mutex<Vec<String>>,
+    /// History pages fail: no fill ends, so none tells an address's followers anything.
+    fail_pages: std::sync::atomic::AtomicBool,
 }
 
 impl Node {
@@ -254,6 +256,9 @@ async fn esplora(node: Arc<Node>, pq: String) -> Response {
                 ]
             });
             stamped(StatusCode::OK, Value::Array(rows).to_string())
+        }
+        [_, _, "txs", "summary", ..] if node.fail_pages.load(Ordering::SeqCst) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "no").into_response()
         }
         [_, _, "txs", "summary", ..] | [_, _, "utxo"] => stamped(StatusCode::OK, "[]".into()),
         ["block", h, "status"] => match height_of(h) {
@@ -639,7 +644,7 @@ async fn a_large_address_is_added_up_from_its_answer_and_then_served_from_the_le
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_kept_address_takes_its_whole_history_once_and_a_refused_one_says_so() {
+async fn a_kept_address_takes_its_whole_history_once_and_a_refused_one_takes_the_page() {
     let s = start(true, &[]).await;
     let (whole, refused) = (address(40), address(41));
     s.node.set(&whole, Kind::Large { ms: 0 });
@@ -663,13 +668,16 @@ async fn a_kept_address_takes_its_whole_history_once_and_a_refused_one_says_so()
         ledger(&s, 1, &refused).await["history"] == "refused"
     })
     .await;
-    // Both take the newest page before their seed, as before.
+    // The refused one takes the newest page instead; the whole one never needs it.
     wait_for("filled", || async {
         ledger(&s, 1, &refused).await["filling"] == false
-            && ledger(&s, 1, &whole).await["filling"] == false
     })
     .await;
-    assert_eq!(s.node.pages().len(), 2, "{:?}", s.node.pages());
+    assert_eq!(ledger(&s, 1, &whole).await["filling"], false);
+    let pages = s.node.pages();
+    let refused_sh = ScriptHash::from_script(&refused.script_pubkey()).to_string();
+    assert_eq!(pages.len(), 1, "{pages:?}");
+    assert!(pages[0].contains(&refused_sh), "{pages:?}");
     // Each list asked once; more blocks or readers do not ask again.
     assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 2);
     for _ in 0..3 {
@@ -1027,4 +1035,165 @@ async fn a_whole_history_is_paged_from_the_store_as_the_node_pages() {
         .await;
         assert_eq!(r.status, 422, "{cursor}: {}", r.body);
     }
+}
+
+/// A WebSocket on the app's socket, just enough to follow an address: text frames only.
+struct Ws(TcpStream);
+
+impl Ws {
+    async fn open(addr: &str) -> Ws {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let req = concat!(
+            "GET /regtest/app/ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\n",
+            "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut b = [0u8];
+            stream.read_exact(&mut b).await.unwrap();
+            head.push(b[0]);
+        }
+        assert!(head.starts_with(b"HTTP/1.1 101"));
+        Ws(stream)
+    }
+
+    async fn send(&mut self, msg: Value) {
+        let payload = msg.to_string().into_bytes();
+        // Short messages only: one length byte, masked as a client must.
+        let mut out = vec![0x81, 0x80 | u8::try_from(payload.len()).unwrap()];
+        let key = [1u8, 2, 3, 4];
+        out.extend_from_slice(&key);
+        out.extend(payload.iter().zip(key.iter().cycle()).map(|(b, k)| b ^ k));
+        self.0.write_all(&out).await.unwrap();
+    }
+
+    /// The next text message within `wait`, skipping pings; `None` when none came.
+    async fn next(&mut self, wait: Duration) -> Option<Value> {
+        let read = async {
+            loop {
+                let mut head = [0u8; 2];
+                self.0.read_exact(&mut head).await.ok()?;
+                let len = match head[1] & 0x7F {
+                    126 => usize::from(self.0.read_u16().await.ok()?),
+                    127 => usize::try_from(self.0.read_u64().await.ok()?).ok()?,
+                    n => usize::from(n),
+                };
+                let mut payload = vec![0u8; len];
+                self.0.read_exact(&mut payload).await.ok()?;
+                if head[0] == 0x81 {
+                    return serde_json::from_slice(&payload).ok();
+                }
+            }
+        };
+        tokio::time::timeout(wait, read).await.ok().flatten()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn followers_hear_when_a_whole_history_is_dropped_for_anothers() {
+    // Room for one of the two histories. No fill ends, so only the drop itself can be heard.
+    let s = start(true, &[("LEDGER_MAX_HISTORY_ROWS", "80")]).await;
+    s.node.fail_pages.store(true, Ordering::SeqCst);
+    let (a, b) = (address(50), address(51));
+    for x in [&a, &b] {
+        s.node.set(x, Kind::Large { ms: 0 });
+        let sh = ScriptHash::from_script(&x.script_pubkey()).to_string();
+        s.node.lists.lock().unwrap().insert(sh, 50);
+    }
+    get(&s.addr, 1, &format!("/regtest/api/address/{a}")).await;
+    wait_for("a whole", || async {
+        ledger(&s, 1, &a).await["history"] == "whole"
+    })
+    .await;
+    // A page follows the address.
+    let mut ws = Ws::open(&s.addr).await;
+    ws.send(json!({"op": "subscribe", "topics": [format!("address:{a}")]}))
+        .await;
+    let topic = format!("address:{a}");
+    let said = |m: &Value| m["topic"] == topic.as_str() && m["state"] == "ledger";
+    loop {
+        let m = ws
+            .next(Duration::from_secs(5))
+            .await
+            .expect("no ledger message");
+        if said(&m) {
+            break;
+        }
+    }
+    // Anything still on its way (the notice that its history is whole may come just after the
+    // subscription) is read now, so what follows is heard only for what follows.
+    while ws.next(Duration::from_millis(500)).await.is_some() {}
+    // Another address takes its history, and the bound lets the first one's go.
+    get(&s.addr, 2, &format!("/regtest/api/address/{b}")).await;
+    wait_for("b whole", || async {
+        ledger(&s, 2, &b).await["history"] == "whole"
+    })
+    .await;
+    assert_eq!(ledger(&s, 1, &a).await["history"], "dropped");
+    // The page hears it, so it stops paging a history that is gone.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let m = ws
+            .next(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .expect("the follower never heard the history was dropped");
+        if said(&m) {
+            break;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn followers_hear_when_an_address_with_a_whole_history_is_dropped_for_another() {
+    // Room for one address. No fill ends, so only the drop itself can be heard.
+    let s = start(true, &[("LEDGER_MAX_ADDRESSES", "1")]).await;
+    s.node.fail_pages.store(true, Ordering::SeqCst);
+    let (a, b) = (address(52), address(53));
+    for x in [&a, &b] {
+        s.node.set(x, Kind::Large { ms: 0 });
+        let sh = ScriptHash::from_script(&x.script_pubkey()).to_string();
+        s.node.lists.lock().unwrap().insert(sh, 50);
+    }
+    get(&s.addr, 1, &format!("/regtest/api/address/{a}")).await;
+    wait_for("a whole", || async {
+        ledger(&s, 1, &a).await["history"] == "whole"
+    })
+    .await;
+    let mut ws = Ws::open(&s.addr).await;
+    ws.send(json!({"op": "subscribe", "topics": [format!("address:{a}")]}))
+        .await;
+    let topic = format!("address:{a}");
+    let said = |m: &Value| m["topic"] == topic.as_str() && m["state"] == "ledger";
+    loop {
+        let m = ws
+            .next(Duration::from_secs(5))
+            .await
+            .expect("no ledger message");
+        if said(&m) {
+            break;
+        }
+    }
+    // Anything still on its way (the notice that its history is whole may come just after the
+    // subscription) is read now, so what follows is heard only for what follows.
+    while ws.next(Duration::from_millis(500)).await.is_some() {}
+    // Another large address is kept in its place.
+    get(&s.addr, 2, &format!("/regtest/api/address/{b}")).await;
+    wait_for("b kept", || async {
+        ledger(&s, 2, &b).await["state"] == "tracked"
+    })
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let m = ws
+            .next(deadline.saturating_duration_since(Instant::now()))
+            .await
+            .expect("the follower never heard its address was dropped");
+        if said(&m) {
+            break;
+        }
+    }
+    // Asked now, A is no longer kept (asking queues it again, which would tell its followers too).
+    assert_ne!(ledger(&s, 1, &a).await["state"], "tracked");
 }

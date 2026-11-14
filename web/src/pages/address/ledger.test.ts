@@ -22,9 +22,15 @@ describe("readLedger", () => {
       seeded: { height: 100, time: 1_767_285_600 },
       window: 200,
       filling: false,
+      history: "none",
       txs: [{ txid: TXID, height: 110, position: 1, value: -5, time: 1_767_291_600 }],
       points: [{ height: 100, time: 1_767_285_600, balance: 10 }],
     });
+    for (const h of ["none", "taking", "whole", "refused", "dropped"]) {
+      expect(readLedger({ ...tracked, history: h })).toMatchObject({ history: h });
+    }
+    // An unknown word reads as not kept whole.
+    expect(readLedger({ ...tracked, history: "<b>" })).toMatchObject({ history: "none" });
     expect(readLedger({ state: "queued", position: 2 })).toStrictEqual({
       state: "queued",
       position: 2,
