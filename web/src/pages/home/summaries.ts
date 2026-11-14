@@ -1,6 +1,6 @@
 // The fee facts of the strip's tiles: one batch request on first paint, then the WebSocket's
 // `summary` message for each new block (docs/WS.md), with HTTP as the fallback.
-import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup, untrack } from "solid-js";
 import { blocksTopic } from "../../lib/blocks-topic";
 import type { Block } from "../../lib/esplora";
 import { useTopic } from "../../lib/live";
@@ -17,6 +17,8 @@ import {
  * fetch it only if it is later than this.
  */
 export const PUSH_GRACE_MS = 4_000;
+/** Older tiles' facts are asked for once the strip has stopped scrolling this long. */
+export const SETTLE_MS = 250;
 
 /** A tile's facts: here, not yet, or given up on after the retries. */
 export type TileFacts = BlockSummary | "failed" | undefined;
@@ -24,19 +26,26 @@ export type TileFacts = BlockSummary | "failed" | undefined;
 export function createSummaries(
   network: Network,
   blocks: Accessor<Block[] | undefined>,
+  /** Older blocks in the strip's window, past the live list. */
+  older: Accessor<readonly Block[]> = () => [],
 ): (id: string) => TileFacts {
   const [facts, setFacts] = createSignal<ReadonlyMap<string, BlockSummary | "failed">>(new Map());
   const pending = new Set<string>();
   let controller: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  // Read from handlers and timers, never to subscribe.
+  const shown = () => untrack(() => [...(blocks() ?? []), ...older()]);
+  // Only the tiles in the page keep theirs here; the page-wide cache brings them back.
   const put = (entries: [string, BlockSummary | "failed"][]) => {
-    if (entries.length > 0) setFacts((m) => new Map([...m, ...entries]));
+    if (entries.length === 0) return;
+    const ids = new Set(shown().map((b) => b.id));
+    setFacts((m) => new Map([...m, ...entries].filter(([id]) => ids.has(id))));
   };
 
-  /** Fetches the shown blocks' summaries that are neither here nor already asked for. */
-  const fetchMissing = () => {
-    const wanted = (blocks() ?? [])
+  /** Fetches the summaries of these blocks (the shown ones) that are neither here nor asked for. */
+  const fetchMissing = (list = shown()) => {
+    const wanted = list
       .map((b) => b.id)
       .filter((id) => !pending.has(id) && !knownSummary(network, id));
     if (wanted.length === 0) return;
@@ -60,7 +69,7 @@ export function createSummaries(
     message: (m) => {
       if (m.type !== "summary") return;
       rememberSummary(network, m.summary);
-      if (blocks()?.some((b) => b.id === m.summary.id)) put([[m.summary.id, m.summary]]);
+      if (shown().some((b) => b.id === m.summary.id)) put([[m.summary.id, m.summary]]);
     },
     // Pushes may have been missed while the socket was down.
     resync: () => fetchMissing(),
@@ -75,7 +84,17 @@ export function createSummaries(
     else timer = setTimeout(fetchMissing, PUSH_GRACE_MS);
     first = false;
   });
+  // Scrolling through the past asks nothing until it stops: then one batch per ten tiles in view.
+  let settle: ReturnType<typeof setTimeout> | undefined;
+  createEffect(older, (list) => {
+    clearTimeout(settle);
+    // A tile whose facts failed keeps its gauge until it leaves the page and comes back.
+    const ask = () =>
+      fetchMissing(untrack(older).filter((b) => untrack(facts).get(b.id) === undefined));
+    if (list.length > 0) settle = setTimeout(ask, SETTLE_MS);
+  });
   onCleanup(() => {
+    clearTimeout(settle);
     clearTimeout(timer);
     controller?.abort();
   });

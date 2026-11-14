@@ -361,7 +361,7 @@ Side by side on mainnet (2026-11-12, tip 975,533, three moments a minute apart, 
 
 ### Blocks
 
-Blocks with the reference's `extras`, and every transaction of a block, for tools that list and inspect blocks. Code: `crates/server/src/v1_blocks.rs` for the block routes, `crates/server/src/summary.rs` for the two summary routes.
+Blocks with the reference's `extras`, and every transaction of a block, for tools that list and inspect blocks. The home page's block strip pages back through the past with `blocks/:start_height` ([`FRONTEND.md`](FRONTEND.md#the-block-strips-past)). Code: `crates/server/src/v1_blocks.rs` for the block routes, `crates/server/src/summary.rs` for the two summary routes.
 
 | Route | Answer | `Cache-Control` |
 |---|---|---|

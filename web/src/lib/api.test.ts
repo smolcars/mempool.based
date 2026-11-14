@@ -185,6 +185,9 @@ describe("retries", () => {
     expect(isBusy(reason)).toBe(true);
     expect(retryDelay(reason, 0)).toBeUndefined();
     expect(isBusy(new ApiError(503, "Mempool is switched off.", 1))).toBe(false);
+    expect(isBusy(new ApiError(503, "Block extras need a block table on this server.", 1))).toBe(
+      false,
+    );
     expect(isBusy(new ApiError(503, "the mempool engine is off on this server", 1))).toBe(false);
     vi.useRealTimers();
   });

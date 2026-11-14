@@ -119,10 +119,61 @@
     flex: none;
     position: relative;
   }
+  /* A window over every mined block: the lane is as wide as all of them, and each item in the page
+     stands after the empty slots before it (BlockStrip.tsx, docs/FRONTEND.md). */
   .home-strip__lane {
+    --pitch: calc(var(--tile-w) + var(--tile-gap));
     position: relative;
     display: flex;
     gap: var(--tile-gap);
+    width: calc(var(--slots, 10) * var(--pitch) - var(--tile-gap));
+  }
+  .home-strip__lane > li {
+    margin-inline-start: calc(var(--skip, 0) * var(--pitch));
+  }
+  .home-strip__lane > .home-tile--leaving {
+    margin-inline-start: 0;
+  }
+  /* Older blocks that could not be loaded: one dashed run, its note kept in view while it is. */
+  .home-strip__gap {
+    flex: none;
+    display: flex;
+    align-items: center;
+    width: calc(var(--span) * var(--pitch) - var(--tile-gap));
+    height: var(--tile-h);
+    border: 1.5px dashed var(--color-line-strong);
+    border-radius: var(--radius-m);
+  }
+  .home-strip__gap-note {
+    position: sticky;
+    left: var(--space-5);
+    max-width: min(100%, 22rem);
+    padding: var(--space-3);
+  }
+  .home-strip__gap-note .state {
+    padding: 0;
+  }
+  .home-strip__end {
+    flex: none;
+    display: flex;
+    align-items: center;
+    width: var(--tile-w);
+    height: var(--tile-h);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  /* Shown only while the visitor is in the past. On a touch screen it is a thumb high, but the
+     head's row keeps its height, so the strip below never moves when it comes or goes. */
+  .home-strip__back {
+    /* Above the scroller's padding, which its target reaches into. */
+    position: relative;
+    z-index: 1;
+    margin-block: calc((var(--text-xl) * var(--leading-tight) - 32px) / 2);
+  }
+  @media (pointer: coarse) {
+    .home-strip__back {
+      margin-block: calc((var(--text-xl) * var(--leading-tight) - var(--touch)) / 2);
+    }
   }
   .home-strip__error {
     display: flex;

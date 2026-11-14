@@ -30,6 +30,17 @@ import type { LiveStatus } from "../../lib/live";
 import type { ProjectedBlock } from "../../lib/projected-topic";
 import { type Network, paths } from "../../lib/network";
 import { STRIP_MAX } from "./feeds";
+import {
+  createPastBlocks,
+  EXTENT_AHEAD,
+  inView,
+  LOAD_AHEAD,
+  laneSlots,
+  MAX_DEPTH,
+  OVERSCAN,
+  type Slot,
+  type Want,
+} from "./past";
 import { LiveIndicator } from "./LiveIndicator";
 import { type Motion, motion } from "./motion";
 import {
@@ -42,7 +53,7 @@ import {
   sameTiles,
 } from "./projection";
 import { ProjectedTile, projectedLayers, sameLayers, TILE_LAYER_MIN } from "./ProjectedTile";
-import type { TileFacts } from "./summaries";
+import { createSummaries, type TileFacts } from "./summaries";
 
 const MAX_WEIGHT = 4_000_000;
 /** Projected tiles on screen, not the ones fading out. */
@@ -77,8 +88,6 @@ export function BlockStrip(props: {
   status: Accessor<LiveStatus>;
   /** The node is not answering the page's requests, though the socket is up. */
   stale: Accessor<boolean>;
-  /** A mined block's fee facts, by hash. */
-  facts: (id: string) => TileFacts;
   projection: Accessor<ProjectionModel>;
   network: Network;
 }) {
@@ -88,6 +97,100 @@ export function BlockStrip(props: {
   const [announcement, setAnnouncement] = createSignal("");
   // A held projection is released by time, not by a message: this ticks when it is due.
   const [tick, setTick] = createSignal(0);
+
+  // The mined lane is a window over every block down to block 0 (docs/FRONTEND.md "The block
+  // strip's past"): tiles have a fixed pitch, so only those near the view are in the page.
+  /** The tiles in view, by index from the tip; undefined until the strip is laid out. */
+  const [seen, setSeen] = createSignal<[number, number] | undefined>(undefined, {
+    equals: (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1],
+  });
+  /** The "now" line is out of view: the visitor is looking at the past. */
+  const [away, setAway] = createSignal(false);
+  /** The deepest height the lane has been laid out to, so it only grows as the visitor goes. */
+  const [deepest, setDeepest] = createSignal(Number.POSITIVE_INFINITY);
+  /** The focused tile's height: it stays in the page wherever the strip scrolls. */
+  const [focused, setFocused] = createSignal<number>();
+  // Layout facts, read when the strip is laid out or resized, never per scroll frame.
+  let pitch = 0;
+  let laneLeft = 0;
+  let nowRight = 0;
+  let viewWidth = 0;
+  const tipHeight = () => shown()?.[0]?.height;
+  const floor = () => {
+    const tip = tipHeight() ?? 0;
+    return Math.max(0, tip + 1 - MAX_DEPTH, Math.min(deepest(), tip - EXTENT_AHEAD));
+  };
+  const capped = () => floor() > 0 && floor() === (tipHeight() ?? 0) + 1 - MAX_DEPTH;
+  const count = () => {
+    const tip = tipHeight();
+    return tip === undefined ? 0 : tip - floor() + 1;
+  };
+  const want = createMemo<Want | undefined>(
+    () => {
+      const s = seen();
+      const tip = tipHeight();
+      if (!s || tip === undefined) return undefined;
+      return {
+        top: tip - Math.max(0, s[0] - OVERSCAN),
+        bottom: Math.max(floor(), tip - s[1] - LOAD_AHEAD),
+        middle: tip - Math.round((s[0] + s[1]) / 2),
+        tip,
+      };
+    },
+    {
+      equals: (a, b) =>
+        a?.top === b?.top &&
+        a?.bottom === b?.bottom &&
+        a?.middle === b?.middle &&
+        a?.tip === b?.tip,
+    },
+  );
+  const past = createPastBlocks(props.network, props.blocks, want, focused);
+  const slots = createMemo<Slot[]>(() => {
+    const list = shown();
+    const tip = list?.[0]?.height;
+    if (!list || tip === undefined) return [];
+    const s = seen();
+    const live = new Map(list.map((b) => [b.height, b]));
+    const n = count();
+    return laneSlots({
+      tip,
+      // Before layout, the live list's tiles; after, the view and a few beyond each edge.
+      from: s ? s[0] - OVERSCAN : 0,
+      to: s ? s[1] + OVERSCAN : STRIP_MAX - 1,
+      count: n,
+      capped: capped(),
+      // The newest stays too, so "back to now" always has a tile to give focus to; and a focused
+      // tile's neighbours, so Tab finds the next one however fast it is pressed.
+      pinned: [tip, ...near(focused())],
+      block: (h) => live.get(h) ?? (h < (list.at(-1)?.height ?? 0) ? past.block(h) : undefined),
+      failure: (h) => past.failure(h),
+    });
+  });
+  // The lane is one Tab stop, so the page past it stays a Tab away: the focused tile, else the
+  // first in view, else the newest. Arrow keys walk from it (onKey).
+  const tabStop = createMemo(() => {
+    const f = focused();
+    if (f !== undefined) return f;
+    const s = seen();
+    const tip = tipHeight();
+    const first = s && tip !== undefined ? tip - s[0] : undefined;
+    return first !== undefined &&
+      slots().some((x) => x.kind === "block" && x.block.height === first)
+      ? first
+      : tip;
+  });
+  /** Older blocks in the page, for their fee facts. */
+  const older = createMemo<Block[]>(
+    () => {
+      const lowest = shown()?.at(-1)?.height ?? 0;
+      return slots().flatMap((s) =>
+        s.kind === "block" && s.block.height < lowest ? [s.block] : [],
+      );
+    },
+    { equals: (a, b) => sameIds(a, b) },
+  );
+  const facts = createSummaries(props.network, props.blocks, older);
   /** Blocks crossing the line: what each was projected to be, until it lands. */
   const crossings = new Map<string, Crossing>();
   /** Lands each crossing still in the air; the sequence calls one as its tile touches down. */
@@ -104,6 +207,7 @@ export function BlockStrip(props: {
   let next: HTMLDivElement | undefined;
   let flash: HTMLSpanElement | undefined;
   let nowLine: HTMLDivElement | undefined;
+  let minedBox: HTMLDivElement | undefined;
   const running = new Set<Animation>();
   const ghosts = new Set<Element>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -190,6 +294,21 @@ export function BlockStrip(props: {
       setShown(list);
       setView(nextView);
     };
+    // Looking at the past: nothing plays, and what is in view stays where it is.
+    const shift = (list?.[0]?.height ?? 0) - (before?.[0]?.height ?? 0);
+    if (away() && list?.[0] && before?.[0]) {
+      interrupt();
+      settleNew = false;
+      show();
+      if (shift !== 0) {
+        setSeen((s) => s && [s[0] + shift, s[1] + shift]);
+        // After the lane has its new width, before the browser paints.
+        queueMicrotask(() => {
+          if (scroller) scroller.scrollLeft += shift * pitch;
+        });
+      }
+      return;
+    }
     // Nothing to animate from, or nobody to see it: just show the new state.
     if (!list || !before || !lane || !upcoming || document.hidden || !("animate" in lane)) {
       interrupt();
@@ -216,10 +335,15 @@ export function BlockStrip(props: {
       // A projected tile that becomes a mined block leaves as that block, not as a ghost.
       ...list.map((b) => `p${b.height}`),
     ]);
+    // A mined tile leaves only when its block left the live list's heights (a reorg); an older
+    // one stays in the past, or leaves the window out of sight.
+    const lowest = list.at(-1)?.height ?? 0;
     const out = (tiles as HTMLElement[])
       .filter((el) => {
-        const id = el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
-        return !keep.has(id);
+        const id = el.dataset["id"];
+        if (id !== undefined) return !keep.has(id) && Number(el.dataset["height"]) >= lowest;
+        const key = el.dataset["key"];
+        return key !== undefined && !keep.has(`p${key}`);
       })
       .map((el) => {
         const parent = el.parentElement;
@@ -249,7 +373,7 @@ export function BlockStrip(props: {
       return;
     }
     const m: Motion = motion();
-    const mined = [...lane.children] as HTMLElement[];
+    const mined = [...lane.querySelectorAll<HTMLElement>(":scope > li[data-id]")];
     const projected = [...upcoming.querySelectorAll<HTMLElement>(PROJECTED)];
     const idOf = (el: HTMLElement) => el.dataset["id"] ?? `p${el.dataset["key"] ?? ""}`;
     const arriving = mined.filter((el) => !first.has(idOf(el)));
@@ -267,8 +391,10 @@ export function BlockStrip(props: {
       });
     };
 
-    // Leaders move first: mined tiles from the farthest, projected tiles from the nearest.
-    mined.forEach((el, i) => glide(el, mined.length - 1 - i));
+    // Leaders move first: mined tiles from the farthest, projected tiles from the nearest. Past the
+    // live list's ten, out of sight, they all lead together.
+    const lead = Math.min(mined.length, STRIP_MAX) - 1;
+    mined.forEach((el, i) => glide(el, Math.max(0, lead - i)));
     projected.forEach((el, i) => glide(el, 2 + i));
 
     // Tiles that leave fade where they stood.
@@ -422,22 +548,104 @@ export function BlockStrip(props: {
     }
   }
 
-  // Phones scroll the strip; it starts with the "now" line in the middle.
-  const center = () => {
-    if (!scroller || !nowLine) return;
-    scroller.scrollLeft = nowLine.offsetLeft - scroller.clientWidth / 2 + nowLine.offsetWidth / 2;
+  // The strip starts with the "now" line in the middle.
+  const nowAt = () => (nowLine ? nowLine.offsetLeft - viewWidth / 2 + nowLine.offsetWidth / 2 : 0);
+  /** Reads the layout facts the window is computed from. */
+  const layout = () => {
+    if (!scroller || !lane || !minedBox || !nowLine) return;
+    const tile = lane.querySelector<HTMLElement>(":scope > .home-tile:not(.home-tile--leaving)");
+    const gap = Number.parseFloat(getComputedStyle(lane).columnGap) || 0;
+    pitch = tile ? Number.parseFloat(getComputedStyle(tile).width) + gap : 0;
+    laneLeft = minedBox.offsetLeft;
+    nowRight = nowLine.offsetLeft + nowLine.offsetWidth;
+    viewWidth = scroller.clientWidth;
+  };
+  /** Which tiles are in view, from the scroll position alone. */
+  const measure = () => {
+    frame = 0;
+    if (!scroller) return;
+    const x = scroller.scrollLeft;
+    const s = inView(x, viewWidth, laneLeft, pitch);
+    setSeen(s);
+    setAway(s !== undefined && x > nowRight);
+    const tip = untrack(tipHeight);
+    if (s && tip !== undefined) setDeepest((d) => Math.min(d, tip - s[1] - EXTENT_AHEAD));
+  };
+  let frame = 0;
+  const onScroll = () => {
+    frame ||= requestAnimationFrame(measure);
+  };
+  /** Back to the "now" line: glides when it is near and motion is welcome, else jumps. */
+  const toNow = (focus: boolean) => {
+    if (!scroller) return;
+    const left = nowAt();
+    const near = Math.abs(scroller.scrollLeft - left) < 3 * viewWidth;
+    scroller.scrollTo({ left, behavior: near && !motion().reduced ? "smooth" : "instant" });
+    // The newest tile is always in the page, so focus has somewhere to land.
+    if (focus) {
+      lane
+        ?.querySelector<HTMLElement>(`:scope > li[data-height="${tipHeight() ?? ""}"] a`)
+        ?.focus({ preventScroll: true });
+    }
+  };
+  // A focused tile is kept in the page (`pinned`), so scrolling away never drops focus.
+  const onFocusIn = (e: FocusEvent) => {
+    const li = (e.target as Element).closest<HTMLElement>(".home-strip__lane > li[data-height]");
+    setFocused(li ? Number(li.dataset["height"]) : undefined);
+  };
+  const onFocusOut = (e: FocusEvent) => {
+    if (!lane?.contains(e.relatedTarget as Node | null)) setFocused(undefined);
+  };
+  // Right and Left walk to the next older and newer tile, the strip following; Home goes back to
+  // now, to the newest block, from however far in the past.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const li = (e.target as Element).closest<HTMLElement>(".home-strip__lane > li[data-height]");
+    if (!li) return;
+    if (e.key === "Home") {
+      e.preventDefault();
+      toNow(true);
+      return;
+    }
+    const step = e.key === "ArrowRight" ? -1 : e.key === "ArrowLeft" ? 1 : 0;
+    if (step === 0) return;
+    e.preventDefault();
+    const to = Number(li.dataset["height"]) + step;
+    lane?.querySelector<HTMLElement>(`:scope > li[data-height="${to}"] a`)?.focus();
   };
   onSettled(() => {
-    center();
-    let width = scroller?.clientWidth ?? 0;
+    layout();
+    if (scroller) scroller.scrollLeft = nowAt();
+    measure();
+    let width = viewWidth;
+    // Handled in the next frame, so what it changes cannot loop back into the observer.
+    let resized = 0;
     const ro = new ResizeObserver(() => {
-      if (scroller && scroller.clientWidth !== width) {
-        width = scroller.clientWidth;
-        center();
-      }
+      resized ||= requestAnimationFrame(() => {
+        resized = 0;
+        layout();
+        // A resize keeps the visitor's place in the past; at "now" it centres the line again.
+        if (scroller && viewWidth !== width && !untrack(away)) scroller.scrollLeft = nowAt();
+        width = viewWidth;
+        measure();
+      });
     });
-    if (scroller) ro.observe(scroller);
-    return () => ro.disconnect();
+    if (scroller) {
+      ro.observe(scroller);
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+      scroller.addEventListener("focusin", onFocusIn);
+      scroller.addEventListener("focusout", onFocusOut);
+      scroller.addEventListener("keydown", onKey);
+    }
+    return () => {
+      ro.disconnect();
+      scroller?.removeEventListener("scroll", onScroll);
+      scroller?.removeEventListener("focusin", onFocusIn);
+      scroller?.removeEventListener("focusout", onFocusOut);
+      scroller?.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(resized);
+    };
   });
   onCleanup(interrupt);
 
@@ -475,6 +683,17 @@ export function BlockStrip(props: {
           </span>
           <span class="home-strip__key home-strip__key--mined">Mined</span>
         </p>
+        <Show when={away()}>
+          <button
+            type="button"
+            class="btn home-strip__back"
+            aria-label="Back to now"
+            // A keypress (no pointer, detail 0) moves focus on to the newest block.
+            onClick={(e) => toNow(e.detail === 0)}
+          >
+            <span aria-hidden="true">←</span> Now
+          </button>
+        </Show>
         <LiveIndicator status={props.status} stale={props.stale} />
       </div>
       <div class="home-strip__scroller" ref={scroller}>
@@ -511,7 +730,7 @@ export function BlockStrip(props: {
             <span class="home-strip__flash" ref={flash} />
             <span class="home-strip__now-label">now</span>
           </div>
-          <div class="home-strip__mined">
+          <div class="home-strip__mined" ref={minedBox}>
             <Show
               when={shown() ?? props.error() === undefined}
               fallback={
@@ -529,6 +748,7 @@ export function BlockStrip(props: {
                 ref={lane}
                 aria-label="Mined blocks, newest first"
                 aria-busy={shown() ? "false" : "true"}
+                style={{ "--slots": String(shown() ? count() + (capped() ? 1 : 0) : STRIP_MAX) }}
               >
                 <Show
                   when={shown()}
@@ -536,15 +756,49 @@ export function BlockStrip(props: {
                     <For each={Array.from({ length: STRIP_MAX })}>{() => <SkeletonTile />}</For>
                   }
                 >
-                  <For each={shown()}>
-                    {(b) => (
-                      <MinedTile
-                        block={b}
-                        now={now}
-                        facts={props.facts(b.id)}
-                        crossing={take(b.id)}
-                      />
-                    )}
+                  <For each={slots()} keyed={(s) => s.key}>
+                    {(slot) => {
+                      const s = untrack(slot);
+                      const skip = () => slot().skip;
+                      if (s.kind === "block") {
+                        return (
+                          <MinedTile
+                            block={s.block}
+                            now={now}
+                            facts={facts(s.block.id)}
+                            crossing={take(s.block.id)}
+                            skip={skip()}
+                            place={slot().index + 1}
+                            of={(tipHeight() ?? 0) + 1}
+                            stop={s.block.height === tabStop()}
+                          />
+                        );
+                      }
+                      if (s.kind === "wait") return <SkeletonTile skip={skip()} />;
+                      if (s.kind === "end") {
+                        return (
+                          <li class="home-strip__end" style={{ "--skip": String(skip()) }}>
+                            Older blocks are on the{" "}
+                            <Link href={paths.blocks(Math.max(0, floor() - 1))}>Blocks page</Link>.
+                          </li>
+                        );
+                      }
+                      const failed = () => slot() as Extract<Slot, { kind: "failed" }>;
+                      return (
+                        <li
+                          class="home-strip__gap"
+                          style={{ "--skip": String(skip()), "--span": String(failed().span) }}
+                        >
+                          <div class="home-strip__gap-note">
+                            <ErrorState
+                              title={`Blocks ${groupDigits(failed().top)} to ${groupDigits(failed().bottom)} could not be loaded`}
+                              error={failed().error}
+                              retry={past.retry}
+                            />
+                          </div>
+                        </li>
+                      );
+                    }}
                   </For>
                 </Show>
               </ol>
@@ -563,6 +817,8 @@ function sameIds(a: readonly Block[] | undefined, b: readonly Block[] | undefine
   if (!a || !b) return a === b;
   return a.length === b.length && a.every((x, i) => x.id === b[i]?.id);
 }
+
+const near = (h: number | undefined) => (h === undefined ? [] : [h + 1, h, h - 1]);
 
 /** A tile's two fee lines as words, for its label: median, then range. */
 export function tileFeeText(facts: TileFacts): string | undefined {
@@ -584,6 +840,13 @@ function MinedTile(props: {
   facts: TileFacts;
   /** When it is crossing the line: what it was projected to be, and whether it has landed. */
   crossing: Crossing | undefined;
+  /** Empty slots before it in the lane. */
+  skip: number;
+  /** Its place among all the mined blocks, newest first, and how many there are. */
+  place: number;
+  of: number;
+  /** The lane's one Tab stop: arrow keys move from it to the others. */
+  stop: boolean;
 }) {
   const b = () => props.block;
   const full = () => Math.min(1, Math.max(0, b().weight / MAX_WEIGHT));
@@ -627,11 +890,19 @@ function MinedTile(props: {
   return (
     <li
       class={["home-tile home-tile--mined", { "home-tile--guessing": guessing() }]}
+      style={{ "--skip": String(props.skip) }}
+      aria-posinset={props.place}
+      aria-setsize={props.of}
 
       data-id={b().id}
       data-height={b().height}
     >
-      <Link class="home-tile__body" href={paths.block(b().id)} aria-label={label()}>
+      <Link
+        class="home-tile__body"
+        href={paths.block(b().id)}
+        aria-label={label()}
+        tabindex={props.stop ? 0 : -1}
+      >
         <span class="home-tile__title num">{groupDigits(b().height)}</span>
         <span class="home-tile__fee num">
           <Switch fallback={<span class="home-tile__bone home-tile__bone--line" />}>
@@ -712,9 +983,13 @@ function MinedTile(props: {
   );
 }
 
-function SkeletonTile() {
+function SkeletonTile(props: { skip?: number }) {
   return (
-    <li class="home-tile home-tile--skeleton" aria-hidden="true">
+    <li
+      class="home-tile home-tile--skeleton"
+      aria-hidden="true"
+      style={{ "--skip": String(props.skip ?? 0) }}
+    >
       <span class="home-tile__body">
         <span class="home-tile__bone home-tile__bone--title" />
         <span class="home-tile__bone" />
