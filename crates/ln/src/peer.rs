@@ -38,8 +38,9 @@ pub(crate) type Pm = PeerManager<
 >;
 
 /// LDK's recommended period for `timer_tick_occurred`: pings and stale-peer checks. A peer that
-/// has not completed the handshake by the second tick is dropped. Tests tick faster.
-const TIMER_TICK: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 10 });
+/// has not completed the handshake by the second tick, or sent nothing in the tick after a ping,
+/// is dropped. Tests tick only when they set a period ([`Peer::set_timer_tick`]).
+pub(crate) const TIMER_TICK: Duration = Duration::from_secs(10);
 /// LDK's staleness horizon: channels without an update this old are pruned.
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
 /// A saved graph younger than this is shown at once after a restart.
@@ -76,6 +77,8 @@ struct Shared {
     /// When each peer was dialled: what tests check the back-off against.
     #[cfg(test)]
     dials: std::sync::Mutex<Vec<(PublicKey, Instant)>>,
+    /// [`TIMER_TICK`] in milliseconds; in tests `u64::MAX`, never, unless a test sets it.
+    timer_tick_ms: std::sync::atomic::AtomicU64,
 }
 
 impl Peer {
@@ -197,6 +200,11 @@ impl Peer {
             changes,
             #[cfg(test)]
             dials: std::sync::Mutex::new(Vec::new()),
+            timer_tick_ms: std::sync::atomic::AtomicU64::new(if cfg!(test) {
+                u64::MAX
+            } else {
+                TIMER_TICK.as_secs() * 1000
+            }),
         });
         let stop = Arc::new(Notify::new());
         let task = tokio::spawn(supervise(
@@ -219,6 +227,14 @@ impl Peer {
     #[cfg(test)]
     pub(crate) fn gossip(&self) -> &Arc<Gossip> {
         &self.shared.gossip
+    }
+
+    /// Starts LDK's timer ticks at `period`, for a test of its liveness checks. Without it a test
+    /// has none: a real-time deadline on a loaded machine drops a peer that only answered late.
+    #[cfg(test)]
+    pub(crate) fn set_timer_tick(&self, period: Duration) {
+        let ms = u64::try_from(period.as_millis()).unwrap_or(u64::MAX);
+        self.shared.timer_tick_ms.store(ms, Ordering::Relaxed);
     }
 
     /// When `node` was dialled, in order.
@@ -570,7 +586,8 @@ async fn supervise(
                 }
 
                 shared.pm.process_events();
-                if now.duration_since(last_timer) >= TIMER_TICK {
+                let tick = Duration::from_millis(shared.timer_tick_ms.load(Ordering::Relaxed));
+                if now.duration_since(last_timer) >= tick {
                     shared.pm.timer_tick_occurred();
                     last_timer = now;
                 }

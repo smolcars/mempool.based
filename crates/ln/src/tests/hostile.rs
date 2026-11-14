@@ -430,7 +430,7 @@ impl Hostile {
     }
 }
 
-/// Our peer, dialling `peers`, checking channels against `node`, ticking fast.
+/// Our peer, dialling `peers`, checking channels against `node`, without LDK's liveness ticks.
 fn ours(dir: &TempDir, peers: Vec<PeerAddr>, node: &FakeChain) -> Peer {
     let mut config = Config::new(NET, dir.0.clone());
     config.max_peers = peers.len();
@@ -723,6 +723,8 @@ async fn protocol_abuse_costs_one_connection_and_never_another_peer() {
     // from it once a megabyte of pongs waits (LDK), and drop it when its pong to our own ping
     // never comes.
     h.proxy.stall.store(true, Ordering::Relaxed);
+    // From here LDK's pings and their deadline run, at 1 s.
+    peer.set_timer_tick(Duration::from_secs(1));
     let ping = Ping {
         ponglen: 65_531,
         byteslen: 0,
@@ -774,6 +776,7 @@ async fn a_slow_peer_is_dropped_before_its_handshake_and_dialled_again() {
     // One byte every 300 ms: the handshake (50 bytes from it) never completes in time.
     h.proxy.trickle_ms.store(300, Ordering::Relaxed);
     let peer = ours(&dir, vec![honest.addr, h.addr], &node);
+    peer.set_timer_tick(Duration::from_secs(1));
     wait_for("the honest peer", || up(&peer, honest.addr)).await;
     // Dropped at the second timer tick and dialled again, however long that takes here.
     wait_for("dropped and dialled again", || {
@@ -967,11 +970,12 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
         *h.script.answers.lock().unwrap() = Some(false_ones);
     }
     let peer = ours(&dir, vec![h.addr, honest.addr], &node);
-    // Set before any peer is dialled: the hostile batch must end at its end marker with its
-    // answers held, never by the timeout first.
-    peer.gossip()
-        .no_batch_timeout
-        .store(late, Ordering::Relaxed);
+    // Set before any peer is dialled: a batch that answers must end at its end marker, never by
+    // the timeout first, which on a slow machine could cut it while its answers are checked.
+    peer.gossip().no_batch_timeout.store(
+        matches!(how, Withhold::FalseScript | Withhold::FalseScriptLate),
+        Ordering::Relaxed,
+    );
     wait_for("both lists asked for", || {
         h.script.range_queries.load(Ordering::Relaxed) == 1
             && honest.script.range_queries.load(Ordering::Relaxed) == 1
@@ -997,6 +1001,14 @@ async fn withheld_then_asked_elsewhere(how: Withhold) {
                 ids.iter()
                     .map(|id| raw(CHANNEL_ANNOUNCEMENT, &channel(*id, 60, 61))),
             );
+            // Every one refused before the batch ends, so all are handed over at its end marker.
+            // Read in more than one lookup batch, as a slow machine may, some would still be
+            // checked then, handed over a tick later, and asked of the honest peer separately.
+            wait_for("every false announcement refused", || {
+                status(&peer).validation.rejected.wrong_script == ids.len() as u64
+                    && peer.gossip().lookup.waiting() == 0
+            })
+            .await;
             h.send([end_marker()]);
         }
         Withhold::FalseScriptLate => {
@@ -1158,7 +1170,9 @@ fn ours_default(dir: &TempDir, peers: Vec<PeerAddr>, node: &FakeChain) -> Peer {
     let mut config = Config::new(NET, dir.0.clone());
     config.max_peers = peers.len();
     config.peers = peers;
-    Peer::start(config, node.clone()).unwrap().0
+    let peer = Peer::start(config, node.clone()).unwrap().0;
+    peer.set_timer_tick(crate::peer::TIMER_TICK);
+    peer
 }
 
 fn report(what: &str, peer: &Peer, node: &FakeChain, started: std::time::Instant, rss0: f64) {
