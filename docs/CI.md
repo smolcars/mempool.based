@@ -163,7 +163,7 @@ Two shards would leave too little room. Their slowest was 97 s, and a limit with
 | | Three shards | Four shards |
 |---|---|---|
 | `e2e`, each shard | 99, 98 and 121 s; 125, 108 and 99 s; 109, 107 and 103 s | 93, 98, 74 and 95 s; 89, 100, 68 and 106 s; 93, 104, 80 and 93 s |
-| Whole run | 134, 135 and 133 s | 122, 127 and 126 s |
+| Whole run, from its creation | 136, 137 and 137 s | 125, 130 and 128 s |
 
 The cut by count was not what made the first shard heavy: its slow file was. With four, the first shard's tests took 132 to 151 s of summed time and the others' 92 to 181 s, which shard is heaviest changing from run to run. The tests that mine run one at a time after the rest, so the shard holding `live.mine.e2e.ts` adds 20 to 25 s.
 
