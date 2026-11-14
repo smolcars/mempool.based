@@ -261,34 +261,58 @@ export async function wideFaces(page: Page) {
 }
 
 /**
- * Every table under `scope` shows each row whole: no text reaches past the table's box or fades
- * at its edge, and the table does not scroll. An id cut in the middle is the one thing shortened.
+ * What is cut in the rows of every table under `scope`: each run of text, measured as drawn, must
+ * lie inside the table's box and inside every box that clips it (an ellipsis included), and the
+ * table must not scroll or fade at its edge. An id cut in the middle by design is judged by its
+ * own box instead.
  */
-export async function rowsWhole(page: Page, scope: string, label: string) {
-  await expect(async () => {
-    const faults = await page.evaluate((sel) => {
-      const out: string[] = [];
-      for (const scroll of document.querySelectorAll<HTMLElement>(`${sel} .table-scroll`)) {
-        if (scroll.getClientRects().length === 0) continue;
-        const name = scroll.querySelector("caption")?.textContent ?? "";
-        if ("moreEnd" in scroll.dataset) out.push(`${name}: fades at its edge`);
-        const box = scroll.getBoundingClientRect();
-        for (const el of scroll.querySelectorAll<HTMLElement>("tbody td *")) {
-          if (el.getClientRects().length === 0 || el.closest(".visually-hidden")) continue;
-          const own = [...el.childNodes].some(
-            (n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim() !== "",
-          );
-          if (!own) continue;
-          // An id is shortened by design, with an ellipsis: its own box is what must stay inside.
-          const r = (el.closest(".hash") ?? el).getBoundingClientRect();
-          const text = (el.textContent ?? "").trim();
-          if (r.right > box.right + 0.5 || r.left < box.left - 0.5) {
-            out.push(`${name}: "${text}" reaches past the edge`);
+export async function rowFaults(page: Page, scope: string): Promise<string[]> {
+  return page.evaluate((sel) => {
+    const out: string[] = [];
+    const inside = (r: DOMRect, box: DOMRect) =>
+      r.left >= box.left - 0.5 && r.right <= box.right + 0.5;
+    for (const scroll of document.querySelectorAll<HTMLElement>(`${sel} .table-scroll`)) {
+      if (scroll.getClientRects().length === 0) continue;
+      const name = scroll.querySelector("caption")?.textContent ?? "";
+      if ("moreEnd" in scroll.dataset) out.push(`${name}: fades at its edge`);
+      const edge = scroll.getBoundingClientRect();
+      const body = scroll.querySelector("tbody");
+      if (!body) continue;
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? "").trim();
+        const parent = node.parentElement;
+        if (!text || !parent || parent.getClientRects().length === 0) continue;
+        if (parent.closest(".visually-hidden")) continue;
+        const hash = parent.closest(".hash");
+        if (hash) {
+          if (!inside(hash.getBoundingClientRect(), edge))
+            out.push(`${name}: id "${text}" past the edge`);
+          continue;
+        }
+        // The table's box, and every box between the text and it that clips what overflows.
+        const boxes = [edge];
+        for (let a: HTMLElement | null = parent; a && a !== scroll; a = a.parentElement) {
+          if (getComputedStyle(a).overflowX !== "visible") boxes.push(a.getBoundingClientRect());
+        }
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const r of range.getClientRects()) {
+          if (r.width === 0) continue;
+          if (!boxes.every((box) => inside(r, box))) {
+            out.push(`${name}: "${text}" is cut`);
+            break;
           }
         }
       }
-      return out;
-    }, scope);
-    expect(faults, label).toStrictEqual([]);
+    }
+    return out;
+  }, scope);
+}
+
+/** Every row under `scope` whole ({@link rowFaults}), once the tables have settled. */
+export async function rowsWhole(page: Page, scope: string, label: string) {
+  await expect(async () => {
+    expect(await rowFaults(page, scope), label).toStrictEqual([]);
   }).toPass({ timeout: 3000 });
 }

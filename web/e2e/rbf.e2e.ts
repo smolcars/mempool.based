@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import type { Page, WebSocketRoute } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { amountsIntact, rowsWhole, tablesFit, wideFaces } from "./rows";
+import { amountsIntact, rowFaults, rowsWhole, tablesFit, wideFaces } from "./rows";
 
 const RECORDED = JSON.parse(
   readFileSync(new URL("../../fixtures/api-v1/replacements.json", import.meta.url), "utf8"),
@@ -239,4 +239,17 @@ test("no replacement row is cut or faded, whatever its status, at 320, 390 and 7
       await rowsWhole(page, scope, `${path} at ${width} px in wide faces`);
     }
   }
+  // The rule sees a status cut inside its own box, as the preview's "Not mi…" was.
+  await page
+    .locator(".rbf-list .rbf-status__word")
+    .first()
+    .evaluate((el) => {
+      Object.assign(el.style, {
+        display: "block",
+        width: "2.5em",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      });
+    });
+  expect(await rowFaults(page, ".rbf-list")).toContainEqual(expect.stringMatching(/is cut$/));
 });
