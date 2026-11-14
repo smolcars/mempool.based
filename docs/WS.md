@@ -265,12 +265,16 @@ Rates are sat per 1,000 vB, as everywhere. `stale` is true while the node is fai
 {"topic":"address:bc1q…","type":"address","state":"watching","status":"6c3e…"}
 {"topic":"address:bc1q…","type":"address","state":"unavailable"}
 {"topic":"address:bc1q…","type":"address","state":"refused","reason":"too_large"}
+{"topic":"address:bc1q…","type":"address","state":"ledger","height":975700}
 ```
+
+**Before the node is asked to watch an address,** the server must know it is small: watching makes the node join the address's whole history. An address it does not know is checked first, a totals request in the server's one large-address lane ([`API.md`](API.md#very-large-addresses)); a large one is answered `ledger` when the ledger keeps it and `refused` `too_large` otherwise, without the node watching it. A check that cannot run within 5 s (the lane is busy) or that the node fails is answered `unavailable` and tried again 10 s later. So following a new small address costs the node one light totals join besides the subscription.
 
 | `state` | Means |
 |---|---|
 | `watching` | The node watches it. `status` is the node's Electrum status of the address's history (`null` for an address with none): it changes whenever a payment to or from it enters the mempool or confirms, and with a reorg. Refetch what the page shows when it differs from the last one. Subscribe first, then fetch, so nothing falls between |
 | `unavailable` | The node cannot be reached, or the connection to it dropped: the last status may be out of date. When the connection is back the server asks again and sends `watching` with the status as it is then |
+| `ledger` | The server's own ledger keeps it ([`API.md`](API.md#very-large-addresses)); the node is not asked to watch it. `height` is the block its totals are exact at, and a new message comes whenever a block changes them: refetch `/app/address/:address/ledger` then. Unconfirmed transactions are polled as for `too_large` |
 | `refused` | The node will not watch it. `reason` is `too_large` (more history than the node's `--max-sh-creates`: no live signal; the address page polls the address's unconfirmed transactions instead, [`API.md`](API.md#what-the-page-shows-of-such-an-address)), `no_index` (the node runs without `--sh-index`), `server_full` (the node's own subscription cap) or `refused` (any other refusal). Final until the page subscribes again |
 
 No message is sent until the node has answered, normally a few milliseconds after subscribing. One node subscription serves every socket following the address, and it is dropped when the last one leaves; one whose request is still in flight then keeps its place under `WS_TRACKED_ADDRESSES_TOTAL` until the node answers, so sockets subscribing and leaving fast cannot pile up requests on the node.

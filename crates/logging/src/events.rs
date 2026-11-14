@@ -87,6 +87,8 @@ pub struct ServerStarting<'a> {
     pub backfill_enabled: bool,
     pub backfill_busy_percent: u32,
     pub backfill_fee_rate_depth: u32,
+    pub ledger_max_addresses: usize,
+    pub ledger_discover: bool,
 }
 event!(ServerStarting<'a>, "server_starting", Info, keep);
 
@@ -746,6 +748,83 @@ pub struct BlockRowsFollowed {
     pub duration_ms: f64,
 }
 event!(BlockRowsFollowed, "block_rows_followed", Debug);
+
+/// The address ledger followed new blocks for its tracked addresses. Debug: once per block.
+#[derive(Debug, Serialize)]
+pub struct LedgerFollowed {
+    pub network: &'static str,
+    /// The ledger's tip afterwards; `None` once nothing is tracked.
+    pub tip: Option<u32>,
+    pub applied: u32,
+    pub undone: u32,
+    /// Addresses dropped because a reorg took the block they were seeded at.
+    pub dropped: usize,
+    /// A reorg deeper than the ledger keeps: every address was dropped.
+    pub reset: bool,
+    /// Addresses whose totals changed.
+    pub changed: usize,
+    pub duration_ms: f64,
+}
+event!(LedgerFollowed, "ledger_followed", Debug);
+
+/// Following blocks for the ledger failed, at the 1st, 2nd, 4th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct LedgerFollowFailed {
+    pub network: &'static str,
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(LedgerFollowFailed, "ledger_follow_failed", Warn);
+
+/// An address was added up and is tracked from now on.
+#[derive(Debug, Serialize)]
+pub struct LedgerSeeded {
+    pub network: &'static str,
+    /// Electrum scripthash, as shown.
+    pub scripthash: String,
+    /// The block its totals are exact at.
+    pub height: u32,
+    /// Whether the node's newest history page was kept too.
+    pub page: bool,
+    /// Addresses dropped to make room.
+    pub evicted: usize,
+    /// `reader`, `discovery`, or `answer` (a totals answer the guard learned from).
+    pub via: &'static str,
+    pub duration_ms: f64,
+}
+event!(LedgerSeeded, "ledger_seeded", Info);
+
+/// The node refused to add an address up: its `--max-sh-creates` is in force. Said once until a
+/// seed works again.
+#[derive(Debug, Serialize)]
+pub struct LedgerSeedRefused {
+    pub network: &'static str,
+    /// Transactions paying the address, and the node's cap, as its refusal gave them.
+    pub creates: Option<u64>,
+    pub cap: Option<u64>,
+}
+event!(LedgerSeedRefused, "ledger_seed_refused", Info);
+
+/// A seed failed, at the 1st, 2nd, 4th… failure in a row; it is tried again later.
+#[derive(Debug, Serialize)]
+pub struct LedgerSeedFailed {
+    pub network: &'static str,
+    pub error: &'static str,
+    pub failures: u32,
+    pub duration_ms: f64,
+}
+event!(LedgerSeedFailed, "ledger_seed_failed", Warn);
+
+/// Discovery checked the size of a script a block paid often. At most `CHECKS_PER_HOUR` an hour.
+#[derive(Debug, Serialize)]
+pub struct LedgerChecked {
+    pub network: &'static str,
+    pub scripthash: String,
+    /// `small`, `large`, `too_large` (the node refused it) or `unknown`.
+    pub size: &'static str,
+    pub duration_ms: f64,
+}
+event!(LedgerChecked, "ledger_checked", Debug);
 
 /// Rows described blocks a reorg took off the best chain; they were replaced or removed.
 #[derive(Debug, Serialize)]
@@ -1636,6 +1715,8 @@ mod tests {
                 backfill_enabled: true,
                 backfill_busy_percent: 50,
                 backfill_fee_rate_depth: 52_560,
+                ledger_max_addresses: 1000,
+                ledger_discover: true,
             }),
             both(&NetworkEnabled {
                 network: n,
@@ -1908,6 +1989,47 @@ mod tests {
                 written: 1,
                 rated: 1,
                 duration_ms: 40.0,
+            }),
+            both(&LedgerFollowed {
+                network: n,
+                tip: Some(9),
+                applied: 1,
+                undone: 0,
+                dropped: 0,
+                reset: false,
+                changed: 2,
+                duration_ms: 30.0,
+            }),
+            both(&LedgerFollowFailed {
+                network: n,
+                error: "node",
+                failures: 1,
+            }),
+            both(&LedgerSeeded {
+                network: n,
+                scripthash: "00".repeat(32),
+                height: 9,
+                page: true,
+                evicted: 0,
+                via: "reader",
+                duration_ms: 8000.0,
+            }),
+            both(&LedgerSeedRefused {
+                network: n,
+                creates: Some(20_000),
+                cap: Some(10_000),
+            }),
+            both(&LedgerSeedFailed {
+                network: n,
+                error: "timeout",
+                failures: 1,
+                duration_ms: 900_000.0,
+            }),
+            both(&LedgerChecked {
+                network: n,
+                scripthash: "00".repeat(32),
+                size: "small",
+                duration_ms: 120.0,
             }),
             both(&BlockRowsReorged {
                 network: n,

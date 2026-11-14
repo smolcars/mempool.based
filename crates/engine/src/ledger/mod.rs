@@ -105,6 +105,8 @@ pub struct Point {
 /// What the ledger holds for one script.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tracked {
+    /// The script itself, as kept.
+    pub script: ScriptBuf,
     pub totals: Totals,
     /// The block the totals are exact at: the ledger's tip.
     pub at: At,
@@ -288,6 +290,16 @@ fn effects(
 /// applies each new block, one write per block, so a restart resumes where it stopped. With
 /// nothing tracked it asks the node nothing.
 pub async fn follow<S: Source>(store: &Store, source: &S) -> Result<Followed, Error> {
+    follow_seeing(store, source, |_| {}).await
+}
+
+/// [`follow`], showing `seen` each block it applies, so a caller can look at the block without
+/// reading it again.
+pub async fn follow_seeing<S: Source>(
+    store: &Store,
+    source: &S,
+    mut seen: impl FnMut(&PrevoutBlock) + Send,
+) -> Result<Followed, Error> {
     let mut f = Followed::default();
     let mut changed: Vec<ScriptHash> = Vec::new();
     let mut node_height: Option<u32> = None;
@@ -337,6 +349,7 @@ pub async fn follow<S: Source>(store: &Store, source: &S) -> Result<Followed, Er
             node_height = None;
             continue;
         }
+        seen(&block);
         // The block is matched against the scripts inside the write, so a script seeded
         // meanwhile gets this block too.
         match store.write(move |sql| db::apply(sql, tip, &block)).await? {
@@ -375,20 +388,7 @@ pub async fn seed<S: Source>(
     {
         return Ok(Seeded::Already);
     }
-    let tip = store.read(Read::Ledger, db::tip).await?;
-    let anchor = match tip {
-        Some(t) => {
-            let below = t.height.saturating_sub(1);
-            store
-                .read(Read::Ledger, move |sql| db::chain_at(sql, below))
-                .await?
-                .unwrap_or(t)
-        }
-        None => {
-            let h = source.height().await?.saturating_sub(1);
-            source.at(h).await?.ok_or(Error::Moved)?
-        }
-    };
+    let anchor = anchor(store, source).await?;
     let totals = match source.totals(script, anchor.hash).await? {
         Ok(t) => t,
         Err(size) => return Ok(Seeded::Refused(size)),
@@ -401,6 +401,95 @@ pub async fn seed<S: Source>(
     } else {
         None
     };
+    insert(
+        store,
+        source,
+        script,
+        totals,
+        anchor,
+        rows,
+        max_scripts,
+        now,
+    )
+    .await
+}
+
+/// The block a seed's totals are pinned to: one below the ledger's tip, or below the node's tip
+/// when nothing is tracked, since the node's address index can trail its tip.
+pub async fn anchor<S: Source>(store: &Store, source: &S) -> Result<At, Error> {
+    match store.read(Read::Ledger, db::tip).await? {
+        Some(t) => {
+            let below = t.height.saturating_sub(1);
+            Ok(store
+                .read(Read::Ledger, move |sql| db::chain_at(sql, below))
+                .await?
+                .unwrap_or(t))
+        }
+        None => {
+            let h = source.height().await?.saturating_sub(1);
+            source.at(h).await?.ok_or(Error::Moved)
+        }
+    }
+}
+
+/// Starts tracking `script` from totals the caller already holds, exact at block `hash` at
+/// `height`: an answer of the node's totals route, by its chain-tip stamp. That block must be one
+/// the ledger holds, or the node's when nothing is tracked; otherwise [`Error::Moved`], and the
+/// caller seeds instead. The newest transactions start from the next block.
+#[allow(clippy::too_many_arguments)]
+pub async fn adopt<S: Source>(
+    store: &Store,
+    source: &S,
+    script: &Script,
+    totals: Totals,
+    hash: BlockHash,
+    height: u32,
+    max_scripts: usize,
+    now: u64,
+) -> Result<Seeded, Error> {
+    let sh = ScriptHash::from_script(script);
+    if store
+        .read(Read::Ledger, move |sql| db::is_tracked(sql, sh))
+        .await?
+    {
+        return Ok(Seeded::Already);
+    }
+    let held = match store.read(Read::Ledger, db::tip).await? {
+        Some(_) => {
+            store
+                .read(Read::Ledger, move |sql| db::chain_at(sql, height))
+                .await?
+        }
+        None => source.at(height).await?,
+    };
+    let anchor = held.filter(|a| a.hash == hash).ok_or(Error::Moved)?;
+    insert(
+        store,
+        source,
+        script,
+        totals,
+        anchor,
+        None,
+        max_scripts,
+        now,
+    )
+    .await
+}
+
+/// Tracks `script` from `totals` exact at `anchor`, with the blocks the ledger applied since
+/// applied to it alone, in one write that commits only if the ledger's tip has not moved.
+#[allow(clippy::too_many_arguments)]
+async fn insert<S: Source>(
+    store: &Store,
+    source: &S,
+    script: &Script,
+    totals: Totals,
+    anchor: At,
+    rows: Option<Vec<TxRow>>,
+    max_scripts: usize,
+    now: u64,
+) -> Result<Seeded, Error> {
+    let sh = ScriptHash::from_script(script);
     let kept_page = rows.is_some();
     let rows = rows.unwrap_or_default();
     let owned = script.to_owned();
@@ -513,4 +602,31 @@ pub async fn count(store: &Store) -> Result<usize, store::Error> {
 /// The scripts tracked, for tests and tools.
 pub async fn tracked_scripts(store: &Store) -> Result<Vec<(ScriptHash, ScriptBuf)>, store::Error> {
     store.read(Read::Ledger, db::scripts).await
+}
+
+/// The scripts paid by the most transactions in `block`, at most `k`, most paid first: the
+/// candidates for tracking found without a reader asking. A transaction paying a script several
+/// times counts once, as the node counts its creates. Scripts starting with `OP_RETURN` (unspendable)
+/// are skipped, and so is any paid by a single transaction.
+pub fn paid_most(block: &PrevoutBlock, k: usize) -> Vec<(ScriptBuf, u32)> {
+    let mut paid: HashMap<&str, u32> = HashMap::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for tx in &block.tx {
+        seen.clear();
+        for o in &tx.vout {
+            let hex = o.script_pub_key.hex.as_str();
+            if hex.starts_with("6a") || hex.is_empty() || seen.contains(&hex) {
+                continue;
+            }
+            seen.push(hex);
+            *paid.entry(hex).or_default() += 1;
+        }
+    }
+    let mut ranked: Vec<(&str, u32)> = paid.into_iter().filter(|(_, n)| *n > 1).collect();
+    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    ranked
+        .into_iter()
+        .filter_map(|(hex, n)| Some((ScriptBuf::from_hex(hex).ok()?, n)))
+        .take(k)
+        .collect()
 }

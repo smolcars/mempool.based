@@ -493,7 +493,7 @@ The Lightning network's totals over time: channels, nodes, capacity, fee policie
 
 ### ledger
 
-Running totals for a bounded set of very large addresses, whose totals the node refuses above its `--max-sh-creates` or takes seconds to give ([`RBITCOIN.md`](RBITCOIN.md#address-history-cost)). The code is `crates/engine/src/ledger/`. **Not wired into the server yet:** nothing is tracked and the server asks the node nothing for it.
+Running totals for a bounded set of very large addresses, whose totals the node refuses above its `--max-sh-creates` or takes seconds to give ([`RBITCOIN.md`](RBITCOIN.md#address-history-cost)). The code is `crates/engine/src/ledger/`; the server's use of it, seeding, its bounds and its routes, in [`API.md`](API.md#very-large-addresses).
 
 - **Seeded once.** `ledger::seed` asks the node for the script's totals pinned with `?asof=` to a block the ledger holds (one below its tip, since the address index can trail the tip; below the node's tip when nothing is tracked), and optionally the newest history page at the same block. Blocks the ledger applied after that block are read again and applied to the new script alone, in the same write, which commits only if the ledger's tip has not moved. The node's size refusal is `Seeded::Refused`.
 - **Kept from blocks.** `ledger::follow` reads each new block once with `getblock` verbosity 3 (every output's and every spent output's script and value) and applies it to every tracked script in one write: funded count and sum per output paying the script, spent count and sum per input spending one of its outputs, one transaction for either. All scripts are exact at one block, the highest row of `ledger_chain`. With nothing tracked it asks the node nothing.

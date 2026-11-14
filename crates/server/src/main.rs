@@ -119,6 +119,8 @@ fn started(config: &Config, log: logging::Settings) {
         backfill_enabled: config.backfill.enabled,
         backfill_busy_percent: config.backfill.busy_percent,
         backfill_fee_rate_depth: config.backfill.fee_rate_depth,
+        ledger_max_addresses: config.ledger.max_addresses,
+        ledger_discover: config.ledger.discover,
     });
     for n in &config.networks {
         logging::emit(&NetworkEnabled {
@@ -210,6 +212,7 @@ mod tests {
             web_dir: "missing".into(),
             data_dir: None,
             backfill: rbitcoin_space::config::Backfill::default(),
+            ledger: rbitcoin_space::config::LedgerConfig::default(),
             networks: Vec::new(),
             limits: Limits::default(),
             ws: WsLimits::default(),

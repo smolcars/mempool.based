@@ -53,9 +53,21 @@ pub enum Verdict {
     /// The node refused the script's totals as above its `--max-sh-creates`, with the counts its
     /// refusal gave when it gave them.
     TooLarge(Option<ScriptSize>),
+    /// The node answered the script's totals, and it is large (`crate::ledger::LARGE`): more
+    /// funded outputs than that, or the answer took longer than the history deadline. Its
+    /// totals are not asked of the node again except to seed it in the ledger.
+    Large,
     /// This page of the history ran past the history deadline.
     Slow,
+    /// The node answered the script's totals quickly and it is not large: asked freely.
+    Small,
 }
+
+/// How long a script is remembered as [`Verdict::Large`]: an address's paying transactions only
+/// grow, so it stays large; the bound is the table's.
+pub const REMEMBER_LARGE: Duration = Duration::from_secs(30 * 24 * 3600);
+/// How long a script is remembered as [`Verdict::Small`]: it may grow past the threshold.
+pub const REMEMBER_SMALL: Duration = Duration::from_secs(3600);
 
 /// One page of a script's history: its cursor and `?asof=`. `None` stands for the whole script.
 type Page = Option<(Option<Txid>, Option<BlockHash>)>;
@@ -108,12 +120,26 @@ fn script_hash(script: &ScriptRef) -> ScriptHash {
 }
 
 impl Verdicts {
-    /// What is known about this page: the script's size first, then the page's own time.
+    /// Why this page would be refused: the script's size first, then the page's own time.
+    /// `None` when nothing refuses it (a small script is not a refusal).
     pub fn check(&self, script: ScriptHash, page: Page, now: Instant) -> Option<Verdict> {
         let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         [(script, None), (script, page)]
             .iter()
-            .find_map(|k| table.get(k).filter(|(_, until)| *until > now))
+            .find_map(|k| {
+                table
+                    .get(k)
+                    .filter(|(v, until)| *until > now && *v != Verdict::Small)
+            })
+            .map(|(v, _)| *v)
+    }
+
+    /// What is known about the script as a whole: its size.
+    pub fn class(&self, script: ScriptHash, now: Instant) -> Option<Verdict> {
+        let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        table
+            .get(&(script, None))
+            .filter(|(_, until)| *until > now)
             .map(|(v, _)| *v)
     }
 
@@ -137,7 +163,12 @@ impl Verdicts {
                 table.remove(&oldest);
             }
         }
-        table.insert(key, (verdict, now + REMEMBER));
+        let keep = match verdict {
+            Verdict::Large => REMEMBER_LARGE,
+            Verdict::Small => REMEMBER_SMALL,
+            Verdict::TooLarge(_) | Verdict::Slow => REMEMBER,
+        };
+        table.insert(key, (verdict, now + keep));
     }
 
     pub fn len(&self) -> usize {
@@ -184,6 +215,20 @@ mod tests {
         assert_eq!(v.check(script(2), first_page(), now), Some(Verdict::Slow));
         assert_eq!(v.check(script(2), later, now), None);
         assert_eq!(v.check(script(3), first_page(), now), None);
+    }
+
+    #[test]
+    fn a_small_script_still_has_its_slow_pages() {
+        let v = Verdicts::default();
+        let now = Instant::now();
+        v.learn(script(1), None, Verdict::Small, now);
+        v.learn(script(1), first_page(), Verdict::Slow, now);
+        assert_eq!(v.check(script(1), first_page(), now), Some(Verdict::Slow));
+        assert_eq!(
+            v.check(script(1), Some((None, Some(BlockHash::all_zeros()))), now),
+            None
+        );
+        assert_eq!(v.class(script(1), now), Some(Verdict::Small));
     }
 
     #[test]

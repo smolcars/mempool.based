@@ -71,9 +71,16 @@ async fn mock_esplora(blocks: Blocks, misses: Misses) -> String {
         *misses.lock().unwrap().entry("history".into()).or_default() += 1;
         "[]"
     }
+    // An address's totals, asked before the node is asked to watch it: small, so it may be.
+    async fn totals(State((_, misses)): State<(Blocks, Misses)>) -> impl IntoResponse {
+        *misses.lock().unwrap().entry("totals".into()).or_default() += 1;
+        let zero = r#"{"funded_txo_count":1,"funded_txo_sum":1,"spent_txo_count":0,"spent_txo_sum":0,"tx_count":1}"#;
+        format!(r#"{{"chain_stats":{zero},"mempool_stats":{zero}}}"#)
+    }
     let app = axum::Router::new()
         .route("/block/{hash}", get(block))
         .route("/blocks", get(recent))
+        .route("/scripthash/{hash}", get(totals))
         .route("/scripthash/{hash}/txs", get(history))
         .with_state((blocks, misses));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

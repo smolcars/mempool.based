@@ -14,6 +14,7 @@ pub mod difficulty;
 pub mod error;
 pub mod esplora;
 pub mod health;
+pub mod ledger;
 pub mod lightning;
 pub mod limits;
 pub mod mining;
@@ -129,6 +130,8 @@ pub struct NetworkContext {
     pub trees: transactions::Trees,
     /// The Lightning gossip peer, when `{NET}_LIGHTNING_ENABLED` (`lightning`).
     pub lightning: Option<Arc<lightning::Lightning>>,
+    /// The guard on large-address joins, and the ledger when there is a store (`ledger`).
+    pub guard: Arc<ledger::Guard>,
 }
 
 impl std::fmt::Debug for NetworkContext {
@@ -149,8 +152,24 @@ impl NetworkContext {
         self
     }
 
-    /// Starts the network's Electrum client, so it must run inside a tokio runtime.
+    /// Starts the network's Electrum client, so it must run inside a tokio runtime. With a lane
+    /// of its own: the app shares one between its networks.
+    #[cfg(test)]
     fn new(config: &NetworkConfig, all: &Config, sockets: &Arc<ws::Sockets>) -> Option<Self> {
+        Self::with_lane(
+            config,
+            all,
+            sockets,
+            Arc::new(tokio::sync::Semaphore::new(1)),
+        )
+    }
+
+    fn with_lane(
+        config: &NetworkConfig,
+        all: &Config,
+        sockets: &Arc<ws::Sockets>,
+        lane: Arc<tokio::sync::Semaphore>,
+    ) -> Option<Self> {
         let url = match &config.esplora {
             config::EsploraEndpoint::Http(url) => url.clone(),
             config::EsploraEndpoint::Unix(path) => path.to_string_lossy().into_owned(),
@@ -171,7 +190,28 @@ impl NetworkContext {
             .data_dir
             .as_deref()
             .and_then(|dir| blocks::BlockTable::open(dir, config, &url, &lister));
+        let api = esplora::Api::new(all.broadcast, &all.limits, &url).ok()?;
+        let ledger = table.as_ref().and_then(|t| {
+            ledger::Ledger::new(
+                Arc::clone(&t.store),
+                config,
+                &url,
+                all.ledger,
+                Arc::clone(&lane),
+                Arc::clone(&api.verdicts),
+                Arc::clone(&track),
+            )
+            .map(Arc::new)
+        });
+        let guard = Arc::new(ledger::Guard::new(
+            Arc::clone(&api.verdicts),
+            lane,
+            &url,
+            all.limits.history_timeout,
+            ledger,
+        )?);
         Some(Self {
+            guard,
             blocks: table,
             data_dir: all.data_dir.is_some(),
             lister,
@@ -182,7 +222,7 @@ impl NetworkContext {
             ),
             config: config.clone(),
             esplora: Esplora::new(&url).ok()?,
-            api: esplora::Api::new(all.broadcast, &all.limits, &url).ok()?,
+            api,
             electrum,
             hub,
             track,
@@ -219,6 +259,7 @@ pub fn network_routes() -> Router<Arc<NetworkContext>> {
         .route("/app/tx/{txid}/replacements", get(replacements::route))
         .route("/app/fees/score", get(ws::fees::score::route))
         .route("/app/address/{address}/size", get(verdicts::size_route))
+        .route("/app/address/{address}/ledger", get(ledger::route))
         .merge(statistics::app_routes())
         .merge(api_v1::routes())
         .merge(audits::routes())
@@ -251,6 +292,8 @@ impl App {
             .route("/healthz", get(healthz))
             .merge(app_config::routes(config));
         let sockets = ws::Sockets::new(&config.ws, config.limits.request_timeout);
+        // One large-address join at the node at a time, for the whole server (`ledger`).
+        let lane = Arc::new(tokio::sync::Semaphore::new(1));
         let mut enabled_networks = Vec::new();
         let mut peers = Vec::new();
         for network in Network::ALL {
@@ -260,7 +303,7 @@ impl App {
                 .iter()
                 .find(|n| n.network == network)
                 // Cannot fail: `Config` checked the endpoints by the clients' own rules.
-                .and_then(|n| NetworkContext::new(n, config, &sockets));
+                .and_then(|n| NetworkContext::with_lane(n, config, &sockets, Arc::clone(&lane)));
             let enabled = context.is_some();
             let scope = match context {
                 Some(ctx) => {
@@ -272,6 +315,9 @@ impl App {
                     tokio::spawn(summary::worker(Arc::clone(&ctx)));
                     tokio::spawn(difficulty::run(Arc::clone(&ctx), ctx.electrum.events()));
                     blocks::spawn(&ctx, config.backfill);
+                    ledger::spawn(&ctx);
+                    ctx.track
+                        .set_gate(Arc::clone(&ctx.guard) as Arc<dyn ws::track::AddressGate>);
                     ws::mempool::start(&ctx);
                     tokio::spawn(mining::run(Arc::clone(&ctx)));
                     tokio::spawn(ws::v1::run(Arc::clone(&ctx)));

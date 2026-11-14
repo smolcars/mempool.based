@@ -101,13 +101,14 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
     Ok(sql
         .prepare(concat!(
             "SELECT s.funded_count, s.funded_sum, s.spent_count, s.spent_sum, s.tx_count, ",
-            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time ",
+            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script ",
             "FROM ledger_scripts s, ",
             "(SELECT height, hash, time FROM ledger_chain ORDER BY height DESC LIMIT 1) c ",
             "WHERE s.sh = ?1"
         ))?
         .query_row(params![sh_bytes(sh)], |r| {
             Ok(Tracked {
+                script: ScriptBuf::from_bytes(r.get(10)?),
                 totals: Totals {
                     funded_count: int(r, 0)?,
                     funded_sum: int(r, 1)?,

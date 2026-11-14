@@ -97,6 +97,8 @@ pub struct Tracking {
     state: Mutex<State>,
     /// A transaction is newly followed: [`follow_txs`] says its state now.
     wake: Notify,
+    /// Asked before the node is asked to watch an address; none in tests without a server.
+    gate: OnceLock<Arc<dyn AddressGate>>,
 }
 
 impl std::fmt::Debug for Tracking {
@@ -167,7 +169,34 @@ enum AddrState {
     Unavailable,
     /// The node refused: `too_large`, `no_index`, `server_full` or `refused`.
     Refused(&'static str),
+    /// The server's own ledger keeps it, exact at this block; the node is not asked to watch it.
+    Ledger(u32),
 }
+
+/// What the server decided before asking the node to watch a script (`crate::ledger::Guard`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Known to be small: the node watches it.
+    Watch,
+    /// The ledger keeps it, exact at this height.
+    Ledger(u32),
+    /// Large and not kept: no live signal, as for the node's own refusal.
+    TooLarge,
+    /// Its size could not be learned now: asked again shortly.
+    Later,
+}
+
+/// Decides, before the node is asked to watch a script, whether it may be: watching makes the
+/// node join the script's whole history.
+pub trait AddressGate: Send + Sync {
+    fn decide(
+        &self,
+        sh: ScriptHash,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Decision> + Send + '_>>;
+}
+
+/// How long a script whose size could not be learned waits before it is asked again.
+const GATE_RETRY: Duration = Duration::from_secs(10);
 
 /// A transaction's state as the topic says it.
 #[derive(Debug, Clone, PartialEq)]
@@ -278,6 +307,7 @@ impl Tracking {
             },
             engines: OnceLock::new(),
             wake: Notify::new(),
+            gate: OnceLock::new(),
             state: Mutex::new(State {
                 txs: HashMap::new(),
                 addresses: HashMap::new(),
@@ -751,9 +781,29 @@ impl Tracking {
             AddrState::Watching(status) => json!({ "state": "watching", "status": status }),
             AddrState::Unavailable => json!({ "state": "unavailable" }),
             AddrState::Refused(reason) => json!({ "state": "refused", "reason": reason }),
+            AddrState::Ledger(height) => json!({ "state": "ledger", "height": height }),
         };
         let msg = merge(json!({ "topic": &*e.name, "type": "address" }), fields);
         self.publish(st, Topic::Address(sh), &msg);
+    }
+
+    pub fn set_gate(&self, gate: Arc<dyn AddressGate>) {
+        let _ = self.gate.set(gate);
+    }
+
+    /// The ledger's totals for a script changed, or it began keeping it: followers are told the
+    /// new height, and the node's subscription, if any, is dropped.
+    pub fn ledger_changed(&self, sh: ScriptHash, height: u32) {
+        let mut st = lock(&self.state);
+        let Some(e) = st.addresses.get_mut(&sh) else {
+            return;
+        };
+        if e.pending {
+            return;
+        }
+        e.sub = None;
+        e.state = Some(AddrState::Ledger(height));
+        self.address_message(&mut st, sh);
     }
 
     /// A status the node pushed for a script.
@@ -994,8 +1044,27 @@ fn tx_message(txid: &Txid, s: &Shown) -> Value {
 /// Asks the node to watch an address, and says what it answered. An entry released meanwhile is
 /// not revived: dropping the answer's handle releases the node's subscription again.
 async fn watch(track: Arc<Tracking>, sh: ScriptHash, epoch: u64) {
-    let answer = match &track.electrum {
-        Some(client) => Some(client.subscribe(electrum::Topic::ScriptHash(sh)).await),
+    // Asked of the gate again after a pause for as long as its size cannot be learned and anyone
+    // still follows it.
+    loop {
+        let decision = match track.gate.get() {
+            Some(gate) => gate.decide(sh).await,
+            None => Decision::Watch,
+        };
+        if decision == Decision::Watch {
+            break;
+        }
+        if !not_watched(&track, sh, epoch, decision) {
+            return;
+        }
+        tokio::time::sleep(GATE_RETRY).await;
+    }
+    let answer = track
+        .electrum
+        .as_ref()
+        .map(|client| client.subscribe(electrum::Topic::ScriptHash(sh)));
+    let answer = match answer {
+        Some(a) => Some(a.await),
         None => None,
     };
     let mut st = lock(&track.state);
@@ -1031,6 +1100,31 @@ async fn watch(track: Arc<Tracking>, sh: ScriptHash, epoch: u64) {
         st.stats.address_errors += 1;
     }
     track.address_message(&mut st, sh);
+}
+
+/// Records a decision not to ask the node to watch `sh`. `true` when it is to be asked again
+/// shortly: the entry stays pending meanwhile, so it keeps its place and is not asked twice.
+fn not_watched(track: &Tracking, sh: ScriptHash, epoch: u64, decision: Decision) -> bool {
+    let mut st = lock(&track.state);
+    let Some(e) = st.addresses.get_mut(&sh).filter(|e| e.epoch == epoch) else {
+        return false;
+    };
+    if e.refs == 0 {
+        st.addresses.remove(&sh);
+        return false;
+    }
+    e.state = Some(match decision {
+        Decision::Ledger(h) => AddrState::Ledger(h),
+        Decision::TooLarge => AddrState::Refused("too_large"),
+        Decision::Watch | Decision::Later => AddrState::Unavailable,
+    });
+    e.pending = decision == Decision::Later;
+    track.address_message(&mut st, sh);
+    e_pending(&st, sh)
+}
+
+fn e_pending(st: &State, sh: ScriptHash) -> bool {
+    st.addresses.get(&sh).is_some_and(|e| e.pending)
 }
 
 /// What a failed Electrum subscribe means for the client.

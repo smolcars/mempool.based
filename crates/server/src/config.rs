@@ -323,6 +323,24 @@ impl Default for WsLimits {
     }
 }
 
+/// The address ledger (`docs/CONFIG.md`, "Very large addresses").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LedgerConfig {
+    /// `LEDGER_MAX_ADDRESSES`: addresses tracked per network; the least recently viewed goes.
+    pub max_addresses: usize,
+    /// `LEDGER_DISCOVER`: look for large addresses in each block, without waiting for a reader.
+    pub discover: bool,
+}
+
+impl Default for LedgerConfig {
+    fn default() -> Self {
+        Self {
+            max_addresses: 1000,
+            discover: true,
+        }
+    }
+}
+
 /// The block table's backfill (`docs/CONFIG.md`, "Block table").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backfill {
@@ -352,6 +370,7 @@ pub struct Config {
     /// `DATA_DIR`: where each network's SQLite file lives. `None` runs without a store.
     pub data_dir: Option<PathBuf>,
     pub backfill: Backfill,
+    pub ledger: LedgerConfig,
     /// Enabled networks, in [`Network::ALL`] order.
     pub networks: Vec<NetworkConfig>,
     pub limits: Limits,
@@ -377,6 +396,21 @@ impl Config {
             Some(v) => v
                 .parse()
                 .map_err(|_| "LISTEN_ADDR is not a socket address".to_owned())?,
+        };
+        let ledger = LedgerConfig {
+            max_addresses: positive(
+                &var,
+                "LEDGER_MAX_ADDRESSES",
+                LedgerConfig::default().max_addresses,
+            )
+            .ok()
+            .filter(|n| *n <= 100_000)
+            .ok_or("LEDGER_MAX_ADDRESSES must be a whole number from 1 to 100000")?,
+            discover: match var("LEDGER_DISCOVER").as_deref() {
+                None | Some("true") => true,
+                Some("false") => false,
+                Some(_) => return Err("LEDGER_DISCOVER must be true or false".into()),
+            },
         };
         let web_dir = var("WEB_DIR").map_or_else(|| "web/dist".into(), PathBuf::from);
         let data_dir = var("DATA_DIR").map(PathBuf::from);
@@ -556,6 +590,7 @@ impl Config {
             web_dir,
             data_dir,
             backfill,
+            ledger,
             networks,
             limits,
             ws,
