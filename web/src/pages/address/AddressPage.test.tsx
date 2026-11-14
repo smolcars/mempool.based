@@ -621,12 +621,14 @@ describe("address page", () => {
     });
     const el = open(`/address/${ME}?view=unspent`);
     await until(() => expect(text(el)).toContain(`3${NNBSP}665${NNBSP}660`));
-    expect(text(el)).toContain("outputs paid to it, as counted by the node");
+    expect(text(el)).toContain("transactions paid to it, as counted by the node");
     expect(text(el)).toContain(`10${NNBSP}000`);
     await until(() => expect(el.querySelector(`a[href="/tx/${txid(7)}"]`)).not.toBeNull());
     expect(text(el)).toContain("1 transaction");
     // What is not shown, and why, once; no advice to look elsewhere, no tabs, no alarm.
-    expect(text(el)).toContain(`The node adds up addresses of up to 10${NNBSP}000 outputs only`);
+    expect(text(el)).toContain(
+      `The node adds up only addresses paid by at most 10${NNBSP}000 transactions`,
+    );
     for (const gone of ["another explorer", "Totals are not available", "Reload"]) {
       expect(text(el)).not.toContain(gone);
     }

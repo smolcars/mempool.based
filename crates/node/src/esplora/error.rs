@@ -70,8 +70,10 @@ impl Error {
     }
 }
 
-/// How many outputs a script has received and the node's cap, from its refusal of an unpaged
+/// How many transactions have paid a script and the node's cap, from its refusal of an unpaged
 /// answer for size: `scripthash join exceeds --max-sh-creates (<creates> creates, cap <cap>)`.
+/// A create is one transaction paying the script, counted once however many of its outputs do:
+/// rbitcoin's index keeps one transaction key per create (`SCHEMA.md`, "Class B — scripthash").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScriptSize {
     pub creates: u64,

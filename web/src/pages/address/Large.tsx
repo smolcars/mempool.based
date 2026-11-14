@@ -19,8 +19,8 @@ const plural = (n: number, one: string, many: string) =>
   `${groupDigits(n)} ${n === 1 ? one : many}`;
 
 /**
- * An address with more outputs than the node totals: what is known (how many outputs it has
- * received, the node's cap, its unconfirmed transactions now), then what is not shown and why.
+ * An address paid by more transactions than the node totals: what is known (how many transactions
+ * have paid it, the node's cap, its unconfirmed transactions now), then what is not shown and why.
  */
 export function LargeAddress(props: { address: string }) {
   const network = useNetwork();
@@ -102,13 +102,13 @@ export function LargeAddress(props: { address: string }) {
               label="Received"
               ready={size() !== undefined}
               value={<span class="num">{groupDigits(size()?.creates ?? 0)}</span>}
-              sub="outputs paid to it, as counted by the node"
+              sub="transactions paid to it, as counted by the node"
             />
             <Stat
               label="This server's limit"
               ready={size() !== undefined}
               value={<span class="num">{groupDigits(size()?.cap ?? 0)}</span>}
-              sub="outputs per address"
+              sub="paying transactions per address"
             />
           </Show>
           <Stat
@@ -135,10 +135,12 @@ export function LargeAddress(props: { address: string }) {
         <p class="address-unshown">
           Its balance, unspent outputs and confirmed transactions are not shown.{" "}
           <Show when={size()} fallback="It has more history than this server's node adds up,">
-            {(s) => `The node adds up addresses of up to ${groupDigits(s().cap)} outputs only,`}
+            {(s) =>
+              `The node adds up only addresses paid by at most ${groupDigits(s().cap)} transactions,`
+            }
           </Show>{" "}
           and reading even its newest confirmed transactions would keep the node busy for tens of
-          seconds or more.
+          seconds, up to two minutes.
         </p>
       </section>
 

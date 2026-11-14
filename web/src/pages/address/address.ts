@@ -98,7 +98,10 @@ export function keptAfterRefresh(
   return i === -1 ? [] : shown.slice(i + 1).filter((t) => t.status.confirmed);
 }
 
-/** What the node said when it refused an address's totals: outputs received, and its cap. */
+/**
+ * What the node said when it refused an address's totals: how many transactions have paid it (each
+ * counted once, however many of its outputs pay the address), and its cap.
+ */
 export interface Size {
   creates: number;
   cap: number;
