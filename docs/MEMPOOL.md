@@ -85,7 +85,7 @@ So both transports use the same RPC path. Not measured against a real unix socke
 
 Each cycle:
 
-1. **Probe:** `getmempoolinfo` (10 ms, under 1 KB). If its size, vsize total and fee total equal the ones taken before the last full cycle, and no tip hint arrived, and the last full cycle is under 10 s old, stop here.
+1. **Probe:** `getmempoolinfo` (10 ms, 0.4 KB) and Esplora's `/mempool/recent` (the ten newest arrivals' txids, 1.1 KB, 2–4 ms on regtest), the second once the first has answered. If the first's size, vsize total and fee total and the second's txids equal the ones taken before the last full cycle, and no tip hint arrived, and the last full cycle is under 10 s old, stop here.
 2. **List:** `getrawmempool` with `mempool_sequence` (110–250 ms, 3.6 MB at 55,000 transactions).
 3. **Tip:** Esplora's tip hash, stamped with its height (18 ms).
 4. **Blocks:** the six most recent blocks on the active chain ending at that tip, fetched with Esplora's raw-block route (98 ms, 1.6 MB a block) only when not already held. Usually zero; one per new block.
@@ -95,14 +95,16 @@ Each cycle:
 
 **Cadence.** A cycle starts at least 1 s after the previous one started, and never sooner after the previous one ended than that one took, so the tracker spends at most half its time talking to a slow node. After a cycle in which a listed transaction's details could not be read, the next cycle lists again whatever the probe says. One loop does everything in order: a cycle can never overlap another, and nothing queues behind a slow node. On failure the wait doubles from 2 s to a cap of 30 s, and comes back to 1 s on the next success. A hint (`block_found` or `tip_changed`) skips the wait but never interrupts a cycle in progress; what `block_found` does is in [When a block is found](#when-a-block-is-found).
 
-The probe saves the 3.6 MB listing whenever the mempool did not move. On mainnet it almost always has, so the listing runs about once a second. A change the probe cannot see (an eviction and an arrival with identical size and fee) is caught by the 10 s heartbeat.
+The probe saves the 3.6 MB listing whenever the mempool did not move. On mainnet it almost always has, so the listing runs about once a second. Any change moves one half of the probe: a removal on its own moves the count, and any arrival moves the newest arrivals. The totals alone did not do: a transaction of exactly the size and fee of one a block or an eviction had just taken left them unchanged, so it went unseen until the 10 s heartbeat, often long enough to be mined before the tracker listed it (on regtest, identical payments sent just after a block: 6 of 12 never seen in the mempool, 2 more seen after 3 s; with the newest arrivals, all 12 within 1 s). A replacement alone cannot collide, since it must pay more than all it replaces. Whatever the probe still cannot see (an arrival the node does not list as recent, a probe whose `/mempool/recent` failed, which never skips) is caught by the hint, a full cycle or the 10 s heartbeat.
+
+**What the probe costs.** Before 2026-11-14 it was `getmempoolinfo` alone; `/mempool/recent` adds one call of 1.1 KB, under 4 ms on regtest and indistinguishable from the tip height's round trip through the live site on mainnet. On an idle mempool, where most probes skip, a skipped probe reads 1.5 KB instead of 0.4 KB, about 1 KB/s more per network. On a busy one, where the 3.6 MB listing runs nearly every cycle anyway, it is 1.1 KB on top of 3.6 MB, 0.03%. The skip saves as much as before: the newest arrivals change only when something arrives, and then the totals had changed too in all but the collisions above.
 
 **Measured** over 15 minutes on mainnet, 54,000–55,000 transactions, one block, and a node restart that nobody planned:
 
 | | |
 |---|---|
 | Cycles | 610 in 900 s, one every 1.5 s on average |
-| A typical cycle | 5 calls (probe, listing, tip, entry array, raw array), 3.6–3.7 MB, 170–440 ms |
+| A typical cycle | 5 calls (probe, listing, tip, entry array, raw array), 3.6–3.7 MB, 170–440 ms; one more since the probe also reads `/mempool/recent` |
 | The block cycle | 4 calls plus one block, 5.0 MB, 284 ms: 3,502 confirmed, 3 replaced, 0 evicted |
 | Total read | 2.48 GB, the initial sync included: about 2.5 MB/s, nearly all of it the listing |
 | Our count against `getmempoolinfo` | equal at 23 of 28 checks, 1–4 short at the others: transactions that arrived between our cycle and the check. Summed vsize and fees matched to the satoshi whenever the counts did |

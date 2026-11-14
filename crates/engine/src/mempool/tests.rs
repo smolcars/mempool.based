@@ -440,7 +440,9 @@ struct Node {
     detail_failures: VecDeque<Option<SourceError>>,
     /// Detail batches larger than this answer `TooBig`.
     max_batch: Option<usize>,
-    /// Same `getmempoolinfo` whatever the pool, to test the heartbeat.
+    /// Txids as they entered, newest first: `/mempool/recent` is the first ten.
+    recent: VecDeque<Txid>,
+    /// Same probe answers whatever the pool, to test the heartbeat.
     frozen_info: bool,
     delay: Duration,
     /// What Esplora's tip route answers while the node has announced a block it does not serve.
@@ -450,6 +452,7 @@ struct Node {
 #[derive(Default)]
 struct Counters {
     infos: AtomicU32,
+    recents: AtomicU32,
     listings: AtomicU32,
     details: AtomicU32,
     blocks: AtomicU32,
@@ -487,6 +490,7 @@ impl Mock {
                 })
             });
             n.pool.push(t.clone());
+            n.recent.push_front(t.compute_txid());
             n.sequence += 1;
         });
     }
@@ -548,18 +552,18 @@ impl Source for Mock {
         self.n.infos.fetch_add(1, Ordering::SeqCst);
         self.enter().await?;
         Ok(self.with(|n| {
-            let size = if n.frozen_info {
-                0
-            } else {
-                n.pool.len() as u64
-            };
+            // The node's own totals: count, vsize and base fees, which equal swaps leave alone.
+            let entries = n.pool.iter().map(entry).filter(|_| !n.frozen_info);
+            let (size, bytes, total_fee) = entries.fold((0, 0, Amount::ZERO), |(c, v, f), e| {
+                (c + 1, v + e.vsize, f + e.fees.base)
+            });
             MempoolInfo {
                 loaded: true,
                 size,
-                bytes: if n.frozen_info { 0 } else { n.sequence },
+                bytes,
                 usage: 0,
                 maxmempool: 300_000_000,
-                total_fee: Amount::ZERO,
+                total_fee,
                 mempoolminfee: Amount::ZERO,
                 minrelaytxfee: Amount::ZERO,
                 incrementalrelayfee: Amount::ZERO,
@@ -568,6 +572,15 @@ impl Source for Mock {
                 limitclustersize: 101_000,
                 unbroadcastcount: 0,
             }
+        }))
+    }
+
+    async fn recent(&self) -> Result<Vec<Txid>, SourceError> {
+        // Outside `enter`: injected failures and delays stay aimed at the calls they test.
+        self.n.recents.fetch_add(1, Ordering::SeqCst);
+        Ok(self.with(|n| match n.frozen_info {
+            true => Vec::new(),
+            false => n.recent.iter().take(10).copied().collect(),
         }))
     }
 
@@ -746,7 +759,7 @@ async fn probes_skip_unchanged_pools_and_the_heartbeat_lists_anyway() {
     assert_eq!(mock.n.listings.load(Ordering::SeqCst), 1);
     assert!(mock.n.infos.load(Ordering::SeqCst) >= 6);
 
-    // A change getmempoolinfo cannot see is still found by the heartbeat.
+    // A change the probe cannot see is still found by the heartbeat.
     mock.with(|n| n.frozen_info = true);
     cycle(next_cycle(&mut ev).await); // the probe saw the info change to frozen
     mock.send(&tx(&[coin(1)], 1, 2));
@@ -755,6 +768,51 @@ async fn probes_skip_unchanged_pools_and_the_heartbeat_lists_anyway() {
     assert!(s.skipped >= 8, "{s:?}");
     task.abort();
     drop(tracker);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_arrival_just_like_one_that_left_is_seen_at_the_next_probe() {
+    // Same tag, same fee; same shape, same size; another coin, another txid.
+    let like = |coin_n, tag| tx(&[coin(coin_n)], 1, tag);
+    let (a, b) = (like(0, 5), like(1, 6));
+    let mock = Mock::new();
+    mock.send(&a);
+    mock.send(&b);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let skipping = mock.n.listings.load(Ordering::SeqCst);
+
+    // `a` is evicted and `a2`, its twin in size and fee, arrives: the node's totals do not move.
+    let a2 = like(2, 5);
+    let info = mock.mempool_info().await.unwrap();
+    mock.with(|n| n.pool.retain(|t| *t != a));
+    mock.send(&a2);
+    let after = mock.mempool_info().await.unwrap();
+    assert_eq!(
+        (info.size, info.bytes, info.total_fee),
+        (after.size, after.bytes, after.total_fee)
+    );
+    let at = tokio::time::Instant::now();
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!((s.added, s.evicted), (1, 1));
+    assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
+    assert_eq!(mock.n.listings.load(Ordering::SeqCst), skipping + 1);
+
+    // A block takes `b`, announced, and `b2` arrives just like it: the end-to-end tests' case.
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    mock.mine(&[&b]);
+    tracker.block_found(found(&mock));
+    assert_eq!(next_block(&mut ev).await.confirmed, 1);
+    let b2 = like(3, 6);
+    mock.send(&b2);
+    let at = tokio::time::Instant::now();
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!(s.added, 1);
+    assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
+    assert_eq!(txids(&tracker), pool_txids(&mock));
+    task.abort();
 }
 
 #[tokio::test(start_paused = true)]
@@ -856,8 +914,8 @@ async fn a_failed_fetch_publishes_nothing_and_resumes_where_it_stopped() {
     );
     // The retry fetches only the four it does not hold yet.
     let s = cycle(next_cycle(&mut ev).await);
-    // Probe, listing, tip, two detail batches; the block is still held.
-    assert_eq!((s.added, s.size, s.calls, s.blocks), (6, 6, 5, 0));
+    // The probe's two calls, listing, tip, two detail batches; the block is still held.
+    assert_eq!((s.added, s.size, s.calls, s.blocks), (6, 6, 6, 0));
     assert_eq!(mock.n.details.load(Ordering::SeqCst), 4);
     let d = sub.recv().await.unwrap();
     assert_eq!((d.seq, d.added.len()), (1, 6));

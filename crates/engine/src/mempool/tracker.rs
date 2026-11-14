@@ -29,6 +29,12 @@ pub enum SourceError {
 /// Everything the tracker reads from the node. [`NodeSource`] is the real one; tests mock it.
 pub trait Source: Send + Sync + 'static {
     fn mempool_info(&self) -> impl Future<Output = Result<MempoolInfo, SourceError>> + Send;
+    /// The newest arrivals' txids, newest first: Esplora's `/mempool/recent`. Read with the probe
+    /// so an arrival that leaves the totals unchanged still changes what the probe sees. The
+    /// default, nothing, leaves the probe on the totals alone.
+    fn recent(&self) -> impl Future<Output = Result<Vec<Txid>, SourceError>> + Send {
+        async { Ok(Vec::new()) }
+    }
     /// Every mempool txid with the node's `mempool_sequence`.
     fn listing(&self) -> impl Future<Output = Result<RawMempool, SourceError>> + Send;
     /// Entry and bytes for each txid, in order; `None` where it is no longer in the mempool.
@@ -75,6 +81,11 @@ impl Source for NodeSource {
 
     async fn mempool_info(&self) -> Result<MempoolInfo, SourceError> {
         self.rpc.mempool_info().await.map_err(rpc_err)
+    }
+
+    async fn recent(&self) -> Result<Vec<Txid>, SourceError> {
+        let r = self.esplora.mempool_recent().await.map_err(esplora_err)?;
+        Ok(r.value.into_iter().map(|t| t.txid).collect())
     }
 
     async fn listing(&self) -> Result<RawMempool, SourceError> {
@@ -349,8 +360,8 @@ struct Poller<S> {
     pending: HashMap<Txid, TxInfo>,
     /// Recent active-chain blocks, tip first.
     blocks: Vec<Arc<BlockSpends>>,
-    /// `getmempoolinfo` before the last complete cycle.
-    probe: Option<MempoolInfo>,
+    /// `getmempoolinfo` and `/mempool/recent` before the last complete cycle.
+    probe: Option<Probe>,
     /// The last block announced through [`Tracker::block_found`]. Until the model's tip is it or
     /// above it, no probe may skip a listing: a block is a change even when the mempool's totals
     /// do not move, and the node can announce one before it serves it.
@@ -368,9 +379,20 @@ fn reached(tip: ChainTip, found: ChainTip) -> bool {
     tip.height > found.height || tip.hash == found.hash
 }
 
-/// The part of `getmempoolinfo` that moves when the transaction set does.
-fn same_pool(a: &MempoolInfo, b: &MempoolInfo) -> bool {
-    (a.size, a.bytes, a.total_fee) == (b.size, b.bytes, b.total_fee)
+/// What a probe reads: `getmempoolinfo`, and the newest arrivals when the node answered them.
+struct Probe {
+    info: MempoolInfo,
+    recent: Option<Vec<Txid>>,
+}
+
+/// Whether nothing the tracker must see can have changed between two probes. The totals move
+/// with any removal on its own; the newest arrivals move with any arrival, so a new transaction
+/// of the same size and fee as one that left (a block's, an evicted one's) is not missed.
+fn same_pool(a: &Probe, b: &Probe) -> bool {
+    let (x, y) = (&a.info, &b.info);
+    (x.size, x.bytes, x.total_fee) == (y.size, y.bytes, y.total_fee)
+        && a.recent.is_some()
+        && a.recent == b.recent
 }
 
 impl<S: Source> Poller<S> {
@@ -417,17 +439,22 @@ impl<S: Source> Poller<S> {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner) = Some(i.clone());
             }
-            let result = match info {
-                Ok(info)
+            // Asked only of a node that answered: a failing one is not asked twice per retry.
+            let recent = match &info {
+                Ok(_) => self.source.recent().await.ok(),
+                Err(_) => None,
+            };
+            let result = match info.map(|info| Probe { info, recent }) {
+                Ok(probe)
                     if !forced
                         && last_full.is_some_and(|t| t.elapsed() < self.config.heartbeat)
-                        && self.probe.as_ref().is_some_and(|p| same_pool(p, &info)) =>
+                        && self.probe.as_ref().is_some_and(|p| same_pool(p, &probe)) =>
                 {
                     skipped += 1;
                     next = self.pace(started);
                     continue;
                 }
-                Ok(info) => self.cycle(info).await,
+                Ok(probe) => self.cycle(probe).await,
                 Err(e) => Err(e),
             };
             let bytes = self.source.bytes().saturating_sub(bytes);
@@ -437,7 +464,7 @@ impl<S: Source> Poller<S> {
                     last_full = Some(started);
                     stats.duration = started.elapsed();
                     stats.bytes = bytes;
-                    stats.calls += 1;
+                    stats.calls += 2; // the probe's two
                     stats.skipped = std::mem::take(&mut skipped);
                     next = self.pace(started);
                     self.totals.0 += bytes;
@@ -576,7 +603,7 @@ impl<S: Source> Poller<S> {
     }
 
     /// One listing, diffed and published. On error nothing is published.
-    async fn cycle(&mut self, info: MempoolInfo) -> Result<CycleStats, SourceError> {
+    async fn cycle(&mut self, probe: Probe) -> Result<CycleStats, SourceError> {
         let mut stats = CycleStats::default();
         let listing = self.source.listing().await?;
         let tip = self.source.tip().await?;
@@ -662,7 +689,7 @@ impl<S: Source> Poller<S> {
         drop(state);
         self.last_sequence = Some(listing.mempool_sequence);
         // Listed transactions still missing details must be retried: no probe skip until then.
-        self.probe = (stats.vanished == 0).then_some(info);
+        self.probe = (stats.vanished == 0).then_some(probe);
         Ok(stats)
     }
 
