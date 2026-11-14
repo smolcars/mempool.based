@@ -32,8 +32,10 @@ test("a new unconfirmed transaction appears without a reload", async ({ page }) 
   page.on("request", (r) => {
     if (r.url().endsWith(`/address/${LARGE}/txs/mempool`)) asks += 1;
   });
-  // The page's clock is moved a poll at a time instead of waiting out real polls.
+  // The page's clock stands still but when the test moves it, a poll at a time, instead of
+  // waiting out real polls.
   await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
   await stubLarge(page, { mempool: () => txids });
   await page.goto(`/regtest/address/${LARGE}`);
   const pool = page.getByRole("table", { name: /^Unconfirmed transactions of this address/ });
@@ -64,6 +66,7 @@ test("without the node's count, it says what it can and leaves no bar waiting", 
 test("a failed check says so and keeps the list, then recovers by itself", async ({ page }) => {
   let fail = false;
   await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
   await stubLarge(page, { mempool: () => [chain.txs.payment] });
   await page.route(new RegExp(`/regtest/api/address/${LARGE}/txs/mempool$`), (route) =>
     fail
