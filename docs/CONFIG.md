@@ -149,11 +149,12 @@ Following an address on either WebSocket has a per-client budget of its own with
 
 ### Very large addresses
 
-The address ledger ([`API.md`](API.md#very-large-addresses), [`STORE.md`](STORE.md#ledger)) needs `DATA_DIR`. Its other bounds are fixed: one large-address join at the node at a time for the whole server; 16 readers' seeds and 16 discovered ones waiting per network, 2 places per client; at most 12 discovery checks an hour per network.
+The address ledger ([`API.md`](API.md#very-large-addresses), [`STORE.md`](STORE.md#ledger)) needs `DATA_DIR`. Its other bounds are fixed: one large-address join at the node at a time for the whole server (seeds, fills and whole-history lists alike, each list at most once per address); 16 readers' seeds and 16 discovered ones waiting per network, 2 places per client; at most 12 discovery checks an hour per network.
 
 | Variable | Default | Protects against |
 |---|---|---|
 | `LEDGER_MAX_ADDRESSES` | `1000` | Store size and per-block work: addresses kept per network; past it the least recently viewed is dropped. An address with a full list of newest transactions takes about 29 KB of rows and 12 KB of undo records, plus about 60 bytes a day of chart: about 50 KB after a year, so 50 MB for 1,000. Each block costs one `getblock` at verbosity 3 (1.4 MB and 115 ms on signet on average) and about 30 ms of the server's time, the same for 1 or 1,000 addresses. 1 to 100,000 |
+| `LEDGER_MAX_HISTORY_ROWS` | `10000000` | Store size and node work: transactions kept in the kept addresses' whole histories, per network, about 48 bytes each on disk (about 480 MB at the default). Before an address's list is asked, the least recently viewed addresses' histories are dropped to make room, and again when blocks make them outgrow it; an address with more transactions than this is never asked for its list. An address whose history is dropped keeps its totals and newest 200 transactions and is not asked for its list again while kept. `0` keeps none. 0 to 1,000,000,000 |
 | `LEDGER_DISCOVER` | `true` | Node work while nobody asks: each new block's most paid scripts are checked for size, at most 12 an hour, and the large ones added up. With nothing tracked it reads each new block once for it (with something tracked the ledger reads it anyway). `false`: addresses are added up only when a reader opens one, and with nothing tracked the node is asked nothing |
 
 ### Block summaries

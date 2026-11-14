@@ -9,7 +9,10 @@ use rusqlite::types::Type;
 
 use node::rpc::model::PrevoutBlock;
 
-use super::{At, Effect, POINT_SPAN, Point, Totals, Tracked, TxRow, UNDO_DEPTH, View, WINDOW};
+use super::{
+    At, Effect, History, HistoryRow, POINT_SPAN, Point, Totals, Tracked, TxRow, UNDO_DEPTH, View,
+    WINDOW,
+};
 use crate::store::{Error, OptionalExtension, Sql, SqlError, params};
 
 fn sh_bytes(sh: ScriptHash) -> [u8; 32] {
@@ -101,7 +104,8 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
     Ok(sql
         .prepare(concat!(
             "SELECT s.funded_count, s.funded_sum, s.spent_count, s.spent_sum, s.tx_count, ",
-            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script, s.filled ",
+            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script, s.filled, ",
+            "s.history, s.history_height ",
             "FROM ledger_scripts s, ",
             "(SELECT height, hash, time FROM ledger_chain ORDER BY height DESC LIMIT 1) c ",
             "WHERE s.sh = ?1"
@@ -119,6 +123,7 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
                 seeded_height: int(r, 5)?,
                 seeded_time: int(r, 6)?,
                 filled: r.get(11)?,
+                history: History::from_sql(r.get(12)?, r.get(13)?),
                 at: At {
                     height: int(r, 7)?,
                     hash: BlockHash::from_byte_array(blob32(r, 8)?),
@@ -257,7 +262,36 @@ fn apply_one(sql: &Sql<'_>, sh: ScriptHash, at: At, e: &Effect) -> Result<(), Er
         sql_int(e.totals.tx_count)?
     ])?;
     insert_rows(sql, sh, &e.rows)?;
+    // A history being taken or whole takes the block's rows above the list's block.
+    let hid: Option<i64> = sql
+        .prepare(concat!(
+            "SELECT hid FROM ledger_scripts WHERE sh = ?1 AND history IN (1, 2) ",
+            "AND history_height < ?2"
+        ))?
+        .query_row(params![sh_bytes(sh), at.height], |r| r.get(0))
+        .optional()?
+        .flatten();
+    if let Some(hid) = hid {
+        let rows: Vec<HistoryRow> = e
+            .rows
+            .iter()
+            .map(|r| HistoryRow {
+                height: r.height,
+                txid: r.txid,
+            })
+            .collect();
+        insert_history(sql, hid, &rows)?;
+    }
     point(sql, sh, at)
+}
+
+fn insert_history(sql: &Sql<'_>, hid: i64, rows: &[HistoryRow]) -> Result<(), Error> {
+    let mut insert = sql
+        .prepare("INSERT OR IGNORE INTO ledger_history (hid, height, txid) VALUES (?1, ?2, ?3)")?;
+    for r in rows {
+        insert.execute(params![hid, r.height, r.txid.to_byte_array()])?;
+    }
+    Ok(())
 }
 
 /// Drops what is older than [`UNDO_DEPTH`] below `height`.
@@ -333,6 +367,7 @@ pub fn undo(sql: &Sql<'_>, tip: At) -> Result<Option<Undone>, Error> {
             "DELETE FROM ledger_undo",
             "DELETE FROM ledger_txs",
             "DELETE FROM ledger_points",
+            "DELETE FROM ledger_history",
         ] {
             sql.prepare(table)?.execute([])?;
         }
@@ -370,6 +405,33 @@ pub fn undo(sql: &Sql<'_>, tip: At) -> Result<Option<Undone>, Error> {
         .execute(params![h])?;
     sql.prepare("DELETE FROM ledger_txs WHERE height >= ?1")?
         .execute(params![h])?;
+    // A history being taken from a block that leaves the chain starts again; the others lose
+    // the block's rows.
+    let mut stmt = sql.prepare(
+        "SELECT hid, history, history_height FROM ledger_scripts WHERE history IN (1, 2)",
+    )?;
+    let histories: Vec<(i64, i64, u32)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, int(r, 2)?)))?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    for (hid, state, from) in histories {
+        if state == 1 && from >= h {
+            sql.prepare("DELETE FROM ledger_history WHERE hid = ?1")?
+                .execute(params![hid])?;
+            sql.prepare("UPDATE ledger_scripts SET history = 0, hid = NULL WHERE hid = ?1")?
+                .execute(params![hid])?;
+        } else {
+            // The list's block may leave too: its rows go, and the blocks applied in its place
+            // bring theirs.
+            sql.prepare("DELETE FROM ledger_history WHERE hid = ?1 AND height >= ?2")?
+                .execute(params![hid, h])?;
+            sql.prepare(concat!(
+                "UPDATE ledger_scripts SET history_height = min(history_height, ?2) ",
+                "WHERE hid = ?1"
+            ))?
+            .execute(params![hid, h.saturating_sub(1)])?;
+        }
+    }
     // A script whose point is dropped gets one at the parent: its balance there is the one it now
     // holds, and a point dropped may have stood for the whole span.
     let mut stmt = sql.prepare("SELECT DISTINCT sh FROM ledger_points WHERE height >= ?1")?;
@@ -416,6 +478,7 @@ fn delete(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
 /// Drops one script and its rows, keeping the chain.
 fn delete_rows(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
     for stmt in [
+        "DELETE FROM ledger_history WHERE hid = (SELECT hid FROM ledger_scripts WHERE sh = ?1)",
         "DELETE FROM ledger_scripts WHERE sh = ?1",
         "DELETE FROM ledger_undo WHERE sh = ?1",
         "DELETE FROM ledger_txs WHERE sh = ?1",
@@ -646,4 +709,202 @@ fn count_rows(sql: &Sql<'_>, sh: ScriptHash) -> Result<usize, Error> {
     Ok(sql
         .prepare("SELECT count(*) FROM ledger_txs WHERE sh = ?1")?
         .query_row(params![sh_bytes(sh)], |r| int(r, 0))?)
+}
+
+/// What [`history_begin`] did.
+pub enum Begun {
+    /// Rows go under `hid` from now on; `evicted` histories were dropped to make room.
+    Taking { hid: i64, evicted: usize },
+    /// More transactions than the bound holds: marked dropped, never asked.
+    TooLarge,
+    /// The ledger's tip moved: nothing written.
+    Moved,
+    /// Not tracked, or its history is not to be taken: nothing written.
+    Nothing,
+}
+
+/// Starts taking `sh`'s history, pinned to the block at `from`, if the ledger's tip is still
+/// `tip`: rows of the blocks after `from` (`since`) go in now, the node's list follows in batches.
+/// Makes room within `max_rows` first. A history left half taken by a restart is dropped.
+pub fn history_begin(
+    sql: &Sql<'_>,
+    sh: ScriptHash,
+    tip: At,
+    from: u32,
+    since: &[HistoryRow],
+    max_rows: u64,
+) -> Result<Begun, Error> {
+    if self::tip(sql)? != Some(tip) {
+        return Ok(Begun::Moved);
+    }
+    let state: Option<i64> = sql
+        .prepare("SELECT history FROM ledger_scripts WHERE sh = ?1")?
+        .query_row(params![sh_bytes(sh)], |r| r.get(0))
+        .optional()?;
+    if !matches!(state, Some(0 | 3)) {
+        return Ok(Begun::Nothing);
+    }
+    history_restarted(sql)?;
+    let Some(evicted) = history_bound(sql, Some(sh), max_rows)? else {
+        history_too_large(sql, sh)?;
+        return Ok(Begun::TooLarge);
+    };
+    let hid: i64 = sql
+        .prepare("SELECT coalesce(max(hid), 0) + 1 FROM ledger_scripts")?
+        .query_row([], |r| r.get(0))?;
+    sql.prepare(
+        "UPDATE ledger_scripts SET history = 1, history_height = ?2, hid = ?3 WHERE sh = ?1",
+    )?
+    .execute(params![sh_bytes(sh), from, hid])?;
+    insert_history(sql, hid, since)?;
+    Ok(Begun::Taking { hid, evicted })
+}
+
+/// Stores a batch of the node's list for `hid`, unless that history stopped being taken (a reorg
+/// below its block, a restart, the script dropped): then `false`, writing nothing.
+pub fn history_rows(
+    sql: &Sql<'_>,
+    sh: ScriptHash,
+    hid: i64,
+    rows: &[HistoryRow],
+) -> Result<bool, Error> {
+    let taking = sql
+        .prepare("SELECT 1 FROM ledger_scripts WHERE sh = ?1 AND hid = ?2 AND history = 1")?
+        .query_row(params![sh_bytes(sh), hid], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if taking {
+        insert_history(sql, hid, rows)?;
+    }
+    Ok(taking)
+}
+
+/// What [`history_end`] did.
+pub enum Ended {
+    /// Whole, with this many rows.
+    Whole(u64),
+    /// Blocks made it outgrow the bound while it was taken: dropped.
+    TooLarge,
+    /// Not as many rows as the totals count, or no longer being taken: its rows dropped.
+    Mismatch,
+}
+
+/// Ends taking `hid`'s history: whole when it holds exactly as many rows as the totals count
+/// transactions and fits within `max_rows`, making room as [`history_bound`] does.
+pub fn history_end(sql: &Sql<'_>, sh: ScriptHash, hid: i64, max_rows: u64) -> Result<Ended, Error> {
+    let row: Option<(i64, i64)> = sql
+        .prepare(concat!(
+            "SELECT tx_count, (SELECT count(*) FROM ledger_history WHERE hid = ?2) ",
+            "FROM ledger_scripts WHERE sh = ?1 AND hid = ?2 AND history = 1"
+        ))?
+        .query_row(params![sh_bytes(sh), hid], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    match row {
+        Some((want, have)) if want == have => {
+            if history_bound(sql, Some(sh), max_rows)?.is_none() {
+                history_abort(sql, sh, hid, 4)?;
+                return Ok(Ended::TooLarge);
+            }
+            sql.prepare("UPDATE ledger_scripts SET history = 2 WHERE sh = ?1")?
+                .execute(params![sh_bytes(sh)])?;
+            Ok(Ended::Whole(u64::try_from(have).unwrap_or(u64::MAX)))
+        }
+        _ => {
+            history_abort(sql, sh, hid, 0)?;
+            Ok(Ended::Mismatch)
+        }
+    }
+}
+
+/// Drops `hid`'s rows and leaves the script at `state` (0 to be tried again, 3 refused), if it is
+/// still the history being taken.
+pub fn history_abort(sql: &Sql<'_>, sh: ScriptHash, hid: i64, state: i64) -> Result<(), Error> {
+    sql.prepare("DELETE FROM ledger_history WHERE hid = ?1")?
+        .execute(params![hid])?;
+    sql.prepare(concat!(
+        "UPDATE ledger_scripts SET history = ?3, hid = NULL ",
+        "WHERE sh = ?1 AND hid = ?2 AND history = 1"
+    ))?
+    .execute(params![sh_bytes(sh), hid, state])?;
+    Ok(())
+}
+
+/// Drops any history being taken: after a restart, nothing is taking it any more.
+pub fn history_restarted(sql: &Sql<'_>) -> Result<(), Error> {
+    sql.prepare(
+        "DELETE FROM ledger_history WHERE hid IN (SELECT hid FROM ledger_scripts WHERE history = 1)",
+    )?
+    .execute([])?;
+    sql.prepare("UPDATE ledger_scripts SET history = 0, hid = NULL WHERE history = 1")?
+        .execute([])?;
+    Ok(())
+}
+
+/// Keeps the histories held or being taken within `max_rows`, counting each as its script's
+/// transactions (exactly its rows once whole), and `room_for` as well when given: drops the least
+/// recently viewed whole histories other than `room_for`'s, then, without `room_for`, any being
+/// taken, marking them dropped. `Some(dropped)`, or `None` when `room_for` cannot fit even alone.
+pub fn history_bound(
+    sql: &Sql<'_>,
+    room_for: Option<ScriptHash>,
+    max_rows: u64,
+) -> Result<Option<usize>, Error> {
+    let want = |sql: &Sql<'_>| -> Result<u64, Error> {
+        let n: i64 = sql
+            .prepare(concat!(
+                "SELECT coalesce(sum(tx_count), 0) FROM ledger_scripts ",
+                "WHERE history IN (1, 2) OR sh = ?1"
+            ))?
+            .query_row(params![room_for.map(sh_bytes)], |r| r.get(0))?;
+        Ok(u64::try_from(n).unwrap_or(u64::MAX))
+    };
+    // Too large even alone: nothing else is dropped for it.
+    if let Some(sh) = room_for {
+        let own: i64 = sql
+            .prepare("SELECT tx_count FROM ledger_scripts WHERE sh = ?1")?
+            .query_row(params![sh_bytes(sh)], |r| r.get(0))?;
+        if u64::try_from(own).unwrap_or(u64::MAX) > max_rows {
+            return Ok(None);
+        }
+    }
+    let mut dropped = 0;
+    while want(sql)? > max_rows {
+        let oldest: Option<(Vec<u8>, i64)> = sql
+            .prepare(concat!(
+                "SELECT sh, hid FROM ledger_scripts WHERE history IN (1, 2) AND sh IS NOT ?1 ",
+                "AND (history = 2 OR ?1 IS NULL) ORDER BY history DESC, viewed, sh LIMIT 1"
+            ))?
+            .query_row(params![room_for.map(sh_bytes)], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        let Some((oldest, hid)) = oldest else {
+            return Ok(room_for.is_none().then_some(dropped));
+        };
+        sql.prepare("DELETE FROM ledger_history WHERE hid = ?1")?
+            .execute(params![hid])?;
+        sql.prepare("UPDATE ledger_scripts SET history = 4, hid = NULL WHERE sh = ?1")?
+            .execute(params![oldest])?;
+        dropped += 1;
+    }
+    Ok(Some(dropped))
+}
+
+/// The scripts whose history may be taken: never taken (or failed), or refused.
+pub fn unhistoried(sql: &Sql<'_>) -> Result<Vec<(ScriptHash, History)>, Error> {
+    let mut stmt = sql.prepare("SELECT sh, history FROM ledger_scripts WHERE history IN (0, 3)")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            ScriptHash::from_byte_array(blob32(r, 0)?),
+            History::from_sql(r.get(1)?, None),
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Marks `sh`'s history too large for the bound, unless it is being taken or held.
+pub fn history_too_large(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
+    sql.prepare("UPDATE ledger_scripts SET history = 4 WHERE sh = ?1 AND history IN (0, 3)")?
+        .execute(params![sh_bytes(sh)])?;
+    Ok(())
 }

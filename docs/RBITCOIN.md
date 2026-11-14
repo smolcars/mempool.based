@@ -148,6 +148,8 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A new tip announced only once the block can be served | Delivered upstream by [rbitcoin PR 1577](https://github.com/rbitcoin-org/rbitcoin/pull/1577), in no release yet: a just-announced block is served at the first request instead of being held 0.3 to 1.5 s |
 | Outpoint pushes for mempool spends | A transaction page could show an output being spent as it happens, without polling |
 | Totals above `--max-sh-creates` on the unix socket only | The explorer keeps large addresses' totals itself and needs each added up once; with this, an operator could keep the cap on for everyone else and still have them added up ([below](#totals-of-large-addresses)) |
+| The whole history list above `--max-sh-creates` on the unix socket only | The same for the list of a large address's transactions, asked once per address ([below](#the-whole-history-of-a-large-address)): today the cap refuses it for everyone or for no one |
+| A history list written as it is read | The node builds the whole answer before its first byte (16 of the 18.5 s for 1.9 million rows on signet) and must write it within its Electrum idle timeout (120 s); a list streamed from the index would hold less in the node and start at once |
 
 ## Totals of large addresses
 
@@ -170,3 +172,25 @@ The explorer keeps its own running totals for large addresses ([`API.md`](API.md
 | 1,831,301, the largest found | 1,907,668 | 8.0 s, then 7.9 s | +617 MB, then +484 MB |
 
 Time and memory do not follow size: an address paid all over the chain (the pay-to-anchor script) took longer than one with 25 times its outputs. For comparison, the whole Electrum history of the largest took 55.9 s and 181 MB. Nothing near mainnet's largest address (3,665,660 creates) has been added up; never run such a join on mainnet without watching the node's memory.
+
+## The whole history of a large address
+
+The explorer keeps every transaction id of a kept large address itself ([`STORE.md`](STORE.md#ledger)) and asks the node for the list once per address. Read from rbitcoin v0.9.2's `crates/rbitcoin-electrum/src/server.rs` and `crates/rbitcoin-query/src/scripthash.rs`; the same on `master`.
+
+**The request.** Electrum `blockchain.scripthash.get_history` with the scripthash and a trailing `"asof:<block hash>"`: the confirmed history as of that block, no mempool rows, one `{"height", "tx_hash"}` per transaction, and the reply stamped with `chain_tip` (that block) and `chain_tip_height`. Esplora has no unpaged history route: its pages are 25 rows, each costing the node as much as the first ([above](#address-history-cost)). The explorer reads it on a TCP connection of its own (`node::electrum::history`), not the shared one, so the hundreds of MB it can be do not hold up headers and subscriptions.
+
+**Its cap.** It is an unpaged join, so `--max-sh-creates` refuses it like totals, with `{"code": 1, "message": "scripthash join exceeds --max-sh-creates (<n> creates, cap <N>)"}`; `--heavy-sh-creates` queues it behind other heavy joins. A height window starting above 0 takes another path in the node; the explorer does not use it to step round the operator's cap.
+
+**The order, and what we rely on.** The node sorts the list by height, then by the txid's 32 bytes in internal order (the reverse of the hex shown), both ascending (`apply_history_filter`, `HistoryOrder::HeightAsc`). Its Esplora chain pages (`/txs/chain`, `/txs`, `/txs/summary`) are the same order reversed: height descending, then txid bytes descending (`HistoryOrder::NewestFirst`), and a `last_seen_txid` cursor continues after that txid in it. So a list sorted that way pages exactly as the node does, whatever the transactions' positions in their blocks. The explorer checks the order on every row as it reads and refuses a list that breaks it. Verified on a real v0.9.2 on regtest: the node's list, its chain pages read to the end, and the explorer's kept list were identical, with up to 12 rows sharing a block, before and after a two-block reorg (`cargo test -p engine -- --ignored ledger::tests::regtest::whole_histories_equal_the_nodes_across_a_reorg`).
+
+**Measured on signet** (2026-11-14, read-only, one request at a time; the owner's node, cap off), twice: first the list alone, read and written into SQLite in batches of 10,000 rows, pinned to block 330,808; then the server's own path (`NET=SIGNET cargo run --release -p engine --example history_list -- <script hex>` under `/usr/bin/time -l`: the script seeded into a fresh store, then `ledger::history`), pinned to block 330,810. Peak memory is the whole measuring process's resident size.
+
+| Transactions | List alone: time, first rows after, answer | `ledger::history` into the store | Explorer peak memory |
+|---|---|---|---|
+| 70,945 | 1.0 s, 0.8 s, 6.7 MB | 1.0 s | 10.3 MB |
+| 118,197 | 2.4 s, 2.0 s, 11.2 MB | 1.4 s | 10.2 MB |
+| 125,717 | 2.0 s, 1.7 s, 11.9 MB | 1.8 s | 10.2 MB |
+| 1,908,560, the largest found | 18.5 s, 16.0 s, 181.3 MB | 14.0 s | 10.3 MB |
+
+The largest took 55.9 s when its list was measured before, so the time depends on the node's caches. About 95 bytes of answer a row. The store took the rows as fast as they came: about 2.5 s for 1.9 million once the first arrived. **Mainnet: not measured.** Its largest address has 3,665,660 creates and more transactions; an rbitcoin developer reports its whole history in 45 s from cold caches on another machine. The node holds the whole answer before it writes the first byte, and must write it within its Electrum idle timeout (120 s by default); the explorer reads at its store's pace, measured above at about 2.5 s for two million rows, while holding at most three batches. The orchestrator measures the node's memory during the first real fetch on mainnet.
+

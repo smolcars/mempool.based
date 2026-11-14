@@ -20,9 +20,10 @@ use bitcoin::{BlockHash, Script, ScriptBuf, Txid};
 use node::esplora::{ScriptHash, ScriptSize};
 use node::rpc::model::PrevoutBlock;
 
-pub use self::source::{NodeSource, Source};
+pub use self::source::{HISTORY_BATCH, HISTORY_TIMEOUT, NodeSource, Source};
 use crate::mempool::SourceError;
 use crate::store::{self, Read, Store};
+pub use node::electrum::history::Row as HistoryRow;
 
 /// Blocks whose effects are kept for undoing a reorg. A deeper reorg drops every script, to be
 /// seeded again ([`Followed::reset`]). The block table repairs to the same depth.
@@ -116,6 +117,36 @@ pub struct Tracked {
     /// The node's newest history page before the seed block was joined to the newest
     /// transactions, or found not to be needed: [`fill`] has nothing left to do.
     pub filled: bool,
+    /// Where the script's whole history stands.
+    pub history: History,
+}
+
+/// Where a kept script's whole history stands (docs/STORE.md, "ledger").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum History {
+    /// Not taken yet, or the last try failed.
+    None,
+    /// Being taken from the node now.
+    Taking,
+    /// Every confirmed transaction is kept: the node's list at block `height`, and every block
+    /// applied since.
+    Whole { height: u32 },
+    /// The node refused the list for size: its `--max-sh-creates` is in force.
+    Refused,
+    /// Dropped to keep the stored history within its bound, or too large for it.
+    Dropped,
+}
+
+impl History {
+    fn from_sql(state: i64, height: Option<u32>) -> Self {
+        match (state, height) {
+            (1, _) => Self::Taking,
+            (2, Some(height)) => Self::Whole { height },
+            (3, _) => Self::Refused,
+            (4, _) => Self::Dropped,
+            _ => Self::None,
+        }
+    }
 }
 
 /// A script's totals, newest transactions (newest first) and balance chart (oldest first), read
@@ -165,6 +196,8 @@ pub enum Error {
     Moved,
     /// A total would not fit: the node's answer cannot be right.
     OutOfRange,
+    /// The node's history list did not hold as many transactions as the ledger counts.
+    Mismatch,
 }
 
 impl Error {
@@ -177,6 +210,7 @@ impl Error {
             Self::Store(_) => "store",
             Self::Moved => "moved",
             Self::OutOfRange => "out_of_range",
+            Self::Mismatch => "mismatch",
         }
     }
 }
@@ -190,6 +224,7 @@ impl std::fmt::Display for Error {
             Self::Store(e) => write!(f, "store: {e}"),
             Self::Moved => f.write_str("the chain moved"),
             Self::OutOfRange => f.write_str("a total out of range"),
+            Self::Mismatch => f.write_str("the history list does not match the totals"),
         }
     }
 }
@@ -212,7 +247,7 @@ impl From<store::Error> for Error {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Effect {
     totals: Totals,
-    /// In block order; at most [`WINDOW`], the last ones.
+    /// Every transaction of the script in the block, in block order.
     rows: Vec<TxRow>,
 }
 
@@ -281,10 +316,6 @@ fn effects(
                 time: block.time,
             });
         }
-    }
-    for e in out.values_mut() {
-        let extra = e.rows.len().saturating_sub(WINDOW);
-        e.rows.drain(..extra);
     }
     Ok(out)
 }
@@ -610,6 +641,164 @@ pub async fn fill<S: Source>(store: &Store, source: &S, sh: ScriptHash) -> Resul
 /// The kept scripts [`fill`] has yet to do.
 pub async fn unfilled(store: &Store) -> Result<Vec<ScriptHash>, store::Error> {
     store.read(Read::Ledger, db::unfilled).await
+}
+
+/// What [`history`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Historied {
+    /// The whole history is kept: `rows` from the node's list at block `height`, with `evicted`
+    /// other scripts' histories dropped to make room.
+    Whole {
+        height: u32,
+        rows: u64,
+        evicted: usize,
+    },
+    /// The node refused the list for size, with the counts its refusal gave.
+    Refused(Option<ScriptSize>),
+    /// More transactions than the bound holds: not asked, and not asked again.
+    TooLarge,
+    /// Not tracked, or its history taken, refused for good or dropped already: nothing done.
+    Nothing,
+}
+
+/// Takes `sh`'s whole confirmed history from the node, once: its list pinned to a block the ledger
+/// holds (one below its tip), streamed into the store in batches, with the rows of the blocks the
+/// ledger applied after that block; from then on [`follow`] adds each block's rows and undoes
+/// them on a reorg. The rows are served only once all are in and as many as the totals count.
+///
+/// The stored history of all scripts together is kept within `max_rows` (rows held or being
+/// taken): room is made by dropping the least recently viewed scripts' histories, and a script
+/// with more transactions than that is not asked at all. A failure, a reorg below the list's
+/// block, or a restart leaves nothing behind, to be tried again.
+///
+/// One request that costs the node a join of the script's whole history: run it in the lane, as
+/// a seed.
+pub async fn history<S: Source>(
+    store: &Store,
+    source: &S,
+    sh: ScriptHash,
+    max_rows: u64,
+) -> Result<Historied, Error> {
+    let Some(t) = tracked(store, sh).await? else {
+        return Ok(Historied::Nothing);
+    };
+    if !matches!(t.history, History::None | History::Refused) {
+        return Ok(Historied::Nothing);
+    }
+    // Decided again when it begins, against the others' histories too.
+    if t.totals.tx_count > max_rows {
+        store
+            .write(move |sql| db::history_too_large(sql, sh))
+            .await?;
+        return Ok(Historied::TooLarge);
+    }
+    let at = anchor(store, source).await?;
+    // The rows of the blocks the ledger applied after `at`, read again for this script alone.
+    let (from, to) = (at.height, t.at.height);
+    let chain = store
+        .read(Read::Ledger, move |sql| db::chain(sql, from, to))
+        .await?;
+    if chain.first() != Some(&at) || chain.last() != Some(&t.at) {
+        return Err(Error::Moved);
+    }
+    let map = HashMap::from([(t.script.to_hex_string(), sh)]);
+    let mut since = Vec::new();
+    for b in chain.into_iter().skip(1) {
+        let block = source.block(b.hash).await?;
+        if block.hash != b.hash || block.height != b.height {
+            return Err(Error::Moved);
+        }
+        let rows = effects(&block, &map)?.remove(&sh).unwrap_or_default().rows;
+        since.extend(rows.into_iter().map(|r| HistoryRow {
+            height: r.height,
+            txid: r.txid,
+        }));
+    }
+    let tip = t.at;
+    let begun = store
+        .write(move |sql| db::history_begin(sql, sh, tip, at.height, &since, max_rows))
+        .await?;
+    let (hid, evicted) = match begun {
+        db::Begun::Taking { hid, evicted } => (hid, evicted),
+        db::Begun::TooLarge => return Ok(Historied::TooLarge),
+        db::Begun::Moved => return Err(Error::Moved),
+        db::Begun::Nothing => return Ok(Historied::Nothing),
+    };
+    // The list holds the transactions up to `at`, never more than the totals count at the tip
+    // above it: a longer one is stopped before it fills the disk.
+    let budget = t.totals.tx_count;
+    let (rows_tx, mut rows_rx) = tokio::sync::mpsc::channel::<Vec<HistoryRow>>(2);
+    // Owns the receiver, so a write that stops closes it and the node's list stops too.
+    let write = async move {
+        let mut received = 0u64;
+        while let Some(batch) = rows_rx.recv().await {
+            received = received.saturating_add(batch.len() as u64);
+            if received > budget {
+                return Ok(Err(Error::Mismatch));
+            }
+            if !store
+                .write(move |sql| db::history_rows(sql, sh, hid, &batch))
+                .await?
+            {
+                // A reorg below the list's block, a restart or the bound ended it.
+                return Ok(Err(Error::Moved));
+            }
+        }
+        Ok::<_, store::Error>(Ok(()))
+    };
+    let (listed, written) = tokio::join!(source.history(&t.script, at, rows_tx), write);
+    let outcome = match (listed, written) {
+        (_, Err(e)) => Err(Error::Store(e)),
+        (_, Ok(Err(e))) => Err(e),
+        (Ok(Ok(())), Ok(Ok(()))) => Ok(None),
+        (Ok(Err(size)), Ok(Ok(()))) => Ok(Some(size)),
+        (Err(e), Ok(Ok(()))) => Err(Error::Source(e)),
+    };
+    match outcome {
+        Ok(None) => match store
+            .write(move |sql| db::history_end(sql, sh, hid, max_rows))
+            .await?
+        {
+            db::Ended::Whole(rows) => Ok(Historied::Whole {
+                height: at.height,
+                rows,
+                evicted,
+            }),
+            db::Ended::TooLarge => Ok(Historied::TooLarge),
+            db::Ended::Mismatch => Err(Error::Mismatch),
+        },
+        Ok(Some(size)) => {
+            store
+                .write(move |sql| db::history_abort(sql, sh, hid, 3))
+                .await?;
+            Ok(Historied::Refused(size))
+        }
+        Err(e) => {
+            store
+                .write(move |sql| db::history_abort(sql, sh, hid, 0))
+                .await?;
+            Err(e)
+        }
+    }
+}
+
+/// Drops the least recently viewed scripts' histories while all of them together hold more than
+/// `max_rows`: following blocks makes them grow. How many were dropped.
+pub async fn bound(store: &Store, max_rows: u64) -> Result<usize, store::Error> {
+    store
+        .write(move |sql| db::history_bound(sql, None, max_rows))
+        .await
+        .map(Option::unwrap_or_default)
+}
+
+/// The kept scripts whose history [`history`] may take: never taken, failed, or refused.
+pub async fn unhistoried(store: &Store) -> Result<Vec<(ScriptHash, History)>, store::Error> {
+    store.read(Read::Ledger, db::unhistoried).await
+}
+
+/// After a restart: a history that was being taken is dropped, to be taken again.
+pub async fn history_restarted(store: &Store) -> Result<(), store::Error> {
+    store.write(db::history_restarted).await
 }
 
 /// Rows in a page of the node's history (Esplora's page size).

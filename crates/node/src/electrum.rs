@@ -9,6 +9,7 @@
 //! and a slow event consumer loses events (and learns so) instead of blocking
 //! the connection.
 
+pub mod history;
 mod types;
 
 #[cfg(test)]

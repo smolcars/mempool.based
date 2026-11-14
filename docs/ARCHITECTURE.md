@@ -13,7 +13,7 @@ rbitcoin.space is a sidecar: one Rust server beside a stock rbitcoin node, a sta
 ## Principles
 
 1. **The node is the source of truth.** Anything rbitcoin can answer is asked of rbitcoin, never copied into our own store. Blocks, transactions, addresses and spends stay in the node.
-2. **We store only derived or observed data:** per-block mining summaries, block audits, mempool history, replacements, fee-recommendation scores, Lightning graph history, and running totals for a bounded set of large addresses, whose totals the node refuses or takes long to give, kept from each block ([`STORE.md`](STORE.md#ledger)).
+2. **We store only derived or observed data:** per-block mining summaries, block audits, mempool history, replacements, fee-recommendation scores, Lightning graph history, and running totals and transaction lists for a bounded set of large addresses, whose totals the node refuses or takes long to give and whose history it can only page at full cost each page, kept from each block ([`STORE.md`](STORE.md#ledger)).
 3. **Push where the node pushes, poll where it does not.** Blocks and tracked scripts arrive by Electrum subscription. The mempool is polled, because rbitcoin has no mempool event stream ([`RBITCOIN.md`](RBITCOIN.md)).
 4. **Clients are untrusted.** The browser never reaches the node directly. Every request goes through typed, bounded handlers ([`SECURITY.md`](SECURITY.md)).
 5. **Compatibility is a bonus, not a constraint.** We serve rbitcoin's Esplora API as it is, and mempool.space-shaped endpoints where they are cheap. Where rbitcoin lets us do better, we do it our own way ([`COMPAT.md`](COMPAT.md)).

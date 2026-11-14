@@ -12,8 +12,9 @@
 //! **The ledger** (with `DATA_DIR`): a reader opening a large address queues a seed; discovery
 //! queues the scripts each block pays most, after a size check. One seed runs at a time; the
 //! queue is bounded and a client may hold at most [`CLIENT_SEEDS`] places in it. Each kept address
-//! then takes the node's newest history page before its seed once ([`book::fill`]), in the same
-//! lane, after the readers' seeds.
+//! then takes its whole history from the node once ([`book::history`]), in the same lane, after
+//! the readers' seeds; one whose history the node refuses, or that is dropped for the bound, takes
+//! the node's newest history page before its seed once instead ([`book::fill`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -33,7 +34,8 @@ use engine::ledger::{self as book, At, NodeSource, Seeded, Source as _};
 use engine::store::Store;
 use logging::events::{
     LedgerChecked, LedgerFillFailed, LedgerFilled, LedgerFollowFailed, LedgerFollowed,
-    LedgerSeedFailed, LedgerSeedRefused, LedgerSeeded,
+    LedgerHistory, LedgerHistoryBound, LedgerHistoryFailed, LedgerSeedFailed, LedgerSeedRefused,
+    LedgerSeeded,
 };
 use node::esplora::model::ScriptInfo;
 use node::esplora::{Error, Esplora, RawResponse, Route, ScriptHash, ScriptRef, ScriptSize};
@@ -71,6 +73,9 @@ const REFUSED_FOR: Duration = Duration::from_secs(3600);
 /// of that address, up to [`FILL_RETRY_MAX`].
 const FAILED_FOR: Duration = Duration::from_secs(600);
 const FILL_RETRY_MAX: Duration = Duration::from_secs(24 * 3600);
+/// A whole history the node refused is asked again after this long: the operator may have raised
+/// its cap. A refusal costs the node milliseconds.
+const HISTORY_REFUSED_FOR: Duration = Duration::from_secs(24 * 3600);
 /// Discovery: candidates taken from each block, size checks an hour, and how long a checked
 /// script is not checked again.
 pub const PER_BLOCK: usize = 3;
@@ -313,6 +318,8 @@ struct Seeds {
     /// Kept scripts still to be filled (as the store says), with their failures so far and when
     /// each may be tried next.
     unfilled: HashMap<ScriptHash, (u32, Instant)>,
+    /// Kept scripts whose whole history is still to be taken, the same way.
+    unhistoried: HashMap<ScriptHash, (u32, Instant)>,
 }
 
 impl Seeds {
@@ -395,14 +402,11 @@ impl Seeds {
         let job = match self.readers.pop_front() {
             Some(j) => Some(j),
             None => {
-                let due = self
-                    .unfilled
-                    .iter()
-                    .filter(|(_, (_, at))| now >= *at)
-                    .min_by_key(|(sh, (_, at))| (*at, sh.to_byte_array()))
-                    .map(|(sh, _)| *sh);
-                if let Some(sh) = due {
+                if let Some(sh) = due_in(&self.unfilled, now) {
                     return Some(Work::Fill(sh));
+                }
+                if let Some(sh) = due_in(&self.unhistoried, now) {
+                    return Some(Work::History(sh));
                 }
                 self.found.pop_front()
             }
@@ -447,14 +451,36 @@ impl Seeds {
 
     /// A fill failed: it is due again after a wait that doubles with each failure. Its count.
     fn fill_failed(&mut self, sh: ScriptHash, now: Instant) -> u32 {
-        let e = self.unfilled.entry(sh).or_insert((0, now));
-        e.0 += 1;
-        let wait = FAILED_FOR
-            .saturating_mul(1 << (e.0 - 1).min(16))
-            .min(FILL_RETRY_MAX);
-        e.1 = now + wait;
-        e.0
+        backoff(&mut self.unfilled, sh, now)
     }
+
+    /// The scripts the store says may take their whole history, as [`Self::set_unfilled`].
+    fn set_unhistoried(&mut self, kept: &[ScriptHash], now: Instant) {
+        self.unhistoried.retain(|sh, _| kept.contains(sh));
+        for sh in kept {
+            self.unhistoried.entry(*sh).or_insert((0, now));
+        }
+    }
+}
+
+/// The script due first in `map`, if one is due.
+fn due_in(map: &HashMap<ScriptHash, (u32, Instant)>, now: Instant) -> Option<ScriptHash> {
+    map.iter()
+        .filter(|(_, (_, at))| now >= *at)
+        .min_by_key(|(sh, (_, at))| (*at, sh.to_byte_array()))
+        .map(|(sh, _)| *sh)
+}
+
+/// A failure of `sh`'s work in `map`: due again after a wait that doubles with each failure, up
+/// to [`FILL_RETRY_MAX`]. Its count.
+fn backoff(map: &mut HashMap<ScriptHash, (u32, Instant)>, sh: ScriptHash, now: Instant) -> u32 {
+    let e = map.entry(sh).or_insert((0, now));
+    e.0 += 1;
+    let wait = FAILED_FOR
+        .saturating_mul(1 << (e.0 - 1).min(16))
+        .min(FILL_RETRY_MAX);
+    e.1 = now + wait;
+    e.0
 }
 
 /// What the ledger says of a script, for `/app/address/:address/ledger`.
@@ -533,6 +559,7 @@ impl Ledger {
                 .ok()?,
                 esplora: Esplora::with_limits(url, SEED_TIMEOUT, Esplora::DEFAULT_MAX_RESPONSE)
                     .ok()?,
+                electrum: network.electrum.clone(),
             },
             config,
             lane,
@@ -568,6 +595,13 @@ impl Ledger {
         }
         if let Ok(kept) = book::unfilled(&self.store).await {
             self.seeds().set_unfilled(&kept, Instant::now());
+            if !kept.is_empty() {
+                self.wake.notify_one();
+            }
+        }
+        if let Ok(kept) = book::unhistoried(&self.store).await {
+            let kept: Vec<ScriptHash> = kept.into_iter().map(|(sh, _)| sh).collect();
+            self.seeds().set_unhistoried(&kept, Instant::now());
             if !kept.is_empty() {
                 self.wake.notify_one();
             }
@@ -820,6 +854,84 @@ impl Ledger {
         }
     }
 
+    /// Keeps the whole histories within their bound after blocks made them grow: the least
+    /// recently viewed leave first. How many were dropped.
+    async fn bound(&self) -> usize {
+        let dropped = book::bound(&self.store, self.config.max_history_rows)
+            .await
+            .unwrap_or(0);
+        if dropped > 0 {
+            logging::emit(&LedgerHistoryBound {
+                network: self.network,
+                dropped,
+            });
+        }
+        dropped
+    }
+
+    /// Takes one kept script's whole history in the lane (already held), once.
+    async fn history(&self, sh: ScriptHash) {
+        let started = Instant::now();
+        let r = book::history(&self.store, &self.source, sh, self.config.max_history_rows).await;
+        let took = started.elapsed();
+        let (outcome, height, rows, evicted) = match r {
+            Ok(book::Historied::Whole {
+                height,
+                rows,
+                evicted,
+            }) => {
+                self.seeds().unhistoried.remove(&sh);
+                ("whole", height, rows, evicted)
+            }
+            Ok(book::Historied::Refused(_)) => {
+                let mut s = self.seeds();
+                let e = s.unhistoried.entry(sh).or_insert((0, started));
+                e.1 = Instant::now() + HISTORY_REFUSED_FOR;
+                ("refused", 0, 0, 0)
+            }
+            Ok(book::Historied::TooLarge) => {
+                self.seeds().unhistoried.remove(&sh);
+                ("too_large", 0, 0, 0)
+            }
+            Ok(book::Historied::Nothing) => {
+                self.seeds().unhistoried.remove(&sh);
+                return;
+            }
+            Err(e) => {
+                let failures = backoff(&mut self.seeds().unhistoried, sh, Instant::now());
+                // Histories it dropped to make room may now take the newest page; its own wait
+                // is kept.
+                self.reload().await;
+                if failures.is_power_of_two() {
+                    logging::emit(&LedgerHistoryFailed {
+                        network: self.network,
+                        scripthash: sh.to_string(),
+                        error: e.label(),
+                        failures,
+                        duration_ms: ms(took),
+                    });
+                }
+                return;
+            }
+        };
+        logging::emit(&LedgerHistory {
+            network: self.network,
+            scripthash: sh.to_string(),
+            outcome,
+            height,
+            rows,
+            evicted,
+            duration_ms: ms(took),
+        });
+        // A refused or dropped history leaves the newest page to a fill; followers hear the
+        // address changed.
+        self.reload().await;
+        if let Some(t) = self.totals(sh).await {
+            self.track
+                .ledger_changed(node::electrum::ScriptHash(sh.to_byte_array()), t.at.height);
+        }
+    }
+
     fn failed(&self, sh: ScriptHash, error: &'static str, took: Duration) {
         let failures = {
             let mut s = self.seeds();
@@ -857,6 +969,7 @@ fn remember(
 enum Work {
     Seed(Job),
     Fill(ScriptHash),
+    History(ScriptHash),
     Check(ScriptBuf),
 }
 
@@ -900,6 +1013,12 @@ async fn run(ctx: Arc<NetworkContext>) {
                 };
                 ledger.fill(sh).await;
             }
+            Work::History(sh) => {
+                let Ok(_lane) = Arc::clone(&ledger.lane).acquire_owned().await else {
+                    return;
+                };
+                ledger.history(sh).await;
+            }
             Work::Check(script) => {
                 let started = Instant::now();
                 // Waits for the lane itself.
@@ -936,6 +1055,10 @@ async fn follow(ctx: Arc<NetworkContext>) {
     let Some(ledger) = ctx.guard.ledger.clone() else {
         return;
     };
+    // A history being taken when the server stopped is taken again from the start, and the
+    // bound may have been lowered since.
+    let _ = book::history_restarted(&ledger.store).await;
+    ledger.bound().await;
     ledger.reload().await;
     let mut tips = ctx.summaries.tips();
     let mut failures = 0u32;
@@ -955,7 +1078,8 @@ async fn follow(ctx: Arc<NetworkContext>) {
                 if failures > 0 {
                     failures = 0;
                 }
-                if f.dropped > 0 || f.reset || f.undone > 0 {
+                let bounded = ledger.bound().await;
+                if f.dropped > 0 || f.reset || f.undone > 0 || bounded > 0 {
                     ledger.reload().await;
                 }
                 if let Some(tip) = f.tip {
@@ -988,8 +1112,17 @@ async fn follow(ctx: Arc<NetworkContext>) {
                     });
                 }
             }
-            Err(book::Error::Moved) => retry = true,
+            Err(book::Error::Moved) => {
+                retry = true;
+                if ledger.bound().await > 0 {
+                    ledger.reload().await;
+                }
+            }
             Err(e) => {
+                // Blocks applied before the failure count too.
+                if ledger.bound().await > 0 {
+                    ledger.reload().await;
+                }
                 failures += 1;
                 retry = true;
                 if failures.is_power_of_two() {
@@ -1099,6 +1232,13 @@ fn tracked_json(v: &book::View) -> Value {
         "seeded": { "height": t.seeded_height, "time": t.seeded_time },
         "window": book::WINDOW,
         "filling": !t.filled,
+        "history": match t.history {
+            book::History::None => "none",
+            book::History::Taking => "taking",
+            book::History::Whole { .. } => "whole",
+            book::History::Refused => "refused",
+            book::History::Dropped => "dropped",
+        },
         "txs": v.txs.iter().map(|r| json!({
             "txid": r.txid.to_string(),
             "height": r.height,
@@ -1424,5 +1564,43 @@ mod tests {
             s.next(later + FILL_RETRY_MAX),
             Some(Work::Fill(_))
         ));
+    }
+
+    #[test]
+    fn whole_histories_run_after_fills_and_before_discoverys_and_back_off() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let (filled, whole) = (
+            ScriptHash::from_script(&script(7)),
+            ScriptHash::from_script(&script(8)),
+        );
+        s.set_unfilled(&[filled], now);
+        s.set_unhistoried(&[whole], now);
+        s.found.push_back(Job {
+            script: script(5),
+            sh: ScriptHash::from_script(&script(5)),
+            client: None,
+            asked: now,
+        });
+        s.ask(&script(0), true, client(1), now);
+        assert!(matches!(s.next(now), Some(Work::Seed(j)) if j.client.is_some()));
+        s.running = None;
+        assert!(matches!(s.next(now), Some(Work::Fill(sh)) if sh == filled));
+        s.set_unfilled(&[], now);
+        assert!(matches!(s.next(now), Some(Work::History(sh)) if sh == whole));
+        // It failed: discovery's seed goes first, and the history waits, longer each time,
+        // even across a reload from the store.
+        assert_eq!(backoff(&mut s.unhistoried, whole, now), 1);
+        s.set_unhistoried(&[whole], now);
+        assert!(matches!(s.next(now), Some(Work::Seed(j)) if j.client.is_none()));
+        s.running = None;
+        assert!(s.next(now + FAILED_FOR - Duration::from_secs(1)).is_none());
+        let later = now + FAILED_FOR;
+        assert!(matches!(s.next(later), Some(Work::History(_))));
+        assert_eq!(backoff(&mut s.unhistoried, whole, later), 2);
+        assert!(s.next(later + FAILED_FOR).is_none());
+        // Taken: the store no longer lists it, and it is never offered again.
+        s.set_unhistoried(&[], later);
+        assert!(s.next(later + FILL_RETRY_MAX).is_none());
     }
 }

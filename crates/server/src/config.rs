@@ -330,6 +330,9 @@ pub struct LedgerConfig {
     pub max_addresses: usize,
     /// `LEDGER_DISCOVER`: look for large addresses in each block, without waiting for a reader.
     pub discover: bool,
+    /// `LEDGER_MAX_HISTORY_ROWS`: transactions kept per network in the kept addresses' whole
+    /// histories; the least recently viewed address's history goes. `0` keeps none.
+    pub max_history_rows: u64,
 }
 
 impl Default for LedgerConfig {
@@ -337,6 +340,7 @@ impl Default for LedgerConfig {
         Self {
             max_addresses: 1000,
             discover: true,
+            max_history_rows: 10_000_000,
         }
     }
 }
@@ -410,6 +414,14 @@ impl Config {
                 None | Some("true") => true,
                 Some("false") => false,
                 Some(_) => return Err("LEDGER_DISCOVER must be true or false".into()),
+            },
+            max_history_rows: match var("LEDGER_MAX_HISTORY_ROWS") {
+                None => LedgerConfig::default().max_history_rows,
+                Some(v) => v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| *n <= 1_000_000_000)
+                    .ok_or("LEDGER_MAX_HISTORY_ROWS must be a whole number from 0 to 1000000000")?,
             },
         };
         let web_dir = var("WEB_DIR").map_or_else(|| "web/dist".into(), PathBuf::from);

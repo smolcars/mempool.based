@@ -89,6 +89,7 @@ pub struct ServerStarting<'a> {
     pub backfill_fee_rate_depth: u32,
     pub ledger_max_addresses: usize,
     pub ledger_discover: bool,
+    pub ledger_max_history_rows: u64,
 }
 event!(ServerStarting<'a>, "server_starting", Info, keep);
 
@@ -842,6 +843,45 @@ pub struct LedgerFillFailed {
     pub duration_ms: f64,
 }
 event!(LedgerFillFailed, "ledger_fill_failed", Warn);
+
+/// A kept address's whole history was asked of the node, once: kept, refused or too large for
+/// the bound.
+#[derive(Debug, Serialize)]
+pub struct LedgerHistory {
+    pub network: &'static str,
+    pub scripthash: String,
+    /// `whole` (kept), `refused` (the node's `--max-sh-creates` is in force for it) or
+    /// `too_large` (more transactions than `LEDGER_MAX_HISTORY_ROWS`: not asked).
+    pub outcome: &'static str,
+    /// The block the node's list was pinned to.
+    pub height: u32,
+    pub rows: u64,
+    /// Other addresses' histories dropped to make room.
+    pub evicted: usize,
+    pub duration_ms: f64,
+}
+event!(LedgerHistory, "ledger_history", Info);
+
+/// Taking a kept address's whole history failed, at the 1st, 2nd, 4th… failure of that address;
+/// nothing of it was kept, and it is tried again later.
+#[derive(Debug, Serialize)]
+pub struct LedgerHistoryFailed {
+    pub network: &'static str,
+    pub scripthash: String,
+    pub error: &'static str,
+    pub failures: u32,
+    pub duration_ms: f64,
+}
+event!(LedgerHistoryFailed, "ledger_history_failed", Warn);
+
+/// Blocks made the kept histories outgrow `LEDGER_MAX_HISTORY_ROWS`: the least recently viewed
+/// addresses' histories were dropped.
+#[derive(Debug, Serialize)]
+pub struct LedgerHistoryBound {
+    pub network: &'static str,
+    pub dropped: usize,
+}
+event!(LedgerHistoryBound, "ledger_history_bound", Info);
 
 /// Discovery checked the size of a script a block paid often. At most `CHECKS_PER_HOUR` an hour.
 #[derive(Debug, Serialize)]
@@ -1745,6 +1785,7 @@ mod tests {
                 backfill_fee_rate_depth: 52_560,
                 ledger_max_addresses: 1000,
                 ledger_discover: true,
+                ledger_max_history_rows: 10_000_000,
             }),
             both(&NetworkEnabled {
                 network: n,
@@ -2067,6 +2108,26 @@ mod tests {
                 error: "node_busy",
                 failures: 1,
                 duration_ms: 3.0,
+            }),
+            both(&LedgerHistory {
+                network: n,
+                scripthash: "00".repeat(32),
+                outcome: "whole",
+                height: 9,
+                rows: 1_908_560,
+                evicted: 0,
+                duration_ms: 18_500.0,
+            }),
+            both(&LedgerHistoryFailed {
+                network: n,
+                scripthash: "00".repeat(32),
+                error: "timeout",
+                failures: 1,
+                duration_ms: 900_000.0,
+            }),
+            both(&LedgerHistoryBound {
+                network: n,
+                dropped: 1,
             }),
             both(&LedgerChecked {
                 network: n,
