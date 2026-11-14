@@ -1131,25 +1131,44 @@ async fn positions_are_sent_at_a_bounded_rate_and_block_changes_at_once() {
     c.expect(&s.mempool_view(a)).await;
     assert!(c.last[&topic]["position"]["ahead_txs"].as_u64().unwrap() > 0);
 
-    // Leaving the next block goes out without waiting.
+    // Leaving the next block is news, said once.
     let before = c.count[&topic];
+    // Taken before the change, so before the message it causes: the interval runs from that.
+    let moved = Instant::now();
     mock.send(&[coin(5000)], 1, 200_000_000, 998_000);
     s.settle().await;
-    let moved = Instant::now();
     c.wait(&topic, |v| v["position"]["block"] == json!(1)).await;
-    assert!(moved.elapsed() < Duration::from_millis(300));
     assert_eq!(c.count[&topic], before + 1);
 
     // A move between later blocks is a shuffle: it waits for the interval, then goes out.
-    let at = Instant::now();
     mock.send(&[coin(5001)], 1, 200_000_000, 998_000);
     s.settle().await;
     c.wait(&topic, |v| v["position"]["block"] == json!(2)).await;
     assert!(
-        at.elapsed() >= Duration::from_millis(350),
+        moved.elapsed() >= Duration::from_millis(400),
         "{:?}",
-        at.elapsed()
+        moved.elapsed()
     );
+    assert_eq!(c.count[&topic], before + 2);
+
+    // With an interval longer than the test, a shuffle waits throughout while leaving the next
+    // block still goes out: it never waits for the interval.
+    let mock = Mock::new();
+    let a = mock.send(&[coin(1)], 1, 100, 1000);
+    let s = Server::start(&mock, |w| w.position_interval = Duration::from_secs(3600));
+    s.settle().await;
+    let mut c = Client::new(64);
+    let topic = tx_topic(a);
+    c.sub(&s, &topic).unwrap();
+    c.expect(&s.mempool_view(a)).await;
+    mock.send(&[coin(2)], 1, 10_000, 100);
+    s.settle().await;
+    mock.send(&[coin(5000)], 1, 200_000_000, 998_000);
+    s.settle().await;
+    c.expect(&s.mempool_view(a)).await;
+    assert_eq!(c.last[&topic]["position"]["block"], json!(1));
+    // The snapshot and the block change, which carries the shuffle held before it.
+    assert_eq!(c.count[&topic], 2);
 }
 
 #[tokio::test]
@@ -1745,7 +1764,7 @@ async fn five_thousand_followers_cost_the_node_nothing() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let before = mock.reads();
     let started = Instant::now();
-    let mut clients: Vec<Client> = Vec::with_capacity(5000);
+    let mut clients: Vec<(Client, String)> = Vec::with_capacity(5000);
     for i in 0..5000u32 {
         let c = Client::new(8);
         let id = match real.get(i as usize) {
@@ -1756,13 +1775,19 @@ async fn five_thousand_followers_cost_the_node_nothing() {
                 b
             }),
         };
-        c.sub(&s, &tx_topic(id)).unwrap();
-        clients.push(c);
+        let topic = tx_topic(id);
+        c.sub(&s, &topic).unwrap();
+        clients.push((c, topic));
     }
     let subscribe = started.elapsed();
     assert_eq!(s.track().tracked().0, 5000);
     // A few feed rounds with every one of them followed.
     tokio::time::sleep(Duration::from_millis(300)).await;
+    // Each one's first message, however long a loaded machine takes to send them all.
+    for (c, topic) in &mut clients {
+        c.wait(topic, |_| true).await;
+        assert_eq!(c.last.len(), 1);
+    }
     let after = mock.reads();
     // The tracker's heartbeat lists now and then whatever we do; nothing else may move.
     assert_eq!(
@@ -1770,22 +1795,13 @@ async fn five_thousand_followers_cost_the_node_nothing() {
         (0, 0),
         "detail and cluster requests"
     );
-    for c in &mut clients {
-        c.drain();
-        assert_eq!(c.last.len(), 1);
-    }
     println!(
         "5000 followers subscribed in {subscribe:?}; heartbeat listings meanwhile: {}",
         after.0 - before.0
     );
     // Released as they leave: nothing is left behind.
-    for (i, c) in clients.iter().enumerate() {
-        let id = real.get(i).copied().unwrap_or_else(|| {
-            let mut b = [0u8; 32];
-            b[..4].copy_from_slice(&(i as u32).to_le_bytes());
-            Txid::from_byte_array(b)
-        });
-        c.unsub(&s, &tx_topic(id));
+    for (c, topic) in &clients {
+        c.unsub(&s, topic);
     }
     assert_eq!(s.track().tracked().0, 0);
 }
@@ -1934,18 +1950,17 @@ async fn addresses_recover_from_outages_honestly() {
 async fn a_confirmation_is_said_at_once_whatever_the_interval() {
     let mock = Mock::new();
     let a = mock.send(&[coin(1)], 1, 500, 200);
-    let s = Server::start(&mock, |w| w.mempool_interval = Duration::from_secs(10));
+    // Longer than the test: a confirmation that waited for it would never arrive.
+    let s = Server::start(&mock, |w| w.mempool_interval = Duration::from_secs(3600));
     s.settle().await;
     let mut c = Client::new(256);
     let topic = tx_topic(a);
     c.sub(&s, &topic).unwrap();
     c.expect(&s.mempool_view(a)).await;
 
-    let at = Instant::now();
     let b1 = mock.mine(&[a]);
     let v = c.wait(&topic, |v| state(v) == "confirmed").await;
     assert_eq!(v["hash"], json!(b1.to_string()));
-    assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
 }
 
 /// Every message on a `/api/v1/ws` connection so far, oldest first: they carry no topic.
