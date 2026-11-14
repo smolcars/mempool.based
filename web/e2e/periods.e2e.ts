@@ -1,10 +1,13 @@
 // Every chart with period choices, on a phone and in the wide faces a Linux machine falls back to:
 // the choices one row with the chosen one in sight, the coverage note two lines at most, and the
 // plot and its time axis on the first screen of its panel (docs/DESIGN.md "The intervals are one
-// row"). The Lightning overview's once wrapped "All" onto a second row and took four lines to say
-// its coverage, putting its time axis below the first screen at 320 px.
+// row"), and every label on the plot whole inside it. The Lightning overview's once wrapped "All"
+// onto a second row and took four lines to say its coverage, putting its time axis below the first
+// screen at 320 px; the mining page's fee axis once ran its regtest labels ("0.0000002 BTC") off the
+// plot's left edge and the screen's.
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+import { frames } from "./layout";
 import { mainnet, recorded, serve } from "./lightning-answers";
 
 /** A day of the network's ten-minute samples with three missing: the overview's longest note. */
@@ -85,6 +88,18 @@ async function faults(page: Page, chart: RegExp): Promise<string[]> {
     if (fold > screen) {
       out.push(`the time axis ends ${Math.round(fold)} px into a ${screen} px screen`);
     }
+    // Where each label's text runs, from its own position and length: Firefox's boxes for SVG text
+    // reach 3 px past the glyphs on each side.
+    const width = el.querySelector("svg")?.getBoundingClientRect().width ?? 0;
+    for (const label of el.querySelectorAll<SVGTextElement>("svg text")) {
+      const length = label.getComputedTextLength();
+      const anchor = label.getAttribute("text-anchor");
+      const x = Number(label.getAttribute("x"));
+      const start = anchor === "end" ? x - length : anchor === "middle" ? x - length / 2 : x;
+      if (start < -0.5 || start + length > width + 0.5) {
+        out.push(`"${label.textContent ?? ""}" runs off the plot`);
+      }
+    }
     return out;
   });
 }
@@ -109,6 +124,11 @@ test("every chart's periods are one row, its time axis on the first screen of it
             root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
             root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
           });
+          // A chart measures its labels when it lays out, and a font swapped under a drawn page is
+          // not a layout (a reader's font is set before the first): a pixel's resize is one.
+          await page.setViewportSize({ ...size, width: size.width - 1 });
+          await frames(page);
+          await page.setViewportSize(size);
         }
         const where = `${path} at ${size.width} px${wide ? " in a wide font" : ""}`;
         for (const chart of charts)

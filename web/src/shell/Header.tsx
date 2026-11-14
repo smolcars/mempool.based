@@ -78,7 +78,7 @@ export function Header(props: { networks: Accessor<readonly Network[] | undefine
   return (
     <header class="site-header" ref={header}>
       <div class="site-header__inner">
-        <Link class="brand" href="/">
+        <Link class="brand tap" href="/">
           <Logo />
           <span class="brand__word">rbitcoin.space</span>
         </Link>

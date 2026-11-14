@@ -114,7 +114,8 @@ test("block health draws the blocks the server watched arrive, follows every per
     block = await read();
     expect((await chart.boundingBox())?.y).toBe(box.y);
     await expect(page).toHaveURL(/\/regtest\/mining\?period=all$/);
-    await page.touchscreen.tap(end.x, end.y);
+    // A thumb's target (docs/DESIGN.md "Touch"): a second tap 20 px aside still opens it.
+    await page.touchscreen.tap(end.x - 20, end.y);
   } else {
     await page.mouse.move(end.x, end.y);
     block = await read();

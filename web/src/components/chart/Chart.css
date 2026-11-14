@@ -140,6 +140,12 @@
     font-size: var(--text-xs);
     font-variant-numeric: tabular-nums slashed-zero;
   }
+  /* A tick label measured for its axis's room (Chart.tsx, labelWidth), never seen. */
+  .chart__ruler {
+    position: absolute;
+    visibility: hidden;
+    white-space: nowrap;
+  }
   .chart__hatch-line {
     stroke: var(--color-line);
     stroke-width: 1.5;

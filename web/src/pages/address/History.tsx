@@ -231,7 +231,7 @@ export function History(props: {
                 }}
                 type="button"
                 role="tab"
-                class="address-tab"
+                class="address-tab tap"
                 id={`address-tab-${v.id}`}
                 aria-controls="address-panel"
                 aria-selected={view() === v.id ? "true" : "false"}

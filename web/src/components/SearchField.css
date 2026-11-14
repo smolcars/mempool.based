@@ -46,6 +46,10 @@
     .search__field {
       min-height: var(--touch);
     }
+    /* The field's whole height, its border included, is the input's to take a tap. */
+    .search input {
+      margin-block: -1px;
+    }
     .search input {
       font-size: var(--text-md);
     }

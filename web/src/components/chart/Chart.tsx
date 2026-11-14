@@ -160,8 +160,9 @@ export interface ChartProps {
   href?: (i: number) => string | undefined;
 }
 
-/** How far from the picked point, in px, a second tap still means that point. */
-const TAP_SLOP = 16;
+/** How far from the picked point, in px, a second tap still means that point: half a thumb's
+ * target (`--touch`) either side. */
+const TAP_SLOP = 22;
 /** Samples this far apart on screen, or farther, are each marked (`ChartSeries.marks`). */
 const MARK_SPACING = 24;
 
@@ -184,6 +185,24 @@ const layerStyle = (l: ChartLayer | undefined, k: number) => {
 };
 /** A layer with a colour of its own rather than a shade. */
 const filled = (l: ChartLayer | undefined) => l?.fee !== undefined || l?.pool !== undefined;
+
+/**
+ * How wide the widest of `labels` draws as a tick label, in px: set in a hidden label beside the
+ * plot, so the page's own fonts measure it (a canvas's `system-ui` is another face in Firefox).
+ */
+function labelWidth(labels: readonly string[], el: Element | undefined): number {
+  if (!el || labels.length === 0) return 0;
+  const ruler = document.createElement("span");
+  ruler.className = "chart__label chart__ruler";
+  el.append(ruler);
+  let widest = 0;
+  for (const label of labels) {
+    ruler.textContent = label;
+    widest = Math.max(widest, ruler.getBoundingClientRect().width);
+  }
+  ruler.remove();
+  return widest;
+}
 
 interface AxisFrame {
   scale: Scale;
@@ -251,11 +270,8 @@ export default function Chart(props: ChartProps) {
     const last = xs.at(-1);
     if (w <= 0 || first === undefined || last === undefined) return undefined;
     const h = height();
-    const left = MARGIN.left;
-    const right = w - (props.right ? MARGIN.rightAxis : MARGIN.right);
     const bottom = h - MARGIN.bottom;
     const domain = props.domain ?? [first, first === last ? first + 1 : last];
-    const sx = scale(domain, [left, right]);
     const yRange = [bottom, MARGIN.top] as const;
     const count = Math.max(2, Math.round((bottom - MARGIN.top) / 50));
     const stack = stackLayout(
@@ -290,6 +306,17 @@ export default function Chart(props: ChartProps) {
       count,
     );
     const yr = props.right ? valueAxis(props.right, on("right"), yRange, count) : undefined;
+    // Each value axis as wide as its longest label needs (0.0000002 BTC on regtest), never
+    // narrower than it always was: labels sit 10 px left of the plot and 8 px right of it.
+    const room = (axis: ChartAxis | undefined, ticks: readonly number[]) =>
+      Math.ceil(labelWidth(axis ? ticks.map((t) => axis.format(t)) : [], box)) + 1;
+    const left = Math.max(MARGIN.left, room(props.left, yl.ticks) + 10);
+    const right =
+      w -
+      (props.right && yr
+        ? Math.max(MARGIN.rightAxis, room(props.right, yr.ticks) + 8)
+        : MARGIN.right);
+    const sx = scale(domain, [left, right]);
     const gap = props.gap ?? maxGap(xs);
     // A fixed step makes a lone point a real sample between known gaps: show it as a sliver.
     const sliver = props.gap === undefined ? 0 : 2;

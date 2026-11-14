@@ -1,11 +1,9 @@
 // Every page type in a stand-in for a wider system font than a Mac's, across widths and in both
 // schemes: nothing runs into anything, nothing is cut, amounts stay whole, tables fit their panels.
-import { readFileSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
-import type { Page } from "@playwright/test";
-import { type Prose, chain, expect, stubRetargets, test } from "./fixtures";
+import { type Prose, expect, test } from "./fixtures";
 import { frames, layoutFaults } from "./layout";
-import { LARGE, stubLarge } from "./large-address";
+import { PAGES } from "./pages";
 import { amountsIntact, tablesFit } from "./rows";
 
 // The wide stand-in unless the run names another (`E2E_PROSE`, checked in fixtures.ts).
@@ -13,62 +11,6 @@ test.use({ prose: (process.env["E2E_PROSE"] as Prose | undefined) ?? "wide" });
 // Each width is a resize of one loaded page: WebKit calls a fetch the next page's load cancels an
 // "access control" failure, though the app is same-origin and catches it.
 test.use({ consoleErrorsAllowed: [/status of (429|503)|due to access control checks/] });
-
-const ACINQ = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
-const recorded = (name: string): unknown =>
-  JSON.parse(
-    readFileSync(new URL(`../../fixtures/lightning/app/${name}.json`, import.meta.url), "utf8"),
-  );
-
-/** Lightning on regtest from mainnet's recorded answers (as in lightning.e2e.ts). */
-async function lightning(page: Page) {
-  const answers: Record<string, unknown> = {
-    status: recorded("status"),
-    overview: recorded("overview"),
-    "statistics/1w": recorded("statistics-1w"),
-    [`nodes/${ACINQ}`]: recorded("node-acinq"),
-    [`nodes/${ACINQ}/history`]: recorded("node-acinq-history"),
-    "channels/811984x2037x0": recorded("channel-811984x2037x0"),
-    "search?q=acinq": recorded("search-acinq"),
-    "rankings/capacity?limit=100": recorded("rankings-capacity"),
-  };
-  await page.route(/\/regtest\/app\/lightning\//, async (route) => {
-    const url = new URL(route.request().url());
-    const key = url.pathname.replace(/^\/regtest\/app\/lightning\//, "") + url.search;
-    const json = answers[key];
-    await (json === undefined ? route.continue() : route.fulfill({ json }));
-  });
-}
-
-/** No replacements recorded. */
-async function noReplacements(page: Page) {
-  await page.route(/\/regtest\/api\/v1\/(fullrbf\/)?replacements$/, (route) =>
-    route.fulfill({ json: [] }),
-  );
-}
-
-/** Every page type, each with what it needs stubbed. */
-const PAGES: { path: string; stub?: (page: Page) => Promise<void> }[] = [
-  { path: "/regtest/" },
-  { path: "/regtest/blocks" },
-  { path: `/regtest/block/${chain.blocks[106]}` },
-  { path: "/regtest/block/next" },
-  { path: `/regtest/tx/${chain.txs.script_types}` },
-  { path: `/regtest/tx/${chain.txs.cpfp_child}` },
-  { path: `/regtest/address/${chain.addresses.p2tr}` },
-  { path: `/regtest/address/${LARGE}`, stub: (page) => stubLarge(page) },
-  { path: "/regtest/mining", stub: stubRetargets },
-  { path: "/regtest/mining/pool/unknown" },
-  { path: "/regtest/mempool" },
-  // Empty, whichever test replaced a transaction first: its "none yet" once lay over the next part.
-  { path: "/regtest/rbf", stub: noReplacements },
-  { path: "/regtest/lightning", stub: lightning },
-  { path: "/regtest/lightning/rankings", stub: lightning },
-  { path: `/regtest/lightning/node/${ACINQ}`, stub: lightning },
-  { path: "/regtest/lightning/channel/811984x2037x0", stub: lightning },
-  { path: "/regtest/lightning/search?q=acinq", stub: lightning },
-  { path: "/regtest/no/such/page" },
-];
 
 /** What a failed check says, on one line: its label and what it found. */
 const said = (error: unknown) =>
@@ -126,7 +68,7 @@ for (const { path, stub } of PAGES) {
 
 // The check itself: each kind of fault it exists for, built on a page, is found; the same text
 // in a box that scrolls on that axis is not.
-test("the layout check finds text over text, text cut on any edge, and a wrapped label", async ({
+test("the layout check finds text over text, text cut on any edge, a short form's lost end, and a wrapped label", async ({
   page,
 }) => {
   await page.goto("/regtest/no/such/page");
@@ -163,6 +105,17 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
     add(wide, { whiteSpace: "nowrap" }, "Past a narrower window, its far end");
     // Clipped below only: `overflow-y: clip` beside a visible x.
     add(host, { ...at(290), height: "10px", overflowY: "clip" }, "Clipped on one axis");
+    // A short form with its whole in a title: cut after its "…" it lost its end; cut before it, it
+    // gave way at its head, as a cut ID does.
+    const whole = "mwLW3XDqcAYmYKp8VDEYXweSBJ5mTUAuat";
+    add(host, { ...at(320), width: "100px", overflow: "hidden" }, "mwLW3XD…UAuat").title = whole;
+    add(host, { ...at(350), width: "40px", overflow: "hidden" }, "mwLW3XD…").title = whole;
+    // The same in Hash's markup, a head and a tail: the tail cut wholly out of sight.
+    const split = add(host, { ...at(380), width: "40px", overflow: "hidden" });
+    split.title = whole;
+    split.className = "hash--ends";
+    add(split, { display: "inline" }, "nB3eG7k…").className = "hash__head";
+    add(split, { display: "inline" }, "Zq9Xw").className = "hash__tail";
     // Only scrolled out of sight: scrolling shows it.
     add(host, { ...at(140), width: "60px", overflowX: "auto" }, "Scrolls along");
     const row = add(host, { ...at(200), width: "300px", whiteSpace: "normal" });
@@ -181,5 +134,8 @@ test("the layout check finds text over text, text cut on any edge, and a wrapped
   expect(faults.join("\n")).toContain('"Past a narrower window, its far end" is cut');
   expect(faults.join("\n")).toContain('"Clipped on one axis" is cut');
   expect(faults.join("\n")).not.toContain("Scrolls along");
+  expect(faults.join("\n")).toContain('"mwLW3XD…UAuat" loses its end');
+  expect(faults.join("\n")).not.toMatch(/"mwLW3XD…" /);
+  expect(faults.join("\n")).toContain('"nB3eG7k…Zq9Xw" loses its end');
   expect(faults.join("\n")).toContain('the label "Two words" wraps');
 });

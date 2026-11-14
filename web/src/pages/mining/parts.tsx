@@ -105,7 +105,9 @@ export function NothingStored(props: { what: string; period: Period }) {
   return (
     <Empty title={`No ${props.what} stored for ${props.period.words}`}>
       <Show when={props.period.id !== "all"}>
-        <Link href={paths.mining("all")}>See all stored history</Link>
+        <Link class="tap" href={paths.mining("all")}>
+          See all stored history
+        </Link>
       </Show>
     </Empty>
   );

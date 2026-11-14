@@ -60,7 +60,7 @@ const columns = (factsOf: (id: string) => RowFacts) => [
       if (f === undefined) return <Skel size="s" />;
       const m = f === "failed" ? undefined : f.miner;
       return m ? (
-        <Link class="blocks-miner" href={paths.pool(m.slug)} title={m.name}>
+        <Link class="blocks-miner tap-line" href={paths.pool(m.slug)} title={m.name}>
           {m.name}
         </Link>
       ) : (

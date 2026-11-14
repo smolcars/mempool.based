@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { hashGroups, truncateMiddle } from "../lib/format";
+import { hashGroups } from "../lib/format";
 import type { JSX } from "@solidjs/web";
 import { CopyButton } from "./CopyButton";
 import { Link } from "./Link";
@@ -9,7 +9,10 @@ export interface HashProps {
   value: string;
   /** Network-free page path (from `paths`) to link to. */
   href?: string;
-  /** Characters kept at each end: 8 and 8 in lists, 7 and 5 for addresses in the flow diagram. */
+  /**
+   * Characters kept at each end: 8 and 8 in lists, 7 and 5 for addresses in the flow diagram. Where
+   * the room is narrower still, the head gives way to its ellipsis; the tail is always whole.
+   */
   head?: number;
   tail?: number;
   /** Copy button; on by default. */
@@ -27,20 +30,33 @@ export interface HashProps {
 
 /** A hash or address shortened in the middle, in the monospace cut. Full value in the title and the copy. */
 export function Hash(props: HashProps) {
+  const head = () => props.head ?? 8;
+  const tail = () => props.tail ?? 8;
+  const ends = () => !props.whole && !props.fit && props.value.length > head() + tail() + 1;
   const short = (): JSX.Element =>
     props.fit ? (
       <>
         <span class="hash__head">{props.value.slice(0, -8)}</span>
         <span class="hash__tail">{props.value.slice(-8)}</span>
       </>
-    ) : props.whole ? (
-      props.value
+    ) : ends() ? (
+      <>
+        <span class="hash__head">{props.value.slice(0, head())}…</span>
+        <span class="hash__tail">{props.value.slice(-tail())}</span>
+      </>
     ) : (
-      truncateMiddle(props.value, props.head, props.tail)
+      props.value
     );
   return (
     <span
-      class={["hash", { "hash--whole": props.whole === true, "hash--fit": props.fit === true }]}
+      class={[
+        "hash",
+        {
+          "hash--whole": props.whole === true,
+          "hash--fit": props.fit === true,
+          "hash--ends": ends(),
+        },
+      ]}
     >
       <Show
         when={props.href}
@@ -51,7 +67,7 @@ export function Hash(props: HashProps) {
         }
       >
         {(href) => (
-          <Link class="hash__text" href={href()} title={props.value}>
+          <Link class="hash__text tap-line" href={href()} title={props.value}>
             {short()}
           </Link>
         )}

@@ -202,7 +202,7 @@ export function ChannelLink(props: { id: string }) {
 
 export function BlockLink(props: { block: BlockRef }) {
   return (
-    <Link class="num" href={paths.block(props.block.hash)}>
+    <Link class="num tap" href={paths.block(props.block.hash)}>
       {groupDigits(props.block.height)}
     </Link>
   );
@@ -375,7 +375,7 @@ export function LightningNav(props: { here: "overview" | "rankings" | "search" |
 export function Msat(props: { msat: number; what: string }) {
   return (
     <Exact
-      class="ln-msat num"
+      class="ln-msat num tap"
       title={msat(props.msat)}
       figure={
         <>
