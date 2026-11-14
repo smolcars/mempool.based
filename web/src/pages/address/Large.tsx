@@ -54,7 +54,10 @@ export function LargeAddress(props: { address: string }) {
   const list = () => checked()?.list;
   const change = () =>
     list()?.reduce((sum, tx) => sum + (netChange(tx, props.address) ?? 0), 0) ?? 0;
-  const failed = () => pool.state === "errored";
+  // Holds from a failed check until an answer comes: a retry in flight is no answer yet.
+  const failed = createMemo((was?: boolean) =>
+    pool.state === "errored" ? true : pool.state === "ready" ? false : (was ?? false),
+  );
 
   const columns: Column<Transaction | null>[] = [
     {

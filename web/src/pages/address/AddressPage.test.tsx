@@ -696,8 +696,20 @@ describe("address page", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await until(() => expect(text(el)).toContain("The last check failed"));
     expect(text(el)).not.toContain("shows here within");
-    up = true;
+    // A retry in flight is no answer: the warning holds and nothing is promised until one comes.
+    let answer: (r: Response) => void = () => undefined;
+    serve({
+      [`/address/${ME}`]: refused(503, "address history too large for this server"),
+      [`/address/${ME}/txs/mempool`]: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    });
     document.dispatchEvent(new Event("visibilitychange"));
+    await sleep(100);
+    expect(text(el)).toContain("The last check failed");
+    expect(text(el)).not.toContain("shows here within");
+    answer(Response.json([]));
     await until(() => expect(text(el)).toContain("shows here within 10 seconds"));
     expect(text(el)).not.toContain("The last check failed");
   });
