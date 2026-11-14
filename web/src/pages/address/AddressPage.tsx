@@ -24,7 +24,7 @@ import { refusal } from "./address";
 import { BalanceChart } from "./BalanceChart";
 import { History } from "./History";
 import { LargeAddress } from "./Large";
-import { FAILED_POLL_MS, LEDGER_POLL_MS, readLedger, waiting } from "./ledger";
+import { asksAgain, LEDGER_POLL_MS, readLedger, waiting } from "./ledger";
 import { AddingUp, KeptAddress } from "./Kept";
 import { Notice, settled } from "./parts";
 import { Totals } from "./Totals";
@@ -167,8 +167,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   const askLedger = () => {
     if (document.hidden || ledgerAnswer.loading) return;
     const l = ledger();
-    const due = waiting(l) || (l.state === "failed" && Date.now() - lastAsk >= FAILED_POLL_MS);
-    if (!due) return;
+    if (!asksAgain(l, Date.now() - lastAsk)) return;
     lastAsk = Date.now();
     refetchLedger();
   };

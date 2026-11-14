@@ -227,10 +227,23 @@ function Unshown(props: { ledger: Tracked }) {
         Its node declines to list this address's whole history, so this server keeps only {newest()}
         , not its older history or its unspent outputs.
       </Match>
+      <Match when={props.ledger.history === "too_large"}>
+        This address's whole history is larger than this server keeps, so it keeps only {newest()},
+        not its older history or its unspent outputs.
+      </Match>
+      <Match when={props.ledger.history === "dropped" && props.ledger.historyAgain}>
+        {(again) => (
+          <>
+            This server let this address's whole history go to make room for addresses viewed more
+            lately. It takes it again when this page is open after {formatMoment(again())}; until
+            then it shows {newest()}. Its unspent outputs are not kept.
+          </>
+        )}
+      </Match>
       <Match when={props.ledger.history === "dropped"}>
-        This server keeps whole histories only up to a set size, and this address's does not fit
-        beside the others, so it keeps only {newest()}, not its older history or its unspent
-        outputs.
+        This server let this address's whole history go to make room for addresses viewed more
+        lately, and is getting it again. Until then it shows {newest()}. Its unspent outputs are not
+        kept.
       </Match>
       <Match when={true}>
         This server is getting this address's whole history from its node, once. Until then it shows{" "}

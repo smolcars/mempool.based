@@ -119,6 +119,8 @@ pub struct Tracked {
     pub filled: bool,
     /// Where the script's whole history stands.
     pub history: History,
+    /// When its whole history was last taken from the node, Unix seconds.
+    pub history_taken: Option<u64>,
 }
 
 /// Where a kept script's whole history stands (docs/STORE.md, "ledger").
@@ -133,8 +135,10 @@ pub enum History {
     Whole { height: u32 },
     /// The node refused the list for size: its `--max-sh-creates` is in force.
     Refused,
-    /// Dropped to keep the stored history within its bound, or too large for it.
+    /// Dropped to keep the stored history within its bound, to be taken again when viewed.
     Dropped,
+    /// More transactions than the whole bound holds.
+    TooLarge,
 }
 
 impl History {
@@ -144,6 +148,7 @@ impl History {
             (2, Some(height)) => Self::Whole { height },
             (3, _) => Self::Refused,
             (4, _) => Self::Dropped,
+            (5, _) => Self::TooLarge,
             _ => Self::None,
         }
     }
@@ -655,8 +660,10 @@ pub enum Historied {
     },
     /// The node refused the list for size, with the counts its refusal gave.
     Refused(Option<ScriptSize>),
-    /// More transactions than the bound holds: not asked, and not asked again.
+    /// More transactions than the bound holds: not asked.
     TooLarge,
+    /// Room could be made only by dropping histories viewed lately: not asked now.
+    NoRoom,
     /// Not tracked, or its history taken, refused for good or dropped already: nothing done.
     Nothing,
 }
@@ -667,22 +674,30 @@ pub enum Historied {
 /// them on a reorg. The rows are served only once all are in and as many as the totals count.
 ///
 /// The stored history of all scripts together is kept within `max_rows` (rows held or being
-/// taken): room is made by dropping the least recently viewed scripts' histories, and a script
-/// with more transactions than that is not asked at all. A failure, a reorg below the list's
-/// block, or a restart leaves nothing behind, to be tried again.
+/// taken): room is made by dropping the least recently viewed scripts' histories, never one viewed
+/// at or after `viewing` (Unix seconds), and a script with more transactions than that is not
+/// asked at all. A history dropped before is taken again the same way; `now` is recorded as when
+/// it was taken. A failure, a reorg below the list's block, or a restart leaves nothing behind,
+/// to be tried again.
 ///
 /// One request that costs the node a join of the script's whole history: run it in the lane, as
 /// a seed.
+#[allow(clippy::too_many_arguments)]
 pub async fn history<S: Source>(
     store: &Store,
     source: &S,
     sh: ScriptHash,
     max_rows: u64,
+    viewing: u64,
+    now: u64,
 ) -> Result<Historied, Error> {
     let Some(t) = tracked(store, sh).await? else {
         return Ok(Historied::Nothing);
     };
-    if !matches!(t.history, History::None | History::Refused) {
+    if !matches!(
+        t.history,
+        History::None | History::Refused | History::Dropped | History::TooLarge
+    ) {
         return Ok(Historied::Nothing);
     }
     // Decided again when it begins, against the others' histories too.
@@ -716,11 +731,12 @@ pub async fn history<S: Source>(
     }
     let tip = t.at;
     let begun = store
-        .write(move |sql| db::history_begin(sql, sh, tip, at.height, &since, max_rows))
+        .write(move |sql| db::history_begin(sql, sh, tip, at.height, &since, max_rows, viewing))
         .await?;
     let (hid, evicted) = match begun {
         db::Begun::Taking { hid, evicted } => (hid, evicted),
         db::Begun::TooLarge => return Ok(Historied::TooLarge),
+        db::Begun::NoRoom => return Ok(Historied::NoRoom),
         db::Begun::Moved => return Err(Error::Moved),
         db::Begun::Nothing => return Ok(Historied::Nothing),
     };
@@ -756,7 +772,7 @@ pub async fn history<S: Source>(
     };
     match outcome {
         Ok(None) => match store
-            .write(move |sql| db::history_end(sql, sh, hid, max_rows))
+            .write(move |sql| db::history_end(sql, sh, hid, max_rows, viewing, now))
             .await?
         {
             db::Ended::Whole(rows) => Ok(Historied::Whole {
@@ -765,6 +781,7 @@ pub async fn history<S: Source>(
                 evicted,
             }),
             db::Ended::TooLarge => Ok(Historied::TooLarge),
+            db::Ended::NoRoom => Ok(Historied::NoRoom),
             db::Ended::Mismatch => Err(Error::Mismatch),
         },
         Ok(Some(size)) => {
@@ -784,7 +801,7 @@ pub async fn history<S: Source>(
 
 /// Drops the least recently viewed scripts' histories while all of them together hold more than
 /// `max_rows`: following blocks makes them grow. How many were dropped.
-pub async fn bound(store: &Store, max_rows: u64) -> Result<usize, store::Error> {
+pub async fn bound(store: &Store, max_rows: u64, viewing: u64) -> Result<usize, store::Error> {
     // Read first: the writer is shared, and the bound is checked after every round of blocks.
     if !store
         .read(Read::Ledger, move |sql| db::history_over(sql, max_rows))
@@ -793,13 +810,19 @@ pub async fn bound(store: &Store, max_rows: u64) -> Result<usize, store::Error> 
         return Ok(0);
     }
     store
-        .write(move |sql| db::history_bound(sql, None, max_rows))
+        .write(move |sql| db::history_bound(sql, None, max_rows, viewing))
         .await
-        .map(Option::unwrap_or_default)
+        .map(|room| match room {
+            db::Room::Made(n) => n,
+            db::Room::TooLarge | db::Room::Viewed => 0,
+        })
 }
 
-/// The kept scripts whose history [`history`] may take: never taken, failed, or refused.
-pub async fn unhistoried(store: &Store) -> Result<Vec<(ScriptHash, History)>, store::Error> {
+/// The kept scripts whose history [`history`] may take: never taken, failed, refused, or dropped
+/// for the bound, with when each was last taken whole (Unix seconds).
+pub async fn unhistoried(
+    store: &Store,
+) -> Result<Vec<(ScriptHash, History, Option<u64>)>, store::Error> {
     store.read(Read::Ledger, db::unhistoried).await
 }
 

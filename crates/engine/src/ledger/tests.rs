@@ -1411,9 +1411,16 @@ mod regtest {
         mine(1);
         follow(t.store(), &node).await.unwrap();
         for s in &scripts {
-            let r = history(t.store(), &node, ScriptHash::from_script(s), 1_000_000)
-                .await
-                .unwrap();
+            let r = history(
+                t.store(),
+                &node,
+                ScriptHash::from_script(s),
+                1_000_000,
+                NOBODY,
+                NOW,
+            )
+            .await
+            .unwrap();
             assert!(matches!(r, Historied::Whole { .. }), "{r:?}");
         }
         check_whole(t.store(), &node, &scripts, "taken").await;
@@ -1858,6 +1865,10 @@ async fn a_seed_block_older_than_the_ledgers_chain_is_the_nodes_below_its_tip() 
 
 /// No bound worth the name, for tests that are not about it.
 const ROWS: u64 = 1_000_000;
+/// A `viewing` time no script has been viewed at or after: nothing is kept from being dropped.
+const NOBODY: u64 = i64::MAX as u64;
+/// When a list is taken, in tests that do not look at it.
+const NOW: u64 = 1_800_000_000;
 
 #[tokio::test]
 async fn whole_histories_follow_the_chain_through_random_reorgs_and_restarts() {
@@ -1896,7 +1907,7 @@ async fn whole_histories_follow_the_chain_through_random_reorgs_and_restarts() {
                         _ => None,
                     };
                     *fake.during_list.lock().unwrap() = hook;
-                    let pending = history(t.store(), &fake, sh(i), ROWS);
+                    let pending = history(t.store(), &fake, sh(i), ROWS, NOBODY, NOW);
                     tokio::pin!(pending);
                     let r = loop {
                         tokio::select! {
@@ -1951,7 +1962,7 @@ async fn a_reorg_below_the_lists_block_while_it_streams_starts_it_again() {
         f.push_txs(pays(0, 1));
         f.push_txs(vec![]);
     }));
-    let pending = history(t.store(), &fake, sh(0), ROWS);
+    let pending = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW);
     tokio::pin!(pending);
     let r = loop {
         tokio::select! {
@@ -1965,7 +1976,9 @@ async fn a_reorg_below_the_lists_block_while_it_streams_starts_it_again() {
     assert_eq!(s.history, History::None);
     // Taken again, it is whole and exact.
     follow(t.store(), &fake).await.unwrap();
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     assert!(matches!(r, Historied::Whole { .. }), "{r:?}");
     check_history(t.store(), &fake, "taken again").await;
     assert!(!kept_history(t.store(), 0).await.is_empty());
@@ -1987,7 +2000,7 @@ async fn a_restart_while_a_list_is_taken_drops_it_and_it_is_taken_again() {
     t.store()
         .write(move |sql| {
             let db::Begun::Taking { hid, .. } =
-                db::history_begin(sql, sh(0), tip, tip.height, &[], ROWS)?
+                db::history_begin(sql, sh(0), tip, tip.height, &[], ROWS, NOBODY)?
             else {
                 panic!("not begun");
             };
@@ -2006,9 +2019,11 @@ async fn a_restart_while_a_list_is_taken_drops_it_and_it_is_taken_again() {
     assert_eq!(history_table_rows(t.store()).await, 0);
     assert_eq!(
         unhistoried(t.store()).await.unwrap(),
-        vec![(sh(0), History::None)]
+        vec![(sh(0), History::None, None)]
     );
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     assert!(matches!(r, Historied::Whole { .. }), "{r:?}");
     // And a restart after it is whole keeps it, through more blocks and a reorg.
     t.reopen().await;
@@ -2035,16 +2050,18 @@ async fn a_failed_list_leaves_nothing_and_is_taken_on_the_next_try() {
     answer(t.store(), &fake, 0).await;
     follow(t.store(), &fake).await.unwrap();
     fake.fail_lists.store(1, Ordering::SeqCst);
-    let r = history(t.store(), &fake, sh(0), ROWS).await;
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW).await;
     assert!(matches!(r, Err(Error::Source(SourceError::Busy))), "{r:?}");
     // A list a row short of the totals is not kept either.
     fake.short_lists.store(1, Ordering::SeqCst);
-    let r = history(t.store(), &fake, sh(0), ROWS).await;
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW).await;
     assert!(matches!(r, Err(Error::Mismatch)), "{r:?}");
     assert_eq!(history_table_rows(t.store()).await, 0);
     let s = tracked(t.store(), sh(0)).await.unwrap().unwrap();
     assert_eq!(s.history, History::None);
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     let Historied::Whole { rows, .. } = r else {
         panic!("{r:?}")
     };
@@ -2054,7 +2071,9 @@ async fn a_failed_list_leaves_nothing_and_is_taken_on_the_next_try() {
     // Asked once: never again.
     let lists = fake.lists.load(Ordering::SeqCst);
     assert_eq!(
-        history(t.store(), &fake, sh(0), ROWS).await.unwrap(),
+        history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+            .await
+            .unwrap(),
         Historied::Nothing
     );
     assert_eq!(fake.lists.load(Ordering::SeqCst), lists);
@@ -2071,7 +2090,9 @@ async fn a_refused_list_leaves_the_newest_page_to_the_fill() {
     fake.push_txs(pays(0, 1));
     follow(t.store(), &fake).await.unwrap();
     fake.refuse_lists.store(true, Ordering::SeqCst);
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     assert_eq!(
         r,
         Historied::Refused(Some(ScriptSize {
@@ -2090,10 +2111,12 @@ async fn a_refused_list_leaves_the_newest_page_to_the_fill() {
     ));
     assert_eq!(
         unhistoried(t.store()).await.unwrap(),
-        vec![(sh(0), History::Refused)]
+        vec![(sh(0), History::Refused, None)]
     );
     fake.refuse_lists.store(false, Ordering::SeqCst);
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     assert!(matches!(r, Historied::Whole { .. }), "{r:?}");
     check_history(t.store(), &fake, "after a refusal").await;
 }
@@ -2135,52 +2158,58 @@ async fn the_bound_drops_the_least_recently_viewed_history() {
     assert!(c0 + c1 + c2 > max, "{c0} {c1} {c2}");
     for i in [0, 1] {
         assert!(matches!(
-            history(t.store(), &fake, sh(i), max).await.unwrap(),
+            history(t.store(), &fake, sh(i), max, NOBODY, NOW)
+                .await
+                .unwrap(),
             Historied::Whole { evicted: 0, .. }
         ));
     }
     // Script 0 viewed since: script 1 is the least recently viewed and leaves for script 2.
     touch(t.store(), sh(0), 500).await.unwrap();
-    let r = history(t.store(), &fake, sh(2), max).await.unwrap();
+    let r = history(t.store(), &fake, sh(2), max, NOBODY, NOW)
+        .await
+        .unwrap();
     assert!(matches!(r, Historied::Whole { evicted: 1, .. }), "{r:?}");
     let s1 = tracked(t.store(), sh(1)).await.unwrap().unwrap();
     assert_eq!(s1.history, History::Dropped);
     assert!(kept_history(t.store(), 1).await.is_empty());
     let held = i64::try_from(c0 + c2).unwrap();
     assert_eq!(history_table_rows(t.store()).await, held);
-    // Dropped, it is not asked again, and takes the newest page instead.
+    // Dropped, it may be taken again (when viewed, the server decides), with when it was taken;
+    // meanwhile it takes the newest page.
     assert!(
-        !unhistoried(t.store())
+        unhistoried(t.store())
             .await
             .unwrap()
-            .iter()
-            .any(|(s, _)| *s == sh(1))
+            .contains(&(sh(1), History::Dropped, Some(NOW)))
     );
     assert!(unfilled(t.store()).await.unwrap().contains(&sh(1)));
     // Larger than the whole bound: not asked at all.
     assert!(c3 > max, "{c3} {max}");
     let lists = fake.lists.load(Ordering::SeqCst);
     assert_eq!(
-        history(t.store(), &fake, sh(3), max).await.unwrap(),
+        history(t.store(), &fake, sh(3), max, NOBODY, NOW)
+            .await
+            .unwrap(),
         Historied::TooLarge
     );
     assert_eq!(fake.lists.load(Ordering::SeqCst), lists);
     assert_eq!(
         tracked(t.store(), sh(3)).await.unwrap().unwrap().history,
-        History::Dropped
+        History::TooLarge
     );
     assert_eq!(history_table_rows(t.store()).await, held);
     // Blocks make the kept ones grow past the bound: the least recently viewed leaves.
     fake.push_txs(pays(0, 2));
     fake.push_txs(pays(2, 2));
     follow(t.store(), &fake).await.unwrap();
-    assert_eq!(bound(t.store(), c0 + c2 + 1).await.unwrap(), 1);
+    assert_eq!(bound(t.store(), c0 + c2 + 1, NOBODY).await.unwrap(), 1);
     assert_eq!(
         tracked(t.store(), sh(2)).await.unwrap().unwrap().history,
         History::Dropped
     );
     check_history(t.store(), &fake, "within the bound").await;
-    assert_eq!(bound(t.store(), c0 + c2 + 1).await.unwrap(), 0);
+    assert_eq!(bound(t.store(), c0 + c2 + 1, NOBODY).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -2194,7 +2223,9 @@ async fn a_dropped_script_takes_its_history_rows_with_it() {
         .await
         .unwrap();
     follow(t.store(), &fake).await.unwrap();
-    history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     assert!(history_table_rows(t.store()).await > 0);
     // A ledger of one: seeding script 1 drops script 0, and its rows.
     seed(t.store(), &fake, &script(1), false, 1, 200)
@@ -2216,7 +2247,9 @@ async fn a_reorg_through_the_lists_block_keeps_the_whole_history_whole() {
     fake.push_txs(pays(0, 2));
     follow(t.store(), &fake).await.unwrap();
     // Pinned one below the tip.
-    let r = history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     let Historied::Whole { height, .. } = r else {
         panic!("{r:?}")
     };
@@ -2252,14 +2285,14 @@ async fn a_list_that_outgrows_the_bound_while_it_streams_is_dropped() {
         .tx_count;
     // Exactly the bound when it begins; a block paying it lands while it streams.
     *fake.during_list.lock().unwrap() = Some(Box::new(|f: &Fake| f.push_txs(pays(0, 1))));
-    let pending = history(t.store(), &fake, sh(0), n);
+    let pending = history(t.store(), &fake, sh(0), n, NOBODY, NOW);
     tokio::pin!(pending);
     let r = loop {
         tokio::select! {
             r = &mut pending => break r,
             () = tokio::task::yield_now() => {
                 follow(t.store(), &fake).await.unwrap();
-                bound(t.store(), n).await.unwrap();
+                bound(t.store(), n, NOBODY).await.unwrap();
             }
         }
     };
@@ -2296,7 +2329,7 @@ async fn a_list_longer_than_the_totals_is_stopped_before_it_is_all_stored() {
     )
     .await
     .unwrap();
-    let r = history(t.store(), &fake, sh(0), ROWS).await;
+    let r = history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW).await;
     assert!(matches!(r, Err(Error::Mismatch)), "{r:?}");
     assert_eq!(history_table_rows(t.store()).await, 0);
     assert_eq!(
@@ -2315,7 +2348,9 @@ async fn blocks_applied_before_a_failed_catch_up_count_against_the_bound() {
         .await
         .unwrap();
     follow(t.store(), &fake).await.unwrap();
-    history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     let n = tracked(t.store(), sh(0))
         .await
         .unwrap()
@@ -2336,7 +2371,7 @@ async fn blocks_applied_before_a_failed_catch_up_count_against_the_bound() {
         .tx_count;
     assert_eq!(grown, n + 4);
     // The rows the two blocks committed are over a bound that held before them.
-    assert_eq!(bound(t.store(), n + 1).await.unwrap(), 1);
+    assert_eq!(bound(t.store(), n + 1, NOBODY).await.unwrap(), 1);
     assert_eq!(history_table_rows(t.store()).await, 0);
     assert_eq!(
         tracked(t.store(), sh(0)).await.unwrap().unwrap().history,
@@ -2364,7 +2399,9 @@ async fn a_whole_history_pages_as_the_node_does() {
         history_page(t.store(), sh(0), None, None, 3).await.unwrap(),
         PageRead::NotWhole
     );
-    history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    history(t.store(), &fake, sh(0), ROWS, NOBODY, NOW)
+        .await
+        .unwrap();
     fake.push_txs(pays(0, 2));
     follow(t.store(), &fake).await.unwrap();
     // Pages of three, newest first, each after the last row of the one before: the whole list
@@ -2429,4 +2466,136 @@ async fn a_whole_history_pages_as_the_node_does() {
         history_page(t.store(), sh(1), None, None, 3).await.unwrap(),
         PageRead::NotWhole
     );
+}
+
+#[tokio::test]
+async fn a_dropped_history_is_taken_again_and_one_viewed_lately_is_never_the_one_dropped() {
+    let mut rng = Rng(311);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    for i in 0..3 {
+        fake.push_txs(pays(i, 4));
+    }
+    for (i, viewed) in [(0, 100), (1, 200), (2, 300)] {
+        seed(t.store(), &fake, &script(i), false, 10, viewed)
+            .await
+            .unwrap();
+    }
+    follow(t.store(), &fake).await.unwrap();
+    let count_of = |i: usize| {
+        let t = &t;
+        async move {
+            tracked(t.store(), sh(i))
+                .await
+                .unwrap()
+                .unwrap()
+                .totals
+                .tx_count
+        }
+    };
+    let (c0, c1, c2) = (count_of(0).await, count_of(1).await, count_of(2).await);
+    // Room for two of the three.
+    let max = (c0 + c1).max(c1 + c2).max(c0 + c2);
+    for (i, now) in [(0, 1000), (1, 1001)] {
+        let r = history(t.store(), &fake, sh(i), max, NOBODY, now)
+            .await
+            .unwrap();
+        assert!(matches!(r, Historied::Whole { evicted: 0, .. }), "{r:?}");
+    }
+    // Script 2 is viewed: room is made from the least recently viewed, script 0.
+    let r = history(t.store(), &fake, sh(2), max, NOBODY, 1002)
+        .await
+        .unwrap();
+    assert!(matches!(r, Historied::Whole { evicted: 1, .. }), "{r:?}");
+    let s0 = tracked(t.store(), sh(0)).await.unwrap().unwrap();
+    assert_eq!(
+        (s0.history, s0.history_taken),
+        (History::Dropped, Some(1000))
+    );
+    // Viewed again, it is taken again; script 1, the least recently viewed now, makes room.
+    touch(t.store(), sh(0), 400).await.unwrap();
+    let r = history(t.store(), &fake, sh(0), max, NOBODY, 2000)
+        .await
+        .unwrap();
+    assert!(matches!(r, Historied::Whole { evicted: 1, .. }), "{r:?}");
+    let s0 = tracked(t.store(), sh(0)).await.unwrap().unwrap();
+    assert_eq!(s0.history_taken, Some(2000));
+    assert_eq!(
+        tracked(t.store(), sh(1)).await.unwrap().unwrap().history,
+        History::Dropped
+    );
+    check_history(t.store(), &fake, "taken again").await;
+    // Scripts 0 and 2 both viewed at or after 300: neither is dropped for script 1, which waits.
+    let lists = fake.lists.load(Ordering::SeqCst);
+    let r = history(t.store(), &fake, sh(1), max, 300, 3000)
+        .await
+        .unwrap();
+    assert_eq!(r, Historied::NoRoom);
+    assert_eq!(fake.lists.load(Ordering::SeqCst), lists, "not asked");
+    assert_eq!(
+        tracked(t.store(), sh(1)).await.unwrap().unwrap().history,
+        History::Dropped
+    );
+    // Blocks push the two over the bound: while both are viewed, neither is dropped.
+    fake.push_txs(pays(0, 3));
+    fake.push_txs(pays(2, 3));
+    follow(t.store(), &fake).await.unwrap();
+    assert_eq!(bound(t.store(), c0 + c2, 300).await.unwrap(), 0);
+    // Once the readers have gone, the least recently viewed goes.
+    assert_eq!(bound(t.store(), c0 + c2, 500).await.unwrap(), 1);
+    assert_eq!(
+        tracked(t.store(), sh(2)).await.unwrap().unwrap().history,
+        History::Dropped
+    );
+}
+
+#[tokio::test]
+async fn no_room_drops_nothing_when_the_viewed_ones_would_still_be_in_the_way() {
+    let mut rng = Rng(321);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    for i in 0..3 {
+        fake.push_txs(pays(i, 4));
+    }
+    for (i, viewed) in [(0, 100), (1, 500), (2, 600)] {
+        seed(t.store(), &fake, &script(i), false, 10, viewed)
+            .await
+            .unwrap();
+    }
+    follow(t.store(), &fake).await.unwrap();
+    let mut n = Vec::new();
+    for i in 0..3 {
+        n.push(
+            tracked(t.store(), sh(i))
+                .await
+                .unwrap()
+                .unwrap()
+                .totals
+                .tx_count,
+        );
+    }
+    // Room for all three only without the bound below; 0 and 1 are whole.
+    let max = n[0] + n[1] + n[2] - 1;
+    for i in [0, 1] {
+        history(t.store(), &fake, sh(i), max, NOBODY, NOW)
+            .await
+            .unwrap();
+    }
+    // Script 1 is viewed (at 500): dropping script 0 alone could not make room for script 2
+    // when the bound is just under script 1 and 2 together.
+    let tight = n[1] + n[2] - 1;
+    let r = history(t.store(), &fake, sh(2), tight, 400, NOW)
+        .await
+        .unwrap();
+    assert_eq!(r, Historied::NoRoom);
+    for i in [0, 1] {
+        assert!(
+            matches!(
+                tracked(t.store(), sh(i)).await.unwrap().unwrap().history,
+                History::Whole { .. }
+            ),
+            "script {i} kept"
+        );
+    }
+    check_history(t.store(), &fake, "nothing dropped").await;
 }

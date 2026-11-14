@@ -87,7 +87,15 @@ const RECHECK: Duration = Duration::from_secs(7 * 24 * 3600);
 /// Bounds of the remembered outcomes and checked scripts.
 const REMEMBERED: usize = 4096;
 /// A reader's view is written to the store at most this often per script (for eviction).
-const TOUCH_EVERY: Duration = Duration::from_secs(3600);
+const TOUCH_EVERY: Duration = Duration::from_secs(300);
+/// A whole history viewed this lately is never dropped to make room: a reader may be paging it.
+pub const VIEWING: Duration = Duration::from_secs(1800);
+/// A kept address's whole list is taken only once a reader has viewed it, and stays queued this
+/// long after the last view.
+pub const WANTED_FOR: Duration = Duration::from_secs(3600);
+/// A history dropped for the bound is taken again at most this often per address, counted from
+/// when it was last taken: the lists are heavy for the node.
+pub const RELIST: Duration = Duration::from_secs(24 * 3600);
 
 /// The lane's sentinel: no place in it within [`LANE_WAIT`].
 pub const LANE_BUSY: &str = "lane busy";
@@ -323,6 +331,8 @@ struct Seeds {
     unfilled: HashMap<ScriptHash, (u32, Instant)>,
     /// Kept scripts whose whole history is still to be taken, the same way.
     unhistoried: HashMap<ScriptHash, (u32, Instant)>,
+    /// Kept scripts a reader viewed, and when last: only these take their whole list.
+    wanted: HashMap<ScriptHash, Instant>,
 }
 
 impl Seeds {
@@ -405,12 +415,16 @@ impl Seeds {
         let job = match self.readers.pop_front() {
             Some(j) => Some(j),
             None => {
-                // A fill waits for the whole list while it may still come; after two failed
-                // lists the page fill goes ahead.
+                // Only a script a reader viewed lately takes its whole list.
+                let wanted =
+                    |sh: &ScriptHash| self.wanted.get(sh).is_some_and(|at| now < *at + WANTED_FOR);
+                // A fill waits for the whole list while it may still come soon; after two failed
+                // lists, or while a dropped one waits its day, the page fill goes ahead.
                 let listing = |sh: &ScriptHash| {
-                    self.unhistoried
-                        .get(sh)
-                        .is_some_and(|(fails, _)| *fails < LIST_TRIES)
+                    wanted(sh)
+                        && self.unhistoried.get(sh).is_some_and(|(fails, due)| {
+                            *fails < LIST_TRIES && *due <= now + FAILED_FOR
+                        })
                 };
                 let fills: HashMap<ScriptHash, (u32, Instant)> = self
                     .unfilled
@@ -421,7 +435,13 @@ impl Seeds {
                 if let Some(sh) = due_in(&fills, now) {
                     return Some(Work::Fill(sh));
                 }
-                if let Some(sh) = due_in(&self.unhistoried, now) {
+                let lists: HashMap<ScriptHash, (u32, Instant)> = self
+                    .unhistoried
+                    .iter()
+                    .filter(|(sh, _)| wanted(sh))
+                    .map(|(sh, v)| (*sh, *v))
+                    .collect();
+                if let Some(sh) = due_in(&lists, now) {
                     return Some(Work::History(sh));
                 }
                 self.found.pop_front()
@@ -470,12 +490,26 @@ impl Seeds {
         backoff(&mut self.unfilled, sh, now)
     }
 
-    /// The scripts the store says may take their whole history, as [`Self::set_unfilled`].
-    fn set_unhistoried(&mut self, kept: &[ScriptHash], now: Instant) {
-        self.unhistoried.retain(|sh, _| kept.contains(sh));
-        for sh in kept {
-            self.unhistoried.entry(*sh).or_insert((0, now));
+    /// The scripts the store says may take their whole history, each due from the time given
+    /// (later for a history dropped lately), as [`Self::set_unfilled`].
+    fn set_unhistoried(&mut self, kept: &[(ScriptHash, Instant)]) {
+        self.unhistoried
+            .retain(|sh, _| kept.iter().any(|(k, _)| k == sh));
+        for (sh, due) in kept {
+            let e = self.unhistoried.entry(*sh).or_insert((0, *due));
+            e.1 = e.1.max(*due);
         }
+    }
+
+    /// A reader viewed a kept script: its whole list may be taken, while it is viewed.
+    fn want(&mut self, sh: ScriptHash, now: Instant) {
+        if self.wanted.len() >= REMEMBERED && !self.wanted.contains_key(&sh) {
+            self.wanted.retain(|_, at| now < *at + WANTED_FOR);
+            if self.wanted.len() >= REMEMBERED {
+                return;
+            }
+        }
+        self.wanted.insert(sh, now);
     }
 }
 
@@ -536,6 +570,13 @@ impl std::fmt::Debug for Ledger {
             .field("network", &self.network)
             .finish_non_exhaustive()
     }
+}
+
+/// The time (Unix seconds) at or after which a stored view keeps a history from being dropped:
+/// [`VIEWING`] back, and [`TOUCH_EVERY`] more, since a view is stored at most that often and the
+/// last one may be newer than the one stored.
+fn viewing_since(now: u64) -> u64 {
+    now.saturating_sub(VIEWING.as_secs() + TOUCH_EVERY.as_secs())
 }
 
 fn unix_now() -> u64 {
@@ -624,12 +665,26 @@ impl Ledger {
         ) else {
             return;
         };
-        let unlisted: Vec<ScriptHash> = unlisted.into_iter().map(|(sh, _)| sh).collect();
+        let now = Instant::now();
+        let unix = unix_now();
+        // A history dropped for the bound is due a day after it was last taken.
+        let unlisted: Vec<(ScriptHash, Instant)> = unlisted
+            .into_iter()
+            .map(|(sh, h, taken)| {
+                let again = match (h, taken) {
+                    (book::History::Dropped, Some(t)) => {
+                        let at = t.saturating_add(RELIST.as_secs());
+                        now + Duration::from_secs(at.saturating_sub(unix))
+                    }
+                    _ => now,
+                };
+                (sh, again)
+            })
+            .collect();
         {
-            let now = Instant::now();
             let mut s = self.seeds();
             s.set_unfilled(&unfilled, now);
-            s.set_unhistoried(&unlisted, now);
+            s.set_unhistoried(&unlisted);
         }
         if !unfilled.is_empty() || !unlisted.is_empty() {
             self.wake.notify_one();
@@ -731,6 +786,14 @@ impl Ledger {
             && let Ok(Some(view)) = book::view(&self.store, sh).await
         {
             self.touch(sh);
+            // Viewed: its whole list is taken (or taken again) if it is not held.
+            if matches!(
+                view.tracked.history,
+                book::History::None | book::History::Refused | book::History::Dropped
+            ) {
+                self.seeds().want(sh, Instant::now());
+                self.wake.notify_one();
+            }
             return Status::Tracked(view);
         }
         let (status, queued) = self.seeds().ask(script, large, client, Instant::now());
@@ -902,7 +965,8 @@ impl Ledger {
     /// Keeps the whole histories within their bound after blocks made them grow: the least
     /// recently viewed leave first. How many were dropped.
     async fn bound(&self) -> usize {
-        let dropped = book::bound(&self.store, self.config.max_history_rows)
+        let viewing = viewing_since(unix_now());
+        let dropped = book::bound(&self.store, self.config.max_history_rows, viewing)
             .await
             .unwrap_or(0);
         if dropped > 0 {
@@ -917,7 +981,16 @@ impl Ledger {
     /// Takes one kept script's whole history in the lane (already held), once.
     async fn history(&self, sh: ScriptHash) {
         let started = Instant::now();
-        let r = book::history(&self.store, &self.source, sh, self.config.max_history_rows).await;
+        let now = unix_now();
+        let r = book::history(
+            &self.store,
+            &self.source,
+            sh,
+            self.config.max_history_rows,
+            viewing_since(now),
+            now,
+        )
+        .await;
         let took = started.elapsed();
         let (outcome, height, rows, evicted) = match r {
             Ok(book::Historied::Whole {
@@ -939,6 +1012,11 @@ impl Ledger {
             Ok(book::Historied::TooLarge) => {
                 self.seeds().unhistoried.remove(&sh);
                 ("too_large", 0, 0, 0)
+            }
+            // The room is held by histories readers are viewing: tried again later.
+            Ok(book::Historied::NoRoom) => {
+                backoff(&mut self.seeds().unhistoried, sh, Instant::now());
+                ("no_room", 0, 0, 0)
             }
             Ok(book::Historied::Nothing) => {
                 self.seeds().unhistoried.remove(&sh);
@@ -1286,6 +1364,16 @@ fn tracked_json(v: &book::View) -> Value {
             book::History::Whole { .. } => "whole",
             book::History::Refused => "refused",
             book::History::Dropped => "dropped",
+            book::History::TooLarge => "too_large",
+        },
+        // A history dropped for the bound is taken again once a reader views it, but not before
+        // this (Unix seconds); `null` once it may be.
+        "history_again": match (t.history, t.history_taken) {
+            (book::History::Dropped, Some(taken)) => {
+                let at = taken.saturating_add(RELIST.as_secs());
+                (at > unix_now()).then_some(at)
+            }
+            _ => None,
         },
         "txs": v.txs.iter().map(|r| json!({
             "txid": r.txid.to_string(),
@@ -1623,7 +1711,8 @@ mod tests {
             ScriptHash::from_script(&script(8)),
         );
         s.set_unfilled(&[filled], now);
-        s.set_unhistoried(&[whole], now);
+        s.set_unhistoried(&[(whole, now)]);
+        s.want(whole, now);
         s.found.push_back(Job {
             script: script(5),
             sh: ScriptHash::from_script(&script(5)),
@@ -1639,7 +1728,7 @@ mod tests {
         // It failed: discovery's seed goes first, and the history waits, longer each time,
         // even across a reload from the store.
         assert_eq!(backoff(&mut s.unhistoried, whole, now), 1);
-        s.set_unhistoried(&[whole], now);
+        s.set_unhistoried(&[(whole, now)]);
         assert!(matches!(s.next(now), Some(Work::Seed(j)) if j.client.is_none()));
         s.running = None;
         assert!(s.next(now + FAILED_FOR - Duration::from_secs(1)).is_none());
@@ -1648,7 +1737,7 @@ mod tests {
         assert_eq!(backoff(&mut s.unhistoried, whole, later), 2);
         assert!(s.next(later + FAILED_FOR).is_none());
         // Taken: the store no longer lists it, and it is never offered again.
-        s.set_unhistoried(&[], later);
+        s.set_unhistoried(&[]);
         assert!(s.next(later + FILL_RETRY_MAX).is_none());
     }
 
@@ -1658,7 +1747,8 @@ mod tests {
         let now = Instant::now();
         let sh = ScriptHash::from_script(&script(9));
         s.set_unfilled(&[sh], now);
-        s.set_unhistoried(&[sh], now);
+        s.set_unhistoried(&[(sh, now)]);
+        s.want(sh, now);
         // The list goes first; the page waits for it.
         assert!(matches!(s.next(now), Some(Work::History(_))));
         assert_eq!(backoff(&mut s.unhistoried, sh, now), 1);
@@ -1668,5 +1758,52 @@ mod tests {
         assert_eq!(backoff(&mut s.unhistoried, sh, later), 2);
         // Failed twice: the page is taken meanwhile.
         assert!(matches!(s.next(later), Some(Work::Fill(f)) if f == sh));
+    }
+
+    #[test]
+    fn only_a_viewed_address_takes_its_list_and_a_dropped_one_waits_its_day() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let (found, viewed) = (
+            ScriptHash::from_script(&script(10)),
+            ScriptHash::from_script(&script(11)),
+        );
+        s.set_unfilled(&[found], now);
+        s.set_unhistoried(&[(found, now), (viewed, now + RELIST)]);
+        // Nobody viewed the discovered one: no list, and its page fill goes ahead at once.
+        assert!(matches!(s.next(now), Some(Work::Fill(f)) if f == found));
+        s.set_unfilled(&[], now);
+        assert!(s.next(now).is_none());
+        // A dropped one viewed now still waits for its day.
+        s.want(viewed, now);
+        assert!(s.next(now).is_none());
+        // Viewed again then, it is taken again.
+        let later = now + RELIST;
+        s.want(viewed, later);
+        assert!(matches!(s.next(later), Some(Work::History(h)) if h == viewed));
+        // A view an hour old no longer asks for a list.
+        assert!(s.next(later + WANTED_FOR).is_none());
+    }
+
+    #[test]
+    fn a_viewed_address_whose_list_waits_its_day_takes_the_page_meanwhile() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let sh = ScriptHash::from_script(&script(12));
+        s.set_unfilled(&[sh], now);
+        s.set_unhistoried(&[(sh, now + RELIST)]);
+        s.want(sh, now);
+        assert!(matches!(s.next(now), Some(Work::Fill(f)) if f == sh));
+    }
+
+    #[test]
+    fn a_view_the_store_did_not_record_still_protects_for_the_whole_window() {
+        // Stored at t0; viewed again just before the next write was allowed, so not stored.
+        let t0 = 1_800_000_000;
+        let last = t0 + TOUCH_EVERY.as_secs() - 1;
+        // Until VIEWING after that last view, the stored t0 is still within the protection.
+        assert!(viewing_since(last + VIEWING.as_secs()) <= t0);
+        // And not much longer.
+        assert!(viewing_since(t0 + VIEWING.as_secs() + TOUCH_EVERY.as_secs() + 1) > t0);
     }
 }

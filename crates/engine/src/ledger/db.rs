@@ -105,7 +105,7 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
         .prepare(concat!(
             "SELECT s.funded_count, s.funded_sum, s.spent_count, s.spent_sum, s.tx_count, ",
             "s.seeded_height, s.seeded_time, c.height, c.hash, c.time, s.script, s.filled, ",
-            "s.history, s.history_height ",
+            "s.history, s.history_height, s.history_taken ",
             "FROM ledger_scripts s, ",
             "(SELECT height, hash, time FROM ledger_chain ORDER BY height DESC LIMIT 1) c ",
             "WHERE s.sh = ?1"
@@ -124,6 +124,9 @@ pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> 
                 seeded_time: int(r, 6)?,
                 filled: r.get(11)?,
                 history: History::from_sql(r.get(12)?, r.get(13)?),
+                history_taken: r
+                    .get::<_, Option<i64>>(14)?
+                    .and_then(|t| u64::try_from(t).ok()),
                 at: At {
                     height: int(r, 7)?,
                     hash: BlockHash::from_byte_array(blob32(r, 8)?),
@@ -717,8 +720,10 @@ fn count_rows(sql: &Sql<'_>, sh: ScriptHash) -> Result<usize, Error> {
 pub enum Begun {
     /// Rows go under `hid` from now on; `evicted` histories were dropped to make room.
     Taking { hid: i64, evicted: usize },
-    /// More transactions than the bound holds: marked dropped, never asked.
+    /// More transactions than the bound holds: marked too large, never asked.
     TooLarge,
+    /// Room could be made only by dropping histories viewed lately: nothing written.
+    NoRoom,
     /// The ledger's tip moved: nothing written.
     Moved,
     /// Not tracked, or its history is not to be taken: nothing written.
@@ -735,6 +740,7 @@ pub fn history_begin(
     from: u32,
     since: &[HistoryRow],
     max_rows: u64,
+    viewing: u64,
 ) -> Result<Begun, Error> {
     if self::tip(sql)? != Some(tip) {
         return Ok(Begun::Moved);
@@ -743,13 +749,17 @@ pub fn history_begin(
         .prepare("SELECT history FROM ledger_scripts WHERE sh = ?1")?
         .query_row(params![sh_bytes(sh)], |r| r.get(0))
         .optional()?;
-    if !matches!(state, Some(0 | 3)) {
+    if !matches!(state, Some(0 | 3 | 4)) {
         return Ok(Begun::Nothing);
     }
     history_restarted(sql)?;
-    let Some(evicted) = history_bound(sql, Some(sh), max_rows)? else {
-        history_too_large(sql, sh)?;
-        return Ok(Begun::TooLarge);
+    let evicted = match history_bound(sql, Some(sh), max_rows, viewing)? {
+        Room::Made(n) => n,
+        Room::TooLarge => {
+            history_too_large(sql, sh)?;
+            return Ok(Begun::TooLarge);
+        }
+        Room::Viewed => return Ok(Begun::NoRoom),
     };
     let hid: i64 = sql
         .prepare("SELECT coalesce(max(hid), 0) + 1 FROM ledger_scripts")?
@@ -787,13 +797,22 @@ pub enum Ended {
     Whole(u64),
     /// Blocks made it outgrow the bound while it was taken: dropped.
     TooLarge,
+    /// Room could be made only by dropping histories viewed lately: its rows dropped.
+    NoRoom,
     /// Not as many rows as the totals count, or no longer being taken: its rows dropped.
     Mismatch,
 }
 
 /// Ends taking `hid`'s history: whole when it holds exactly as many rows as the totals count
 /// transactions and fits within `max_rows`, making room as [`history_bound`] does.
-pub fn history_end(sql: &Sql<'_>, sh: ScriptHash, hid: i64, max_rows: u64) -> Result<Ended, Error> {
+pub fn history_end(
+    sql: &Sql<'_>,
+    sh: ScriptHash,
+    hid: i64,
+    max_rows: u64,
+    viewing: u64,
+    now: u64,
+) -> Result<Ended, Error> {
     let row: Option<(i64, i64)> = sql
         .prepare(concat!(
             "SELECT tx_count, (SELECT count(*) FROM ledger_history WHERE hid = ?2) ",
@@ -803,12 +822,20 @@ pub fn history_end(sql: &Sql<'_>, sh: ScriptHash, hid: i64, max_rows: u64) -> Re
         .optional()?;
     match row {
         Some((want, have)) if want == have => {
-            if history_bound(sql, Some(sh), max_rows)?.is_none() {
-                history_abort(sql, sh, hid, 4)?;
-                return Ok(Ended::TooLarge);
+            match history_bound(sql, Some(sh), max_rows, viewing)? {
+                Room::Made(_) => {}
+                Room::TooLarge => {
+                    history_abort(sql, sh, hid, 5)?;
+                    return Ok(Ended::TooLarge);
+                }
+                // Blocks made room short while it streamed: asked again later.
+                Room::Viewed => {
+                    history_abort(sql, sh, hid, 0)?;
+                    return Ok(Ended::NoRoom);
+                }
             }
-            sql.prepare("UPDATE ledger_scripts SET history = 2 WHERE sh = ?1")?
-                .execute(params![sh_bytes(sh)])?;
+            sql.prepare("UPDATE ledger_scripts SET history = 2, history_taken = ?2 WHERE sh = ?1")?
+                .execute(params![sh_bytes(sh), sql_int(now)?])?;
             Ok(Ended::Whole(u64::try_from(have).unwrap_or(u64::MAX)))
         }
         _ => {
@@ -842,15 +869,29 @@ pub fn history_restarted(sql: &Sql<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// What [`history_bound`] could do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Room {
+    /// Within the bound, with this many histories dropped to get there.
+    Made(usize),
+    /// `room_for` has more transactions than the whole bound.
+    TooLarge,
+    /// Room for `room_for` could be made only by dropping histories viewed lately: not now.
+    Viewed,
+}
+
 /// Keeps the histories held or being taken within `max_rows`, counting each as its script's
 /// transactions (exactly its rows once whole), and `room_for` as well when given: drops the least
 /// recently viewed whole histories other than `room_for`'s, then, without `room_for`, any being
-/// taken, marking them dropped. `Some(dropped)`, or `None` when `room_for` cannot fit even alone.
+/// taken, marking them dropped. A history viewed at or after `viewing` (Unix seconds) is never
+/// dropped: a reader may be paging it. Without `room_for` the histories may then stay over the
+/// bound until those readers leave.
 pub fn history_bound(
     sql: &Sql<'_>,
     room_for: Option<ScriptHash>,
     max_rows: u64,
-) -> Result<Option<usize>, Error> {
+    viewing: u64,
+) -> Result<Room, Error> {
     let want = |sql: &Sql<'_>| -> Result<u64, Error> {
         let n: i64 = sql
             .prepare(concat!(
@@ -866,7 +907,21 @@ pub fn history_bound(
             .prepare("SELECT tx_count FROM ledger_scripts WHERE sh = ?1")?
             .query_row(params![sh_bytes(sh)], |r| r.get(0))?;
         if u64::try_from(own).unwrap_or(u64::MAX) > max_rows {
-            return Ok(None);
+            return Ok(Room::TooLarge);
+        }
+    }
+    // Nothing is dropped unless enough can be: what may go must make the room on its own.
+    if room_for.is_some() {
+        let free: i64 = sql
+            .prepare(concat!(
+                "SELECT coalesce(sum(tx_count), 0) FROM ledger_scripts ",
+                "WHERE history = 2 AND sh IS NOT ?1 AND viewed < ?2"
+            ))?
+            .query_row(params![room_for.map(sh_bytes), sql_int(viewing)?], |r| {
+                r.get(0)
+            })?;
+        if want(sql)?.saturating_sub(u64::try_from(free).unwrap_or(0)) > max_rows {
+            return Ok(Room::Viewed);
         }
     }
     let mut dropped = 0;
@@ -874,14 +929,19 @@ pub fn history_bound(
         let oldest: Option<(Vec<u8>, i64)> = sql
             .prepare(concat!(
                 "SELECT sh, hid FROM ledger_scripts WHERE history IN (1, 2) AND sh IS NOT ?1 ",
-                "AND (history = 2 OR ?1 IS NULL) ORDER BY history DESC, viewed, sh LIMIT 1"
+                "AND (history = 2 OR ?1 IS NULL) AND viewed < ?2 ",
+                "ORDER BY history DESC, viewed, sh LIMIT 1"
             ))?
-            .query_row(params![room_for.map(sh_bytes)], |r| {
+            .query_row(params![room_for.map(sh_bytes), sql_int(viewing)?], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?;
         let Some((oldest, hid)) = oldest else {
-            return Ok(room_for.is_none().then_some(dropped));
+            return Ok(if room_for.is_some() {
+                Room::Viewed
+            } else {
+                Room::Made(dropped)
+            });
         };
         sql.prepare("DELETE FROM ledger_history WHERE hid = ?1")?
             .execute(params![hid])?;
@@ -889,16 +949,21 @@ pub fn history_bound(
             .execute(params![oldest])?;
         dropped += 1;
     }
-    Ok(Some(dropped))
+    Ok(Room::Made(dropped))
 }
 
-/// The scripts whose history may be taken: never taken (or failed), or refused.
-pub fn unhistoried(sql: &Sql<'_>) -> Result<Vec<(ScriptHash, History)>, Error> {
-    let mut stmt = sql.prepare("SELECT sh, history FROM ledger_scripts WHERE history IN (0, 3)")?;
+/// The scripts whose history may be taken: never taken (or failed), refused, or dropped for the
+/// bound, with when each was last taken whole (Unix seconds).
+pub fn unhistoried(sql: &Sql<'_>) -> Result<Vec<(ScriptHash, History, Option<u64>)>, Error> {
+    let mut stmt = sql.prepare(
+        "SELECT sh, history, history_taken FROM ledger_scripts WHERE history IN (0, 3, 4)",
+    )?;
     let rows = stmt.query_map([], |r| {
+        let taken: Option<i64> = r.get(2)?;
         Ok((
             ScriptHash::from_byte_array(blob32(r, 0)?),
             History::from_sql(r.get(1)?, None),
+            taken.and_then(|t| u64::try_from(t).ok()),
         ))
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -906,7 +971,7 @@ pub fn unhistoried(sql: &Sql<'_>) -> Result<Vec<(ScriptHash, History)>, Error> {
 
 /// Marks `sh`'s history too large for the bound, unless it is being taken or held.
 pub fn history_too_large(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
-    sql.prepare("UPDATE ledger_scripts SET history = 4 WHERE sh = ?1 AND history IN (0, 3)")?
+    sql.prepare("UPDATE ledger_scripts SET history = 5 WHERE sh = ?1 AND history IN (0, 3, 4)")?
         .execute(params![sh_bytes(sh)])?;
     Ok(())
 }

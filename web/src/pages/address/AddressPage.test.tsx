@@ -1064,7 +1064,7 @@ describe("balance chart", () => {
   });
 
   describe("a kept address", () => {
-    const keptLedger = (history: string) => ({
+    const keptLedger = (history: string, again: number | null = null) => ({
       state: "tracked",
       chain_stats: part(150_000_000, 50_000_000, 30),
       balance: 100_000_000,
@@ -1073,6 +1073,7 @@ describe("balance chart", () => {
       window: 200,
       filling: false,
       history,
+      history_again: again,
       txs: [{ txid: txid(7), height: 899_500, position: 3, value: 5000, time: 1_699_500_000 }],
       points: [],
     });
@@ -1122,14 +1123,20 @@ describe("balance chart", () => {
     });
 
     it("says truthfully why it lists only the newest transactions", async () => {
-      for (const [history, says] of [
-        ["taking", "is getting this address's whole history from its node"],
-        ["none", "is getting this address's whole history from its node"],
-        ["refused", "Its node declines to list this address's whole history"],
-        ["dropped", "does not fit beside the others"],
+      for (const [history, again, says] of [
+        ["taking", null, "is getting this address's whole history from its node"],
+        ["none", null, "is getting this address's whole history from its node"],
+        ["refused", null, "Its node declines to list this address's whole history"],
+        ["dropped", null, "make room for addresses viewed more lately, and is getting it again"],
+        [
+          "dropped",
+          1_767_300_000,
+          "takes it again when this page is open after 1 Jan 2026, 20:40 UTC",
+        ],
+        ["too_large", null, "whole history is larger than this server keeps"],
       ] as const) {
         serve({
-          [`/app/address/${ME}/ledger`]: keptLedger(history),
+          [`/app/address/${ME}/ledger`]: keptLedger(history, again),
           [`/address/${ME}`]: stats(part(150_000_000, 50_000_000, 30)),
           [`/address/${ME}/txs/mempool`]: [],
         });
