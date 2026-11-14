@@ -182,6 +182,16 @@
   .address-tab[aria-selected="true"]::after {
     transform: none;
   }
+  /* In a wide font on a phone the two tabs take two lines, a line apart: the first's target
+     reaches up and the second's down, so each is a thumb high and neither covers the other. */
+  @media (pointer: coarse) {
+    .address-tab:first-child::before {
+      inset-block: calc(1lh - var(--touch)) 0;
+    }
+    .address-tab:last-child::before {
+      inset-block: 0 calc(1lh - var(--touch));
+    }
+  }
 
   /* Fixed column widths, so columns stay put when rows replace their placeholders. */
   .address-txs .table,
