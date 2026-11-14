@@ -3,7 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
 import { AUDIT } from "../src/components/audit/fakes";
 import { ACINQ, mainnet, ONE, recorded, serve } from "./lightning-answers";
-import { LARGE, stubLarge } from "./large-address";
+import { KEPT, LARGE, stubLarge } from "./large-address";
 import { tablesFit, tapRow, wideFaces } from "./rows";
 
 test.use({ consoleErrorsAllowed: [/status of (429|503)/] });
@@ -138,6 +138,12 @@ const LISTS: { path: string; table: string | RegExp; stub?: (page: Page) => Prom
     path: `/regtest/address/${LARGE}`,
     table: /^Unconfirmed transactions of this address/,
     stub: (page) => stubLarge(page),
+  },
+  // Kept by the server's ledger: its newest confirmed transactions.
+  {
+    path: `/regtest/address/${LARGE}?ledger=kept`,
+    table: /^Newest confirmed transactions of this address/,
+    stub: (page) => stubLarge(page, { ledger: () => KEPT }),
   },
   { path: "/regtest/mining?period=all", table: /^Pools ranked by blocks found/ },
   { path: "/regtest/mining/pool/unknown", table: /^Blocks found by/ },

@@ -1,4 +1,5 @@
 import { createMemo, Match, onCleanup, Show, Switch } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Amount } from "../../components/Amount";
 import { type Column, DataTable } from "../../components/DataTable";
 import { FeeRate } from "../../components/FeeRate";
@@ -22,7 +23,7 @@ const plural = (n: number, one: string, many: string) =>
  * An address paid by more transactions than the node totals: what is known (how many transactions
  * have paid it, the node's cap, its unconfirmed transactions now), then what is not shown and why.
  */
-export function LargeAddress(props: { address: string }) {
+export function LargeAddress(props: { address: string; note?: JSX.Element }) {
   const network = useNetwork();
   const path = `/address/${encodeURIComponent(props.address)}`;
   const [answer] = createRequest(
@@ -33,7 +34,80 @@ export function LargeAddress(props: { address: string }) {
   // the page says what it can without it.
   const size = () => readSize(settled(answer));
   const sizeSettled = () => answer.state !== "unresolved" && answer.state !== "pending";
+  const pool = useUnconfirmed(props.address);
+  const list = () => pool.checked()?.list;
+  const change = () =>
+    list()?.reduce((sum, tx) => sum + (netChange(tx, props.address) ?? 0), 0) ?? 0;
 
+  return (
+    <>
+      <Show when={props.note}>{props.note}</Show>
+      <section class="address-totals panel" aria-label="What is known">
+        <dl class="address-stats address-stats--large">
+          <Show when={size() !== undefined || !sizeSettled()}>
+            <Stat
+              class="address-stat--balance"
+              label="Received"
+              ready={size() !== undefined}
+              value={<span class="num">{groupDigits(size()?.creates ?? 0)}</span>}
+              sub="transactions paid to it, as counted by the node"
+            />
+            <Stat
+              label="This server's limit"
+              ready={size() !== undefined}
+              value={<span class="num">{groupDigits(size()?.cap ?? 0)}</span>}
+              sub="paying transactions per address"
+            />
+          </Show>
+          <Stat
+            label="Unconfirmed"
+            ready={list() !== undefined || pool.failed()}
+            value={
+              <Show
+                when={list()?.length}
+                fallback={<span class="muted">{pool.failed() ? MISSING : "None"}</span>}
+              >
+                <Amount sats={change()} signed />
+              </Show>
+            }
+            sub={
+              <Show
+                when={list()?.length}
+                fallback={pool.failed() ? "Not known just now" : "Nothing waiting"}
+              >
+                {(n) => <UnconfirmedMark label={plural(n(), "transaction", "transactions")} />}
+              </Show>
+            }
+          />
+        </dl>
+        <Show
+          when={props.note === undefined}
+          fallback={
+            <p class="address-unshown">
+              Its balance, unspent outputs and confirmed transactions are not shown yet.
+            </p>
+          }
+        >
+          <p class="address-unshown">
+            Its balance, unspent outputs and confirmed transactions are not shown.{" "}
+            <Show when={size()} fallback="It has more history than this server's node adds up,">
+              {(s) =>
+                `The node adds up only addresses paid by at most ${groupDigits(s().cap)} transactions,`
+              }
+            </Show>{" "}
+            and reading even its newest confirmed transactions would keep the node busy for tens of
+            seconds or more.
+          </p>
+        </Show>
+      </section>
+      <UnconfirmedTransactions address={props.address} pool={pool} />
+    </>
+  );
+}
+
+/** An address's unconfirmed transactions, asked every {@link POLL_MS} while the page is in view. */
+export function useUnconfirmed(address: string) {
+  const path = `/address/${encodeURIComponent(address)}`;
   const [pool, { refetch }] = createApi<Transaction[]>(() => `${path}/txs/mempool`, {
     fresh: true,
   });
@@ -51,14 +125,20 @@ export function LargeAddress(props: { address: string }) {
     const a = settled(pool);
     return a ? arrivals(was?.list, a) : was;
   });
-  const list = () => checked()?.list;
-  const change = () =>
-    list()?.reduce((sum, tx) => sum + (netChange(tx, props.address) ?? 0), 0) ?? 0;
   // Holds from a failed check until an answer comes: a retry in flight is no answer yet.
   const failed = createMemo((was?: boolean) =>
     pool.state === "errored" ? true : pool.state === "ready" ? false : (was ?? false),
   );
+  return { pool, refetch, checked, failed };
+}
 
+/** The unconfirmed transactions section, from {@link useUnconfirmed}. */
+export function UnconfirmedTransactions(props: {
+  address: string;
+  pool: ReturnType<typeof useUnconfirmed>;
+}) {
+  const { pool: answer, refetch, checked, failed } = props.pool;
+  const list = () => checked()?.list;
   const columns: Column<Transaction | null>[] = [
     {
       header: "Transaction",
@@ -94,56 +174,6 @@ export function LargeAddress(props: { address: string }) {
 
   return (
     <>
-      <section class="address-totals panel" aria-label="What is known">
-        <dl class="address-stats address-stats--large">
-          <Show when={size() !== undefined || !sizeSettled()}>
-            <Stat
-              class="address-stat--balance"
-              label="Received"
-              ready={size() !== undefined}
-              value={<span class="num">{groupDigits(size()?.creates ?? 0)}</span>}
-              sub="transactions paid to it, as counted by the node"
-            />
-            <Stat
-              label="This server's limit"
-              ready={size() !== undefined}
-              value={<span class="num">{groupDigits(size()?.cap ?? 0)}</span>}
-              sub="paying transactions per address"
-            />
-          </Show>
-          <Stat
-            label="Unconfirmed"
-            ready={list() !== undefined || failed()}
-            value={
-              <Show
-                when={list()?.length}
-                fallback={<span class="muted">{failed() ? MISSING : "None"}</span>}
-              >
-                <Amount sats={change()} signed />
-              </Show>
-            }
-            sub={
-              <Show
-                when={list()?.length}
-                fallback={failed() ? "Not known just now" : "Nothing waiting"}
-              >
-                {(n) => <UnconfirmedMark label={plural(n(), "transaction", "transactions")} />}
-              </Show>
-            }
-          />
-        </dl>
-        <p class="address-unshown">
-          Its balance, unspent outputs and confirmed transactions are not shown.{" "}
-          <Show when={size()} fallback="It has more history than this server's node adds up,">
-            {(s) =>
-              `The node adds up only addresses paid by at most ${groupDigits(s().cap)} transactions,`
-            }
-          </Show>{" "}
-          and reading even its newest confirmed transactions would keep the node busy for tens of
-          seconds or more.
-        </p>
-      </section>
-
       <section class="address-history" aria-labelledby="address-mempool-title">
         <SectionHeader title="Unconfirmed transactions" id="address-mempool-title">
           <span class={["address-live", { "address-live--on": !failed() }]}>
@@ -165,7 +195,7 @@ export function LargeAddress(props: { address: string }) {
           <Match when={failed() && list() === undefined}>
             <ErrorState
               title="Could not load the unconfirmed transactions"
-              error={pool.error}
+              error={answer.error}
               retry={refetch}
             />
           </Match>

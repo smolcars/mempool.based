@@ -141,6 +141,33 @@
     color: var(--color-text-muted);
     font-size: var(--text-sm);
   }
+
+  /* A large address being added up for the first time: a panel with the accent's rule, its
+     progress in figures that keep their width as they count. */
+  .address-adding {
+    max-width: 48rem;
+    margin-top: var(--space-4);
+    border-left: 3px solid var(--color-accent);
+  }
+  .address-adding__title {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-md);
+  }
+  .address-adding p {
+    margin: 0;
+  }
+  .address-adding .address-adding__progress {
+    margin-top: var(--space-3);
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Where a kept address's totals come from. */
+  .address-kept {
+    max-width: 48rem;
+    margin-top: var(--space-4);
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
   /* Room under the chosen tab's bar, which hangs below the tabs, so it never meets the table. */
   .address-tabs {
     display: flex;
@@ -365,10 +392,11 @@
     font-weight: var(--weight-medium);
   }
 
-  /* Below this the four figures beside the balance get too narrow, so the balance takes a row. */
+  /* Below this the four figures beside the balance get too narrow, so the balance takes a row,
+     and the figures wrap when an exchange's millions do not fit four abreast. */
   @media (max-width: 80em) {
     .address-stats {
-      grid-template-columns: repeat(4, minmax(min-content, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
     }
     .address-stats--large {
       grid-template-columns: repeat(2, minmax(min-content, 1fr));
@@ -381,9 +409,10 @@
     .address {
       padding-top: var(--space-5);
     }
-    /* The right column holds the exact unconfirmed change, the left only figures in magnitude. */
+    /* Two abreast where they fit, one below that: an exchange's millions need a whole row on the
+       narrowest phones. */
     .address-stats {
-      grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
       gap: var(--space-4);
     }
     .address-stat__value {
