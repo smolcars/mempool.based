@@ -953,8 +953,9 @@ async fn a_failed_fetch_publishes_nothing_and_resumes_where_it_stopped() {
     );
     // The retry fetches only the four it does not hold yet.
     let s = cycle(next_cycle(&mut ev).await);
-    // The probe's two calls, listing, tip, two detail batches; the block is still held.
-    assert_eq!((s.added, s.size, s.calls, s.blocks), (6, 6, 6, 0));
+    // The probe (after a failure, `getmempoolinfo` alone), listing, tip, two detail batches;
+    // the block is still held.
+    assert_eq!((s.added, s.size, s.calls, s.blocks), (6, 6, 5, 0));
     assert_eq!(mock.n.details.load(Ordering::SeqCst), 4);
     let d = sub.recv().await.unwrap();
     assert_eq!((d.seq, d.added.len()), (1, 6));

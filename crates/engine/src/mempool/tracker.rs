@@ -436,7 +436,8 @@ impl<S: Source> Poller<S> {
             // list but not the totals, and a later removal of its twin would match both. Asked
             // only of a node that answered the last cycle: after a failure the next cycle lists
             // anyway, and a node that is down is not asked twice per retry.
-            let recent = match failures == 0 && last_full.is_some() {
+            let ask_recent = failures == 0 && last_full.is_some();
+            let recent = match ask_recent {
                 true => self.source.recent().await.ok(),
                 false => None,
             };
@@ -468,7 +469,7 @@ impl<S: Source> Poller<S> {
                     last_full = Some(started);
                     stats.duration = started.elapsed();
                     stats.bytes = bytes;
-                    stats.calls += 2; // the probe's two
+                    stats.calls += 1 + u32::from(ask_recent); // the probe's
                     stats.skipped = std::mem::take(&mut skipped);
                     next = self.pace(started);
                     self.totals.0 += bytes;
