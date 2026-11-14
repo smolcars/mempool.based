@@ -4,7 +4,7 @@ import { chain, expect, test } from "./fixtures";
 // A regtest block hash has no leading zeros, so search asks for a transaction first and gets a 404.
 test.use({ consoleErrorsAllowed: [/status of 404/] });
 
-const search = (page: Page) => page.getByRole("search").getByRole("searchbox", { name: "Search" });
+const search = (page: Page) => page.getByRole("search").getByRole("combobox", { name: "Search" });
 
 const cases = [
   { kind: "a height", query: "#106", url: "/regtest/block/106" },
@@ -73,7 +73,7 @@ test("a phone's nothing-found panel keeps its width when the field loses focus",
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/regtest/");
   const field = search(page);
-  await field.fill("884406x95x0");
+  await field.fill("nothing like an id");
   await field.press("Enter");
   const panel = page.locator(".search__panel");
   await expect(panel).toBeVisible();

@@ -511,7 +511,7 @@ Decided while building it:
 ### Lightning (not in the prototype)
 
 ```text
-Lightning                                   Find a node or channel [ … ][Search]
+Lightning              (nodes and channels are found from the header's search)
 The network now ═════════════════════════════════════════ As of 12 Nov, 18:30 UTC
 Channels  Nodes  Capacity  Median fee rate  Median base fee
 (only channels checked against the chain)

@@ -211,4 +211,88 @@
   .search__aside {
     color: var(--color-text-muted);
   }
+
+  /* Lightning nodes matching what is typed: under the field like the miss panel, a row per node. */
+  .search__list {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    left: 0;
+    right: 0;
+    z-index: var(--z-tooltip);
+    /* Within the screen under the sticky header, so the last row is reachable by scrolling it. */
+    max-height: calc(100dvh - var(--header-h, 4rem) - var(--space-4));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-m);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-sm);
+    animation: search-drop var(--dur-quick) var(--ease-out);
+  }
+  .search__option {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name cap"
+      "key key";
+    align-content: center;
+    column-gap: var(--space-3);
+    min-height: var(--touch);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .search__option[aria-selected="true"] {
+    background: var(--color-surface-sunken);
+    box-shadow: inset 2px 0 0 var(--color-accent);
+  }
+  @media (hover: hover) {
+    .search__option:hover {
+      background: var(--color-surface-sunken);
+    }
+  }
+  @media (forced-colors: active) {
+    .search__option[aria-selected="true"] {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
+  }
+  .search__name {
+    grid-area: name;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--weight-medium);
+  }
+  .search__name--none {
+    color: var(--color-text-muted);
+    font-weight: normal;
+  }
+  .search__cap {
+    grid-area: cap;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+  .search__nodekey {
+    grid-area: key;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+  }
+  .search__all {
+    display: flex;
+    align-items: center;
+    margin-top: var(--space-1);
+    border-top: 1px solid var(--color-line);
+    border-radius: 0 0 4px 4px;
+    color: var(--color-accent);
+    font-weight: var(--weight-medium);
+    overflow-wrap: anywhere;
+  }
 }

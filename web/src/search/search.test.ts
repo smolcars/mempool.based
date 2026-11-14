@@ -6,6 +6,7 @@ import { createSearch, describe as read, type Get, probeOrder, resolve as lead }
 
 const TXID = "65428488a6202f1d681d053b3ff5d8ea9f5b0e5e1e0dcf7bf2e4c1e5a3f9c2e1";
 const BLOCK = "00000000000000000000e13ad5e424f6ba7208b0c1a9a687e9ccc4d62b3b094c";
+const KEY = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
 const REGTEST_BLOCK = "2ac64444e3172ee94aeeff3b09014b1d69b4daeccddac025d493332d54f6f145";
 
 const notFound = () => Promise.reject(new ApiError(404, "Not found."));
@@ -33,8 +34,25 @@ describe("read (describe)", () => {
     [TXID.slice(0, 20), "mainnet", "20 of 64 characters", false],
     ["hello", "mainnet", "Not recognised", false],
     ["x".repeat(600), "mainnet", "Too long", false],
+    [KEY, "mainnet", "Lightning node", true],
+    ["811984x2037x0", "mainnet", "Lightning channel", true],
   ] as const)("%s on %s reads %j", (q, network, label, ready) => {
     expect(read(q, network)).toStrictEqual({ label, ready });
+  });
+
+  it("reads a name as a node search only where Lightning is on", () => {
+    expect(read("noderunner", "signet", true)).toStrictEqual({ label: "Node name", ready: true });
+    expect(read("noderunner", "signet", false)).toStrictEqual({
+      label: "Not recognised",
+      ready: false,
+    });
+    // A key's start searches nodes; a txid's start still counts its characters.
+    expect(read("03864ef0", "signet", true)).toStrictEqual({
+      label: "8 of 64 characters",
+      ready: true,
+    });
+    // Under 3 characters the index answers nothing.
+    expect(read("no", "signet", true)).toStrictEqual({ label: "Not recognised", ready: false });
   });
 });
 
@@ -65,6 +83,19 @@ describe("resolve (lead)", () => {
     await expect(lead(classify("tb1pfees9rn5nz"), probe)).resolves.toStrictEqual({
       kind: "go",
       path: "/address/tb1pfees9rn5nz",
+    });
+    expect(asked).toStrictEqual([]);
+  });
+
+  it("goes to a Lightning node or channel page without asking", async () => {
+    const { asked, probe } = api([]);
+    await expect(lead(classify(KEY), probe)).resolves.toStrictEqual({
+      kind: "go",
+      path: `/lightning/node/${KEY}`,
+    });
+    await expect(lead(classify("892785849701564416"), probe)).resolves.toStrictEqual({
+      kind: "go",
+      path: "/lightning/channel/811984x2037x0",
     });
     expect(asked).toStrictEqual([]);
   });
@@ -180,5 +211,99 @@ describe("createSearch", () => {
     });
     await search.run(TXID, "testnet4");
     expect(seen).toStrictEqual(["testnet4"]);
+  });
+});
+
+describe("createSearch and Lightning", () => {
+  const status = (state: string) => ({ state });
+  /** A fake `/app` whose status is `state`, recording each path; searches wait for `release`. */
+  function lightning(state: string) {
+    const asked: string[] = [];
+    const searches: { signal: AbortSignal; release: (v: unknown) => void }[] = [];
+    const app: Get = (_network, path, signal) => {
+      asked.push(path);
+      if (path === "/lightning/status") return Promise.resolve(status(state));
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        searches.push({ signal, release: resolve });
+      });
+    };
+    return { asked, searches, app };
+  }
+  const nodes = (alias: string) => ({
+    nodes: [{ id: KEY, alias, capacity: 5, channels: 1 }],
+    channels: [],
+  });
+
+  it("opens the results page for a name on Enter, and asks the status once", async () => {
+    const { asked, app } = lightning("synced");
+    const search = createSearch(notFound, app);
+    await expect(search.run(" noderunner ", "signet")).resolves.toStrictEqual({
+      kind: "go",
+      path: "/lightning/search?q=noderunner",
+    });
+    await search.run("acinq", "signet");
+    expect(asked).toStrictEqual(["/lightning/status"]);
+  });
+
+  it("says nothing matches a name where Lightning is off, and never searches there", async () => {
+    const { asked, app } = lightning("off");
+    const search = createSearch(notFound, app);
+    await expect(search.run("noderunner", "mainnet")).resolves.toStrictEqual({
+      kind: "missing",
+      query: null,
+    });
+    await expect(search.suggest("noderunner", "mainnet")).resolves.toStrictEqual({
+      lightning: false,
+      nodes: [],
+    });
+    expect(asked).toStrictEqual(["/lightning/status"]);
+  });
+
+  it("asks nothing for an id or a query the index refuses", async () => {
+    const { asked, app } = lightning("synced");
+    const search = createSearch(notFound, app);
+    for (const q of [TXID, KEY, "811984x2037x0", "840000", "ab", "x".repeat(67)]) {
+      await expect(search.suggest(q, "signet")).resolves.toStrictEqual({
+        lightning: undefined,
+        nodes: [],
+      });
+    }
+    expect(asked).toStrictEqual([]);
+  });
+
+  it("suggests nodes with their names cleaned, and a newer suggestion overtakes an older", async () => {
+    const { searches, app } = lightning("synced");
+    const search = createSearch(notFound, app);
+    const first = search.suggest("node", "signet");
+    await vi.waitFor(() => expect(searches).toHaveLength(1));
+    const second = search.suggest("noderunner", "signet");
+    await vi.waitFor(() => expect(searches).toHaveLength(2));
+    expect(searches[0]?.signal.aborted).toBe(true);
+    searches[0]?.release(nodes("old"));
+    searches[1]?.release(nodes("bad\u{202E}name"));
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toStrictEqual({
+      lightning: true,
+      nodes: [{ key: KEY, name: "bad\u{FFFD}name", capacity: 5, path: `/lightning/node/${KEY}` }],
+    });
+  });
+
+  it("answers nothing once cancelled, and offers nothing when the search fails", async () => {
+    const { searches, app } = lightning("syncing");
+    const search = createSearch(notFound, app);
+    const cancelled = search.suggest("noderunner", "signet");
+    await vi.waitFor(() => expect(searches).toHaveLength(1));
+    search.cancel();
+    await expect(cancelled).resolves.toBeUndefined();
+    const failing = createSearch(notFound, (_n, path) =>
+      path === "/lightning/status"
+        ? Promise.resolve(status("syncing"))
+        : Promise.reject(new ApiError(503, "Syncing.")),
+    );
+    await expect(failing.suggest("noderunner", "signet")).resolves.toStrictEqual({
+      lightning: true,
+      nodes: [],
+    });
   });
 });

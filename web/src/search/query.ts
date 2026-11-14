@@ -11,9 +11,13 @@ export type HashKind = "block" | "tx";
 export type Query =
   | { kind: "height"; height: number }
   | { kind: "hash"; hash: string; as: HashKind | null }
-  | { kind: "address"; address: Recognised };
+  | { kind: "address"; address: Recognised }
+  /** A Lightning node's public key: 66 hex digits, compressed (02 or 03 first), lowercase. */
+  | { kind: "node"; key: string }
+  /** A Lightning channel's short id, as `<height>x<index>x<output>`. */
+  | { kind: "channel"; id: string };
 
-type Hint = HashKind | "address" | null;
+type Hint = HashKind | "address" | "node" | "channel" | null;
 
 const U32_MAX = 4_294_967_295;
 
@@ -27,6 +31,10 @@ const PATH_WORDS: Record<string, Hint> = {
   "block-height": "block",
   address: "address",
   addresses: "address",
+  node: "node",
+  nodes: "node",
+  channel: "channel",
+  channels: "channel",
 };
 
 // Zero-width characters ride along with copied text; quotes, brackets and a sentence's final
@@ -55,7 +63,7 @@ function decode(segment: string): string {
 /**
  * The identifier in a pasted link's path: the first segment that fits the nearest path word
  * before it (`/tx/<id>`, `/bitcoin/transaction/<id>`, `/explorer/blocks/btc/<height>`). With no
- * path word, a hash or address as the last segment. The host is ignored, so any explorer's link works.
+ * path word, a hash, address or node key as the last segment. The host is ignored, so any explorer's link works.
  */
 function fromLink(q: string): Query | null {
   let url: URL;
@@ -81,14 +89,14 @@ function fromLink(q: string): Query | null {
   }
   if (hint) return null;
   const last = plain(segments.at(-1) ?? "", null);
-  return last?.kind === "height" ? null : last;
+  return last?.kind === "height" || last?.kind === "channel" ? null : last;
 }
 
 /** A bare identifier, limited to what `hint` allows. */
 function plain(q: string, hint: Hint): Query | null {
   // Hashes and addresses never hold whitespace; a copied one may be grouped or wrapped.
   const compact = q.replaceAll(/\s+/g, "");
-  if (hint !== "address") {
+  if (hint === null || hint === "tx" || hint === "block") {
     const hex = /^(?:0x)?([0-9a-f]{64})(?::\d{1,10})?$/i.exec(compact);
     const hash = hex?.[1]?.toLowerCase();
     const outpoint = compact.includes(":");
@@ -104,7 +112,33 @@ function plain(q: string, hint: Hint): Query | null {
     const address = recognise(compact);
     if (address) return { kind: "address", address };
   }
+  if ((hint === null || hint === "node") && /^0[23][0-9a-f]{64}$/i.test(compact)) {
+    return { kind: "node", key: compact.toLowerCase() };
+  }
+  // A plain number that fits a height was taken as one above.
+  if (hint === null || hint === "channel") {
+    const id = channelId(compact);
+    if (id !== null) return { kind: "channel", id };
+  }
   return null;
+}
+
+const U64_MAX = 2n ** 64n - 1n;
+
+/**
+ * A short channel id in the forms the server's search takes (crates/server/src/lightning/nodes.rs
+ * `scid`): `811984x2037x0`, or the 64-bit number it packs into. Written back as the first.
+ */
+function channelId(q: string): string | null {
+  const parts = /^(\d{1,8})x(\d{1,8})x(\d{1,5})$/i.exec(q);
+  if (parts) {
+    const [h, i, o] = parts.slice(1).map(Number);
+    if (h === undefined || i === undefined || o === undefined) return null;
+    return h <= 0xff_ffff && i <= 0xff_ffff && o <= 0xffff ? `${h}x${i}x${o}` : null;
+  }
+  if (!/^\d{1,20}$/.test(q)) return null;
+  const n = BigInt(q);
+  return n <= U64_MAX ? `${n >> 40n}x${(n >> 16n) & 0xff_ffffn}x${n & 0xffffn}` : null;
 }
 
 /**

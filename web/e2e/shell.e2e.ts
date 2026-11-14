@@ -119,7 +119,7 @@ test.describe("when the web font fails", () => {
 test("the not-found page offers the search and ways on", async ({ page }) => {
   await page.goto("/regtest/no/such/page");
   const main = page.getByRole("main");
-  await expect(main.getByRole("searchbox")).toBeVisible();
+  await expect(main.getByRole("combobox", { name: "Search" })).toBeVisible();
   await expect(main.getByRole("navigation", { name: "Where to go" }).getByRole("link")).toHaveCount(
     5,
   );
@@ -176,8 +176,8 @@ for (const [name, viewport] of [
     );
     // On a phone, searching takes the row: the field and its answer are nearly the page's width.
     if (viewport.width < 700) {
-      await header.getByRole("searchbox").fill("nonsense query");
-      await header.getByRole("searchbox").press("Enter");
+      await header.getByRole("combobox", { name: "Search" }).fill("nonsense query");
+      await header.getByRole("combobox", { name: "Search" }).press("Enter");
       const panel = page.getByText("Nothing matches", { exact: true });
       await expect(panel).toBeVisible();
       const field = await header.locator(".search__field").boundingBox();
@@ -336,7 +336,7 @@ test("the header keeps a usable search and apart sections down to a zoomed phone
   for (const width of [320, 268]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/regtest/");
-    const search = page.getByRole("searchbox", { name: "Search" });
+    const search = page.getByRole("combobox", { name: "Search" });
     const box = await search.boundingBox();
     expect(box?.width ?? 0, `search at ${width} px`).toBeGreaterThanOrEqual(
       width >= 300 ? 90 : 200,

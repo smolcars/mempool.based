@@ -254,3 +254,51 @@ describe("classify: bounds and garbage", () => {
     expect(kindOf(`https://mempool.space/tx/${TXID}?${"a".repeat(400)}`)).toBe("hash");
   });
 });
+
+describe("classify: Lightning", () => {
+  const KEY = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
+
+  it.each([
+    [KEY, KEY],
+    [KEY.toUpperCase(), KEY],
+    [` ${KEY} `, KEY],
+    [`https://mempool.space/lightning/node/${KEY}`, KEY],
+    [`https://example.com/${KEY}`, KEY],
+  ])("%s is a node", (q, key) => {
+    expect(classify(q)).toStrictEqual({ kind: "node", key });
+  });
+
+  it.each([
+    ["811984x2037x0", "811984x2037x0"],
+    ["811984X2037X0", "811984x2037x0"],
+    ["0811984x02037x00", "811984x2037x0"],
+    ["16777215x16777215x65535", "16777215x16777215x65535"],
+    // 811984 << 40 | 2037 << 16: the same channel as the 64-bit number the reference uses.
+    ["892785849701564416", "811984x2037x0"],
+    ["18446744073709551615", "16777215x16777215x65535"],
+    ["4294967296", "0x65536x0"],
+    ["https://mempool.space/lightning/channel/811984x2037x0", "811984x2037x0"],
+    ["https://mempool.space/lightning/channel/123", "0x0x123"],
+  ])("%s is channel %s", (q, id) => {
+    expect(classify(q)).toStrictEqual({ kind: "channel", id });
+  });
+
+  it.each([
+    `04${KEY.slice(2)}`,
+    KEY.slice(0, 65),
+    `${KEY}0`,
+    "16777216x0x0",
+    "1x16777216x0",
+    "1x2x65536",
+    "1x2",
+    "1x2x3x4",
+    "18446744073709551616",
+    "https://example.com/892785849701564416",
+  ])("%s is not a Lightning id", (q) => {
+    expect(["node", "channel"]).not.toContain(classify(q)?.kind);
+  });
+
+  it("keeps a number that fits a height a height", () => {
+    expect(classify("4294967295")).toStrictEqual(height(4_294_967_295));
+  });
+});
