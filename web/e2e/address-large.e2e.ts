@@ -28,19 +28,25 @@ test("leads with the node's count and cap, then says what is not shown", async (
 
 test("a new unconfirmed transaction appears without a reload", async ({ page }) => {
   let txids: string[] = [chain.txs.payment];
-  let asks = 0;
-  page.on("request", (r) => {
-    if (r.url().endsWith(`/address/${LARGE}/txs/mempool`)) asks += 1;
-  });
   // The page's clock stands still but when the test moves it, a poll at a time, instead of
   // waiting out real polls.
   await page.clock.install();
   await page.clock.pauseAt(Date.now() + 1000);
+  // When each ask leaves, by the page's own clock.
+  await page.addInitScript(() => {
+    const asks: number[] = [];
+    (window as unknown as { asks: number[] }).asks = asks;
+    const fetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/txs/mempool")) asks.push(Date.now());
+      return fetch(input, init);
+    };
+  });
   await stubLarge(page, { mempool: () => txids });
   await page.goto(`/regtest/address/${LARGE}`);
   const pool = page.getByRole("table", { name: /^Unconfirmed transactions of this address/ });
   await expect(pool.getByRole("link", { name: /^0def111d/ })).toBeVisible();
-  const first = asks;
   txids = [chain.txs.cpfp_child, chain.txs.payment];
   await page.clock.runFor(POLL_MS);
   await expect(pool.getByRole("link", { name: /^ad853f87/ })).toBeVisible();
@@ -50,7 +56,8 @@ test("a new unconfirmed transaction appears without a reload", async ({ page }) 
   await page.clock.runFor(POLL_MS);
   await expect(page.getByText("Nothing waiting to confirm")).toBeVisible();
   // One ask a poll, no faster.
-  expect(asks - first).toBe(2);
+  const asks = await page.evaluate(() => (window as unknown as { asks: number[] }).asks);
+  expect(asks.slice(1).map((t, i) => t - (asks[i] ?? t))).toStrictEqual([POLL_MS, POLL_MS]);
 });
 
 test("without the node's count, it says what it can and leaves no bar waiting", async ({

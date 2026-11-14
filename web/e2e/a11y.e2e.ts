@@ -60,6 +60,8 @@ async function axe(page: Page, only?: string[]): Promise<string[]> {
 }
 
 interface Stop {
+  /** The element's own number, so a second control of the same name is not the first again. */
+  id: number;
   name: string;
   ring: boolean;
   covered: boolean;
@@ -82,10 +84,11 @@ const record = (page: Page) =>
     const w = window as unknown as Walked;
     w.seen = [];
     w.at = [];
+    const ids = new Map<Element, number>();
     w.here = (): Stop | null => {
       const e = document.activeElement;
       if (!(e instanceof HTMLElement) || e === document.body) return null;
-      e.dataset["walked"] = "";
+      if (!ids.has(e)) ids.set(e, ids.size);
       // The ring is the element's own outline, or its field's (the search draws it on its box).
       let ring = false;
       for (const x of [e, e.parentElement]) {
@@ -103,7 +106,7 @@ const record = (page: Page) =>
       const covered =
         !header?.contains(e) && box.top < bottom - 1 && box.bottom > 0 && !!header?.contains(top);
       const name = (e.getAttribute("aria-label") ?? e.textContent ?? "").trim().slice(0, 40);
-      return { name: `${e.tagName.toLowerCase()} "${name}"`, ring, covered };
+      return { id: ids.get(e) ?? -1, name: `${e.tagName.toLowerCase()} "${name}"`, ring, covered };
     };
     // Tab's own keydown only: a press of Shift+Tab or Alt+Tab is two.
     addEventListener(
@@ -169,9 +172,15 @@ async function walk(page: Page, browserName: string) {
     // The first noted is focus before the batch's first press, which the last batch's end held.
     const { seen } = await noted(page);
     after.push(...(after.length > 0 ? seen : seen.slice(1)));
-    end = after.findIndex((s, i) => !s || (i > 0 && s.name === after[0]?.name));
+    end = after.findIndex((s, i) => !s || (i > 0 && s.id === after[0]?.id));
   }
   const stops = after.slice(0, end < 0 ? after.length : end) as Stop[];
+  // Only the stops kept count as reached: presses past the end went round again.
+  await page.evaluate((n) => {
+    for (const e of (window as unknown as Walked).at.slice(1, n + 1)) {
+      if (e instanceof HTMLElement) e.dataset["walked"] = "";
+    }
+  }, stops.length);
   expect.soft(stops[0]?.name, "the first stop").toBe('a "Skip to content"');
   expect
     .soft(
