@@ -19,7 +19,7 @@
   }
 
   /* Test networks only: a slim band in the network's colour, with the warning in words and a short
-     hatched mark before it. The logo tile and the network switch carry the colour too. */
+     hatched mark before it. The logo and the network switch carry the colour too. */
   .network-band {
     padding-block: var(--space-1);
     padding-inline: max(var(--gutter), var(--safe-l)) max(var(--gutter), var(--safe-r));

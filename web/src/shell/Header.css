@@ -79,25 +79,21 @@
   }
 
   .logo {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     flex: none;
-  }
-  .logo__tile {
     fill: var(--color-network);
   }
-  .logo__layer {
-    fill: var(--color-surface);
+  .logo__mid {
+    fill-opacity: 0.6;
   }
-  .logo__layer--mid {
-    fill-opacity: 0.62;
-  }
-  .logo__layer--top {
+  /* The arriving layer stays in the accent on every network; the crab carries the network color. */
+  .logo__top {
     fill: var(--color-accent);
   }
-  /* On a test network the tile carries the network color; a pink layer on it would clash. */
-  :root:not([data-network="mainnet"]) .logo__layer--top {
-    fill: var(--color-surface);
+  .logo__lines {
+    fill: none;
+    stroke: var(--color-network);
   }
 
   .nav {
