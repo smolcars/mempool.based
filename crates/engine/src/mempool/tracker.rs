@@ -431,6 +431,15 @@ impl<S: Source> Poller<S> {
             let forced = forced || self.wanted.is_some();
             let started = Instant::now();
             let bytes = self.source.bytes();
+            // The newest arrivals first: one between the two reads is then in the totals but not
+            // in the list, so every later list differs. The other way round, it would be in the
+            // list but not the totals, and a later removal of its twin would match both. Asked
+            // only of a node that answered the last cycle: after a failure the next cycle lists
+            // anyway, and a node that is down is not asked twice per retry.
+            let recent = match failures == 0 && last_full.is_some() {
+                true => self.source.recent().await.ok(),
+                false => None,
+            };
             let info = self.source.mempool_info().await;
             if let Ok(i) = &info {
                 *self
@@ -439,11 +448,6 @@ impl<S: Source> Poller<S> {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner) = Some(i.clone());
             }
-            // Asked only of a node that answered: a failing one is not asked twice per retry.
-            let recent = match &info {
-                Ok(_) => self.source.recent().await.ok(),
-                Err(_) => None,
-            };
             let result = match info.map(|info| Probe { info, recent }) {
                 Ok(probe)
                     if !forced

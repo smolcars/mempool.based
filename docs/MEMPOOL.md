@@ -85,7 +85,7 @@ So both transports use the same RPC path. Not measured against a real unix socke
 
 Each cycle:
 
-1. **Probe:** `getmempoolinfo` (10 ms, 0.4 KB) and Esplora's `/mempool/recent` (the ten newest arrivals' txids, 1.1 KB, 2–4 ms on regtest), the second once the first has answered. If the first's size, vsize total and fee total and the second's txids equal the ones taken before the last full cycle, and no tip hint arrived, and the last full cycle is under 10 s old, stop here.
+1. **Probe:** Esplora's `/mempool/recent` (the ten newest arrivals' txids, 1.1 KB, 2–4 ms on regtest), then `getmempoolinfo` (10 ms, 0.4 KB). If the txids and the size, vsize total and fee total equal the ones taken before the last full cycle, and no tip hint arrived, and the last full cycle is under 10 s old, stop here. The list is read first so that a transaction arriving between the two reads is in the totals and not in the list: every later list then differs, and the next probe lists again. The other way round it would be in the list and not in the totals, and the eviction of a twin before the next probe would match both. The list is asked only after a good cycle with no failure since; otherwise the probe has none, and a probe without one never skips and is never skipped against, so the first cycle after start or after a failure is followed by one more listing, and a node that is down is not asked twice per retry.
 2. **List:** `getrawmempool` with `mempool_sequence` (110–250 ms, 3.6 MB at 55,000 transactions).
 3. **Tip:** Esplora's tip hash, stamped with its height (18 ms).
 4. **Blocks:** the six most recent blocks on the active chain ending at that tip, fetched with Esplora's raw-block route (98 ms, 1.6 MB a block) only when not already held. Usually zero; one per new block.

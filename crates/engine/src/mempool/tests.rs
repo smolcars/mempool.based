@@ -444,6 +444,8 @@ struct Node {
     recent: VecDeque<Txid>,
     /// Same probe answers whatever the pool, to test the heartbeat.
     frozen_info: bool,
+    /// Arrives right after the first of the probe's two reads answers, before the second.
+    between_reads: Option<Transaction>,
     delay: Duration,
     /// What Esplora's tip route answers while the node has announced a block it does not serve.
     lag: Option<ChainTip>,
@@ -481,18 +483,20 @@ impl Mock {
     }
 
     fn send(&self, t: &Transaction) {
-        self.with(|n| {
-            n.pool.retain(|p| {
-                !p.input.iter().any(|i| {
-                    t.input
-                        .iter()
-                        .any(|j| i.previous_output == j.previous_output)
-                })
-            });
-            n.pool.push(t.clone());
-            n.recent.push_front(t.compute_txid());
-            n.sequence += 1;
+        self.with(|n| Self::arrive(n, t));
+    }
+
+    fn arrive(n: &mut Node, t: &Transaction) {
+        n.pool.retain(|p| {
+            !p.input.iter().any(|i| {
+                t.input
+                    .iter()
+                    .any(|j| i.previous_output == j.previous_output)
+            })
         });
+        n.pool.push(t.clone());
+        n.recent.push_front(t.compute_txid());
+        n.sequence += 1;
     }
 
     /// Mines `txs` onto the tip, dropping them and their conflicts from the pool.
@@ -557,7 +561,7 @@ impl Source for Mock {
             let (size, bytes, total_fee) = entries.fold((0, 0, Amount::ZERO), |(c, v, f), e| {
                 (c + 1, v + e.vsize, f + e.fees.base)
             });
-            MempoolInfo {
+            let info = MempoolInfo {
                 loaded: true,
                 size,
                 bytes,
@@ -571,16 +575,26 @@ impl Source for Mock {
                 limitclustercount: 64,
                 limitclustersize: 101_000,
                 unbroadcastcount: 0,
+            };
+            if let Some(t) = n.between_reads.take() {
+                Self::arrive(n, &t);
             }
+            info
         }))
     }
 
     async fn recent(&self) -> Result<Vec<Txid>, SourceError> {
         // Outside `enter`: injected failures and delays stay aimed at the calls they test.
         self.n.recents.fetch_add(1, Ordering::SeqCst);
-        Ok(self.with(|n| match n.frozen_info {
-            true => Vec::new(),
-            false => n.recent.iter().take(10).copied().collect(),
+        Ok(self.with(|n| {
+            let recent = match n.frozen_info {
+                true => Vec::new(),
+                false => n.recent.iter().take(10).copied().collect(),
+            };
+            if let Some(t) = n.between_reads.take() {
+                Self::arrive(n, &t);
+            }
+            recent
         }))
     }
 
@@ -754,9 +768,11 @@ async fn probes_skip_unchanged_pools_and_the_heartbeat_lists_anyway() {
     let (tracker, task) = Tracker::start(mock.clone(), config());
     let mut ev = tracker.events();
     cycle(next_cycle(&mut ev).await);
+    // The first cycle's probe had no newest arrivals to save, so the next one lists once more.
+    cycle(next_cycle(&mut ev).await);
     tokio::time::sleep(Duration::from_millis(5500)).await;
-    // Five probes found nothing; still one listing.
-    assert_eq!(mock.n.listings.load(Ordering::SeqCst), 1);
+    // Then five probes found nothing.
+    assert_eq!(mock.n.listings.load(Ordering::SeqCst), 2);
     assert!(mock.n.infos.load(Ordering::SeqCst) >= 6);
 
     // A change the probe cannot see is still found by the heartbeat.
@@ -781,6 +797,7 @@ async fn an_arrival_just_like_one_that_left_is_seen_at_the_next_probe() {
     let (tracker, task) = Tracker::start(mock.clone(), config());
     let mut ev = tracker.events();
     cycle(next_cycle(&mut ev).await);
+    cycle(next_cycle(&mut ev).await); // the second listing, which saves the newest arrivals
     tokio::time::sleep(Duration::from_millis(3500)).await;
     let skipping = mock.n.listings.load(Ordering::SeqCst);
 
@@ -812,6 +829,28 @@ async fn an_arrival_just_like_one_that_left_is_seen_at_the_next_probe() {
     assert_eq!(s.added, 1);
     assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
     assert_eq!(txids(&tracker), pool_txids(&mock));
+    task.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_arrival_between_the_probes_two_reads_is_not_saved_half_seen() {
+    let (a, b) = (tx(&[coin(0)], 1, 5), tx(&[coin(1)], 1, 5));
+    let mock = Mock::new();
+    mock.send(&b);
+    let (tracker, task) = Tracker::start(mock.clone(), config());
+    let mut ev = tracker.events();
+    cycle(next_cycle(&mut ev).await);
+    // `a`, the twin of `b` in size and fee, arrives while a probe is between its two reads.
+    mock.with(|n| n.between_reads = Some(a.clone()));
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!((s.added, s.size), (1, 2));
+    // Then, before the next probe, `b` is evicted: the totals are back to what the probe's
+    // first read saw. The probe saved with that cycle must still tell.
+    mock.with(|n| n.pool.retain(|t| *t != b));
+    let at = tokio::time::Instant::now();
+    let s = cycle(next_cycle(&mut ev).await);
+    assert_eq!((s.evicted, s.size), (1, 1));
+    assert!(at.elapsed() <= Duration::from_secs(1), "{:?}", at.elapsed());
     task.abort();
 }
 
