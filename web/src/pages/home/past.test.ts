@@ -236,6 +236,75 @@ describe("the strip's past, loaded", () => {
     s.dispose();
   });
 
+  it("keeps no page asked for before a deep reorg", async () => {
+    let answer: (r: Response) => void = () => undefined;
+    reply = () => Response.json([]);
+    vi.stubGlobal("fetch", async (url: string) => {
+      requests.push(url);
+      return new Promise<Response>((resolve) => {
+        answer = resolve;
+      });
+    });
+    const s = open(chain(991, 1000), { top: 1000, bottom: 975, middle: 995, tip: 1000 });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    // Block 990 is kept, then a reorg from 980 replaces it while the next page is on its way.
+    answer(Response.json(chain(986, 1000)));
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    // Block 992 of branch b does not build on the 991 kept: a reorg below the live list.
+    s.setList(chain(992, 1001, "b"));
+    flush();
+    answer(Response.json(chain(975, 989)));
+    await vi.waitFor(() => expect(requests.length).toBeGreaterThan(2));
+    expect(s.past.block(980)).toBeUndefined();
+    s.dispose();
+  });
+
+  it("lets go of blocks as the chain grows at now", () => {
+    const s = createRoot((dispose) => {
+      const [list, setList] = createSignal<Block[] | undefined>(chain(991, 1000));
+      const [want, setWant] = createSignal<Want | undefined>(undefined);
+      const past = createPastBlocks("regtest", list, want, () => undefined);
+      return { past, setList, setWant, dispose };
+    });
+    for (let tip = 1001; tip <= 1300; tip++) {
+      s.setWant({ top: tip, bottom: tip - 40, middle: tip - 5, tip });
+      s.setList(chain(tip - 9, tip));
+      flush();
+    }
+    expect(s.past.block(1000)).toBeUndefined();
+    expect(s.past.block(1290)?.height).toBe(1290);
+    expect(s.past.block(1200)?.height).toBe(1200);
+    s.dispose();
+  });
+
+  it("keeps a focused tile's neighbours and the block under the live list, far from the view", async () => {
+    const s = createRoot((dispose) => {
+      const [want, setWant] = createSignal<Want | undefined>({
+        top: 1000,
+        bottom: 970,
+        middle: 995,
+        tip: 1000,
+      });
+      const past = createPastBlocks(
+        "regtest",
+        () => chain(991, 1000),
+        want,
+        () => 505,
+      );
+      return { past, setWant, dispose };
+    });
+    await vi.waitFor(() => expect(s.past.block(975)).toBeDefined());
+    s.setWant({ top: 520, bottom: 490, middle: 505, tip: 1000 });
+    await vi.waitFor(() => expect(s.past.block(490)).toBeDefined());
+    s.setWant({ top: 220, bottom: 190, middle: 205, tip: 1000 });
+    await vi.waitFor(() => expect(s.past.block(190)).toBeDefined());
+    expect([504, 505, 506].map((h) => s.past.block(h)?.height)).toStrictEqual([504, 505, 506]);
+    expect(s.past.block(500)).toBeUndefined();
+    expect(s.past.block(990)?.height).toBe(990);
+    expect(s.past.block(980)).toBeUndefined();
+    s.dispose();
+  });
+
   it("asks nothing below block 0", async () => {
     const s = open(chain(1, 10), { top: 10, bottom: -40, middle: 0, tip: 10 });
     await vi.waitFor(() => expect(s.past.block(0)).toBeDefined());

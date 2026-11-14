@@ -197,6 +197,8 @@ export function createPastBlocks(
   const changed = () => setVersion((v) => v + 1);
   let controller: AbortController | undefined;
   let busy = false;
+  /** Counts deep reorgs, so a page asked for before one is not kept after it. */
+  let chain = 0;
   /** The extras route needs the server's block table; without one, the node's own pages serve. */
   let useV1 = true;
 
@@ -211,7 +213,11 @@ export function createPastBlocks(
     if (bottom && below && below.id !== bottom.previousblockhash) {
       for (const h of blocks.keys()) if (h < bottom.height) blocks.delete(h);
       failed.clear();
+      chain++;
     }
+    // At "now" nothing loads, so new blocks are let go of here too.
+    const w = untrack(want);
+    if (w) prune(w);
     changed();
     step();
   });
@@ -233,12 +239,15 @@ export function createPastBlocks(
     return parse(await fetchApi<unknown>(network, `/blocks/${missing}`, { signal }));
   }
 
-  /** Lets go of what is far from the view. */
+  /**
+   * Lets go of what is far from the view; keeps the block under the live list, which tells a deep
+   * reorg, and a focused tile with its neighbours, which arrow keys go to.
+   */
   function prune(w: Want) {
-    const lowest = live()?.at(-1)?.height ?? Number.POSITIVE_INFINITY;
-    const pin = pinned();
+    const lowest = untrack(live)?.at(-1)?.height ?? Number.POSITIVE_INFINITY;
+    const pin = untrack(pinned);
     for (const h of blocks.keys()) {
-      if (h >= lowest || h === pin) continue;
+      if (h >= lowest - 1 || (pin !== undefined && Math.abs(h - pin) <= 1)) continue;
       if (h < w.bottom - KEEP || h > w.top + KEEP) blocks.delete(h);
     }
     for (const p of failed.keys()) {
@@ -260,8 +269,14 @@ export function createPastBlocks(
     busy = true;
     controller = new AbortController();
     const { signal } = controller;
+    const asked = chain;
     load(ask, signal).then(
       (list) => {
+        if (asked !== chain) {
+          busy = false;
+          step();
+          return;
+        }
         const tip = untrack(live)?.[0]?.height ?? Number.POSITIVE_INFINITY;
         const lowest = untrack(live)?.at(-1)?.height ?? Number.POSITIVE_INFINITY;
         // The live list's blocks are newer news than any page.

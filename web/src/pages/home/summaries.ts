@@ -88,6 +88,12 @@ export function createSummaries(
   let settle: ReturnType<typeof setTimeout> | undefined;
   createEffect(older, (list) => {
     clearTimeout(settle);
+    // Tiles that left the page let go of their facts, a failure included, so a revisit asks again.
+    const ids = new Set(shown().map((b) => b.id));
+    setFacts((m) => {
+      const kept = [...m].filter(([id]) => ids.has(id));
+      return kept.length === m.size ? m : new Map(kept);
+    });
     // A tile whose facts failed keeps its gauge until it leaves the page and comes back.
     const ask = () =>
       fetchMissing(untrack(older).filter((b) => untrack(facts).get(b.id) === undefined));
