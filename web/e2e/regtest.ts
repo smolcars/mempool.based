@@ -63,9 +63,8 @@ export function spending(txid: string, outputs: [string, bigint][]): string {
 export async function pay(rpc: Rpc, address: string, sats: bigint): Promise<string> {
   const { scriptPubKey } = await rpc<{ scriptPubKey: string }>("validateaddress", [address]);
   const coin = await coinbase(rpc);
-  // A fee of its own: the tracker skips a poll while the mempool's count, size and fees match its
-  // last one, so a payment just like one a block took would wait for its 10 s heartbeat.
-  const change = coin.sats - sats - 10_000n - BigInt(spent.size);
+  // The same fee every time, on purpose: a payment just like one a block took must be seen at once.
+  const change = coin.sats - sats - 10_000n;
   return rpc<string>("sendrawtransaction", [
     spending(coin.txid, [
       [scriptPubKey, sats],
