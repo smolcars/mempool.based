@@ -140,7 +140,7 @@ export function LargeAddress(props: { address: string }) {
             }
           </Show>{" "}
           and reading even its newest confirmed transactions would keep the node busy for tens of
-          seconds, up to two minutes.
+          seconds or more.
         </p>
       </section>
 
