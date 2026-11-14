@@ -683,6 +683,25 @@ describe("address page", () => {
     expect(asks).toHaveLength(3);
   });
 
+  it("never promises an empty unconfirmed list it could not check again", async () => {
+    let up = true;
+    serve({
+      [`/address/${ME}`]: refused(503, "address history too large for this server"),
+      [`/address/${ME}/txs/mempool`]: () =>
+        up ? Response.json([]) : refused(502, "upstream unavailable")(),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("shows here within 10 seconds"));
+    up = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await until(() => expect(text(el)).toContain("The last check failed"));
+    expect(text(el)).not.toContain("shows here within");
+    up = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await until(() => expect(text(el)).toContain("shows here within 10 seconds"));
+    expect(text(el)).not.toContain("The last check failed");
+  });
+
   it("asks for the history once the totals have answered, or after a second", async () => {
     let answer: (r: Response) => void = () => undefined;
     serve({

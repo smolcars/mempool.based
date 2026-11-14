@@ -150,6 +150,12 @@ export function LargeAddress(props: { address: string }) {
             </span>
           </span>
         </SectionHeader>
+        {/* A failed check after an answer keeps that answer, said to be possibly out of date. */}
+        <Show when={failed() && list() !== undefined}>
+          <p class="address-busy" role="status">
+            The last check failed, so this list may be out of date. The page tries again by itself.
+          </p>
+        </Show>
         <Switch>
           <Match when={failed() && list() === undefined}>
             <ErrorState
@@ -160,17 +166,13 @@ export function LargeAddress(props: { address: string }) {
           </Match>
           <Match when={list()?.length === 0}>
             <Empty title="Nothing waiting to confirm">
-              A payment to or from this address shows here within {POLL_MS / 1000} seconds of
-              reaching the node.
+              <Show when={!failed()}>
+                A payment to or from this address shows here within {POLL_MS / 1000} seconds of
+                reaching the node.
+              </Show>
             </Empty>
           </Match>
           <Match when={true}>
-            <Show when={failed()}>
-              <p class="address-busy" role="status">
-                The last check failed, so this list may be out of date. The page tries again by
-                itself.
-              </p>
-            </Show>
             <div class="address-pool" aria-busy={list() === undefined ? "true" : "false"}>
               <DataTable
                 caption="Unconfirmed transactions of this address, latest arrivals first"
