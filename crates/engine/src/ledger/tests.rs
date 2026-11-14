@@ -1075,3 +1075,109 @@ mod regtest {
         check_node(t.store(), &node, &scripts, "all four").await;
     }
 }
+
+#[tokio::test]
+async fn totals_already_held_are_adopted_when_their_block_is_the_ledgers() {
+    let mut rng = Rng(101);
+    let fake = Fake::new(20, &mut rng);
+    let t = Temp::new();
+    // Nothing tracked: any block of the node's chain will do.
+    let at = fake.at(15).await.unwrap().unwrap();
+    let s = adopt(
+        t.store(),
+        &fake,
+        &script(0),
+        fake.oracle(0, 15),
+        at.hash,
+        15,
+        10,
+        0,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(s, Seeded::Tracked { page: false, .. }));
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "adopted into an empty ledger").await;
+    // Tracked: a block the ledger holds is adopted, with the blocks since applied to it alone.
+    fake.push(&mut rng);
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    let held = fake.tip() - 1;
+    let at = fake.at(held).await.unwrap().unwrap();
+    let s = adopt(
+        t.store(),
+        &fake,
+        &script(1),
+        fake.oracle(1, held),
+        at.hash,
+        held,
+        10,
+        0,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(s, Seeded::Tracked { .. }));
+    check(t.store(), &fake, "adopted below the tip").await;
+    // A block the ledger does not hold, or another block at its height, is not adopted.
+    fake.push(&mut rng);
+    let ahead = fake.tip();
+    let at = fake.at(ahead).await.unwrap().unwrap();
+    let r = adopt(
+        t.store(),
+        &fake,
+        &script(2),
+        fake.oracle(2, ahead),
+        at.hash,
+        ahead,
+        10,
+        0,
+    )
+    .await;
+    assert!(matches!(r, Err(Error::Moved)));
+    let r = adopt(
+        t.store(),
+        &fake,
+        &script(2),
+        Totals::default(),
+        BlockHash::all_zeros(),
+        held,
+        10,
+        0,
+    )
+    .await;
+    assert!(matches!(r, Err(Error::Moved)));
+    assert!(tracked(t.store(), sh(2)).await.unwrap().is_none());
+}
+
+#[test]
+fn the_scripts_paid_most_are_counted_once_a_transaction() {
+    let tx = |outs: Vec<PrevoutOut>| PrevoutTx {
+        txid: Txid::all_zeros(),
+        vin: vec![],
+        vout: outs,
+    };
+    let op_return = PrevoutOut {
+        value: Amount::ZERO,
+        script_pub_key: ScriptHexText {
+            hex: "6a04deadbeef".into(),
+        },
+    };
+    let block = PrevoutBlock {
+        hash: BlockHash::all_zeros(),
+        height: 1,
+        time: 0,
+        previousblockhash: None,
+        tx: vec![
+            tx(vec![out(0, 1), out(0, 2), out(1, 1), op_return.clone()]),
+            tx(vec![out(0, 1), out(1, 1), op_return.clone()]),
+            tx(vec![out(0, 1), op_return]),
+            tx(vec![out(2, 1)]),
+        ],
+    };
+    let got: Vec<(String, u32)> = paid_most(&block, 5)
+        .into_iter()
+        .map(|(s, n)| (s.to_hex_string(), n))
+        .collect();
+    assert_eq!(got, vec![(hex(0), 3), (hex(1), 2)]);
+    assert_eq!(paid_most(&block, 1).len(), 1);
+}

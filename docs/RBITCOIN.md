@@ -123,7 +123,7 @@ Mainnet, 54,297 transactions in the mempool, client and node on the same private
 - **Batch RPC calls.** A JSON-RPC array is one HTTP request and one work-queue slot, and answers in order. 1,000 `getrawtransaction` calls in one array take about 300 ms ([`MEMPOOL.md`](MEMPOOL.md)).
 - **Ask `getblockstats` for the stats you need.** With no list it also computes its UTXO statistics, about a second per recent block; any short list of totals costs 20 to 30 ms.
 - **Compute fee-rate percentiles ourselves,** from the block listing. `getblockstats` rounds to whole sat/vB, and most transactions now pay under 1 sat/vB, so its percentiles come back as zeros.
-- **Expect 503 on huge addresses, and slow pages on any.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused at once. Their paged history is served but can take the node tens of seconds a page (about 100 s measured for the largest found), and so can a sparse small address's ([above](#address-history-cost)): the server refuses the history of an address whose totals the node refused and gives up on a page after 5 s ([`API.md`](API.md#very-large-addresses)). Surface both to the user.
+- **Expect 503 on huge addresses, and slow pages on any.** Unpaged scripthash joins above `--max-sh-creates` (default 10,000) are refused at once; below a raised cap they are answered, one heavy join at a time. Paged history is served but can take the node tens of seconds a page (about 100 s measured for the largest found), and so can a sparse small address's ([above](#address-history-cost)): the server sends totals of an address it does not know to be small one at a time, keeps large addresses' totals itself, refuses their history pages and gives up on any page after 5 s ([`API.md`](API.md#very-large-addresses)). Surface both to the user.
 - **Electrum's `mempool.get_fee_histogram` is in sat/kvB with cumulative vsize,** not the protocol's sat/vB per band.
 - **Fee estimates are a 10-minute inclusion product,** not Core's historical estimator.
 - **rbitcoin's mempool policy is libre-relay class:** 0.1 sat/vB minimum, no dust limit, full RBF. Do not assume Core's standardness rules in the UI.
@@ -147,38 +147,26 @@ Not required. Each would make this project faster or simpler, and is recorded he
 | A compact per-block transaction listing (txid, fee, weight and value for each transaction) | Delivered upstream by [rbitcoin PR 1578](https://github.com/rbitcoin-org/rbitcoin/pull/1578), in no release yet, as `GET /block/:hash/txs/summary`, and used where the node has it ([above](#listing-a-blocks-transactions)). A year of fee-rate backfill went from about 550 GB read to about 17 GB, measured ([`STORE.md`](STORE.md#backfill)) |
 | A new tip announced only once the block can be served | Delivered upstream by [rbitcoin PR 1577](https://github.com/rbitcoin-org/rbitcoin/pull/1577), in no release yet: a just-announced block is served at the first request instead of being held 0.3 to 1.5 s |
 | Outpoint pushes for mempool spends | A transaction page could show an output being spent as it happens, without polling |
-| Totals, unspent outputs and recent history for any address | Addresses above `--max-sh-creates` get only the count of transactions that paid them, the cap and their unconfirmed transactions today: no balance, no unspent outputs, no confirmed transactions. The most looked-up addresses are these. Specified [below](#totals-and-history-for-any-address) |
+| Totals above `--max-sh-creates` on the unix socket only | The explorer keeps large addresses' totals itself and needs each added up once; with this, an operator could keep the cap on for everyone else and still have them added up ([below](#totals-of-large-addresses)) |
 
-## Totals and history for any address
+## Totals of large addresses
 
-What this explorer would need from rbitcoin to show an address above `--max-sh-creates` like any other, written to be built upstream. It asks only for what the address page and the `/api` pass-through use.
+The explorer keeps its own running totals for large addresses ([`API.md`](API.md#very-large-addresses), [`STORE.md`](STORE.md#ledger)), so it needs the node to add each one up only once, through the ordinary totals route pinned with `?asof=`. Above `--max-sh-creates` that route refuses, so on a node with the cap in force those addresses stay as before. Read from rbitcoin's source (v0.9.2 and `master`, `crates/rbitcoin-query/src/scripthash.rs` `unpaged_join_admit`, `crates/rbitcoin-node/src/run.rs`): the cap is one value set at startup and compared with no regard to who asks, so a trusted caller on the unix socket cannot exceed it either.
 
-**Why.** Measured on mainnet, read-only ([above](#address-history-cost); 2026-11-14 for the last row):
+**What the explorer would switch to.** A route that adds an address up above the cap on the Esplora unix socket only, such as `GET /internal/address/:a` and `/internal/scripthash/:h` with the same JSON, `?asof=` and chain-tip headers, while the ordinary routes and Electrum keep refusing above `--max-sh-creates`. The seed's source is one method, `Source::totals` in `crates/engine/src/ledger/source.rs`: where the node serves that route, the seed would ask it, and the ordinary route's cheap refusal would still tell the server which addresses are large. Nothing else changes.
 
-| Address | Transactions paying it (creates) | Totals | Newest page of history |
+**`--heavy-sh-creates`** (10,000 by default, `0` off) lets one totals join above that many creates run at a time across the node; others wait, each holding one of the node's blocking threads, while lighter joins and paged history do not wait. rbitcoin's operator guide gives 2.1 GiB peak memory for one join near a raised cap of 100,000. The server keeps to one such join at a time itself, whatever the node's settings ([`API.md`](API.md#very-large-addresses)).
+
+**Measured on signet** (2026-11-14, read-only, one request at a time; the owner's node, cap off): an unpaged totals request over the node's own Esplora socket, and the node container's anonymous memory sampled every 100 ms from its cgroup. The rise is the peak above the level just before the request (411 to 694 MB), so it is approximate. Paying transactions are at most the funded outputs; the node gives them only in a refusal.
+
+| Funded outputs | Transactions | Time | Memory rise |
 |---|---|---|---|
-| A busy address | 29,133 | refused, 10–35 ms | 10.9 s |
-| A dormant address | 93,135 | refused | 41.7 s |
-| The largest found | 2,366,550 | refused | 10.2 s |
-| `1HckjUpRGcrrRAtFaaCAUaGjsPx9oYmLaZ`, an exchange | 3,665,660 | refused, 58 ms | 102 s, then 95 s asked again (`/txs/summary`, the owner's node, otherwise idle); 45 s from cold caches reported by an rbitcoin developer on another machine |
+| 22,381 | 22,383 | 0.3 s | +7 MB |
+| 61,346 | 70,764 | 0.5 s | +96 MB |
+| 71,176 | 78,075 | 1.2 s | +0 MB |
+| 72,455 | 118,079 | 1.2 s | +103 MB |
+| 71,856 (the pay-to-anchor script) | 77,110 | 21.3 s | +504 MB |
+| 124,010 | 124,010 | 1.9 s | +31 MB |
+| 1,831,301, the largest found | 1,907,668 | 8.0 s, then 7.9 s | +617 MB, then +484 MB |
 
-So the explorer refuses all of their history ([`API.md`](API.md#very-large-addresses)) and shows the count of paying transactions from the refusal, the cap and the unconfirmed transactions.
-
-**1. A running total per script.** Stored per scripthash beside the address index, and updated in the same write batch as the index:
-
-| Field | On connect | On disconnect |
-|---|---|---|
-| `funded_txo_count`, `funded_txo_sum` | add each output paying the script | subtract them |
-| `spent_txo_count`, `spent_txo_sum` | add each input spending one of its outputs | subtract them |
-| `tx_count` | add each transaction touching it, once | subtract it |
-| `unspent_count` | funded minus spent, kept so `/utxo` can say how many there are | the same |
-
-That is 6 integers per script ever used, about 50 bytes, and constant work per output and input a block adds or removes. With it, `GET /address/:a` and `/scripthash/:h` answer the same JSON as today, in constant time, for any address: the cap no longer applies to them. A reorg is the disconnect path, so the totals are exact at every tip the index stamps.
-
-**2. Unspent outputs in pages.** `GET /address/:a/utxo/page[/:last_outpoint]`, newest first, at most 100 a page, each `{txid, vout, value, status}` as `/utxo` writes them, and a header or field giving `unspent_count`. Its cost must follow the page: an index of unspent outputs per script by height, or the creates index walked newest first skipping spent ones, bounded by a work limit (point 4). `/utxo` itself can keep its cap.
-
-**3. A history page whose cost follows the page.** `/address/:a/txs/chain[/:last_seen_txid]` and `/txs/summary[...]` answer the same rows as today, but find the spends that land on the page from the page's own creates (a spend pointer per create, or a per-script list of spend heights) instead of reading every input of the blocks the page spans or the spend of every create the script ever had. Then the newest 25 rows of any address would cost about 25 creates' and 25 spends' lookups: an expectation, not measured, but it no longer grows with the address's size or age.
-
-**4. A bound the client sets.** An optional `?max_work=` (rows or index reads) on every paged route, past which the node stops and answers `503` with a fixed message, or the rows it has with a flag, and spends nothing more on it. This is what lets a server promise that one reader costs the node a bounded amount, which nothing today can.
-
-**How the explorer would use it, and fall back.** At connect, as for the block listing ([above](#listing-a-blocks-transactions)), each network asks once: the totals of a known above-cap scripthash cannot be named in advance, so the probe is the new paged `/utxo/page` route on the genesis coinbase's script (any `200` or `404` means the node has the routes; v0.9.2 answers `400` for the unknown path). A node without them keeps today's behaviour: the size refusal, the count of paying transactions and the unconfirmed list. A node with them: the totals route is no longer refused, so the page shows the balance, totals and chart as for any address; history pages are asked with `max_work`, and the server's 5 s history deadline and size verdicts stay as the guard for older nodes. Nothing in the explorer's answers changes shape.
+Time and memory do not follow size: an address paid all over the chain (the pay-to-anchor script) took longer than one with 25 times its outputs. For comparison, the whole Electrum history of the largest took 55.9 s and 181 MB. Nothing near mainnet's largest address (3,665,660 creates) has been added up; never run such a join on mainnet without watching the node's memory.

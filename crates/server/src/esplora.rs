@@ -26,6 +26,7 @@ use node::esplora::{
 use tokio::sync::{OnceCell, Semaphore, watch};
 
 use crate::config::{Limits, Network};
+use crate::ledger;
 use crate::limits::{Client, Clients, Held, Refused};
 use crate::verdicts::{self, Verdict, Verdicts};
 use crate::{ApiError, IMMUTABLE, NetworkContext};
@@ -288,6 +289,9 @@ async fn read(ctx: &NetworkContext, client: &Client, route: Route) -> Response {
         key.push_str(&String::from_utf8_lossy(&body));
     }
     if is_heavy(&route) {
+        if let Some(res) = guarded(ctx, client, &route, &key).await {
+            return res;
+        }
         if let Some((script, page)) = verdicts::history_page(&route)
             && let Some(verdict) = ctx.api.verdicts.check(script, page, Instant::now())
         {
@@ -493,6 +497,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
         Deadline {
             after: ctx.api.heavy.history_timeout,
             then: Box::new(move || verdicts.learn(script, page, Verdict::Slow, Instant::now())),
+            started: None,
         }
     });
     // Learned in the call's own task, so a client that hangs up first does not lose it.
@@ -504,7 +509,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
             && let Some(verdict) = verdicts.check(script, page, Instant::now())
         {
             return Err(match verdict {
-                Verdict::TooLarge(_) => Error::TooLarge,
+                Verdict::TooLarge(_) | Verdict::Large | Verdict::Small => Error::TooLarge,
                 Verdict::Slow => Error::Timeout,
             });
         }
@@ -536,10 +541,135 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
     }
 }
 
+/// The address routes the large-address guard decides (docs/API.md, "Very large addresses"), or
+/// `None` to go on as for any heavy route. A tracked script's totals come from the ledger; its
+/// history, unspent outputs and pinned totals, and a large script's anything, are refused at
+/// once. Totals or unspent outputs of a script not known to be small go through the guard's lane,
+/// one such call at the node for the whole server, and teach the server its size.
+async fn guarded(
+    ctx: &NetworkContext,
+    client: &Client,
+    route: &Route,
+    key: &str,
+) -> Option<Response> {
+    let history = verdicts::history_page(route).map(|(s, _)| s);
+    let sh = history.or_else(|| verdicts::unpaged_script(route))?;
+    let guard = &ctx.guard;
+    let tracked = guard.ledger.as_ref().filter(|l| l.is_tracked(sh));
+    if history.is_some() {
+        return (tracked.is_some() || guard.known(sh) == Some(ledger::Size::Large))
+            .then(|| refused_early(Verdict::Large));
+    }
+    if let (Some(ledger), Route::ScriptStats { script, asof: None }) = (tracked, route) {
+        return Some(tracked_stats(ctx, client, ledger, sh, script, key).await);
+    }
+    if tracked.is_some() {
+        return Some(
+            Refused {
+                error: NOT_KEPT,
+                reason: "history_too_large",
+            }
+            .into_response(),
+        );
+    }
+    match guard.known(sh) {
+        Some(ledger::Size::Small) => return None,
+        Some(ledger::Size::Large) => return Some(refused_early(Verdict::Large)),
+        Some(ledger::Size::TooLarge) | None => {}
+    }
+    let script = match route {
+        Route::ScriptStats {
+            script: ScriptRef::Address(a),
+            ..
+        }
+        | Route::ScriptUtxo {
+            script: ScriptRef::Address(a),
+            ..
+        } => Some(a.script_pubkey()),
+        _ => None,
+    };
+    let (g, call) = (Arc::clone(guard), route.clone());
+    // The reader's deadline, from when the lane is taken; the guard learns the size from the
+    // node's own time.
+    let (asked, started) = tokio::sync::oneshot::channel();
+    let deadline = Deadline {
+        after: ctx.api.heavy.history_timeout,
+        then: Box::new(|| ()),
+        started: Some(started),
+    };
+    // Identical requests share the call; only its leader waits for the lane.
+    let answer = heavy_call(
+        ctx,
+        client,
+        key.to_owned(),
+        Some(deadline),
+        move |_| async move { g.ask(&call, sh, script, Some(asked)).await },
+    )
+    .await;
+    Some(match answer {
+        Ok((Err(Error::TooLarge), _)) => refused_early(Verdict::Large),
+        Ok((Err(Error::Unavailable(m)), _)) if m == ledger::LANE_BUSY => {
+            if guard.known(sh) == Some(ledger::Size::Large) {
+                refused_early(Verdict::Large)
+            } else {
+                Refused {
+                    error: HEAVY_BUSY,
+                    reason: "lane_busy",
+                }
+                .into_response()
+            }
+        }
+        Ok((result, source)) => respond(route, result, source),
+        Err(refused) => *refused,
+    })
+}
+
+/// A tracked script's totals from the ledger, with its unconfirmed ones from the node's mempool
+/// rows for it: one cheap call under the cost limit, shared by identical requests.
+async fn tracked_stats(
+    ctx: &NetworkContext,
+    client: &Client,
+    ledger: &Arc<ledger::Ledger>,
+    sh: ScriptHash,
+    script: &ScriptRef,
+    key: &str,
+) -> Response {
+    let Some(tracked) = ledger.totals(sh).await else {
+        return ApiError::UPSTREAM.into_response();
+    };
+    let mempool = Route::ScriptTxsMempool(script.clone());
+    let mut mkey = String::from("ledger-mempool:");
+    mkey.push_str(key);
+    let rows = match heavy_call(ctx, client, mkey, None, move |esplora| async move {
+        esplora.raw(&mempool).await
+    })
+    .await
+    {
+        Ok((Ok(raw), _)) if raw.status == StatusCode::OK => {
+            serde_json::from_slice::<Vec<node::esplora::model::Tx>>(&raw.body).ok()
+        }
+        Err(refused) => return *refused,
+        _ => None,
+    };
+    let mut res = ledger::tracked_answer(script, &tracked, rows.as_deref());
+    res.extensions_mut().insert(ApiOutcome {
+        route: "address_stats",
+        source: Source::Stored,
+        upstream_error: None,
+    });
+    res
+}
+
+/// A tracked script's unspent outputs: the ledger keeps totals, not outputs.
+const NOT_KEPT: ApiError = ApiError::new(
+    StatusCode::SERVICE_UNAVAILABLE,
+    "unspent outputs and older history are not kept for an address this large",
+);
+
 /// A history request refused from what the node said moments ago: no node call.
 fn refused_early(verdict: Verdict) -> Response {
     match verdict {
-        Verdict::TooLarge(_) => Refused {
+        Verdict::TooLarge(_) | Verdict::Large | Verdict::Small => Refused {
             error: TOO_LARGE,
             reason: "history_too_large",
         },
@@ -561,6 +691,9 @@ const TOO_LARGE: ApiError = ApiError::new(
 pub(crate) struct Deadline {
     pub after: Duration,
     pub then: Box<dyn FnOnce() + Send>,
+    /// When set, `after` counts from this signal, not from the call's start: a call that waits
+    /// for something of its own (the large-address lane) before it asks the node.
+    pub started: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// [`heavy`] for any work on the node that one request causes: `fetch` is run with the heavy
@@ -638,9 +771,23 @@ where
                 let fetch = fetch(esplora);
                 let answer = match deadline {
                     None => Some(fetch.await),
-                    Some(Deadline { after, then }) => {
+                    Some(Deadline {
+                        after,
+                        then,
+                        started,
+                    }) => {
                         tokio::pin!(fetch);
-                        if let Ok(answer) = tokio::time::timeout(after, &mut fetch).await {
+                        // Until the call says it has asked the node, its time does not count.
+                        let early = match started {
+                            Some(rx) => tokio::select! {
+                                answer = &mut fetch => Some(answer),
+                                _ = rx => None,
+                            },
+                            None => None,
+                        };
+                        if let Some(answer) = early {
+                            Some(answer)
+                        } else if let Ok(answer) = tokio::time::timeout(after, &mut fetch).await {
                             Some(answer)
                         } else {
                             then();

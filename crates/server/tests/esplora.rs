@@ -662,11 +662,13 @@ async fn heavy_routes_have_a_cost_limit_that_outlives_the_request() {
     let addr = listener.local_addr().unwrap().to_string();
     tokio::spawn(app.serve(listener, std::future::pending()));
 
-    // `?asof=` makes each request its own key, as an attacker would.
+    // `?asof=` makes each request its own key, as an attacker would. A history page: totals of
+    // an address not known to be small go one at a time for the whole server (`ledger`), and
+    // `large_address_totals_go_one_at_a_time` tests that.
     let heavy = |client: u8, n: u32| {
         let addr = addr.clone();
         tokio::spawn(async move {
-            let line = format!("GET /api/address/{MAIN}?asof={n:064x}");
+            let line = format!("GET /api/address/{MAIN}/txs/chain?asof={n:064x}");
             send(
                 &addr,
                 &line,

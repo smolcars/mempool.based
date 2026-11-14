@@ -28,7 +28,7 @@ use tokio::net::{TcpListener, TcpStream};
 const BIG: &str = "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h";
 /// Totals answered, history slow.
 const SLOW: &str = "3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6";
-/// Above the cap, and its totals refusal takes the node half a second.
+/// Above the cap, and its totals refusal takes the node 200 ms: inside the test's deadline.
 const LATE: &str = "1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY";
 /// Above the cap, refused in words that no longer give the counts.
 const RESHAPED: &str = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT";
@@ -60,7 +60,7 @@ async fn mock() -> (String, Seen) {
                 return (StatusCode::OK, "[]").into_response();
             }
             if tail.is_empty() && addr == LATE {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
             if tail.is_empty() && addr == RESHAPED {
                 return (
@@ -316,7 +316,7 @@ async fn a_page_waiting_for_a_slot_is_refused_by_a_verdict_learned_meanwhile() {
             .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 9))));
         tokio::spawn(router.clone().oneshot(req))
     };
-    // Slow pages take all slots but one; the last goes to totals the node refuses after 500 ms.
+    // Slow pages take all slots but one; the last goes to totals the node refuses after 200 ms.
     let busy: Vec<_> = (0..HEAVY_RUNNING - 1)
         .map(|n| spawn(format!("/api/address/{SLOW}/txs?asof={n:064x}")))
         .collect();
