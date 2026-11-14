@@ -87,7 +87,7 @@
     }
   }
 
-  /* An address above the node's cap: its count of outputs leads, the cap and the unconfirmed
+  /* An address above the node's cap: its count of paying transactions leads, the cap and the unconfirmed
      change follow, and what is not shown closes the panel. */
   .address-stats--large {
     grid-template-columns: repeat(3, max-content);

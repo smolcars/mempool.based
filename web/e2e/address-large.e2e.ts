@@ -13,8 +13,10 @@ test("leads with the node's count and cap, then says what is not shown", async (
   const facts = page.getByRole("region", { name: "What is known" });
   await expect(facts.getByText(/^3\s665\s660$/)).toBeVisible();
   await expect(facts.getByText(/^10\s000$/)).toBeVisible();
+  // The node counts transactions that paid the address, not outputs.
+  await expect(facts.getByText("transactions paid to it, as counted by the node")).toBeVisible();
   await expect(facts.getByText("2 transactions")).toBeVisible();
-  await expect(facts).toContainText(/addresses of up to 10\s000 outputs only/);
+  await expect(facts).toContainText(/addresses paid by at most 10\s000 transactions/);
   const pool = page.getByRole("table", { name: /^Unconfirmed transactions of this address/ });
   await expect(pool.getByRole("link", { name: /^0def111d/ })).toBeVisible();
   await expect(page.getByText("another explorer")).toHaveCount(0);

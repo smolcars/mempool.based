@@ -24,7 +24,7 @@ pub const REMEMBER: Duration = Duration::from_secs(300);
 /// address routes' cost limit already bounds how fast the table fills.
 pub const MAX_REMEMBERED: usize = 4096;
 
-/// `GET /app/address/:address/size`: how many outputs an address has received and the node's cap,
+/// `GET /app/address/:address/size`: how many transactions have paid an address and the node's cap,
 /// as the node's last refusal of its totals said (docs/API.md, "Very large addresses"). Read from
 /// memory only, never from the node; `404 size not known` when the server holds no such refusal.
 pub async fn size_route(
