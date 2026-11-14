@@ -231,7 +231,7 @@ Rules:
 
 | Scene | Drawn with | Why |
 |---|---|---|
-| Block strip (up to about 20 tiles) | DOM, CSS and the Web Animations API | Few elements; text must be selectable and accessible |
+| Block strip (the tiles in view and six beyond each edge, however far it is scrolled: 24 mined tiles at 1,440 px, 17 on a phone, and 4 projected) | DOM, CSS and the Web Animations API | Few elements; text must be selectable and accessible |
 | Fee answers, waiting by fee rate, flow diagram, timeline | DOM and SVG | Few elements |
 | Hover, focus, press, tooltips, row flash | CSS transitions | |
 | A block's packed transaction grid (thousands of squares) | WebGL2 instanced quads | Too many elements for the DOM |
@@ -245,7 +245,7 @@ When a block is found, in 900 ms:
 
 1. The "now" line flashes in the accent (opacity).
 2. The next projected tile crosses the line on a shallow arc (lift 14 px, scale 1.05 at the midpoint), lands in the first mined slot with a short squash (`--ease-settle`), and changes from dashed to solid. Its border shows the accent until the sequence ends.
-3. Mined tiles shift right by one slot, the farthest first. The last mined tile fades out.
+3. Mined tiles shift right by one slot, the farthest first; the ones past the view move on into the past. Scrolled into the past, with the "now" line out of view, nothing moves: the tiles in view stay where they are.
 4. Projected tiles shift toward the line, the nearest first, and relabel ("Next block", "In ~20 min").
 5. A new projected tile fades in at the far end and its gauge settles in, like sediment.
 6. Mempool figures and the fee answers update where they stand.
@@ -316,7 +316,7 @@ Decided while building it, where the rest of this document left it open. The pag
 | Logo | `design/logo.svg`: a tile with three strata, the top layer in the accent and offset, still settling. In the header it is inline SVG with the tile in `--color-network`. The wordmark is live text, so a new name is one string |
 | Block tile | Projected (dashed) or mined (solid). Height or label, median fee, fee range, total fees (in magnitude), its fee layers, transaction count and age. Mined tiles link to the block and show the pool below |
 | Tile layers | The block's capacity as a box, its fee bands settled from the floor, cheapest at the bottom, each as thick as the virtual size paying it (`strataLayers`); the room above is room the block left. Until the block's facts arrive, a neutral gauge of the same height stands in |
-| Block strip | Projected lane, "now" line, mined lane. Scrolls sideways inside itself on narrow screens and starts centred on the line |
+| Block strip | Projected lane, "now" line, mined lane. Scrolls sideways inside itself and starts centred on the line; the mined lane goes on into the past down to block 0, and "← Now" in its head brings the line back ([`FRONTEND.md`](FRONTEND.md#the-block-strips-past)) |
 | Fee answers | "Fee to pay now": up to four plainly labelled rates, slowest first (No rush, Low, Medium, High), each with its unit and what it promises (within a day, within an hour, within 30 min, next block), rounded up. Levels next to each other that print the same rate are one answer ("No rush or low"), never stacked labels, laid out in the same two rows of two whatever merges: Low and Medium alone are never merged, a lone answer beside three takes its row, and one answer for every wait ("Any wait") is one tile across the row, the panel no taller than it, its line of text saying the next block has room at that rate. In sunken wells |
 | Waiting by fee rate | The home page's mempool: one line saying the fee rate the next block's worth reaches down to, then, behind "By fee rate" (open on wide screens, closed on a phone), a row per band, dearest first: its range, a bar on a log scale from 100 vB to one block's worth (a band past a block fills its bar, the end cut), its size, and how many blocks deep the queue is by the end of that band |
 | Fee key | Twelve swatches with lower bounds, in one row where their labels fit and two rows of six where they do not (the test is in the labels' own font). Beside a drawing that needs one (the block map, a projected block), never repeated where the figures already name the bands |

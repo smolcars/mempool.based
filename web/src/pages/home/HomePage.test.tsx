@@ -183,25 +183,15 @@ describe("the strip, kept live", () => {
     expect(blocksFetches()).toBe(fetched);
   });
 
-  it("refetches over HTTP on a gap, and shows ten blocks while the ones it drops fade out", async () => {
-    // The tests have no motion tokens, so a leaving tile's fade lasts 0 ms and its ghost goes at a
-    // timer's whim: a read could find it or not. Give the fade a length, so it is always there.
-    document.documentElement.style.setProperty("--dur-slow", "10s");
-    try {
-      const { el, ws } = await open();
-      blocksServed = chain(4, 13);
-      ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
-      await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
-      expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
-      // The three it dropped fade where they stood: hidden from readers, not links to follow.
-      const ghosts = [
-        ...el.querySelectorAll<HTMLElement>(".home-strip__lane > .home-tile--leaving"),
-      ];
-      expect(ghosts.map((g) => Number(g.dataset["height"]))).toStrictEqual([3, 2, 1]);
-      expect(ghosts.every((g) => g.getAttribute("aria-hidden") === "true" && g.inert)).toBe(true);
-    } finally {
-      document.documentElement.style.removeProperty("--dur-slow");
-    }
+  it("refetches over HTTP on a gap, and the blocks it moves past the live list stay as the past", async () => {
+    const { el, ws } = await open();
+    blocksServed = chain(4, 13);
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
+    await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
+    // Before layout the window is the live list's ten; the three it moved on are older blocks now,
+    // kept for when the strip scrolls to them, not ghosts fading out.
+    expect(tileHeights(el)).toStrictEqual(chain(4, 13).map((b) => b.height));
+    expect(el.querySelectorAll(".home-strip__lane > .home-tile--leaving")).toHaveLength(0);
   });
 
   it("refetches on a resync whose tip differs, and not on one that matches", async () => {
@@ -325,6 +315,143 @@ describe("the strip, kept live", () => {
     expect(el.querySelector('[aria-live="polite"]')?.textContent).toBe(
       "Block 11 mined: 1 transaction.",
     );
+  });
+});
+
+describe("the strip's past", () => {
+  // A desktop strip, laid out by hand: the lane starts 600 px in, tiles are 132 px wide with
+  // 12 px between, the view is 1,000 px wide, and the "now" line ends at 582 px.
+  const restore: (() => void)[] = [];
+  const stub = (proto: object, key: string, d: PropertyDescriptor) => {
+    const was = Object.getOwnPropertyDescriptor(proto, key);
+    Object.defineProperty(proto, key, { configurable: true, ...d });
+    restore.push(() =>
+      was ? Object.defineProperty(proto, key, was) : Reflect.deleteProperty(proto, key),
+    );
+  };
+  let scrolled = new WeakMap<Element, number>();
+  beforeEach(() => {
+    scrolled = new WeakMap();
+    const has = (el: Element, c: string) => el.classList.contains(c);
+    stub(HTMLElement.prototype, "offsetLeft", {
+      get(this: HTMLElement) {
+        return has(this, "home-strip__mined") ? 600 : has(this, "home-strip__now") ? 580 : 0;
+      },
+    });
+    stub(HTMLElement.prototype, "offsetWidth", {
+      get(this: HTMLElement) {
+        return has(this, "home-strip__now") ? 2 : 0;
+      },
+    });
+    stub(HTMLElement.prototype, "clientWidth", {
+      get(this: Element) {
+        return has(this, "home-strip__scroller") ? 1000 : 0;
+      },
+    });
+    stub(Element.prototype, "scrollLeft", {
+      get(this: Element) {
+        return scrolled.get(this) ?? 0;
+      },
+      set(this: Element, v: number) {
+        scrolled.set(this, Math.max(0, v));
+        // As in a browser, the scroll event comes after, not inside, whatever scrolled.
+        setTimeout(() => this.dispatchEvent(new Event("scroll")), 0);
+      },
+    });
+    stub(Element.prototype, "scrollTo", {
+      value(this: Element, o: ScrollToOptions) {
+        (this as HTMLElement).scrollLeft = o.left ?? 0;
+      },
+    });
+    const real = window.getComputedStyle.bind(window);
+    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      const width = el.classList.contains("home-tile") ? "132px" : undefined;
+      const gap = el.classList.contains("home-strip__lane") ? "12px" : undefined;
+      return new Proxy(style, {
+        get: (t, k) => {
+          if (k === "width" && width) return width;
+          if (k === "columnGap" && gap) return gap;
+          const v: unknown = Reflect.get(t, k);
+          return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    });
+    restore.push(() => spy.mockRestore());
+    replies["/v1/blocks/10"] = () => Response.json(chain(0, 10));
+  });
+  afterEach(() => {
+    while (restore.length > 0) restore.pop()?.();
+  });
+
+  const scroller = (el: HTMLElement) => el.querySelector(".home-strip__scroller") as HTMLElement;
+  const back = (el: HTMLElement) =>
+    el.querySelector<HTMLButtonElement>('button[aria-label="Back to now"]') ?? undefined;
+
+  it("loads older blocks ahead of the view, down to block 0, in one request", async () => {
+    const { el } = await open();
+    // Four tiles in view and six beyond: block 0 is just past the window, and already loaded.
+    await vi.waitFor(() => expect(requests).toContain("/v1/blocks/10"));
+    expect(tileHeights(el)).toStrictEqual(chain(1, 10).map((b) => b.height));
+    scroller(el).scrollLeft = 600 + 8 * 144;
+    await vi.waitFor(() => expect(tileHeights(el)).toContain(0));
+    expect(requests.filter((p) => /^\/(v1\/)?blocks\//.test(p))).toStrictEqual(["/v1/blocks/10"]);
+    // Its facts are asked for once the strip stops: one batch for the older tiles in the page.
+    await vi.waitFor(() => expect(summaryRequests().at(-1)).toContain(fakeBlock(0).id));
+    // The lane ends at block 0: eleven slots, and nothing after.
+    expect(
+      (el.querySelector(".home-strip__lane") as HTMLElement).style.getPropertyValue("--slots"),
+    ).toBe("11");
+    // Scrolled that far, the way back shows.
+    expect(back(el)).toBeDefined();
+  });
+
+  it("keeps the view still when a block or a reorg comes while away, and plays it at now", async () => {
+    const { el, ws } = await open();
+    await vi.waitFor(() => expect(requests).toContain("/v1/blocks/10"));
+    const s = scroller(el);
+    // Into the past: tile 5 (block 5) at the left edge.
+    s.scrollLeft = 600 + 5 * 144;
+    await vi.waitFor(() => expect(back(el)).toBeDefined());
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(11) });
+    await vi.waitFor(() => expect(s.scrollLeft).toBe(600 + 6 * 144));
+    // Nothing flew in: the new tile is simply there, and the reader is still told.
+    expect(el.querySelector(".home-tile--landing")).toBeNull();
+    expect(el.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Block 11 mined: 1 transaction.",
+    );
+    // A reorg takes 10 and 11 away: the view moves back with the tip, by two tiles.
+    ws.receive({ topic: "blocks", type: "reorg", fork_height: 9 });
+    await vi.waitFor(() => expect(s.scrollLeft).toBe(600 + 4 * 144));
+    // Back to now: the line in the middle again, and the next block crosses it.
+    back(el)?.click();
+    await vi.waitFor(() => expect(back(el)).toBeUndefined());
+    expect(s.scrollLeft).toBe(81);
+    ws.receive({ topic: "blocks", type: "block", block: fakeBlock(10, "b", "a") });
+    await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(10));
+    expect(el.querySelector(".home-tile--landing")).not.toBeNull();
+  });
+
+  it("keeps a focused tile in the page when the strip scrolls away from it, and Home goes back", async () => {
+    const { el } = await open();
+    await vi.waitFor(() => expect(requests).toContain("/v1/blocks/10"));
+    // One Tab stop: the newest tile, until another has focus. Arrow keys walk from it.
+    const stops = () => [...el.querySelectorAll('.home-strip__lane a[tabindex="0"]')];
+    expect(stops()).toStrictEqual([tile(el, 10)?.querySelector("a")]);
+    tile(el, 9)?.querySelector("a")?.focus();
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    const link = tile(el, 8)?.querySelector("a") as HTMLElement;
+    expect(document.activeElement).toBe(link);
+    await vi.waitFor(() => expect(stops()).toStrictEqual([link]));
+    scroller(el).scrollLeft = 600 + 10 * 144;
+    await vi.waitFor(() => expect(back(el)).toBeDefined());
+    expect(link.isConnected).toBe(true);
+    expect(document.activeElement).toBe(link);
+    link.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    await vi.waitFor(() => expect(back(el)).toBeUndefined());
+    expect(document.activeElement).toBe(tile(el, 10)?.querySelector("a"));
   });
 });
 
@@ -936,13 +1063,13 @@ describe("the projected tiles", () => {
     expect(el.querySelector('[aria-live="polite"]')?.textContent).toBe(
       "Block 11 mined: 1 transaction.",
     );
-    // A refetch draws the tile afresh, settled: what was projected is not shown again.
+    // A refetch keeps the tile, settled: what was projected is not shown again.
     blocksServed = chain(4, 13);
     ws.receive({ topic: "blocks", type: "block", block: fakeBlock(13) });
     await vi.waitFor(() => expect(tileHeights(el)[0]).toBe(13));
     const redrawn = tile(el, 11) as HTMLElement;
     expect(redrawn.querySelector(".home-tile__fee")?.textContent).toBe("1.23 sat/vB");
-    expect(redrawn.querySelector(".home-tile__guess")).toBeNull();
+    expect(redrawn.querySelector(".home-tile__guess:not(.home-tile__guess--gone)")).toBeNull();
   });
 
   it("when the projection comes before its block, the old next tile still crosses", async () => {

@@ -10,7 +10,6 @@ import { createFees } from "./fees";
 import { createLiveMempool } from "./live-mempool";
 import { MempoolPanel } from "./MempoolPanel";
 import { RecentTxs } from "./RecentTxs";
-import { createSummaries } from "./summaries";
 import { DifficultyPanel } from "./DifficultyPanel";
 import "./HomePage.css";
 
@@ -38,7 +37,6 @@ export default function HomePage() {
 function Home(props: { network: Network }) {
   const status = useLiveStatus();
   const blocks = createBlockFeed(props.network, status);
-  const facts = createSummaries(props.network, blocks.data);
   const live = createLiveMempool(props.network, status);
   const fees = createFees(props.network, status);
 
@@ -63,7 +61,6 @@ function Home(props: { network: Network }) {
         stale={() =>
           live.stale() || [blocks, live.mempool, live.recent].some((f) => nodeSilent(f.error()))
         }
-        facts={facts}
         projection={live.projection}
         network={props.network}
       />

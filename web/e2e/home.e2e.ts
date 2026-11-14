@@ -11,7 +11,6 @@ test("the home page shows the scenario's blocks, live, with the mempool and fees
   const tiles = page
     .getByRole("list", { name: "Mined blocks, newest first" })
     .getByRole("listitem");
-  await expect(tiles).toHaveCount(10);
   const newest = tiles.first().getByRole("link");
   await expect(newest).toContainText("110");
   await expect(newest).toHaveAttribute("href", `/regtest/block/${chain.tip.hash}`);
@@ -33,10 +32,46 @@ test("the home page shows the scenario's blocks, live, with the mempool and fees
 test("the home page fits a phone without scrolling sideways", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   await page.goto("/regtest/");
+  // A phone keeps only the few tiles near its narrow view in the page.
   await expect(
-    page.getByRole("list", { name: "Mined blocks, newest first" }).getByRole("listitem"),
-  ).toHaveCount(10);
+    page.getByRole("list", { name: "Mined blocks, newest first" }).getByRole("link").first(),
+  ).toHaveAccessibleName(/^Block 110,/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});
+
+test("the strip scrolls right into the past, down to block 0, and back to now", async ({
+  page,
+}) => {
+  const apiPages: string[] = [];
+  page.on("request", (r) => {
+    if (/\/api\/(v1\/)?blocks\/\d+$/.test(r.url())) apiPages.push(new URL(r.url()).pathname);
+  });
+  await page.goto("/regtest/");
+  const lane = page.getByRole("list", { name: "Mined blocks, newest first" });
+  const scroller = page.locator(".home-strip__scroller");
+  await expect(lane.getByRole("link").first()).toHaveAccessibleName(/^Block 110,/);
+  const back = page.getByRole("button", { name: "Back to now" });
+  await expect(back).toHaveCount(0);
+
+  // A swipe or a wheel to the end of the chain: the strip ends at block 0, with nothing after it.
+  await scroller.evaluate((el) => el.scrollTo({ left: el.scrollWidth, behavior: "instant" }));
+  const genesis = lane.getByRole("link", { name: /^Block 0,/ });
+  await expect(genesis).toBeInViewport();
+  expect(await lane.locator(":scope > li").last().getAttribute("data-height")).toBe("0");
+  // Only the tiles near the view are in the page, and the 111 blocks took a handful of pages.
+  expect(await lane.locator(":scope > li").count()).toBeLessThan(40);
+  expect(apiPages.length).toBeLessThanOrEqual(8);
+  expect(apiPages.every((p) => p.startsWith("/regtest/api/v1/blocks/"))).toBe(true);
+
+  // The way back is a real button, a thumb high on a touch screen, and it brings the line into view.
+  await expect(back).toBeVisible();
+  const box = await back.boundingBox();
+  const touch = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+  expect(box?.height).toBeGreaterThanOrEqual(touch ? 44 : 32);
+  await back.click();
+  await expect(back).toHaveCount(0);
+  await expect(page.locator(".home-strip__now")).toBeInViewport();
+  await expect(lane.getByRole("link", { name: /^Block 110,/ })).toBeInViewport();
 });
 
 test("each tile shows its fee gauge and figures, and a coinbase-only block says so", async ({
@@ -87,7 +122,9 @@ test("a cold load asks for each thing once, and nothing the mempool topics send"
 }) => {
   const asked: string[] = [];
   page.on("request", (r) => {
-    const path = new URL(r.url()).pathname;
+    // With the query: the older tiles' facts are a batch of their own, after the newest ten's.
+    const url = new URL(r.url());
+    const path = url.pathname + url.search;
     if (path.includes("/api/") || path.includes("/app/")) asked.push(path.replace("/regtest", ""));
   });
   await page.goto("/regtest/");

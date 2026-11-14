@@ -133,9 +133,13 @@ test("every block names its miner: Unknown on regtest, which has no pools", asyn
   await expect(lane.getByRole("link").first()).toHaveAccessibleName(
     /^Block \d+, mined by Unknown,/,
   );
-  await expect(lane.locator(".home-tile__pool")).toHaveText(
-    Array.from({ length: 10 }, () => "Unknown"),
-  );
+  // Every block tile in the page, the older ones' once their facts come.
+  await expect
+    .poll(async () => {
+      const names = await lane.locator(":scope > li[data-id] .home-tile__pool").allTextContents();
+      return names.length > 0 && names.every((n) => n === "Unknown");
+    })
+    .toBe(true);
 
   await page.goto("/regtest/mining");
   const recent = page.getByRole("list", { name: "Latest blocks, newest first" });
