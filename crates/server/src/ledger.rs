@@ -576,6 +576,10 @@ impl Ledger {
         book::tracked(&self.store, sh).await.ok().flatten()
     }
 
+    pub fn store(&self) -> &Arc<Store> {
+        &self.store
+    }
+
     pub fn is_tracked(&self, sh: ScriptHash) -> bool {
         self.tracked
             .read()
