@@ -109,21 +109,22 @@ describe("ids and searches", () => {
 });
 
 describe("coverage", () => {
-  it("says since when for a history ten minutes old, and hatches before it", () => {
+  it("says since when for a history ten minutes old, in one short line, and hatches before it", () => {
     const s = series();
-    expect(coverageSentence(s, "the last week")).toBe(
-      "This server has recorded the network since 12 Nov 2026, 18:30 UTC, every ten minutes while its Lightning peer runs: the chart starts there.",
+    expect(coverageSentence(s, T0)).toBe("Recorded from 12 Nov, 18:30 UTC.");
+    expect(coverageSentence({ ...s, interval: "all" }, T0)).toBe(
+      "Recorded since 12 Nov, 18:30 UTC.",
     );
+    // The year only when it is not this one.
+    expect(coverageSentence(s, T0 + 60 * 86_400)).toBe("Recorded from 12 Nov 2026, 18:30 UTC.");
     expect(dataFrom(s)).toBe(T0);
   });
 
-  it("names gaps inside a period it fully spans", () => {
+  it("names gaps inside a period it fully spans as a share", () => {
     const s = series({ first: T0 - 30 * 86_400, sampled: 900, complete: false });
-    expect(coverageSentence(s, "the last week")?.replaceAll("\u202F", " ")).toBe(
-      "This view holds 900 ten-minute snapshots of the 1 007 in the last week. The gaps are times this server was not recording.",
-    );
+    expect(coverageSentence(s, T0)).toBe("89% recorded, with gaps while this server was off.");
     expect(dataFrom(s)).toBeUndefined();
-    expect(coverageSentence({ ...s, complete: true }, "the last week")).toBeUndefined();
+    expect(coverageSentence({ ...s, complete: true }, T0)).toBeUndefined();
   });
 });
 

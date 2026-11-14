@@ -205,8 +205,7 @@ describe("coverage", () => {
       { complete: false, fromHeight: 968_000, fromTime: Date.UTC(2026, 8, 22) / 1000 },
       year,
     );
-    expect(text).toMatch(/^Data from 22 Sep 2026 onward\./);
-    expect(text).toContain("the last year is not all here yet");
+    expect(text).toBe("Data from 22 Sep 2026 onward.");
   });
   it("says when nothing is stored", () => {
     expect(

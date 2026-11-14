@@ -1,12 +1,13 @@
 // The Lightning network now and over time, and its newest opens and closes
 // (docs/DESIGN.md "Lightning", docs/FRONTEND.md "Lightning pages").
 import { useLocation, useSearchParams } from "@solidjs/router";
-import { createEffect, createMemo, For, lazy, Loading as Pending, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import { Amount } from "../../components/Amount";
 import { formatMoment } from "../../components/chart/scale";
 import { type Column, DataTable } from "../../components/DataTable";
 import { Link } from "../../components/Link";
 import { More } from "../../components/More";
+import { Periods } from "../../components/Periods";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
@@ -31,6 +32,7 @@ import {
   type Series,
   type Stats,
 } from "./lightning";
+import { recentMoment } from "../mempool/history";
 import {
   ask,
   BlockLink,
@@ -243,33 +245,12 @@ function History(props: { network: Network }) {
         Every ten minutes
       </SectionHeader>
       <div class="ln-section-head">
-        {/* A view fitted to what is recorded has its own choice: a period's name is its whole width. */}
-        <nav class="ln-picker" aria-label="Period">
-          <ul>
-            <Show when={fitted()}>
-              <li>
-                <Link class="ln-picker__item" href={paths.lightning()} aria-current="page">
-                  Recorded
-                  <span class="visually-hidden">: since this server began recording</span>
-                </Link>
-              </li>
-            </Show>
-            <For each={INTERVALS}>
-              {(p) => (
-                <li>
-                  <Link
-                    class="ln-picker__item"
-                    href={paths.lightning(p.id)}
-                    aria-current={!fitted() && p.id === interval().id ? "page" : "false"}
-                  >
-                    {p.label}
-                    <span class="visually-hidden">: {p.words}</span>
-                  </Link>
-                </li>
-              )}
-            </For>
-          </ul>
-        </nav>
+        <Periods
+          choices={INTERVALS}
+          current={interval().id}
+          fitted={fitted()}
+          href={paths.lightning}
+        />
       </div>
       <Show
         when={series.state !== "errored"}
@@ -342,7 +323,7 @@ function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
     props.s.step < 86_400 ? formatMoment : (t: number) => formatMoment(t).replace(/, .*$/, "");
   return (
     <>
-      <Show when={coverageSentence(props.s, props.interval.words)}>
+      <Show when={coverageSentence(props.s)}>
         {(text) => (
           <p class="ln-coverage">
             <Show when={dataFrom(props.s) !== undefined}>
@@ -350,7 +331,7 @@ function HistoryChart(props: { s: Series; interval: Interval; fit: boolean }) {
             </Show>
             {from() === undefined
               ? text()
-              : `Everything recorded, since ${formatMoment(props.s.first ?? 0)}.`}
+              : `Everything recorded, since ${recentMoment(props.s.first ?? 0)}.`}
           </p>
         )}
       </Show>
