@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use engine::lightning::{self as store_ln, Announcement, GraphChannel, GraphNode, Index, Past};
 use engine::store::Store;
-use logging::events::{LightningFundingFailed, LightningIndexBuilt};
+use logging::events::{LightningFundingFailed, LightningIndexBuilt, LightningIndexFailed};
 
 use super::Lightning;
 use crate::pages::clean_alias;
@@ -122,9 +122,8 @@ pub(crate) fn copy(g: &impl GraphRead) -> Copy {
 }
 
 /// Keeps `l`'s index current while the peer runs: every [`EVERY`], if the graph is synced, a
-/// copy of it and the store's past (read again only after new history or statistics rows),
-/// indexed on a blocking thread. A graph that is not synced is never indexed, so a route never
-/// answers from a half-loaded graph.
+/// [`round`]. A graph that is not synced is never indexed, so a route never answers from a
+/// half-loaded graph.
 pub(crate) async fn keep(
     peer: Arc<ln::Peer>,
     store: Arc<Store>,
@@ -132,62 +131,10 @@ pub(crate) async fn keep(
     network: &'static str,
 ) {
     let status = peer.status();
-    let mut past: Option<((u64, u64), Arc<Past>)> = None;
+    let mut past = None;
     loop {
         if status.borrow().synced {
-            let seen = (
-                l.records.load(Ordering::Relaxed),
-                l.written.load(Ordering::Acquire),
-            );
-            if past.as_ref().is_none_or(|(s, _)| *s != seen) {
-                // A failed read keeps the last past; the next round tries again.
-                if let Ok(p) = store_ln::past(&store).await {
-                    past = Some((seen, Arc::new(p)));
-                }
-            }
-            if let Some((_, p)) = &past {
-                // The copy runs here, about 11 ms on mainnet, so no other task ever holds the
-                // peer: at shutdown the owner gets it back whole and stops it in order.
-                let started = Instant::now();
-                let c = copy(&*peer);
-                let copied = started.elapsed();
-                let p = Arc::clone(p);
-                let built = tokio::task::spawn_blocking(move || {
-                    let index = Index::build(c.nodes, c.channels, &p);
-                    (index, copied, started.elapsed(), c.longest_hold)
-                })
-                .await;
-                if let Ok((index, copied, took, hold)) = built {
-                    let first = l.index().is_none();
-                    if first {
-                        // One read of the whole graph, as a snapshot takes, once per start.
-                        let sums = peer.read(super::totals);
-                        let time = store_ln::unix_now();
-                        *l.live.lock().unwrap_or_else(PoisonError::into_inner) =
-                            Some(store_ln::Point {
-                                time,
-                                samples: 1,
-                                sums,
-                            });
-                    }
-                    let (nodes, channels) = index.len();
-                    l.set_index(index);
-                    l.index_ms.store(
-                        took.as_micros().try_into().unwrap_or(u64::MAX),
-                        Ordering::Relaxed,
-                    );
-                    if first {
-                        logging::emit(&LightningIndexBuilt {
-                            network,
-                            nodes,
-                            channels,
-                            copy_ms: copied.as_secs_f64() * 1000.0,
-                            longest_hold_ms: hold.as_secs_f64() * 1000.0,
-                            duration_ms: took.as_secs_f64() * 1000.0,
-                        });
-                    }
-                }
-            }
+            round(&*peer, &store, &l, network, &mut past, Index::build).await;
         }
         let wait = if l.index().is_some() {
             EVERY
@@ -195,6 +142,100 @@ pub(crate) async fn keep(
             FIRST_TRY
         };
         tokio::time::sleep(wait).await;
+    }
+}
+
+/// The store's past and the index's records and statistics counts when it was read.
+pub(crate) type Kept = Option<((u64, u64), Arc<Past>)>;
+
+/// One build of the index of a synced graph: the store's past, read again only after new history
+/// or statistics rows, then a copy of the graph indexed on a blocking thread by `build`. A failed
+/// read keeps the last past for this build, and the next round reads again. Failures are counted
+/// in `l` and reported at the 1st, 2nd, 4th… in a row; while there is no index they show as
+/// [`Lightning::state`] `failed`.
+pub(crate) async fn round(
+    g: &impl GraphRead,
+    store: &Store,
+    l: &Lightning,
+    network: &'static str,
+    past: &mut Kept,
+    build: fn(Vec<GraphNode>, Vec<GraphChannel>, &Past) -> Index,
+) {
+    let seen = (
+        l.records.load(Ordering::Relaxed),
+        l.written.load(Ordering::Acquire),
+    );
+    let mut failed = None;
+    if past.as_ref().is_none_or(|(s, _)| *s != seen) {
+        match store_ln::past(store).await {
+            Ok(p) => *past = Some((seen, Arc::new(p))),
+            Err(e) => failed = Some(("past", e.label())),
+        }
+    }
+    if let Some((_, p)) = past {
+        // The copy runs here, about 11 ms on mainnet, so no other task ever holds the
+        // peer: at shutdown the owner gets it back whole and stops it in order.
+        let started = Instant::now();
+        let c = copy(g);
+        let copied = started.elapsed();
+        let p = Arc::clone(p);
+        let built = tokio::task::spawn_blocking(move || {
+            let index = build(c.nodes, c.channels, &p);
+            (index, copied, started.elapsed(), c.longest_hold)
+        })
+        .await;
+        match built {
+            Ok((index, copied, took, hold)) => {
+                let first = l.index().is_none();
+                if first {
+                    // One read of the whole graph, as a snapshot takes, once per start.
+                    let sums = g.read_graph(super::totals);
+                    let time = store_ln::unix_now();
+                    *l.live.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(store_ln::Point {
+                            time,
+                            samples: 1,
+                            sums,
+                        });
+                }
+                let (nodes, channels) = index.len();
+                l.set_index(index);
+                l.index_ms.store(
+                    took.as_micros().try_into().unwrap_or(u64::MAX),
+                    Ordering::Relaxed,
+                );
+                let recovered = failed.is_none() && l.index_failures.load(Ordering::Relaxed) > 0;
+                if first || recovered {
+                    logging::emit(&LightningIndexBuilt {
+                        network,
+                        nodes,
+                        channels,
+                        copy_ms: copied.as_secs_f64() * 1000.0,
+                        longest_hold_ms: hold.as_secs_f64() * 1000.0,
+                        duration_ms: took.as_secs_f64() * 1000.0,
+                    });
+                }
+            }
+            // A panic in the build is a bug; it ends only this build.
+            Err(_) => failed = failed.or(Some(("build", "panicked"))),
+        }
+    }
+    match failed {
+        Some((stage, error)) => {
+            let failures = l
+                .index_failures
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            if failures.is_power_of_two() {
+                logging::emit(&LightningIndexFailed {
+                    network,
+                    stage,
+                    error,
+                    failures,
+                });
+            }
+        }
+        None => l.index_failures.store(0, Ordering::Relaxed),
     }
 }
 
