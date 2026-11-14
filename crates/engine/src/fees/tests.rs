@@ -283,6 +283,185 @@ fn time_without_a_projection_is_not_counted_as_quiet_minutes() {
     assert!(r.update(1_500, &current, 100).is_some());
 }
 
+/// A current projection on tip 1 holding `(rate, vsize)` transactions: all [`Depth::of`] reads.
+fn projection(pairs: &[(u32, u64)]) -> Projection {
+    let txs = pairs
+        .iter()
+        .enumerate()
+        .map(|(i, &(rate, vsize))| {
+            let mut id = [0u8; 32];
+            id[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            let placed = crate::projected::Placed {
+                block: 0,
+                rate,
+                vsize: u32::try_from(vsize).unwrap(),
+                fee: 0,
+            };
+            (bitcoin::Txid::from_byte_array(id), placed)
+        })
+        .collect();
+    Projection {
+        tip: tip(1),
+        blocks: vec![std::sync::Arc::new(crate::projected::ProjectedBlock {
+            summary: crate::projected::BlockSummary::default(),
+            txs,
+        })],
+        ..Projection::default()
+    }
+}
+
+/// The node's `/fee-estimates` for targets 1, 2, 3, 6 and 144, in sat/vB, as the server takes them.
+fn node(est: [f64; 5], floor: u32) -> Rates {
+    let est: BTreeMap<u16, f64> = [1, 2, 3, 6, 144].into_iter().zip(est).collect();
+    from_node(&est, floor).unwrap()
+}
+
+/// One tick of [`restart`].
+struct Tick {
+    t: u64,
+    cap: Option<Rates>,
+    /// What the warming-up rule serves of the node's estimates: `None` is nothing yet.
+    served: Option<Rates>,
+    ours: Option<Rates>,
+}
+
+/// From a restart at `t0`, every 2 s as the server ticks.
+fn restart(
+    r: &mut Recommender,
+    p: &Projection,
+    t0: u64,
+    until: u64,
+    mut arrivals: impl FnMut(&mut Recommender, u64),
+    node: Rates,
+) -> Vec<Tick> {
+    (t0..until)
+        .step_by(2)
+        .map(|t| {
+            arrivals(r, t);
+            let ours = r.update(t, p, node.minimum);
+            Tick {
+                t,
+                cap: r.cap(),
+                served: r.cap().map(|c| node.at_most(&c)),
+                ours,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn while_warming_up_a_quiet_network_is_served_no_more_than_its_mempool_needs() {
+    // Signet on the live site: 126 transactions, 40 kvB, a few paying hundreds of sat/vB; the
+    // node's next-block estimate a high quantile of old blocks, 89 sat/vB.
+    let p = projection(&[
+        (3_900_000, 182),
+        (246_000, 183),
+        (20_042, 212),
+        (9_000, 6_092),
+        (3_000, 11_724),
+        (1_000, 20_000),
+    ]);
+    let node = node([89.11, 1.098, 1.091, 1.081, 1.0], 1_000);
+    assert_eq!(node.levels, [89_110, 1_091, 1_081, 1_000]);
+    // A 200 vB payment at 3 sat/vB every 20 s.
+    let trickle = |r: &mut Recommender, t: u64| {
+        if t.is_multiple_of(20) {
+            r.arrived(t, 600, 200);
+        }
+    };
+    let mut r = Recommender::default();
+    let t0 = 1_800_000_000;
+    for Tick {
+        t, served, ours, ..
+    } in restart(&mut r, &p, t0, t0 + 400, trickle, node)
+    {
+        match t - t0 {
+            // Nothing watched yet: nothing is served rather than 89 sat/vB.
+            0..60 => assert_eq!((served, ours), (None, None), "at {t}"),
+            // A minute watched: the mempool and its arrivals need the minimum, so no more is served.
+            60..300 => {
+                assert_eq!(served.map(levels), Some([1_000; 4]), "at {t}");
+                assert_eq!(ours, None);
+            }
+            // Ours, which says the same.
+            _ => assert_eq!(
+                (served, ours.map(levels)),
+                (None, Some([1_000; 4])),
+                "at {t}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn while_warming_up_a_busy_network_is_never_capped_below_our_own_answer() {
+    // The recorded mainnet moment: its mempool, and its arrivals replayed minute by minute
+    // from a restart.
+    let f: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../fixtures/fees/mainnet.json")).unwrap();
+    let pairs = |v: &serde_json::Value| -> Vec<(u32, u64)> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_u64().unwrap() as u32, p[1].as_u64().unwrap()))
+            .collect()
+    };
+    let p = projection(&pairs(&f["depth"]));
+    let minutes: Vec<Vec<(u32, u64)>> = f["inflow"].as_array().unwrap().iter().map(pairs).collect();
+    let floor = f["floor"].as_u64().unwrap() as u32;
+    // Ours with all 30 minutes, and the node's estimates of that day.
+    let ours_then = levels(recommend(
+        &Depth::new(pairs(&f["depth"])),
+        &inflow(
+            &minutes
+                .iter()
+                .map(|m| m.iter().map(|&(r, v)| (r, v as u32)).collect())
+                .collect::<Vec<_>>(),
+        ),
+        floor,
+    ));
+    assert_eq!(ours_then, [2_008, 1_141, 1_001, 100]);
+    let node = node([2.664, 0.891, 0.666, 0.651, 0.307], floor);
+    let t0 = 1_800_000_000;
+    // Each minute's arrivals in its second second, at no less than their recorded rate.
+    let replay = |r: &mut Recommender, t: u64| {
+        let m = usize::try_from((t - t0) / 60).unwrap();
+        if (t - t0) % 60 == 2
+            && let Some(m) = minutes.get(m)
+        {
+            for &(rate, vsize) in m {
+                let vsize = u32::try_from(vsize).unwrap();
+                r.arrived(
+                    t,
+                    (u64::from(rate) * u64::from(vsize)).div_ceil(1000),
+                    vsize,
+                );
+            }
+        }
+    };
+    let mut r = Recommender::default();
+    let mut capped = 0;
+    for Tick { t, cap, served, .. } in restart(&mut r, &p, t0, t0 + 300, replay, node) {
+        let (Some(cap), Some(served)) = (cap, served) else {
+            assert!(t - t0 < 60, "nothing served at {t}");
+            continue;
+        };
+        // The node's level or the cap, whichever is lower; the cap never below ours.
+        for (((s, n), c), o) in served
+            .levels
+            .iter()
+            .zip(node.levels)
+            .zip(cap.levels)
+            .zip(ours_then)
+        {
+            assert_eq!(*s, n.min(c), "at {t}");
+            assert!(c >= o, "at {t}: {cap:?}");
+        }
+        capped += 1;
+    }
+    assert!(capped > 100);
+}
+
 /// A mainnet moment recorded by `examples/fee_watch.rs`: every effective rate in the projected
 /// blocks with its vsize, 30 minutes of arrivals, the node's minimum, the projected blocks'
 /// lowest rates, and the answer the method gave.

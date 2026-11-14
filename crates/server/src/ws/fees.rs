@@ -246,7 +246,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                 }
             } => {
                 let now = SystemTime::now();
-                let (own, reason) = match &engines {
+                let (own, reason, limit) = match &engines {
                     Some(e) => {
                         let p = e.projector.current();
                         let floor = e.tracker.node_info().map(|i| floor_of(i.mempoolminfee));
@@ -256,10 +256,13 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                         }
                         let own = floor.and_then(|f| rec.update(unix(now), &p, f));
                         // Before the first projection the engine is still syncing: warming up too.
-                        let reason = if p.stale && p.tip.is_some() { "stale" } else { "warming_up" };
-                        (own.map(|r| (r, p.tip)), reason)
+                        let (reason, limit) = match p.stale && p.tip.is_some() {
+                            true => ("stale", Limit::AsTheyAre),
+                            false => ("warming_up", rec.cap().map_or(Limit::Withheld, Limit::At)),
+                        };
+                        (own.map(|r| (r, p.tip)), reason, limit)
                     }
-                    None => (None, "engine_off"),
+                    None => (None, "engine_off", Limit::AsTheyAre),
                 };
                 let mut fetch = false;
                 let answer = match own {
@@ -280,7 +283,7 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                         }
                         let wanted = ctx.fees.wanted(unix(now)) || ctx.hub.subscribers(Topic::Fees) > 0;
                         fetch = wanted && asked.is_none_or(|a| a.elapsed() >= NODE_EVERY);
-                        node_answer(node, now, seen_floor(engines.as_ref()))
+                        node_answer(node, now, seen_floor(engines.as_ref()), limit)
                     }
                 };
                 // Our own answer withdrawn, or an aged one dropped, before any wait on the node.
@@ -294,14 +297,14 @@ pub(crate) async fn run(ctx: Arc<NetworkContext>, engines: Option<Engines>, mut 
                     let left = node.map_or(NODE_WAIT, |(at, _)| NODE_MAX_AGE.saturating_sub(at.elapsed()));
                     let mut got = tokio::time::timeout(left.min(NODE_WAIT), &mut fetching).await.ok();
                     if got.is_none() && left < NODE_WAIT {
-                        let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
+                        let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()), limit);
                         messages += u64::from(serve(&ctx, answer, &mut published, &mut held));
                         got = tokio::time::timeout(NODE_WAIT - left, &mut fetching).await.ok();
                     }
                     if let Some(Some(r)) = got {
                         node = Some((Instant::now(), r));
                     }
-                    let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()));
+                    let answer = node_answer(node, SystemTime::now(), seen_floor(engines.as_ref()), limit);
                     messages += u64::from(serve(&ctx, answer, &mut published, &mut held));
                 }
             }
@@ -340,16 +343,39 @@ fn seen_floor(engines: Option<&Engines>) -> u32 {
         .map_or(0, |i| floor_of(i.mempoolminfee))
 }
 
-/// The node's estimates as an answer while they are young enough to serve, raised to any higher
-/// minimum seen since they came.
-fn node_answer(node: Option<(Instant, Rates)>, now: SystemTime, floor: u32) -> Option<Answer> {
-    node.filter(|(at, _)| at.elapsed() < NODE_MAX_AGE)
-        .map(|(at, rates)| Answer {
-            rates: rates.at_least(floor),
-            source: Source::Node,
-            tip: None,
-            at: now - at.elapsed(),
-        })
+/// How much of the node's estimates may be served while ours is not.
+#[derive(Debug, Clone, Copy)]
+enum Limit {
+    /// All of them: the engine is off, or the projection is stale.
+    AsTheyAre,
+    /// None: warming up, and no whole minute of arrivals watched yet to bound them by. On a
+    /// quiet network the node's next-block estimate is a high quantile of old blocks, far above
+    /// what the mempool needs (`docs/MEMPOOL.md`, "When ours cannot be served").
+    Withheld,
+    /// Each level no higher than this ([`Recommender::cap`]).
+    At(Rates),
+}
+
+/// The node's estimates as an answer while they are young enough to serve and `limit` lets
+/// them, raised to any higher minimum seen since they came.
+fn node_answer(
+    node: Option<(Instant, Rates)>,
+    now: SystemTime,
+    floor: u32,
+    limit: Limit,
+) -> Option<Answer> {
+    let (at, rates) = node.filter(|(at, _)| at.elapsed() < NODE_MAX_AGE)?;
+    let rates = match limit {
+        Limit::AsTheyAre => rates,
+        Limit::Withheld => return None,
+        Limit::At(cap) => rates.at_most(&cap),
+    };
+    Some(Answer {
+        rates: rates.at_least(floor),
+        source: Source::Node,
+        tip: None,
+        at: now - at.elapsed(),
+    })
 }
 
 /// Stores the answer for the routes, and publishes the topic when the message changed. Returns
@@ -441,4 +467,4 @@ fn message(a: Option<&Answer>) -> Value {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
