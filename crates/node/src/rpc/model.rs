@@ -216,6 +216,49 @@ pub struct BlockTx {
     pub value: Amount,
 }
 
+/// `getblock` with verbosity 3, reduced to what a running total per script needs: each
+/// transaction's outputs and the outputs its inputs spend (`prevout`), as values and script hex.
+/// The coinbase input has no `prevout`. Scripts are kept as the node's lower-case hex, so they can
+/// be matched without decoding them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrevoutBlock {
+    pub hash: BlockHash,
+    pub height: u32,
+    pub time: u32,
+    /// Absent on genesis.
+    pub previousblockhash: Option<BlockHash>,
+    /// In block order, coinbase first.
+    pub tx: Vec<PrevoutTx>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrevoutTx {
+    pub txid: Txid,
+    pub vin: Vec<PrevoutIn>,
+    pub vout: Vec<PrevoutOut>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrevoutIn {
+    /// The output this input spends; `None` for a coinbase input.
+    pub prevout: Option<PrevoutOut>,
+}
+
+/// An output: its value and its script as the node wrote it in hex.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PrevoutOut {
+    #[serde(deserialize_with = "btc")]
+    pub value: Amount,
+    #[serde(rename = "scriptPubKey")]
+    pub script_pub_key: ScriptHexText,
+}
+
+/// `scriptPubKey.hex`, unparsed: chain data, compared as text and never decoded here.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ScriptHexText {
+    pub hex: String,
+}
+
 /// `getblockstats`. Fees and values are in satoshis, fee rates in whole sat/vB
 /// (so the percentiles round most of today's transactions to 0, see `docs/RBITCOIN.md`).
 /// The coinbase is left out of counts, sizes and fees, as in Core.
