@@ -75,4 +75,4 @@ Read [`AGENTS.md`](AGENTS.md) before opening a pull request.
 
 ## License
 
-[MIT](LICENSE). Not affiliated with mempool.space or Mempool Space K.K. Formerly `smolcars/mempool.based`.
+[MIT](LICENSE).
