@@ -11,7 +11,9 @@
 //!
 //! **The ledger** (with `DATA_DIR`): a reader opening a large address queues a seed; discovery
 //! queues the scripts each block pays most, after a size check. One seed runs at a time; the
-//! queue is bounded and a client may hold at most [`CLIENT_SEEDS`] places in it.
+//! queue is bounded and a client may hold at most [`CLIENT_SEEDS`] places in it. Each kept address
+//! then takes the node's newest history page before its seed once ([`book::fill`]), in the same
+//! lane, after the readers' seeds.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -30,8 +32,8 @@ use bitcoin::{Script, ScriptBuf};
 use engine::ledger::{self as book, At, NodeSource, Seeded, Source as _};
 use engine::store::Store;
 use logging::events::{
-    LedgerChecked, LedgerFollowFailed, LedgerFollowed, LedgerSeedFailed, LedgerSeedRefused,
-    LedgerSeeded,
+    LedgerChecked, LedgerFillFailed, LedgerFilled, LedgerFollowFailed, LedgerFollowed,
+    LedgerSeedFailed, LedgerSeedRefused, LedgerSeeded,
 };
 use node::esplora::model::ScriptInfo;
 use node::esplora::{Error, Esplora, RawResponse, Route, ScriptHash, ScriptRef, ScriptSize};
@@ -65,8 +67,10 @@ pub const CLIENT_SEEDS: usize = 2;
 pub const ABANDONED: Duration = Duration::from_secs(120);
 /// A seed the node refused for size is not tried again for this long.
 const REFUSED_FOR: Duration = Duration::from_secs(3600);
-/// A seed that failed is not tried again for this long.
+/// A seed that failed is not tried again for this long; a fill, this long doubled at each failure
+/// of that address, up to [`FILL_RETRY_MAX`].
 const FAILED_FOR: Duration = Duration::from_secs(600);
+const FILL_RETRY_MAX: Duration = Duration::from_secs(24 * 3600);
 /// Discovery: candidates taken from each block, size checks an hour, and how long a checked
 /// script is not checked again.
 pub const PER_BLOCK: usize = 3;
@@ -306,6 +310,9 @@ struct Seeds {
     /// The node's refusal of a seed was logged since the last seed that worked.
     refused_said: bool,
     failures: u32,
+    /// Kept scripts still to be filled (as the store says), with their failures so far and when
+    /// each may be tried next.
+    unfilled: HashMap<ScriptHash, (u32, Instant)>,
 }
 
 impl Seeds {
@@ -381,11 +388,26 @@ impl Seeds {
             + usize::from(running)
     }
 
-    /// The next thing to do in the lane: a reader's seed, a discovered seed, or a size check
-    /// within the hour's budget. Readers who stopped asking are dropped first.
+    /// The next thing to do in the lane: a reader's seed, a fill that is due, a discovered seed,
+    /// or a size check within the hour's budget. Readers who stopped asking are dropped first.
     fn next(&mut self, now: Instant) -> Option<Work> {
         self.readers.retain(|j| now < j.asked + ABANDONED);
-        if let Some(j) = self.readers.pop_front().or_else(|| self.found.pop_front()) {
+        let job = match self.readers.pop_front() {
+            Some(j) => Some(j),
+            None => {
+                let due = self
+                    .unfilled
+                    .iter()
+                    .filter(|(_, (_, at))| now >= *at)
+                    .min_by_key(|(sh, (_, at))| (*at, sh.to_byte_array()))
+                    .map(|(sh, _)| *sh);
+                if let Some(sh) = due {
+                    return Some(Work::Fill(sh));
+                }
+                self.found.pop_front()
+            }
+        };
+        if let Some(j) = job {
             // Running from now, for the client's share and the page, though it waits for the lane.
             self.running = Some((j.sh, now, j.client, j.asked));
             return Some(Work::Seed(j));
@@ -410,6 +432,28 @@ impl Seeds {
         }
         self.checked.insert(ScriptHash::from_script(&script), now);
         Some(Work::Check(script))
+    }
+}
+
+impl Seeds {
+    /// The scripts the store says are still to be filled: new ones are due now, and those
+    /// known keep their failures.
+    fn set_unfilled(&mut self, kept: &[ScriptHash], now: Instant) {
+        self.unfilled.retain(|sh, _| kept.contains(sh));
+        for sh in kept {
+            self.unfilled.entry(*sh).or_insert((0, now));
+        }
+    }
+
+    /// A fill failed: it is due again after a wait that doubles with each failure. Its count.
+    fn fill_failed(&mut self, sh: ScriptHash, now: Instant) -> u32 {
+        let e = self.unfilled.entry(sh).or_insert((0, now));
+        e.0 += 1;
+        let wait = FAILED_FOR
+            .saturating_mul(1 << (e.0 - 1).min(16))
+            .min(FILL_RETRY_MAX);
+        e.1 = now + wait;
+        e.0
     }
 }
 
@@ -516,11 +560,17 @@ impl Ledger {
         self.seeds.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Reads the tracked set again from the store.
+    /// Reads the tracked set again from the store, and the scripts still to be filled.
     async fn reload(&self) {
         if let Ok(rows) = book::tracked_scripts(&self.store).await {
             *self.tracked.write().unwrap_or_else(PoisonError::into_inner) =
                 rows.into_iter().map(|(sh, _)| sh).collect();
+        }
+        if let Ok(kept) = book::unfilled(&self.store).await {
+            self.seeds().set_unfilled(&kept, Instant::now());
+            if !kept.is_empty() {
+                self.wake.notify_one();
+            }
         }
     }
 
@@ -723,6 +773,53 @@ impl Ledger {
         }
     }
 
+    /// Fills one kept script in the lane (already held): the node's page before its seed, once.
+    async fn fill(&self, sh: ScriptHash) {
+        let started = Instant::now();
+        let r = tokio::time::timeout(SEED_TIMEOUT, book::fill(&self.store, &self.source, sh)).await;
+        let error = match r {
+            Ok(Ok(filled)) => {
+                self.seeds().unfilled.remove(&sh);
+                let (height, outcome, rows, tip) = match filled {
+                    book::Filled::Joined { height, rows, tip } => (height, "joined", rows, tip),
+                    book::Filled::Skipped {
+                        height,
+                        reason,
+                        tip,
+                    } => (height, reason, 0, tip),
+                    book::Filled::Nothing => return,
+                };
+                // Followers refetch the list, as after a block: it changed, or it is no longer
+                // `filling`.
+                if let Some(tip) = tip {
+                    self.track
+                        .ledger_changed(node::electrum::ScriptHash(sh.to_byte_array()), tip.height);
+                }
+                logging::emit(&LedgerFilled {
+                    network: self.network,
+                    scripthash: sh.to_string(),
+                    height,
+                    outcome,
+                    rows,
+                    duration_ms: ms(started.elapsed()),
+                });
+                return;
+            }
+            Ok(Err(e)) => e.label(),
+            Err(_) => "timeout",
+        };
+        let failures = self.seeds().fill_failed(sh, Instant::now());
+        if failures.is_power_of_two() {
+            logging::emit(&LedgerFillFailed {
+                network: self.network,
+                scripthash: sh.to_string(),
+                error,
+                failures,
+                duration_ms: ms(started.elapsed()),
+            });
+        }
+    }
+
     fn failed(&self, sh: ScriptHash, error: &'static str, took: Duration) {
         let failures = {
             let mut s = self.seeds();
@@ -759,6 +856,7 @@ fn remember(
 
 enum Work {
     Seed(Job),
+    Fill(ScriptHash),
     Check(ScriptBuf),
 }
 
@@ -795,6 +893,12 @@ async fn run(ctx: Arc<NetworkContext>) {
                 };
                 ledger.seed(job).await;
                 ledger.seeds().running = None;
+            }
+            Work::Fill(sh) => {
+                let Ok(_lane) = Arc::clone(&ledger.lane).acquire_owned().await else {
+                    return;
+                };
+                ledger.fill(sh).await;
             }
             Work::Check(script) => {
                 let started = Instant::now();
@@ -994,6 +1098,7 @@ fn tracked_json(v: &book::View) -> Value {
         "at": { "height": t.at.height, "hash": t.at.hash.to_string(), "time": t.at.time },
         "seeded": { "height": t.seeded_height, "time": t.seeded_time },
         "window": book::WINDOW,
+        "filling": !t.filled,
         "txs": v.txs.iter().map(|r| json!({
             "txid": r.txid.to_string(),
             "height": r.height,
@@ -1261,6 +1366,63 @@ mod tests {
         assert!(matches!(
             s.ask(&script(0), true, client(1), now + REFUSED_FOR),
             (Status::Queued(1), true)
+        ));
+    }
+
+    #[test]
+    fn fills_run_after_the_readers_seeds_and_before_discoverys() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let filled = ScriptHash::from_script(&script(7));
+        s.set_unfilled(&[filled], now);
+        s.found.push_back(Job {
+            script: script(5),
+            sh: ScriptHash::from_script(&script(5)),
+            client: None,
+            asked: now,
+        });
+        s.candidates.push_back(script(6));
+        s.ask(&script(0), true, client(1), now);
+        assert!(matches!(s.next(now), Some(Work::Seed(j)) if j.client.is_some()));
+        s.running = None;
+        assert!(matches!(s.next(now), Some(Work::Fill(sh)) if sh == filled));
+        // Done: the store no longer lists it, and it is never offered again.
+        s.unfilled.remove(&filled);
+        s.set_unfilled(&[], now);
+        assert!(matches!(s.next(now), Some(Work::Seed(j)) if j.client.is_none()));
+        s.running = None;
+        assert!(matches!(s.next(now), Some(Work::Check(_))));
+        assert!(s.next(now).is_none());
+    }
+
+    #[test]
+    fn a_failed_fill_waits_longer_each_time_and_keeps_its_count_across_reloads() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let sh = ScriptHash::from_script(&script(7));
+        s.set_unfilled(&[sh], now);
+        assert!(matches!(s.next(now), Some(Work::Fill(_))));
+        assert_eq!(s.fill_failed(sh, now), 1);
+        // Not offered again while it waits, however often the loop asks.
+        assert!(s.next(now + FAILED_FOR - Duration::from_secs(1)).is_none());
+        // A reload from the store keeps the wait.
+        s.set_unfilled(&[sh], now);
+        assert!(s.next(now).is_none());
+        let later = now + FAILED_FOR;
+        assert!(matches!(s.next(later), Some(Work::Fill(_))));
+        assert_eq!(s.fill_failed(sh, later), 2);
+        assert!(s.next(later + FAILED_FOR).is_none());
+        assert!(matches!(
+            s.next(later + FAILED_FOR * 2),
+            Some(Work::Fill(_))
+        ));
+        // The wait stops doubling at a day.
+        for _ in 0..30 {
+            s.fill_failed(sh, later);
+        }
+        assert!(matches!(
+            s.next(later + FILL_RETRY_MAX),
+            Some(Work::Fill(_))
         ));
     }
 }

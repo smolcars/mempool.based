@@ -815,6 +815,34 @@ pub struct LedgerSeedFailed {
 }
 event!(LedgerSeedFailed, "ledger_seed_failed", Warn);
 
+/// A kept address's newest transactions were filled with the node's page before its seed block,
+/// or found not to take one. Once per address.
+#[derive(Debug, Serialize)]
+pub struct LedgerFilled {
+    pub network: &'static str,
+    pub scripthash: String,
+    /// The seed block the page was pinned to.
+    pub height: u32,
+    /// `joined`, `full` (the window holds rows since the seed only) or `gap` (rows since the seed
+    /// may be missing).
+    pub outcome: &'static str,
+    /// Rows the page added to the window.
+    pub rows: usize,
+    pub duration_ms: f64,
+}
+event!(LedgerFilled, "ledger_filled", Info);
+
+/// A fill failed, at the 1st, 2nd, 4th… failure of that address; it is tried again later.
+#[derive(Debug, Serialize)]
+pub struct LedgerFillFailed {
+    pub network: &'static str,
+    pub scripthash: String,
+    pub error: &'static str,
+    pub failures: u32,
+    pub duration_ms: f64,
+}
+event!(LedgerFillFailed, "ledger_fill_failed", Warn);
+
 /// Discovery checked the size of a script a block paid often. At most `CHECKS_PER_HOUR` an hour.
 #[derive(Debug, Serialize)]
 pub struct LedgerChecked {
@@ -2024,6 +2052,21 @@ mod tests {
                 error: "timeout",
                 failures: 1,
                 duration_ms: 900_000.0,
+            }),
+            both(&LedgerFilled {
+                network: n,
+                scripthash: "00".repeat(32),
+                height: 9,
+                outcome: "joined",
+                rows: 25,
+                duration_ms: 100_000.0,
+            }),
+            both(&LedgerFillFailed {
+                network: n,
+                scripthash: "00".repeat(32),
+                error: "node_busy",
+                failures: 1,
+                duration_ms: 3.0,
             }),
             both(&LedgerChecked {
                 network: n,

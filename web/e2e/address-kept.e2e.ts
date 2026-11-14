@@ -44,7 +44,8 @@ test("a kept address shows its totals, newest transactions and balance at once",
   await expect(txs.locator("tbody tr")).toHaveCount(3);
   await expect(txs.locator("tbody tr").first()).toContainText("0def111d");
   await expect(txs.locator("tbody tr").nth(1)).toContainText(/[−-]12\.34567890/);
-  await expect(page.getByText(/keeps the newest 200 confirmed transactions/)).toBeVisible();
+  await expect(page.getByText(/keeps at most the newest 200 confirmed transactions/)).toBeVisible();
+  await expect(page.getByText(/are added once its node has listed them/)).toHaveCount(0);
   // A block opens on this network.
   await expect(txs.getByRole("link", { name: "110" })).toHaveAttribute(
     "href",
@@ -94,15 +95,20 @@ test("an address dropped from the ledger is added up again when asked for", asyn
   });
 });
 
-test("a long list shows a page at a time", async ({ page }) => {
+test("a long list shows a page at a time, and says when older ones are still to come", async ({
+  page,
+}) => {
   const txs = Array.from({ length: 30 }, (_, i) => ({
     ...KEPT.txs[0],
     position: 100 - i,
   }));
-  await stubLarge(page, { ledger: () => ({ ...KEPT, txs }) });
+  await stubLarge(page, { ledger: () => ({ ...KEPT, txs, filling: true }) });
   await page.goto(`/regtest/address/${LARGE}`);
   const table = page.getByRole("table", { name: /^Newest confirmed transactions/ });
   await expect(table.locator("tbody tr")).toHaveCount(25);
+  await expect(
+    page.getByText(/Those from before block 105, .* are added once its node has listed them/),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Show 5 more" }).click();
   await expect(table.locator("tbody tr")).toHaveCount(30);
   await expect(page.getByRole("button", { name: /^Show \d+ more$/ })).toHaveCount(0);

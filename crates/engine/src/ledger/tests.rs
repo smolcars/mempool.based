@@ -111,6 +111,9 @@ struct Fake {
     variant: AtomicUsize,
     /// Run once, inside the next `totals` call: the chain moving while a seed is under way.
     during_totals: Mutex<Option<Hook>>,
+    /// History pages asked, and how many of the next ones fail.
+    pages: AtomicUsize,
+    fail_pages: AtomicUsize,
 }
 
 impl Fake {
@@ -122,6 +125,8 @@ impl Fake {
             refuse: Mutex::new(HashSet::new()),
             variant: AtomicUsize::new(0),
             during_totals: Mutex::new(None),
+            pages: AtomicUsize::new(0),
+            fail_pages: AtomicUsize::new(0),
         };
         // Genesis pays nobody we track, as on every real chain.
         f.push_txs(Vec::new());
@@ -333,6 +338,12 @@ impl Source for Fake {
 
     async fn page(&self, script: &Script, at: BlockHash) -> Result<Vec<TxSummary>, SourceError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.pages.fetch_add(1, Ordering::SeqCst);
+        let fail = self.fail_pages.load(Ordering::SeqCst);
+        if fail > 0 {
+            self.fail_pages.store(fail - 1, Ordering::SeqCst);
+            return Err(SourceError::Busy);
+        }
         let i = (0..SCRIPTS)
             .find(|i| script == self::script(*i).as_script())
             .unwrap();
@@ -423,7 +434,14 @@ async fn seeded_scripts_follow_the_chain_through_random_reorgs_and_restarts() {
                         Err(e) => panic!("seed: {e}"),
                     }
                 }
-                85..90 => t.reopen().await,
+                85..88 => {
+                    let i = usize::try_from(rng.below(TRACKABLE as u64)).unwrap();
+                    match fill(t.store(), &fake, sh(i)).await {
+                        Ok(_) | Err(Error::Moved) => {}
+                        Err(e) => panic!("fill: {e}"),
+                    }
+                }
+                88..90 => t.reopen().await,
                 _ => {}
             }
             follow(t.store(), &fake).await.unwrap();
@@ -1074,6 +1092,82 @@ mod regtest {
         follow(t.store(), &node).await.unwrap();
         check_node(t.store(), &node, &scripts, "all four").await;
     }
+
+    /// Scripts taken from a totals answer, without a page, then filled: the list equals the
+    /// node's own history, below and above the seed block, and stays so across a reorg.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "regtest: needs a node from dev/regtest (see the comment above)"]
+    async fn scripts_seeded_from_an_answer_are_filled_with_the_nodes_history() {
+        let node = source();
+        let p2wpkh = "bcrt1qw5puevk8wgy5t9d2qjg6frpfmesuqnnpx95u7s";
+        let miner = "bcrt1qft5p2uhsdcdc3l2ua4ap5qqfg4pjaqlp250x7us7a8qqhrxrxfsqseac85";
+        let scripts: Vec<ScriptBuf> = [miner, p2wpkh]
+            .iter()
+            .map(|a| {
+                a.parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                    .unwrap()
+                    .require_network(bitcoin::Network::Regtest)
+                    .unwrap()
+                    .script_pubkey()
+            })
+            .collect();
+        let t = Temp::new();
+        for s in &scripts {
+            let at = anchor(t.store(), &node).await.unwrap();
+            let totals = node.totals(s, at.hash).await.unwrap().unwrap();
+            let r = adopt(t.store(), &node, s, totals, at.hash, at.height, 10, 0)
+                .await
+                .unwrap();
+            assert!(matches!(r, Seeded::Tracked { page: false, .. }), "{r:?}");
+        }
+        // Blocks since the seed, paying both.
+        regtest(&["send", p2wpkh, "33000"]);
+        mine(1);
+        regtest(&["send", p2wpkh, "44000"]);
+        mine(1);
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "seeded from answers").await;
+        for s in &scripts {
+            let f = fill(t.store(), &node, ScriptHash::from_script(s))
+                .await
+                .unwrap();
+            println!("filled: {f:?}");
+            assert!(
+                matches!(f, Filled::Joined { rows, .. } if rows > 0),
+                "{f:?}"
+            );
+            let v = view(t.store(), ScriptHash::from_script(s))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(before_seed(&v) > 0 && v.txs.len() > before_seed(&v));
+        }
+        check_node(t.store(), &node, &scripts, "filled").await;
+        // A reorg two blocks deep, above the seed block.
+        let height = node.height().await.unwrap();
+        let fork = node.at(height - 1).await.unwrap().unwrap();
+        rpc_call(
+            "invalidateblock",
+            serde_json::json!([fork.hash.to_string()]),
+        );
+        for _ in 0..3 {
+            rpc_call("generateblock", serde_json::json!(["raw(51)", []]));
+        }
+        let f = follow(t.store(), &node).await.unwrap();
+        assert_eq!((f.undone, f.applied), (2, 3), "{f:?}");
+        check_node(t.store(), &node, &scripts, "filled, after a reorg").await;
+        mine(1);
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "payments mined again").await;
+        for s in &scripts {
+            assert_eq!(
+                fill(t.store(), &node, ScriptHash::from_script(s))
+                    .await
+                    .unwrap(),
+                Filled::Nothing
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1180,4 +1274,309 @@ fn the_scripts_paid_most_are_counted_once_a_transaction() {
         .collect();
     assert_eq!(got, vec![(hex(0), 3), (hex(1), 2)]);
     assert_eq!(paid_most(&block, 1).len(), 1);
+}
+
+/// Seeds script `i` as a totals answer does: the node's totals at a block the ledger holds, no
+/// history page.
+async fn answer(store: &Store, fake: &Fake, i: usize) -> Seeded {
+    let at = anchor(store, fake).await.unwrap();
+    adopt(
+        store,
+        fake,
+        &script(i),
+        fake.oracle(i, at.height),
+        at.hash,
+        at.height,
+        10,
+        0,
+    )
+    .await
+    .unwrap()
+}
+
+fn pays(i: usize, n: usize) -> Vec<(Vec<PrevoutIn>, Vec<PrevoutOut>)> {
+    (0..n).map(|_| (vec![], vec![out(i, 1_000)])).collect()
+}
+
+/// Rows at or below the seed block: what a page added.
+fn before_seed(v: &View) -> usize {
+    v.txs
+        .iter()
+        .filter(|r| r.height <= v.tracked.seeded_height)
+        .count()
+}
+
+fn pages(fake: &Fake) -> usize {
+    fake.pages.load(Ordering::SeqCst)
+}
+
+/// A fake chain on which script 0 was paid in ten blocks before the seed.
+fn paid_before(seed: u64) -> (Rng, Fake) {
+    let mut rng = Rng(seed);
+    let fake = Fake::new(20, &mut rng);
+    for _ in 0..10 {
+        fake.push_txs(pays(0, 1));
+    }
+    (rng, fake)
+}
+
+#[tokio::test]
+async fn a_script_seeded_from_an_answer_is_filled_once_across_restarts() {
+    let (mut rng, fake) = paid_before(201);
+    let mut t = Temp::new();
+    assert!(matches!(
+        answer(t.store(), &fake, 0).await,
+        Seeded::Tracked { page: false, .. }
+    ));
+    assert!(
+        !view(t.store(), sh(0))
+            .await
+            .unwrap()
+            .unwrap()
+            .tracked
+            .filled
+    );
+    assert_eq!(unfilled(t.store()).await.unwrap(), vec![sh(0)]);
+    // Blocks since the seed pay it, and a restart comes before the fill.
+    fake.push_txs(pays(0, 3));
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    t.reopen().await;
+    let f = fill(t.store(), &fake, sh(0)).await.unwrap();
+    assert!(
+        matches!(f, Filled::Joined { rows, .. } if rows > 0),
+        "{f:?}"
+    );
+    check(t.store(), &fake, "filled").await;
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert!(v.tracked.filled);
+    assert!(before_seed(&v) > 0);
+    assert!(v.txs.len() > before_seed(&v));
+    assert!(unfilled(t.store()).await.unwrap().is_empty());
+    // Never asked again, nor after another restart.
+    assert_eq!(
+        fill(t.store(), &fake, sh(0)).await.unwrap(),
+        Filled::Nothing
+    );
+    t.reopen().await;
+    assert_eq!(
+        fill(t.store(), &fake, sh(0)).await.unwrap(),
+        Filled::Nothing
+    );
+    assert_eq!(pages(&fake), 1);
+    fake.push_txs(pays(0, 2));
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "a block after the fill").await;
+}
+
+#[tokio::test]
+async fn a_fill_stays_exact_across_reorgs_before_and_after_it() {
+    let (mut rng, fake) = paid_before(211);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    for _ in 0..3 {
+        fake.push_txs(pays(0, 2));
+    }
+    follow(t.store(), &fake).await.unwrap();
+    // Two blocks paying it leave before the fill: its rows and its count since the seed fall
+    // together.
+    fake.pop(2);
+    fake.push(&mut rng);
+    fake.push_txs(pays(0, 1));
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    let f = fill(t.store(), &fake, sh(0)).await.unwrap();
+    assert!(matches!(f, Filled::Joined { .. }), "{f:?}");
+    check(t.store(), &fake, "filled after a reorg").await;
+    // And after it: the page's rows lie below every block undone.
+    fake.pop(3);
+    for _ in 0..4 {
+        fake.push_txs(pays(0, 1));
+    }
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "a reorg after the fill").await;
+    assert!(before_seed(&view(t.store(), sh(0)).await.unwrap().unwrap()) > 0);
+}
+
+#[tokio::test]
+async fn a_window_full_since_the_seed_takes_no_page() {
+    let (_, fake) = paid_before(221);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    fake.push_txs(pays(0, WINDOW + 10));
+    follow(t.store(), &fake).await.unwrap();
+    assert!(matches!(
+        fill(t.store(), &fake, sh(0)).await.unwrap(),
+        Filled::Skipped { reason: "full", .. }
+    ));
+    assert_eq!(pages(&fake), 0);
+    assert!(
+        view(t.store(), sh(0))
+            .await
+            .unwrap()
+            .unwrap()
+            .tracked
+            .filled
+    );
+    check(t.store(), &fake, "full").await;
+}
+
+#[tokio::test]
+async fn a_window_cut_then_shortened_by_a_reorg_takes_no_page() {
+    let (mut rng, fake) = paid_before(231);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    // Cut at the window, then a block of its rows undone: fewer than the window, with a gap.
+    fake.push_txs(pays(0, WINDOW + 10));
+    fake.push_txs(pays(0, 5));
+    follow(t.store(), &fake).await.unwrap();
+    fake.pop(1);
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert!(v.txs.len() < WINDOW);
+    assert!(matches!(
+        fill(t.store(), &fake, sh(0)).await.unwrap(),
+        Filled::Skipped { reason: "gap", .. }
+    ));
+    assert_eq!(pages(&fake), 0);
+    check(t.store(), &fake, "cut").await;
+}
+
+#[tokio::test]
+async fn a_failed_page_is_tried_again_and_then_filled() {
+    let (_, fake) = paid_before(241);
+    let t = Temp::new();
+    // The seed's own page fails: it is tracked without it.
+    fake.fail_pages.store(2, Ordering::SeqCst);
+    let s = seed(t.store(), &fake, &script(0), true, 10, 0)
+        .await
+        .unwrap();
+    assert!(matches!(s, Seeded::Tracked { page: false, .. }), "{s:?}");
+    let r = fill(t.store(), &fake, sh(0)).await;
+    assert!(matches!(r, Err(Error::Source(SourceError::Busy))), "{r:?}");
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert!(!v.tracked.filled);
+    assert_eq!(before_seed(&v), 0);
+    let f = fill(t.store(), &fake, sh(0)).await.unwrap();
+    assert!(
+        matches!(f, Filled::Joined { rows, .. } if rows > 0),
+        "{f:?}"
+    );
+    assert_eq!(pages(&fake), 3);
+    check(t.store(), &fake, "filled on the retry").await;
+}
+
+#[tokio::test]
+async fn a_page_whose_rows_overlap_the_kept_ones_adds_each_row_once() {
+    let (_, fake) = paid_before(251);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    fake.push_txs(pays(0, 2));
+    fake.push_txs(pays(0, 1));
+    follow(t.store(), &fake).await.unwrap();
+    let seeded = view(t.store(), sh(0))
+        .await
+        .unwrap()
+        .unwrap()
+        .tracked
+        .seeded_height;
+    let seed_hash = fake.at(seeded).await.unwrap().unwrap().hash;
+    // The node's page at the tip rather than the seed block: rows kept since the seed are in it.
+    let tip = fake.at(fake.tip()).await.unwrap().unwrap();
+    let rows = page_rows(fake.page(&script(0), tip.hash).await.unwrap(), tip.height).unwrap();
+    assert!(rows.iter().any(|r| r.height > seeded));
+    let f = t
+        .store()
+        .write(move |sql| db::fill(sql, sh(0), seeded, Some((seed_hash, &rows))))
+        .await
+        .unwrap();
+    assert!(matches!(f, Filled::Joined { .. }), "{f:?}");
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    let distinct: HashSet<Txid> = v.txs.iter().map(|r| r.txid).collect();
+    assert_eq!(distinct.len(), v.txs.len());
+    check(t.store(), &fake, "overlap").await;
+}
+
+/// The store as an older server left it: `0014_ledger_fill.sql`'s backfill run again over scripts
+/// whose new columns are cleared.
+async fn as_before_the_upgrade(store: &Store) {
+    store
+        .write(|sql| {
+            sql.prepare("UPDATE ledger_scripts SET seeded_tx_count = NULL, filled = 0")?
+                .execute([])?;
+            let text: &'static str = include_str!("../store/migrations/0014_ledger_fill.sql");
+            for stmt in text.split(';').filter(|s| s.contains("UPDATE")) {
+                sql.prepare(stmt)?.execute([])?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn scripts_kept_before_the_upgrade_are_filled_when_the_undo_record_proves_no_gap() {
+    let (mut rng, fake) = paid_before(261);
+    let t = Temp::new();
+    // Script 0 from an answer; script 1 with its page; both a few blocks old.
+    answer(t.store(), &fake, 0).await;
+    fake.push_txs(vec![(vec![], vec![out(0, 5), out(1, 6)])]);
+    follow(t.store(), &fake).await.unwrap();
+    seed(t.store(), &fake, &script(1), true, 10, 0)
+        .await
+        .unwrap();
+    fake.push_txs(pays(0, 2));
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    as_before_the_upgrade(t.store()).await;
+    // Script 1 held its page's rows: done. Script 0 is filled.
+    assert_eq!(unfilled(t.store()).await.unwrap(), vec![sh(0)]);
+    let before = pages(&fake);
+    let f = fill(t.store(), &fake, sh(0)).await.unwrap();
+    assert!(
+        matches!(f, Filled::Joined { rows, .. } if rows > 0),
+        "{f:?}"
+    );
+    assert_eq!(pages(&fake), before + 1);
+    check(t.store(), &fake, "upgraded").await;
+}
+
+#[tokio::test]
+async fn a_script_kept_before_the_upgrade_past_the_undo_record_takes_no_page() {
+    let (mut rng, fake) = paid_before(271);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    for _ in 0..UNDO_DEPTH + 5 {
+        fake.push(&mut rng);
+    }
+    follow(t.store(), &fake).await.unwrap();
+    as_before_the_upgrade(t.store()).await;
+    assert!(matches!(
+        fill(t.store(), &fake, sh(0)).await.unwrap(),
+        Filled::Skipped { reason: "gap", .. }
+    ));
+    assert_eq!(pages(&fake), 0);
+    check(t.store(), &fake, "too old").await;
+}
+
+#[tokio::test]
+async fn a_seed_block_older_than_the_ledgers_chain_is_the_nodes_below_its_tip() {
+    let (_, fake) = paid_before(281);
+    let t = Temp::new();
+    answer(t.store(), &fake, 0).await;
+    fake.push_txs(pays(0, 1));
+    for _ in 0..UNDO_DEPTH + 5 {
+        fake.push_txs(Vec::new());
+    }
+    follow(t.store(), &fake).await.unwrap();
+    let f = fill(t.store(), &fake, sh(0)).await.unwrap();
+    assert!(
+        matches!(f, Filled::Joined { rows, .. } if rows > 0),
+        "{f:?}"
+    );
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert!(v.tracked.seeded_height + UNDO_DEPTH < v.tracked.at.height);
+    assert!(before_seed(&v) > 0);
+    check(t.store(), &fake, "old seed block").await;
 }

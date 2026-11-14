@@ -113,6 +113,9 @@ pub struct Tracked {
     /// The block the node's totals were pinned to: tracking began after it.
     pub seeded_height: u32,
     pub seeded_time: u32,
+    /// The node's newest history page before the seed block was joined to the newest
+    /// transactions, or found not to be needed: [`fill`] has nothing left to do.
+    pub filled: bool,
 }
 
 /// A script's totals, newest transactions (newest first) and balance chart (oldest first), read
@@ -530,6 +533,7 @@ async fn insert<S: Source>(
             totals,
             anchor,
             rows: rows.clone(),
+            filled: kept_page,
             since,
             now,
         };
@@ -545,6 +549,67 @@ async fn insert<S: Source>(
         }
     }
     Err(Error::Moved)
+}
+
+pub use self::db::Filled;
+
+/// Joins the node's newest history page before a kept script's seed block below the rows kept
+/// since, once per script: for a script seeded without it (from a totals answer, or whose page
+/// failed), so its newest transactions reach back before tracking began.
+///
+/// The page is pinned to the seed block, so its rows are all older than the kept ones and none is
+/// in both. It joins them without a gap when the kept rows are every transaction since the seed:
+/// as many as the totals counted since. Where that cannot be shown, or the window is full of rows
+/// since the seed, nothing is added and the node is not asked. Either way the script is marked
+/// filled, and never asked about again; an error leaves it to be tried again.
+///
+/// The ledger keeps only its last [`UNDO_DEPTH`] blocks. An older seed block is the node's block
+/// at that height, checked to be below the ledger's tip on the node's chain: a reorg below the
+/// seed block would have dropped the script, and one deeper than the undo record, every script.
+///
+/// One page of the script's whole history at the node: run one at a time, as a seed.
+pub async fn fill<S: Source>(store: &Store, source: &S, sh: ScriptHash) -> Result<Filled, Error> {
+    let Some(s) = store
+        .read(Read::Ledger, move |sql| db::to_fill(sql, sh))
+        .await?
+    else {
+        return Ok(Filled::Nothing);
+    };
+    if s.filled {
+        return Ok(Filled::Nothing);
+    }
+    let seeded = s.seeded_height;
+    // Decided from the store alone, and decided again in the write.
+    if s.skip.is_some() {
+        return Ok(store
+            .write(move |sql| db::fill(sql, sh, seeded, None))
+            .await?);
+    }
+    let hash = match s.seed_block {
+        Some(h) => h,
+        None => {
+            let tip = s.tip.ok_or(Error::Moved)?;
+            let at = source.at(seeded).await?.ok_or(Error::Moved)?;
+            if source.at(tip.height).await?.map(|a| a.hash) != Some(tip.hash) {
+                return Err(Error::Moved);
+            }
+            at.hash
+        }
+    };
+    let page = source.page(&s.script, hash).await?;
+    let rows = page_rows(page, seeded).ok_or_else(|| {
+        Error::Source(SourceError::Failed(
+            "history page not at the block asked".into(),
+        ))
+    })?;
+    Ok(store
+        .write(move |sql| db::fill(sql, sh, seeded, Some((hash, &rows))))
+        .await?)
+}
+
+/// The kept scripts [`fill`] has yet to do.
+pub async fn unfilled(store: &Store) -> Result<Vec<ScriptHash>, store::Error> {
+    store.read(Read::Ledger, db::unfilled).await
 }
 
 /// Rows in a page of the node's history (Esplora's page size).

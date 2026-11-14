@@ -42,6 +42,7 @@ export const KEPT = {
   at: { height: 110, hash: "00".repeat(32), time: 1_767_291_600 },
   seeded: { height: 105, time: 1_767_288_600 },
   window: 200,
+  filling: false,
   txs: [
     { txid: chain.txs.payment, height: 110, position: 2, value: 50_000_000, time: 1_767_291_600 },
     {
