@@ -74,7 +74,7 @@ interface Walked {
 }
 
 /**
- * Notes where focus is at every key pressed from now on: its name, whether it shows a focus ring,
+ * Notes where focus is at every Tab pressed from now on: its name, whether it shows a focus ring,
  * and whether the header covers it. Noted in the page, so a stop costs no round trip of its own.
  */
 const record = (page: Page) =>
@@ -105,9 +105,11 @@ const record = (page: Page) =>
       const name = (e.getAttribute("aria-label") ?? e.textContent ?? "").trim().slice(0, 40);
       return { name: `${e.tagName.toLowerCase()} "${name}"`, ring, covered };
     };
+    // Tab's own keydown only: a press of Shift+Tab or Alt+Tab is two.
     addEventListener(
       "keydown",
-      () => {
+      (e) => {
+        if (e.key !== "Tab") return;
         w.seen.push(w.here());
         w.at.push(document.activeElement);
       },
