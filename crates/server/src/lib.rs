@@ -14,6 +14,7 @@ pub mod difficulty;
 pub mod error;
 pub mod esplora;
 pub mod health;
+mod kept;
 pub mod ledger;
 pub mod lightning;
 pub mod limits;

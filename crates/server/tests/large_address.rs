@@ -59,6 +59,10 @@ struct Node {
     /// every other list is refused for size. And how many lists were asked.
     lists: Mutex<HashMap<String, u64>>,
     list_calls: AtomicUsize,
+    /// Transactions the lists named: by txid, their height and the script they pay 1,000 sats.
+    txs: Mutex<HashMap<String, (u32, String)>>,
+    /// The node says these blocks left its best chain: a reorg the ledger has not followed yet.
+    orphaned: Mutex<Vec<String>>,
 }
 
 impl Node {
@@ -210,8 +214,16 @@ async fn esplora(node: Arc<Node>, pq: String) -> Response {
             let r = match k {
                 Some(Kind::Large { ms }) => {
                     tokio::time::sleep(Duration::from_millis(ms)).await;
-                    let body =
-                        json!({*kind: id, "chain_stats": stats(50_000), "mempool_stats": stats(0)});
+                    let mut chain = stats(50_000);
+                    // As many transactions as its list holds, when it has one.
+                    let sh = node.scripts.lock().unwrap().get(*id).map(|hex| {
+                        ScriptHash::from_script(&ScriptBuf::from_hex(hex).unwrap()).to_string()
+                    });
+                    if let Some(n) = sh.and_then(|sh| node.lists.lock().unwrap().get(&sh).copied())
+                    {
+                        chain["tx_count"] = n.into();
+                    }
+                    let body = json!({*kind: id, "chain_stats": chain, "mempool_stats": stats(0)});
                     stamped(StatusCode::OK, body.to_string())
                 }
                 Some(Kind::Refused { ms }) => {
@@ -244,6 +256,35 @@ async fn esplora(node: Arc<Node>, pq: String) -> Response {
             stamped(StatusCode::OK, Value::Array(rows).to_string())
         }
         [_, _, "txs", "summary", ..] | [_, _, "utxo"] => stamped(StatusCode::OK, "[]".into()),
+        ["block", h, "status"] => match height_of(h) {
+            Some(height) => {
+                let best = !node.orphaned.lock().unwrap().iter().any(|o| o == h);
+                stamped(
+                    StatusCode::OK,
+                    json!({"in_best_chain": best, "height": height}).to_string(),
+                )
+            }
+            None => (StatusCode::NOT_FOUND, "Block not found").into_response(),
+        },
+        // Transactions the lists named, confirmed where the list put them.
+        ["tx", id, rest @ ..] => {
+            let Some((h, hex)) = node.txs.lock().unwrap().get(*id).cloned() else {
+                return (StatusCode::NOT_FOUND, "Transaction not found").into_response();
+            };
+            let status = json!({"confirmed": true, "block_height": h,
+                "block_hash": hash(h).to_string(), "block_time": 1_700_000_000 + h * 600});
+            match rest {
+                [] => stamped(
+                    StatusCode::OK,
+                    json!({"txid": id, "version": 2, "locktime": 0, "vin": [],
+                        "vout": [{"scriptpubkey": hex, "scriptpubkey_asm": "",
+                        "scriptpubkey_type": "v0_p2wpkh", "value": 1000}], "status": status})
+                    .to_string(),
+                ),
+                ["status"] => stamped(StatusCode::OK, status.to_string()),
+                _ => (StatusCode::NOT_FOUND, "not found").into_response(),
+            }
+        }
         _ => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
@@ -284,6 +325,16 @@ async fn electrum(node: Arc<Node>) -> String {
                                         })
                                         .collect();
                                     rows.sort_unstable();
+                                    let hex = node.scripts.lock().unwrap().get(&sh).cloned();
+                                    let mut txs = node.txs.lock().unwrap();
+                                    for (height, t) in &rows {
+                                        let txid = bitcoin::Txid::from_byte_array(*t).to_string();
+                                        txs.insert(
+                                            txid,
+                                            (*height, hex.clone().unwrap_or_default()),
+                                        );
+                                    }
+                                    drop(txs);
                                     let rows: Vec<Value> = rows
                                         .into_iter()
                                         .map(|(height, t)| {
@@ -832,4 +883,148 @@ async fn the_readers_deadline_counts_from_when_the_node_is_asked() {
     let r = get(&s.addr, 2, &format!("/regtest/api/address/{quick}")).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(first.await.unwrap().status, 504);
+}
+
+/// Pages of `path` (a `/txs/chain` or `/txs/summary` route) to the end, each after the last.
+async fn walk(s: &Server, path: &str) -> Vec<Value> {
+    let mut all = Vec::new();
+    let mut target = path.to_owned();
+    loop {
+        let r = get(&s.addr, 3, &target).await;
+        assert_eq!(r.status, 200, "{target}: {}", r.body);
+        assert!(
+            r.headers
+                .contains(&format!("x-bitcoin-chain-tip-height: {TIP}")),
+            "{}",
+            r.headers
+        );
+        let rows = r.body.as_array().unwrap().clone();
+        assert!(rows.len() <= 25);
+        let Some(last) = rows.last() else { break };
+        target = format!("{path}/{}", last["txid"].as_str().unwrap());
+        all.extend(rows);
+    }
+    all
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_whole_history_is_paged_from_the_store_as_the_node_pages() {
+    let s = start(true, &[]).await;
+    let a = address(42);
+    s.node.set(&a, Kind::Large { ms: 0 });
+    let sh = ScriptHash::from_script(&a.script_pubkey());
+    s.node.lists.lock().unwrap().insert(sh.to_string(), 60);
+    // Until the list is in, pages are refused as before.
+    assert_eq!(
+        get(&s.addr, 1, &format!("/regtest/api/address/{a}"))
+            .await
+            .status,
+        200
+    );
+    wait_for("whole", || async {
+        ledger(&s, 1, &a).await["history"] == "whole"
+    })
+    .await;
+    // The node's order: height, then txid bytes, both descending.
+    let mut want: Vec<(u32, [u8; 32])> = s
+        .node
+        .txs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(t, (h, _))| (*h, t.parse::<bitcoin::Txid>().unwrap().to_byte_array()))
+        .collect();
+    want.sort_unstable_by(|x, y| y.cmp(x));
+    let want: Vec<String> = want
+        .into_iter()
+        .map(|(_, t)| bitcoin::Txid::from_byte_array(t).to_string())
+        .collect();
+    assert_eq!(want.len(), 60);
+    let before = s.node.seen.lock().unwrap().len();
+    for form in [format!("address/{a}"), format!("scripthash/{sh}")] {
+        let chain = walk(&s, &format!("/regtest/api/{form}/txs/chain")).await;
+        let got: Vec<&str> = chain.iter().map(|t| t["txid"].as_str().unwrap()).collect();
+        assert_eq!(got, want, "{form}");
+        assert!(chain.iter().all(|t| t["status"]["confirmed"] == true));
+        let summary = walk(&s, &format!("/regtest/api/{form}/txs/summary")).await;
+        let got: Vec<&str> = summary
+            .iter()
+            .map(|t| t["txid"].as_str().unwrap())
+            .collect();
+        assert_eq!(got, want, "{form} summary");
+        assert!(
+            summary
+                .iter()
+                .all(|t| t["value"] == 1000 && t["time"].as_u64().unwrap() > 0)
+        );
+    }
+    // Only the transactions themselves, by txid, the cursors' status and the ledger's block's
+    // status: never a page of the address. A page costs at most 27 lookups.
+    let asked: Vec<String> = s.node.seen.lock().unwrap()[before..].to_vec();
+    let block = format!("/block/{}/status", hash(TIP));
+    assert!(
+        asked.iter().all(|p| p.starts_with("/tx/") || *p == block),
+        "{asked:?}"
+    );
+    let pages = 2 * 2 * 3;
+    assert!(asked.len() <= pages * 27, "{}", asked.len());
+    // `/txs`: the unconfirmed row, then the newest 25; after the 25th, the next.
+    let r = get(&s.addr, 1, &format!("/regtest/api/address/{a}/txs")).await;
+    assert_eq!(r.status, 200);
+    let rows = r.body.as_array().unwrap();
+    assert_eq!(rows.len(), 26);
+    assert_eq!(rows[0]["status"]["confirmed"], false);
+    assert_eq!(rows[1]["txid"].as_str(), Some(want[0].as_str()));
+    let r = get(
+        &s.addr,
+        1,
+        &format!("/regtest/api/address/{a}/txs?after_txid={}", want[24]),
+    )
+    .await;
+    let rows = r.body.as_array().unwrap();
+    assert_eq!(rows[0]["txid"].as_str(), Some(want[25].as_str()));
+    // Pinned to the ledger's block: the same; to a block it does not hold: refused in words.
+    let r = get(
+        &s.addr,
+        1,
+        &format!("/regtest/api/address/{a}/txs/chain?asof={}", hash(TIP)),
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body[0]["txid"].as_str(), Some(want[0].as_str()));
+    let r = get(
+        &s.addr,
+        1,
+        &format!("/regtest/api/address/{a}/txs/chain?asof={}", hash(50)),
+    )
+    .await;
+    assert_eq!(r.status, 503);
+    assert!(
+        r.body["error"].as_str().unwrap().contains("not kept"),
+        "{}",
+        r.body
+    );
+    // The node has left the ledger's block for another branch the ledger has not followed yet:
+    // the page is not given as of a block that is no longer the node's.
+    s.node.orphaned.lock().unwrap().push(hash(TIP).to_string());
+    for route in ["txs/chain", "txs/summary", "txs"] {
+        let r = get(&s.addr, 1, &format!("/regtest/api/address/{a}/{route}")).await;
+        assert_eq!(r.status, 503, "{route}: {}", r.body);
+        assert!(
+            r.body["error"].as_str().unwrap().contains("retry"),
+            "{}",
+            r.body
+        );
+    }
+    s.node.orphaned.lock().unwrap().clear();
+    // A cursor the node does not know, or not this address's.
+    for cursor in ["ab".repeat(32), "11".repeat(32)] {
+        let r = get(
+            &s.addr,
+            1,
+            &format!("/regtest/api/address/{a}/txs/chain/{cursor}"),
+        )
+        .await;
+        assert_eq!(r.status, 422, "{cursor}: {}", r.body);
+    }
 }

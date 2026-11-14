@@ -2343,3 +2343,90 @@ async fn blocks_applied_before_a_failed_catch_up_count_against_the_bound() {
         History::Dropped
     );
 }
+
+#[tokio::test]
+async fn a_whole_history_pages_as_the_node_does() {
+    let mut rng = Rng(291);
+    let fake = Fake::new(20, &mut rng);
+    let t = Temp::new();
+    fake.push_txs(pays(0, 6));
+    seed(t.store(), &fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    seed(t.store(), &fake, &script(1), false, 10, 0)
+        .await
+        .unwrap();
+    fake.push_txs(pays(0, 4));
+    fake.push_txs(pays(1, 1));
+    follow(t.store(), &fake).await.unwrap();
+    // Not whole yet: nothing is paged.
+    assert_eq!(
+        history_page(t.store(), sh(0), None, None, 3).await.unwrap(),
+        PageRead::NotWhole
+    );
+    history(t.store(), &fake, sh(0), ROWS).await.unwrap();
+    fake.push_txs(pays(0, 2));
+    follow(t.store(), &fake).await.unwrap();
+    // Pages of three, newest first, each after the last row of the one before: the whole list
+    // turned round.
+    let mut want = listed(&fake, 0, fake.tip());
+    want.reverse();
+    let mut got = Vec::new();
+    let mut after = None;
+    loop {
+        let PageRead::Page { at, rows } = history_page(t.store(), sh(0), None, after, 3)
+            .await
+            .unwrap()
+        else {
+            panic!("not a page")
+        };
+        assert_eq!(at.height, fake.tip());
+        let Some(last) = rows.last().copied() else {
+            break;
+        };
+        assert!(rows.len() <= 3);
+        after = Some(last);
+        got.extend(rows);
+    }
+    assert_eq!(got, want);
+    // As of an older block the ledger holds: only rows up to it.
+    let old = fake.tip() - 2;
+    let old_hash = fake.chain.lock().unwrap()[old as usize].hash;
+    let PageRead::Page { at, rows } = history_page(t.store(), sh(0), Some(old_hash), None, 100)
+        .await
+        .unwrap()
+    else {
+        panic!("not a page")
+    };
+    assert_eq!(at.height, old);
+    let mut older = listed(&fake, 0, old);
+    older.reverse();
+    assert_eq!(rows, older);
+    // A block it does not hold, a cursor not in this history or above the block asked.
+    assert_eq!(
+        history_page(t.store(), sh(0), Some(BlockHash::all_zeros()), None, 3)
+            .await
+            .unwrap(),
+        PageRead::AsofNotKept
+    );
+    let stranger = HistoryRow {
+        height: want[0].height,
+        txid: Txid::all_zeros(),
+    };
+    assert_eq!(
+        history_page(t.store(), sh(0), None, Some(stranger), 3)
+            .await
+            .unwrap(),
+        PageRead::CursorMissing
+    );
+    assert_eq!(
+        history_page(t.store(), sh(0), Some(old_hash), Some(want[0]), 3)
+            .await
+            .unwrap(),
+        PageRead::CursorMissing
+    );
+    assert_eq!(
+        history_page(t.store(), sh(1), None, None, 3).await.unwrap(),
+        PageRead::NotWhole
+    );
+}

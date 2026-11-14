@@ -908,3 +908,90 @@ pub fn history_too_large(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
         .execute(params![sh_bytes(sh)])?;
     Ok(())
 }
+
+/// What [`history_page`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageRead {
+    /// Rows exact at block `at` (the ledger's tip, or the block asked), newest first in the
+    /// node's order: after the cursor, at most the limit. Empty past the end.
+    Page { at: At, rows: Vec<HistoryRow> },
+    /// The script is not kept, or its history is not whole.
+    NotWhole,
+    /// The block asked is not one the ledger holds.
+    AsofNotKept,
+    /// The cursor is not a transaction of this history at that block.
+    CursorMissing,
+}
+
+/// A page of `sh`'s whole history from one snapshot: as of block `asof` (one of the ledger's
+/// last [`UNDO_DEPTH`]) or its tip, after the row `after` (its height and txid), at most `limit`.
+pub fn history_page(
+    sql: &Sql<'_>,
+    sh: ScriptHash,
+    asof: Option<BlockHash>,
+    after: Option<HistoryRow>,
+    limit: usize,
+) -> Result<PageRead, Error> {
+    sql.prepare("BEGIN")?.execute([])?;
+    let read = (|| {
+        let hid: Option<i64> = sql
+            .prepare("SELECT hid FROM ledger_scripts WHERE sh = ?1 AND history = 2")?
+            .query_row(params![sh_bytes(sh)], |r| r.get(0))
+            .optional()?
+            .flatten();
+        let (Some(hid), Some(tip)) = (hid, tip(sql)?) else {
+            return Ok(PageRead::NotWhole);
+        };
+        let at = match asof {
+            None => tip,
+            Some(hash) => {
+                let held = sql
+                    .prepare("SELECT height, hash, time FROM ledger_chain WHERE hash = ?1")?
+                    .query_row(params![hash.to_byte_array()], self::at)
+                    .optional()?;
+                let Some(held) = held else {
+                    return Ok(PageRead::AsofNotKept);
+                };
+                held
+            }
+        };
+        // One row-value bound, so the read seeks straight to it: everything below the cursor, or
+        // everything at or below the block.
+        let (height, txid) = match after {
+            None => (i64::from(at.height) + 1, [0; 32]),
+            Some(r) => {
+                let found = r.height <= at.height
+                    && sql
+                        .prepare(concat!(
+                            "SELECT 1 FROM ledger_history WHERE hid = ?1 AND height = ?2 ",
+                            "AND txid = ?3"
+                        ))?
+                        .query_row(params![hid, r.height, r.txid.to_byte_array()], |_| Ok(()))
+                        .optional()?
+                        .is_some();
+                if !found {
+                    return Ok(PageRead::CursorMissing);
+                }
+                (i64::from(r.height), r.txid.to_byte_array())
+            }
+        };
+        let mut stmt = sql.prepare(concat!(
+            "SELECT height, txid FROM ledger_history WHERE hid = ?1 ",
+            "AND (height, txid) < (?2, ?3) ORDER BY height DESC, txid DESC LIMIT ?4"
+        ))?;
+        let rows = stmt
+            .query_map(
+                params![hid, height, txid, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |r| {
+                    Ok(HistoryRow {
+                        height: int(r, 0)?,
+                        txid: Txid::from_byte_array(blob32(r, 1)?),
+                    })
+                },
+            )?
+            .collect::<Result<_, _>>()?;
+        Ok(PageRead::Page { at, rows })
+    })();
+    sql.prepare("COMMIT")?.execute([])?;
+    read
+}

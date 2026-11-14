@@ -557,6 +557,12 @@ async fn guarded(
     let guard = &ctx.guard;
     let tracked = guard.ledger.as_ref().filter(|l| l.is_tracked(sh));
     if history.is_some() {
+        // A kept address whose whole history the ledger holds is paged from the store.
+        if let Some(l) = tracked
+            && let Some(r) = crate::kept::page(ctx, client, l, sh, route, key).await
+        {
+            return Some(r);
+        }
         return (tracked.is_some() || guard.known(sh) == Some(ledger::Size::Large))
             .then(|| refused_early(Verdict::Large));
     }
@@ -661,7 +667,7 @@ async fn tracked_stats(
 }
 
 /// A tracked script's unspent outputs: the ledger keeps totals, not outputs.
-const NOT_KEPT: ApiError = ApiError::new(
+pub(crate) const NOT_KEPT: ApiError = ApiError::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "unspent outputs and older history are not kept for an address this large",
 );
@@ -841,7 +847,7 @@ fn is_hot(route: &Route) -> bool {
 }
 
 /// The node's answer as our response, with an [`ApiOutcome`] for the request log.
-fn respond(route: &Route, answer: Answer, source: Source) -> Response {
+pub(crate) fn respond(route: &Route, answer: Answer, source: Source) -> Response {
     let upstream_error = answer.as_ref().err().map(|e| match e {
         Error::Timeout => "timeout",
         Error::ResponseTooBig => "response_too_big",

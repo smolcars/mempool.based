@@ -796,6 +796,25 @@ pub async fn unhistoried(store: &Store) -> Result<Vec<(ScriptHash, History)>, st
     store.read(Read::Ledger, db::unhistoried).await
 }
 
+pub use self::db::PageRead;
+
+/// A page of `sh`'s whole history, newest first in the node's order (height, then txid bytes,
+/// both descending), as the node's Esplora pages it: as of block `asof` (one of the ledger's last
+/// [`UNDO_DEPTH`]) or the ledger's tip, after the row `after`, at most `limit` rows.
+pub async fn history_page(
+    store: &Store,
+    sh: ScriptHash,
+    asof: Option<BlockHash>,
+    after: Option<HistoryRow>,
+    limit: usize,
+) -> Result<PageRead, store::Error> {
+    store
+        .read(Read::Ledger, move |sql| {
+            db::history_page(sql, sh, asof, after, limit)
+        })
+        .await
+}
+
 /// After a restart: a history that was being taken is dropped, to be taken again.
 pub async fn history_restarted(store: &Store) -> Result<(), store::Error> {
     store.write(db::history_restarted).await
