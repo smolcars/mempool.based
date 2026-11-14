@@ -1,0 +1,43 @@
+# A Cloudflare Tunnel in front of the server, in place of a proxy with published ports
+# (docs/DEPLOY.md, "Behind a Cloudflare Tunnel"). With cloudflared/config.yml and
+# cloudflared/credentials.json in this directory:
+#   docker compose -f compose.yml -f compose.tunnel.yml up -d
+# Use this file or compose.proxy.yml, not both: they pin the same address.
+services:
+  tunnel:
+    # Runs as uid and gid 65532, as the server does.
+    image: ${TUNNEL_IMAGE:-cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344}
+    # The image sets NO_AUTOUPDATE too; a read-only container could not replace its binary anyway.
+    command: [tunnel, --no-autoupdate, --config, /etc/cloudflared/config.yml, run]
+    # The same hardening as the server: cloudflared writes nothing, so it has no volume at all.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging:
+      driver: local
+    # It dials out to Cloudflare; nothing is published on the host.
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      # Owner-only and owned by 65532: whoever holds it can serve the hostname (docs/DEPLOY.md).
+      - ./cloudflared/credentials.json:/etc/cloudflared/credentials.json:ro
+    networks:
+      # Pinned: the server trusts this one address (TRUSTED_PROXIES), so it must not move when
+      # the container or the network is recreated, nor pass to another container.
+      edge:
+        ipv4_address: 172.30.111.2
+    depends_on: [server]
+
+  server:
+    # Reached through the tunnel only: nothing published on the host.
+    ports: !reset []
+    networks: [default, edge]
+
+networks:
+  # Only the tunnel and the server. Other containers are given addresses from ip_range, which
+  # leaves out the tunnel's. Change all three together if the subnet overlaps one the host has.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.30.111.0/29
+          ip_range: 172.30.111.4/30
