@@ -110,6 +110,12 @@ test("the layout check finds text over text, text cut on any edge, a short form'
     const whole = "mwLW3XDqcAYmYKp8VDEYXweSBJ5mTUAuat";
     add(host, { ...at(320), width: "100px", overflow: "hidden" }, "mwLW3XD…UAuat").title = whole;
     add(host, { ...at(350), width: "40px", overflow: "hidden" }, "mwLW3XD…").title = whole;
+    // The same in Hash's markup, a head and a tail: the tail cut wholly out of sight.
+    const split = add(host, { ...at(380), width: "40px", overflow: "hidden" });
+    split.title = whole;
+    split.className = "hash--ends";
+    add(split, { display: "inline" }, "nB3eG7k…").className = "hash__head";
+    add(split, { display: "inline" }, "Zq9Xw").className = "hash__tail";
     // Only scrolled out of sight: scrolling shows it.
     add(host, { ...at(140), width: "60px", overflowX: "auto" }, "Scrolls along");
     const row = add(host, { ...at(200), width: "300px", whiteSpace: "normal" });
@@ -130,5 +136,6 @@ test("the layout check finds text over text, text cut on any edge, a short form'
   expect(faults.join("\n")).not.toContain("Scrolls along");
   expect(faults.join("\n")).toContain('"mwLW3XD…UAuat" loses its end');
   expect(faults.join("\n")).not.toMatch(/"mwLW3XD…" /);
+  expect(faults.join("\n")).toContain('"nB3eG7k…Zq9Xw" loses its end');
   expect(faults.join("\n")).toContain('the label "Two words" wraps');
 });
