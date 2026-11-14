@@ -25,6 +25,7 @@ on:
       - web/**
       - design/**
       - deploy/**
+      - dev/bigstore/**
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -103,6 +104,11 @@ jobs:
           done
           docker logs smoke
           exit 1
+      # The same hardening against a mainnet-sized store, with every store task that needs no node
+      # running: no query may need a writable temporary directory, which the image does not have
+      # (docs/STORE.md, "Temporary data"). About a minute.
+      - name: Run it against a mainnet-sized store
+        run: python3 -I dev/bigstore/hardened.py rbitcoin-space --work "$RUNNER_TEMP"
       - name: Check the compose file
         working-directory: deploy
         run: |

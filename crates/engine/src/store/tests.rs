@@ -1443,3 +1443,117 @@ async fn data_read_during_a_hold_is_never_written_whenever_the_write_comes() {
         .await
         .unwrap();
 }
+
+/// No query may need a writable temporary directory: the image has none. Every connection, the
+/// writer and each reader, keeps SQLite's temporary data in memory (2 is `MEMORY`).
+#[tokio::test]
+async fn every_connection_keeps_temporary_data_in_memory() {
+    let dir = TempDir::new();
+    let store = Arc::new(open(&dir.0, &[M1]).unwrap());
+    let writer: i64 = store
+        .write(|sql| {
+            Ok(sql
+                .prepare("PRAGMA temp_store")?
+                .query_row([], |r| r.get(0))?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(writer, 2);
+    // Every reader at once, so each connection answers, not one reused.
+    let readers = Options::default().readers;
+    let all = Arc::new(std::sync::Barrier::new(readers));
+    let reads = (0..readers).map(|_| {
+        let (store, all) = (store.clone(), all.clone());
+        tokio::spawn(async move {
+            store
+                .read(Read::Blocks, move |sql| {
+                    all.wait();
+                    Ok(sql
+                        .prepare("PRAGMA temp_store")?
+                        .query_row([], |r| r.get::<_, i64>(0))?)
+                })
+                .await
+                .unwrap()
+        })
+    });
+    for r in reads.collect::<Vec<_>>() {
+        assert_eq!(r.await.unwrap(), 2);
+    }
+}
+
+/// What the observer heard about failing reads: `(read, kind, detail, failures)`, and
+/// recoveries.
+type HeardReads = Arc<Mutex<(Vec<(Read, &'static str, String, u32)>, Vec<(Read, u32)>)>>;
+
+/// A read that fails in SQLite is reported with its kind and SQLite's message at the 1st, 2nd,
+/// 4th and 8th failure of that read in a row, each read counted apart, then its recovery; a
+/// panicking read is reported as `panicked`.
+#[tokio::test]
+async fn failed_reads_are_reported_per_read_in_powers_of_two_and_recover() {
+    let dir = TempDir::new();
+    let heard = HeardReads::default();
+    let h = heard.clone();
+    let options = Options {
+        observer: Arc::new(move |e: &Event| {
+            let mut h = h.lock().unwrap();
+            match e {
+                Event::ReadFailed {
+                    read,
+                    kind,
+                    detail,
+                    failures,
+                } => h.0.push((*read, kind, (*detail).to_owned(), *failures)),
+                Event::ReadRecovered { read, failures } => h.1.push((*read, *failures)),
+                _ => {}
+            }
+        }),
+        ..Options::default()
+    };
+    let store = Store::open_with(&dir.0, "regtest", options, &[M1]).unwrap();
+    let missing = |read| {
+        store.read(read, |sql| {
+            Ok(sql
+                .prepare("SELECT count(*) FROM gone")?
+                .query_row([], |r| r.get::<_, i64>(0))?)
+        })
+    };
+    for _ in 0..9 {
+        assert!(matches!(
+            missing(Read::LightningIndex).await,
+            Err(Error::Sql(_))
+        ));
+    }
+    assert!(missing(Read::Audit).await.is_err());
+    let failed = heard.lock().unwrap().0.clone();
+    let index: Vec<_> = failed
+        .iter()
+        .filter(|f| f.0 == Read::LightningIndex)
+        .map(|f| f.3)
+        .collect();
+    assert_eq!(index, [1, 2, 4, 8], "{failed:?}");
+    assert!(failed.iter().any(|f| f.0 == Read::Audit && f.3 == 1));
+    assert!(
+        failed
+            .iter()
+            .all(|f| f.1 == "other" && f.2 == "no such table: gone")
+    );
+    assert!(heard.lock().unwrap().1.is_empty());
+
+    store
+        .read(Read::LightningIndex, |sql| {
+            Ok(sql
+                .prepare("SELECT count(*) FROM items")?
+                .query_row([], |r| r.get::<_, i64>(0))?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(heard.lock().unwrap().1, [(Read::LightningIndex, 9)]);
+
+    let panicked = store
+        .read(Read::Mining, |_| -> Result<(), Error> { panic!("a bug") })
+        .await;
+    assert!(matches!(panicked, Err(Error::Panicked)));
+    let last = heard.lock().unwrap().0.last().cloned().unwrap();
+    assert_eq!(last, (Read::Mining, "panicked", String::new(), 1));
+    store.close().await;
+}

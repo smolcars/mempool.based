@@ -310,7 +310,7 @@ pub(crate) async fn fill_funding(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use std::cell::Cell;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -456,5 +456,167 @@ mod tests {
         let index = Index::build(c.nodes, c.channels, &Past::default());
         assert_eq!(index.search("<b>", 10).len(), 1);
         assert_eq!(index.len().0, 13_600);
+    }
+
+    #[derive(Clone)]
+    struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The events logged so far for `network`. The logger is global, so each test names its own
+    /// network and finds its own lines.
+    fn logged(network: &str) -> Vec<serde_json::Value> {
+        static CAPTURE: std::sync::OnceLock<Capture> = std::sync::OnceLock::new();
+        let c = CAPTURE.get_or_init(|| {
+            let c = Capture(Arc::default());
+            let settings = logging::Settings {
+                format: logging::Format::Json,
+                level: logging::Level::Debug,
+                max_bytes_per_sec: logging::DEFAULT_MAX_BYTES_PER_SEC,
+            };
+            assert!(logging::init(settings, c.clone()));
+            c
+        });
+        logging::flush(Duration::from_secs(5));
+        let raw = String::from_utf8(c.0.lock().unwrap().clone()).unwrap();
+        raw.lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|v| v["network"] == network)
+            .collect()
+    }
+
+    /// A store and a Lightning side whose peer reports a synced graph of a few channels.
+    fn synced(name: &str) -> (Arc<Store>, Lightning, Busy, std::path::PathBuf) {
+        static LOG: Quiet = Quiet;
+        // Starts the logger: what is emitted before it is lost.
+        logged(name);
+        let dir = std::env::temp_dir().join(format!("index-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir, "regtest", engine::store::Options::default()).unwrap();
+        let config = crate::config::LightningConfig {
+            peers: Vec::new(),
+            max_peers: 1,
+            max_channels: 100,
+        };
+        let l = Lightning::new(&config, &dir, crate::config::Network::Regtest);
+        let status = ln::Status {
+            validation: ln::Validation::default(),
+            closes: ln::Closes::default(),
+            synced: true,
+            nodes: 4,
+            channels: 3,
+            at_ceiling: false,
+            peers: Vec::new(),
+        };
+        l.set(super::super::Phase::Running(
+            tokio::sync::watch::channel(status).1,
+        ));
+        let graph = NetworkGraph::new(Network::Bitcoin, &LOG);
+        for c in 0..3u32 {
+            graph
+                .add_channel_from_partial_announcement(
+                    u64::from(c) << 40,
+                    Some(100_000),
+                    u64::from(now()),
+                    ChannelFeatures::empty(),
+                    id(c),
+                    id(c + 10),
+                )
+                .unwrap();
+        }
+        let g = Busy {
+            graph,
+            reads: Cell::new(0),
+        };
+        (Arc::new(store), l, g, dir)
+    }
+
+    async fn sql(store: &Store, sql: &'static str) {
+        store
+            .write(move |s| {
+                s.prepare(sql)?.execute([])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// A failed read of the store's past is reported with the store's error, and with no index
+    /// the graph shows as `failed`, not `synced` or "still syncing"; the next round that reads it
+    /// builds the index and the state is `synced` again.
+    #[tokio::test]
+    async fn a_failed_read_of_the_past_is_reported_and_shown_until_a_build_works() {
+        let (store, l, g, dir) = synced("past");
+        sql(&store, "DROP TABLE ln_statistics").await;
+        let mut past = None;
+        round(&g, &store, &l, "index_past", &mut past, Index::build).await;
+        assert!(l.index().is_none());
+        assert_eq!(l.state(), "failed");
+        let failed = logged("index_past");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0]["event"], "lightning_index_failed");
+        assert_eq!(
+            (
+                &failed[0]["stage"],
+                &failed[0]["error"],
+                &failed[0]["failures"]
+            ),
+            (&"past".into(), &"other".into(), &1.into())
+        );
+
+        sql(
+            &store,
+            "CREATE TABLE ln_statistics (level INTEGER, time INTEGER)",
+        )
+        .await;
+        round(&g, &store, &l, "index_past", &mut past, Index::build).await;
+        assert_eq!(l.index().unwrap().len().1, 3);
+        assert_eq!(l.state(), "synced");
+        assert!(!l.index_failing());
+        let events = logged("index_past");
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[1]["event"], "lightning_index_built");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn panics(_: Vec<GraphNode>, _: Vec<GraphChannel>, _: &Past) -> Index {
+        panic!("a bug in the build")
+    }
+
+    /// A build that panics ends only that build: it is reported, the graph shows as `failed`
+    /// while there is no index, and the next build serves it.
+    #[tokio::test]
+    async fn a_panicking_build_is_reported_and_the_next_one_serves() {
+        let (store, l, g, dir) = synced("build");
+        let mut past = None;
+        round(&g, &store, &l, "index_build", &mut past, panics).await;
+        assert!(l.index().is_none());
+        assert_eq!(l.state(), "failed");
+        let failed = logged("index_build");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(
+            (
+                &failed[0]["event"],
+                &failed[0]["stage"],
+                &failed[0]["error"]
+            ),
+            (
+                &"lightning_index_failed".into(),
+                &"build".into(),
+                &"panicked".into()
+            )
+        );
+        round(&g, &store, &l, "index_build", &mut past, Index::build).await;
+        assert_eq!(l.state(), "synced");
+        assert_eq!(logged("index_build")[1]["event"], "lightning_index_built");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

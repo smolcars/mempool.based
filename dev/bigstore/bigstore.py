@@ -98,7 +98,8 @@ def insert_blocks(db, rows):
 def audit_txs(rng):
     """Up to 40 records as the audit stores them: txid, kind 1 to 5, vsize, rate, first seen."""
     return b"".join(
-        rng.randbytes(32) + bytes([rng.randrange(1, 6)]) + rng.randrange(100, 2000).to_bytes(4, "little")
+        rng.randbytes(32) + bytes([rng.randrange(1, 6)])
+        + rng.randrange(100, 2000).to_bytes(4, "little")
         + rng.randrange(1000, 90000).to_bytes(4, "little") + bytes(4)
         for _ in range(rng.randrange(0, 40))
     )
