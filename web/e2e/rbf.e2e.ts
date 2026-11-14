@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import type { Page, WebSocketRoute } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { amountsIntact, tablesFit } from "./rows";
+import { amountsIntact, rowFaults, rowsWhole, tablesFit, wideFaces } from "./rows";
 
 const RECORDED = JSON.parse(
   readFileSync(new URL("../../fixtures/api-v1/replacements.json", import.meta.url), "utf8"),
@@ -196,4 +196,60 @@ test.describe("nothing to show, and a refusal", () => {
     await page.getByRole("button", { name: "Try again" }).click();
     await expect(page.locator(".rbf-list tbody tr")).toHaveCount(RECORDED.all.length);
   });
+});
+
+// The home page's preview once cut its status to "Not mi…" at 320 px, its rate change taking the
+// room. Every status the record has, beside the longest rate change, stays whole in each list of
+// replacements, at the narrowest phone and in faces wider than the ones the site was built with.
+test("no replacement row is cut or faded, whatever its status, at 320, 390 and 720 px", async ({
+  page,
+}) => {
+  interface Tree {
+    tx: Record<string, unknown>;
+    mined?: boolean | null;
+    replaces: Tree[];
+  }
+  const slowest = (t: Tree): Tree => ({
+    ...t,
+    replaces: t.replaces.map((r) => ({ ...slowest(r), tx: { ...r.tx, rate: 9.99 } })),
+  });
+  const all = structuredClone(RECORDED.all) as unknown as Tree[];
+  const [mined, unknown, longest] = all;
+  if (!mined || !unknown || !longest) throw new Error("too few recorded stories");
+  mined.mined = true;
+  unknown.mined = null;
+  all[2] = { ...slowest(longest), tx: { ...longest.tx, rate: 12_345.6 } };
+  await recorded(page, () => ({ json: all }));
+  for (const width of [320, 390, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const [path, scope] of [
+      ["/regtest/", ".rbf-recent"],
+      ["/regtest/mempool", ".rbf-recent"],
+      ["/regtest/rbf", ".rbf-list"],
+    ] as const) {
+      await page.goto(path);
+      const rows = page.locator(scope).locator("tbody tr");
+      await expect(rows.first().getByText("Mined", { exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(rows.nth(1).getByText("Unknown", { exact: true })).toBeVisible();
+      await expect(rows.nth(2)).toContainText(/12\s?346/);
+      await rowsWhole(page, scope, `${path} at ${width} px`);
+      await wideFaces(page);
+      await rowsWhole(page, scope, `${path} at ${width} px in wide faces`);
+    }
+  }
+  // The rule sees a status cut inside its own box, as the preview's "Not mi…" was.
+  await page
+    .locator(".rbf-list .rbf-status__word")
+    .first()
+    .evaluate((el) => {
+      Object.assign(el.style, {
+        display: "block",
+        width: "2.5em",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      });
+    });
+  expect(await rowFaults(page, ".rbf-list")).toContainEqual(expect.stringMatching(/is cut$/));
 });

@@ -250,3 +250,69 @@ export async function copyNotesClear(page: Page, label: string) {
   expect(faults, label).toStrictEqual([]);
   expect(checked, `${label}: copy controls checked`).toBeGreaterThan(0);
 }
+
+/** Wider fallback faces, as a Linux machine without the system fonts this was built on draws. */
+export async function wideFaces(page: Page) {
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--font-sans", '"DejaVu Sans", Verdana, sans-serif');
+    root.setProperty("--font-mono", '"DejaVu Sans Mono", "Courier New", monospace');
+  });
+}
+
+/**
+ * What is cut in the rows of every table under `scope`: each run of text, measured as drawn, must
+ * lie inside the table's box and inside every box that clips it (an ellipsis included), and the
+ * table must not scroll or fade at its edge. An id cut in the middle by design is judged by its
+ * own box instead.
+ */
+export async function rowFaults(page: Page, scope: string): Promise<string[]> {
+  return page.evaluate((sel) => {
+    const out: string[] = [];
+    const inside = (r: DOMRect, box: DOMRect) =>
+      r.left >= box.left - 0.5 && r.right <= box.right + 0.5;
+    for (const scroll of document.querySelectorAll<HTMLElement>(`${sel} .table-scroll`)) {
+      if (scroll.getClientRects().length === 0) continue;
+      const name = scroll.querySelector("caption")?.textContent ?? "";
+      if ("moreEnd" in scroll.dataset) out.push(`${name}: fades at its edge`);
+      const edge = scroll.getBoundingClientRect();
+      const body = scroll.querySelector("tbody");
+      if (!body) continue;
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = (node.textContent ?? "").trim();
+        const parent = node.parentElement;
+        if (!text || !parent || parent.getClientRects().length === 0) continue;
+        if (parent.closest(".visually-hidden")) continue;
+        const hash = parent.closest(".hash");
+        if (hash) {
+          if (!inside(hash.getBoundingClientRect(), edge))
+            out.push(`${name}: id "${text}" past the edge`);
+          continue;
+        }
+        // The table's box, and every box between the text and it that clips what overflows.
+        const boxes = [edge];
+        for (let a: HTMLElement | null = parent; a && a !== scroll; a = a.parentElement) {
+          if (getComputedStyle(a).overflowX !== "visible") boxes.push(a.getBoundingClientRect());
+        }
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const r of range.getClientRects()) {
+          if (r.width === 0) continue;
+          if (!boxes.every((box) => inside(r, box))) {
+            out.push(`${name}: "${text}" is cut`);
+            break;
+          }
+        }
+      }
+    }
+    return out;
+  }, scope);
+}
+
+/** Every row under `scope` whole ({@link rowFaults}), once the tables have settled. */
+export async function rowsWhole(page: Page, scope: string, label: string) {
+  await expect(async () => {
+    expect(await rowFaults(page, scope), label).toStrictEqual([]);
+  }).toPass({ timeout: 3000 });
+}

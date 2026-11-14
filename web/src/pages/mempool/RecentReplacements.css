@@ -17,15 +17,32 @@
     display: flex;
     min-width: 0;
   }
+  /* Cut at its end with an ellipsis, never through a character: the id's head is what tells
+     rows apart. */
   .rbf-recent .hash__text {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .rbf-recent__rate {
+    white-space: nowrap;
+  }
+  /* The status word is the row's answer: it never wraps or fades. */
+  .rbf-recent .rbf-status__word {
+    white-space: nowrap;
   }
   @media (max-width: 40em) {
     /* Headers wrap, so the figures, not the units, set each column's width. */
     .rbf-recent th {
       white-space: normal;
       vertical-align: bottom;
+    }
+  }
+  /* On the narrowest phones the rate it rose to goes under the one it rose from, so the status
+     keeps its whole word. */
+  @media (max-width: 23.75em) {
+    .rbf-recent__rates {
+      white-space: normal;
     }
   }
 }

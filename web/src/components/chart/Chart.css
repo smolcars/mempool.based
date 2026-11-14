@@ -270,9 +270,15 @@
     .chart__when-comma {
       display: none;
     }
-    .chart__range {
-      white-space: normal;
-    }
+  }
+  /* Where the panel is short of room at any width, a long header takes two lines and a range
+     breaks before its upper end, rather than push a figure past the edge. */
+  .chart__table th {
+    white-space: normal;
+    vertical-align: bottom;
+  }
+  .chart__range {
+    white-space: normal;
   }
   .chart__nowrap {
     white-space: nowrap;
