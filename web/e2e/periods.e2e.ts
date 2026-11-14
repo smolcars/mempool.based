@@ -88,10 +88,10 @@ async function faults(page: Page, chart: RegExp): Promise<string[]> {
     if (fold > screen) {
       out.push(`the time axis ends ${Math.round(fold)} px into a ${screen} px screen`);
     }
-    const plot = el.querySelector("svg")?.getBoundingClientRect();
+    const drawn = el.querySelector("svg")?.getBoundingClientRect();
     for (const label of el.querySelectorAll("svg text")) {
       const r = label.getBoundingClientRect();
-      if (plot && (r.left < plot.left - 1 || r.right > plot.right + 1)) {
+      if (drawn && (r.left < drawn.left - 1 || r.right > drawn.right + 1)) {
         out.push(`"${label.textContent ?? ""}" runs off the plot`);
       }
     }
