@@ -61,10 +61,12 @@ export function Gate(props: { children: JSX.Element }) {
     (n, signal) => ask(n, "/status", isStatus, signal),
   );
   const state = () => status.latest?.state;
+  // A synced graph that could not be indexed yet: the server tries again by itself.
+  const unindexed = () => state() === "failed" && status.latest?.synced === true;
   onSettled(() => {
     const timer = setInterval(() => {
       const s = state();
-      if ((s === "starting" || s === "syncing") && !status.loading) refetch();
+      if ((s === "starting" || s === "syncing" || unindexed()) && !status.loading) refetch();
     }, STATUS_POLL_MS);
     return () => clearInterval(timer);
   });
@@ -83,6 +85,12 @@ export function Gate(props: { children: JSX.Element }) {
           This server does not follow the Lightning network here: its operator runs the Lightning
           peer only on the networks they choose, and this is not one of them. Blocks and
           transactions are on the <Link href={paths.home()}>home page</Link>.
+        </Empty>
+      </Match>
+      <Match when={unindexed()}>
+        <Empty title="This server cannot show its Lightning graph yet">
+          Its Lightning peer has the channel graph, but the server could not prepare it for these
+          pages. It tries again by itself, and the pages appear here once it can.
         </Empty>
       </Match>
       <Match when={state() === "failed" || state() === "stopped"}>

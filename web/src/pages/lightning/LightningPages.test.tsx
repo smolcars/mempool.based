@@ -113,6 +113,19 @@ describe("the Lightning section's states", () => {
     expect(text(el)).not.toContain("Syncing");
   });
 
+  it("says when a synced graph cannot be indexed yet, then shows the pages once it is", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    replies["/app/lightning/status"] = json({ ...synced, state: "failed", synced: true });
+    replies["/app/lightning/overview"] = json(overview());
+    replies["/app/lightning/statistics/1w"] = json(series());
+    const el = mount(() => <LightningPage />, "/lightning");
+    await shows(el, "This server cannot show its Lightning graph yet");
+    expect(text(el)).not.toContain("not running");
+    replies["/app/lightning/status"] = json(synced);
+    await vi.advanceTimersByTimeAsync(5000);
+    await shows(el, "The network now");
+  });
+
   it("says a failed peer is not running", async () => {
     replies["/app/lightning/status"] = json({ state: "failed" });
     const el = mount(() => <LightningPage />, "/lightning");
