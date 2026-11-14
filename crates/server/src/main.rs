@@ -121,6 +121,7 @@ fn started(config: &Config, log: logging::Settings) {
         backfill_fee_rate_depth: config.backfill.fee_rate_depth,
         ledger_max_addresses: config.ledger.max_addresses,
         ledger_discover: config.ledger.discover,
+        ledger_max_history_rows: config.ledger.max_history_rows,
     });
     for n in &config.networks {
         logging::emit(&NetworkEnabled {

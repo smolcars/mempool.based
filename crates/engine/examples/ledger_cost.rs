@@ -69,6 +69,15 @@ impl Source for Measure {
     async fn page(&self, _: &Script, _: BlockHash) -> Result<Vec<TxSummary>, SourceError> {
         Ok(Vec::new())
     }
+
+    async fn history(
+        &self,
+        _: &Script,
+        _: At,
+        _: tokio::sync::mpsc::Sender<Vec<ledger::HistoryRow>>,
+    ) -> Result<Result<(), Option<ScriptSize>>, SourceError> {
+        Ok(Ok(()))
+    }
 }
 
 fn size(dir: &std::path::Path) -> u64 {
@@ -99,6 +108,7 @@ async fn main() {
     let node = NodeSource {
         rpc: rpc.clone(),
         esplora: Esplora::new("http://127.0.0.1:1").unwrap(),
+        electrum: String::new(),
     };
     let tip = node.height().await.unwrap();
     let from = tip - n;

@@ -1,12 +1,15 @@
 //! What the ledger reads from the node.
 
 use std::future::Future;
+use std::time::Duration;
 
 use bitcoin::{BlockHash, Script};
+use node::electrum::history::{self as list, Row};
 use node::esplora::model::{ScriptInfo, TxSummary};
 use node::esplora::{self, Esplora, Route, ScriptRef, ScriptSize};
 use node::rpc::model::PrevoutBlock;
 use node::rpc::{self, Rpc};
+use tokio::sync::mpsc;
 
 use super::{At, Totals};
 use crate::mempool::{SourceError, esplora_err, rpc_err};
@@ -36,16 +39,33 @@ pub trait Source: Send + Sync + 'static {
         script: &Script,
         at: BlockHash,
     ) -> impl Future<Output = Result<Vec<TxSummary>, SourceError>> + Send;
+    /// The script's whole confirmed history as of block `at`, in the node's order (height, then
+    /// txid bytes, ascending), sent to `rows` in batches as it arrives; or the node's size refusal.
+    /// A closed `rows` stops it with an error.
+    fn history(
+        &self,
+        script: &Script,
+        at: At,
+        rows: mpsc::Sender<Vec<Row>>,
+    ) -> impl Future<Output = Result<Result<(), Option<ScriptSize>>, SourceError>> + Send;
 }
 
-/// The node over JSON-RPC (heights, hashes, `getblock` verbosity 3) and Esplora (totals and the
-/// history page, pinned with `?asof=`). Give it clients of its own: one RPC slot with a timeout
-/// that fits a full block, and an Esplora client whose timeout fits a seed.
+/// The node over JSON-RPC (heights, hashes, `getblock` verbosity 3), Esplora (totals and the
+/// history page, pinned with `?asof=`) and Electrum (the whole history list, on a connection of its
+/// own). Give it clients of its own: one RPC slot with a timeout that fits a full block, and an
+/// Esplora client whose timeout fits a seed.
 #[derive(Clone)]
 pub struct NodeSource {
     pub rpc: Rpc,
     pub esplora: Esplora,
+    /// `host:port` of the node's Electrum server.
+    pub electrum: String,
 }
+
+/// How long the whole history list may take, as a seed (the server's lane holds it that long).
+pub const HISTORY_TIMEOUT: Duration = Duration::from_secs(900);
+/// Rows handed on at a time: about 360 KB in memory, two batches waiting at most.
+pub const HISTORY_BATCH: usize = 10_000;
 
 /// A script as the address routes take it. The scripthash form is used, so any script works,
 /// whether or not it has an address.
@@ -126,5 +146,40 @@ impl Source for NodeSource {
             .await
             .map_err(esplora_err)?;
         pinned(s, at)
+    }
+
+    async fn history(
+        &self,
+        script: &Script,
+        at: At,
+        rows: mpsc::Sender<Vec<Row>>,
+    ) -> Result<Result<(), Option<ScriptSize>>, SourceError> {
+        let addr = self.electrum.clone();
+        let sh =
+            node::electrum::ScriptHash(esplora::ScriptHash::from_script(script).to_byte_array());
+        let read = tokio::task::spawn_blocking(move || {
+            list::list(
+                &addr,
+                &sh,
+                at.hash,
+                at.height,
+                HISTORY_TIMEOUT,
+                HISTORY_BATCH,
+                &mut |b| rows.blocking_send(b).is_ok(),
+            )
+        });
+        match read.await {
+            Ok(Ok(_)) => Ok(Ok(())),
+            Ok(Err(node::electrum::Error::Server { message, .. }))
+                if message.starts_with("scripthash join exceeds --max-sh-creates") =>
+            {
+                Ok(Err(ScriptSize::from_refusal(message.as_bytes())))
+            }
+            Ok(Err(node::electrum::Error::Timeout)) => {
+                Err(SourceError::Failed("history list timed out".into()))
+            }
+            Ok(Err(e)) => Err(SourceError::Failed(format!("history list: {e}"))),
+            Err(_) => Err(SourceError::Failed("history list task ended".into())),
+        }
     }
 }

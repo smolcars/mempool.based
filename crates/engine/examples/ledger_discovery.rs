@@ -38,6 +38,7 @@ async fn main() {
         )
         .unwrap(),
         esplora: Esplora::new("http://127.0.0.1:1").unwrap(),
+        electrum: String::new(),
     };
     let tip = node.height().await.unwrap();
     let started = Instant::now();
@@ -58,6 +59,6 @@ async fn main() {
     );
     for (hex, (blocks, paid)) in &found {
         let script = bitcoin::ScriptBuf::from_hex(hex).unwrap();
-        println!("{} {blocks} {paid}", ScriptHash::from_script(&script));
+        println!("{} {blocks} {paid} {hex}", ScriptHash::from_script(&script));
     }
 }

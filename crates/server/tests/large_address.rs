@@ -55,6 +55,10 @@ struct Node {
     paid: Mutex<Vec<ScriptBuf>>,
     /// Each address's script hex, by address and by scripthash.
     scripts: Mutex<HashMap<String, String>>,
+    /// Scripts whose whole history the mock's Electrum lists, by scripthash, with its length;
+    /// every other list is refused for size. And how many lists were asked.
+    lists: Mutex<HashMap<String, u64>>,
+    list_calls: AtomicUsize,
 }
 
 impl Node {
@@ -244,6 +248,70 @@ async fn esplora(node: Arc<Node>, pq: String) -> Response {
     }
 }
 
+/// The mock's Electrum: answers `server.version`, and `get_history` pinned with `asof:` by the
+/// node's rules (sorted by height then txid bytes, stamped with the block); refuses anything else.
+async fn electrum(node: Arc<Node>) -> String {
+    use tokio::io::AsyncBufReadExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let node = Arc::clone(&node);
+            tokio::spawn(async move {
+                let (rd, mut wr) = stream.into_split();
+                let mut lines = tokio::io::BufReader::new(rd).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let req: Value = serde_json::from_str(&line).unwrap_or_default();
+                    let id = req["id"].clone();
+                    let reply = match req["method"].as_str().unwrap_or_default() {
+                        "server.version" => json!({"id": id, "result": ["mock", "1.4"]}),
+                        "blockchain.scripthash.get_history" => {
+                            node.list_calls.fetch_add(1, Ordering::SeqCst);
+                            let sh = req["params"][0].as_str().unwrap_or_default().to_owned();
+                            let at = req["params"][1].as_str().unwrap_or_default();
+                            let at = at.strip_prefix("asof:").unwrap_or_default().to_owned();
+                            let n = node.lists.lock().unwrap().get(&sh).copied();
+                            match (n, height_of(&at)) {
+                                (Some(n), Some(h)) => {
+                                    let mut rows: Vec<(u32, [u8; 32])> = (0..n)
+                                        .map(|k| {
+                                            let txid =
+                                                sha256d::Hash::hash(format!("{sh} {k}").as_bytes());
+                                            (
+                                                1 + u32::try_from(k).unwrap() % h,
+                                                txid.to_byte_array(),
+                                            )
+                                        })
+                                        .collect();
+                                    rows.sort_unstable();
+                                    let rows: Vec<Value> = rows
+                                        .into_iter()
+                                        .map(|(height, t)| {
+                                            json!({"height": height, "tx_hash":
+                                                bitcoin::Txid::from_byte_array(t).to_string()})
+                                        })
+                                        .collect();
+                                    json!({"id": id, "result": rows, "chain_tip": at,
+                                        "chain_tip_height": h})
+                                }
+                                _ => json!({"id": id, "error": {"code": 1, "message":
+                                    "scripthash join exceeds --max-sh-creates (20000 creates, cap 10000)"}}),
+                            }
+                        }
+                        _ => json!({"id": id, "error": {"code": -32601, "message": "no"}}),
+                    };
+                    let mut out = reply.to_string();
+                    out.push('\n');
+                    if wr.write_all(out.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
 async fn mock() -> (String, Arc<Node>) {
     let node = Arc::new(Node::default());
     let n = Arc::clone(&node);
@@ -287,6 +355,7 @@ async fn start_with(store: bool, extra: &[(&str, &str)], before: impl FnOnce(&No
     static N: AtomicUsize = AtomicUsize::new(0);
     let (mock, node) = mock().await;
     before(&node);
+    let electrum_addr = electrum(Arc::clone(&node)).await;
     let (host, port) = mock.split_once(':').unwrap();
     let url = format!("http://{mock}");
     let mut vars: HashMap<String, String> = [
@@ -295,7 +364,7 @@ async fn start_with(store: bool, extra: &[(&str, &str)], before: impl FnOnce(&No
         ("REGTEST_RPC_USER", "u"),
         ("REGTEST_RPC_PASSWORD", "p"),
         ("REGTEST_ESPLORA_URL", url.as_str()),
-        ("REGTEST_ELECTRUM_ADDR", "127.0.0.1:1"),
+        ("REGTEST_ELECTRUM_ADDR", electrum_addr.as_str()),
         ("BACKFILL_ENABLED", "false"),
         ("LEDGER_DISCOVER", "false"),
     ]
@@ -516,6 +585,47 @@ async fn a_large_address_is_added_up_from_its_answer_and_then_served_from_the_le
     assert_eq!((r.status, r.body["error"].as_str()), (503, Some(TOO_LARGE)));
     assert_eq!(s.node.totals_calls(&a), 1);
     assert_eq!(s.node.pages().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kept_address_takes_its_whole_history_once_and_a_refused_one_says_so() {
+    let s = start(true, &[]).await;
+    let (whole, refused) = (address(40), address(41));
+    s.node.set(&whole, Kind::Large { ms: 0 });
+    s.node.set(&refused, Kind::Large { ms: 0 });
+    let sh = ScriptHash::from_script(&whole.script_pubkey()).to_string();
+    // As many rows as the totals count: 50,000.
+    s.node.lists.lock().unwrap().insert(sh, 50_000);
+    for a in [&whole, &refused] {
+        assert_eq!(
+            get(&s.addr, 1, &format!("/regtest/api/address/{a}"))
+                .await
+                .status,
+            200
+        );
+    }
+    wait_for("whole", || async {
+        ledger(&s, 1, &whole).await["history"] == "whole"
+    })
+    .await;
+    wait_for("refused", || async {
+        ledger(&s, 1, &refused).await["history"] == "refused"
+    })
+    .await;
+    // Both take the newest page before their seed, as before.
+    wait_for("filled", || async {
+        ledger(&s, 1, &refused).await["filling"] == false
+            && ledger(&s, 1, &whole).await["filling"] == false
+    })
+    .await;
+    assert_eq!(s.node.pages().len(), 2, "{:?}", s.node.pages());
+    // Each list asked once; more blocks or readers do not ask again.
+    assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 2);
+    for _ in 0..3 {
+        ledger(&s, 2, &whole).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
