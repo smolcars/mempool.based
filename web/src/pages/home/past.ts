@@ -1,7 +1,7 @@
 // The strip's past: older blocks loaded a page at a time as the visitor scrolls right, and the
 // window of tiles kept in the page (docs/FRONTEND.md "The block strip's past").
 import { type Accessor, createEffect, createSignal, onCleanup, untrack } from "solid-js";
-import { ApiError, fetchApi, isBusy } from "../../lib/api";
+import { ApiError, fetchStamped, isBusy, type Stamped } from "../../lib/api";
 import { isBlock } from "../../lib/blocks-topic";
 import type { Block } from "../../lib/esplora";
 import type { Network } from "../../lib/network";
@@ -222,13 +222,21 @@ export function createPastBlocks(
     step();
   });
 
-  async function load({ top, missing }: PageAsk, signal: AbortSignal): Promise<Block[]> {
+  /** A page and the tip its answer is stamped with (none when it came from the page's cache). */
+  async function load(
+    { top, missing }: PageAsk,
+    signal: AbortSignal,
+  ): Promise<{ list: Block[]; tip: Stamped<unknown>["tip"] }> {
     // After a deep reorg the browser may still hold a page of the old branch for its second.
     const ask = { signal, fresh: chain > 0 };
+    const page = async (path: string) => {
+      const r = await fetchStamped<unknown>(network, path, ask);
+      return { list: parse(r.value), tip: r.tip };
+    };
     if (useV1) {
       try {
-        const list = parse(await fetchApi<unknown>(network, `/v1/blocks/${top}`, ask));
-        if (list.some((b) => b.height === missing)) return list;
+        const r = await page(`/v1/blocks/${top}`);
+        if (r.list.some((b) => b.height === missing)) return r;
         // Cut short where the server's block table ends (a fresh install): the node has the rest.
       } catch (e) {
         if (signal.aborted || !(e instanceof ApiError) || (e.status !== 404 && e.status !== 503))
@@ -238,7 +246,7 @@ export function createPastBlocks(
       }
     }
     // The node's pages hold ten, so they are asked for from the highest block still missing.
-    return parse(await fetchApi<unknown>(network, `/blocks/${missing}`, ask));
+    return page(`/blocks/${missing}`);
   }
 
   /**
@@ -273,7 +281,7 @@ export function createPastBlocks(
     const { signal } = controller;
     const asked = chain;
     load(ask, signal).then(
-      (list) => {
+      ({ list, tip: stamp }) => {
         if (asked !== chain) {
           busy = false;
           step();
@@ -281,11 +289,16 @@ export function createPastBlocks(
         }
         const tip = untrack(live)?.[0]?.height ?? Number.POSITIVE_INFINITY;
         const lowest = untrack(live)?.at(-1)?.height ?? Number.POSITIVE_INFINITY;
-        // A page that does not chain onto the blocks kept above it is another branch's.
+        // A page that does not chain onto the blocks kept above it is another branch's. After a deep
+        // reorg, one far below the live list has none above it: its stamp must name a live block,
+        // as the server answers rows of the chain under that tip only. A page from this page's own
+        // cache has no stamp, and is settled, deeper than any reorg the server repairs.
+        const kept = untrack(live) ?? [];
         if (
           list.some(
             (b) => blocks.has(b.height + 1) && blocks.get(b.height + 1)?.previousblockhash !== b.id,
-          )
+          ) ||
+          (chain > 0 && stamp !== undefined && !kept.some((b) => b.id === stamp.hash))
         ) {
           failed.set(
             pageOf(start),

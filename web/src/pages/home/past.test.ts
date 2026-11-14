@@ -267,6 +267,37 @@ describe("the strip's past, loaded", () => {
     s.dispose();
   });
 
+  it("after a deep reorg, keeps a page far below the live list only when its stamp is of the live chain", async () => {
+    const stamped = (blocks: Block[], tip: Block) =>
+      Response.json(blocks, {
+        headers: {
+          "x-bitcoin-chain-tip": tip.id,
+          "x-bitcoin-chain-tip-height": String(tip.height),
+        },
+      });
+    const s = open(chain(991, 1000), undefined);
+    flush();
+    // A reorg from 950: the new live list does not build on what was kept.
+    s.setList(chain(992, 1001, "b"));
+    flush();
+    // The visitor is around 955; the server's table still answers the old branch at first.
+    reply = (path) => {
+      const top = Number(path.split("/").at(-1));
+      return stamped(chain(top - 14, top), fakeBlock(1000));
+    };
+    s.setWant({ top: 970, bottom: 940, middle: 955, tip: 1001 });
+    await vi.waitFor(() => expect(s.past.failure(955)).toBeDefined());
+    expect(s.past.block(955)).toBeUndefined();
+    // Caught up: stamped with the live tip, the page is taken.
+    reply = (path) => {
+      const top = Number(path.split("/").at(-1));
+      return stamped(chain(top - 14, top, "b"), fakeBlock(1001, "b"));
+    };
+    s.past.retry();
+    await vi.waitFor(() => expect(s.past.block(955)?.id).toBe(fakeBlock(955, "b").id));
+    s.dispose();
+  });
+
   it("lets go of blocks as the chain grows at now", () => {
     const s = createRoot((dispose) => {
       const [list, setList] = createSignal<Block[] | undefined>(chain(991, 1000));
