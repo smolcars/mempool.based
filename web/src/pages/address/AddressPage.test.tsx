@@ -612,32 +612,75 @@ describe("address page", () => {
     await until(() => expect(text(el)).toContain("This server does not serve Mainnet."));
   });
 
-  it("asks nothing more of an address too large to total, and says why once", async () => {
+  it("leads an address too large to total with what the node said, and asks nothing slow", async () => {
     serve({
       [`/address/${ME}`]: refused(503, "address history too large for this server"),
+      [`/app/address/${ME}/size`]: { creates: 3_665_660, cap: 10_000 },
+      [`/address/${ME}/txs/mempool`]: [tx(7, [[OTHER, 9000]], [[ME, 2500]], false)],
       [`/address/${ME}/txs`]: [tx(1, [[OTHER, 2000]], [[ME, 1000]])],
     });
     const el = open(`/address/${ME}?view=unspent`);
-    // Said once, at the top, naming what is missing; nothing below repeats it or promises a reload.
-    await until(() =>
-      expect(text(el)).toContain("This address has more history than this server adds up"),
-    );
-    expect(text(el)).toContain("says nothing about how much it holds");
-    for (const repeat of [
-      "Totals are not available",
-      "no balance chart",
-      "not available for this address",
-      "Reload",
-    ]) {
-      expect(text(el)).not.toContain(repeat);
+    await until(() => expect(text(el)).toContain(`3${NNBSP}665${NNBSP}660`));
+    expect(text(el)).toContain("outputs paid to it, as counted by the node");
+    expect(text(el)).toContain(`10${NNBSP}000`);
+    await until(() => expect(el.querySelector(`a[href="/tx/${txid(7)}"]`)).not.toBeNull());
+    expect(text(el)).toContain("1 transaction");
+    // What is not shown, and why, once; no advice to look elsewhere, no tabs, no alarm.
+    expect(text(el)).toContain(`adds them up only for addresses of up to 10${NNBSP}000 outputs`);
+    for (const gone of ["another explorer", "Totals are not available", "Reload"]) {
+      expect(text(el)).not.toContain(gone);
     }
     expect(el.querySelector('[role="tab"]')).toBeNull();
     expect(el.querySelector('[role="alert"]')).toBeNull();
     // Past the wait for the totals too: a page of its history can keep the node busy for a minute.
     await sleep(1200);
-    // Not its history, its balance history or its unspent outputs: only the totals were asked.
-    expect(calls.filter((c) => c.startsWith("/api/"))).toStrictEqual([`/api/address/${ME}`]);
-    expect(el.querySelector("tbody tr .hash")).toBeNull();
+    // Only the totals and the mempool rows: never its history, balance history or unspent outputs.
+    expect(new Set(calls.filter((c) => c.startsWith("/api/")))).toStrictEqual(
+      new Set([`/api/address/${ME}`, `/api/address/${ME}/txs/mempool`]),
+    );
+  });
+
+  it("says what it can when the server does not know the size", async () => {
+    serve({
+      [`/address/${ME}`]: refused(503, "address history too large for this server"),
+      [`/address/${ME}/txs/mempool`]: [],
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(text(el)).toContain("Nothing waiting to confirm"));
+    await until(() =>
+      expect(text(el)).toContain("it has more history than this server's node adds up"),
+    );
+    expect(text(el)).not.toContain("Received");
+    expect(el.querySelector(".skeleton")).toBeNull();
+  });
+
+  it("shows a new unconfirmed transaction of a large address without a reload", async () => {
+    let pool = [tx(7, [[OTHER, 9000]], [[ME, 2500]], false)];
+    serve({
+      [`/address/${ME}`]: refused(503, "address history too large for this server"),
+      [`/app/address/${ME}/size`]: { creates: 20_000, cap: 10_000 },
+      [`/address/${ME}/txs/mempool`]: () => Response.json(pool),
+    });
+    const el = open(`/address/${ME}`);
+    await until(() => expect(el.querySelector(`a[href="/tx/${txid(7)}"]`)).not.toBeNull());
+    const row = el.querySelector(`a[href="/tx/${txid(7)}"]`)?.closest("tr");
+    pool = [tx(8, [[ME, 4000]], [[OTHER, 3000]], false), ...pool];
+    // The page asks every POLL_MS while in view, and at once when it comes back into view.
+    document.dispatchEvent(new Event("visibilitychange"));
+    await until(() => expect(el.querySelector(`a[href="/tx/${txid(8)}"]`)).not.toBeNull());
+    const rows = [...el.querySelectorAll("tbody tr")];
+    expect(rows[0]?.textContent).toContain(txid(8).slice(-4));
+    expect(rows[0]?.classList.contains("address-row--new")).toBe(true);
+    // The row already shown is the same element: nothing a reader focused is lost.
+    expect(rows[1]).toBe(row);
+    expect(text(el)).toContain("2 transactions");
+    // Confirmed: it leaves the list.
+    pool = [];
+    document.dispatchEvent(new Event("visibilitychange"));
+    await until(() => expect(text(el)).toContain("Nothing waiting to confirm"));
+    // Each ask is one request, and a fresh one.
+    const asks = calls.filter((c) => c.endsWith("/txs/mempool"));
+    expect(asks).toHaveLength(3);
   });
 
   it("asks for the history once the totals have answered, or after a second", async () => {

@@ -21,7 +21,7 @@ use bitcoin::address::NetworkUnchecked;
 use bitcoin::{Address, BlockHash, Transaction, Txid};
 use node::esplora::{
     BlockTxsStart, Error, Esplora, OutPosition, OutPositions, RawResponse, Route, ScriptHash,
-    ScriptRef,
+    ScriptRef, ScriptSize,
 };
 use tokio::sync::{OnceCell, Semaphore, watch};
 
@@ -504,15 +504,17 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
             && let Some(verdict) = verdicts.check(script, page, Instant::now())
         {
             return Err(match verdict {
-                Verdict::TooLarge => Error::TooLarge,
+                Verdict::TooLarge(_) => Error::TooLarge,
                 Verdict::Slow => Error::Timeout,
             });
         }
         let answer = esplora.raw(&call).await;
         if let Some((script, verdicts)) = size
-            && matches!(&answer, Ok(raw) if Error::from_status(raw.status, &raw.body) == Error::TooLarge)
+            && let Ok(raw) = &answer
+            && Error::from_status(raw.status, &raw.body) == Error::TooLarge
         {
-            verdicts.learn(script, None, Verdict::TooLarge, Instant::now());
+            let size = ScriptSize::from_refusal(&raw.body);
+            verdicts.learn(script, None, Verdict::TooLarge(size), Instant::now());
         }
         answer
     })
@@ -522,7 +524,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
         // arrival. The node never refuses a page for size, and a page it timed out on took the
         // whole history timeout, so neither answer is taken for the other.
         Ok((Err(Error::TooLarge), _)) if verdicts::history_page(&route).is_some() => {
-            refused_early(Verdict::TooLarge)
+            refused_early(Verdict::TooLarge(None))
         }
         Ok((Err(Error::Timeout), Source::Upstream(took)))
             if took < ctx.api.heavy.history_timeout && verdicts::history_page(&route).is_some() =>
@@ -537,7 +539,7 @@ async fn heavy(ctx: &NetworkContext, client: &Client, route: Route, key: String)
 /// A history request refused from what the node said moments ago: no node call.
 fn refused_early(verdict: Verdict) -> Response {
     match verdict {
-        Verdict::TooLarge => Refused {
+        Verdict::TooLarge(_) => Refused {
             error: TOO_LARGE,
             reason: "history_too_large",
         },

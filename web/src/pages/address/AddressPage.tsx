@@ -23,6 +23,7 @@ import { type AddressMessage, addressTopic } from "../../lib/track-topics";
 import { refusal } from "./address";
 import { BalanceChart } from "./BalanceChart";
 import { History } from "./History";
+import { LargeAddress } from "./Large";
 import { Notice, settled } from "./parts";
 import { Totals } from "./Totals";
 import "./AddressPage.css";
@@ -232,12 +233,9 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       <Match when={pageRefusal() === "wrong-network" && props.found}>
         {(f) => <WrongNetwork found={f()} network={network()} />}
       </Match>
-      {/* One state, said once: nothing below could be shown, so nothing below is drawn. */}
+      {/* What the node says about an address above its cap, and its unconfirmed transactions. */}
       <Match when={tooLarge()}>
-        <Notice title="This address has more history than this server adds up">
-          Its balance, totals, balance chart and transactions are not shown here. That says nothing
-          about how much it holds: look it up with your own node or another explorer.
-        </Notice>
+        <LargeAddress address={props.address} />
       </Match>
       <Match when={true}>
         <LiveLine watch={watch()} socket={socket()} />

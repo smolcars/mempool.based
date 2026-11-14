@@ -30,6 +30,8 @@ const BIG: &str = "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h";
 const SLOW: &str = "3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6";
 /// Above the cap, and its totals refusal takes the node half a second.
 const LATE: &str = "1KFHE7w8BhaENAswwryaoccDb6qcT6DbYY";
+/// Above the cap, refused in words that no longer give the counts.
+const RESHAPED: &str = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT";
 /// Everything answered at once.
 const SMALL: &str = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
 const TXID: &str = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
@@ -59,6 +61,13 @@ async fn mock() -> (String, Seen) {
             }
             if tail.is_empty() && addr == LATE {
                 tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            if tail.is_empty() && addr == RESHAPED {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "scripthash join exceeds --max-sh-creates; use a paged route",
+                )
+                    .into_response();
             }
             if tail.is_empty() && addr != SMALL && addr != SLOW {
                 return (
@@ -121,6 +130,7 @@ fn config(url: &str) -> Config {
 struct Reply {
     status: u16,
     error: String,
+    body: serde_json::Value,
     took: Duration,
 }
 
@@ -138,6 +148,7 @@ async fn get_as(addr: &str, client: u8, target: &str) -> Reply {
     Reply {
         status: String::from_utf8_lossy(&raw[9..12]).parse().unwrap(),
         error: body["error"].as_str().unwrap_or_default().to_owned(),
+        body,
         took: started.elapsed(),
     }
 }
@@ -214,6 +225,57 @@ async fn once_the_node_refuses_the_totals_for_size_the_history_never_reaches_it(
             .status,
         200
     );
+}
+
+#[tokio::test]
+async fn the_app_says_how_large_the_node_said_an_address_is_without_asking_it() {
+    let (addr, seen) = start().await;
+    let size = |a: &str| format!("/app/address/{a}/size");
+    const UNKNOWN: (u16, &str) = (404, "size not known");
+    // Nothing learned yet: not known, and the node is not asked.
+    let r = get(&addr, &size(BIG)).await;
+    assert_eq!((r.status, r.error.as_str()), UNKNOWN);
+    assert_eq!(calls(&seen, BIG), 0);
+
+    assert_eq!(get(&addr, &format!("/api/address/{BIG}")).await.status, 503);
+    let r = get(&addr, &size(BIG)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        r.body,
+        serde_json::json!({"creates": 2_366_550_u64, "cap": 10_000_u64})
+    );
+    assert_eq!(calls(&seen, BIG), 1, "read from memory");
+
+    // A refusal whose words changed is still a refusal, but its size is not known.
+    assert_eq!(
+        get(&addr, &format!("/api/address/{RESHAPED}")).await.status,
+        503
+    );
+    assert_eq!(
+        get(&addr, &format!("/api/address/{RESHAPED}/txs")).await.error,
+        TOO_LARGE.1
+    );
+    let r = get(&addr, &size(RESHAPED)).await;
+    assert_eq!((r.status, r.error.as_str()), UNKNOWN);
+
+    // An address the node totals has no size to give.
+    assert_eq!(get(&addr, &format!("/api/address/{SMALL}")).await.status, 200);
+    let r = get(&addr, &size(SMALL)).await;
+    assert_eq!((r.status, r.error.as_str()), UNKNOWN);
+
+    // Hostile and wrong-network input is refused before anything is looked up.
+    for (path, error) in [
+        (size("not-an-address"), "invalid address"),
+        (size(&"1".repeat(200)), "invalid address"),
+        (size("%3Cscript%3E"), "invalid address"),
+        (
+            size("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"),
+            "address is for another network",
+        ),
+    ] {
+        let r = get(&addr, &path).await;
+        assert_eq!((r.status, r.error.as_str()), (400, error), "{path}");
+    }
 }
 
 #[tokio::test]
