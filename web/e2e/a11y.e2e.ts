@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { Page } from "@playwright/test";
 import { chain, expect, stubRetargets, test } from "./fixtures";
-import { LARGE, stubLarge } from "./large-address";
+import { KEPT, LARGE, stubLarge } from "./large-address";
 import { ACINQ, mainnet, serve } from "./lightning-answers";
 
 // axe-core is a development dependency only: read from node_modules and run in the page through
@@ -283,6 +283,19 @@ const PAGES: PageType[] = [
     path: "/regtest/lightning/search?q=acinq",
     ready: (p) => p.getByRole("link", { name: "ACINQ" }).first(),
     before: (p) => serve(p, mainnet()),
+  },
+  {
+    name: "address kept by the server's ledger",
+    path: `/regtest/address/${LARGE}?ledger=kept`,
+    ready: (p) =>
+      p.getByRole("table", { name: /^Newest confirmed transactions/ }).getByRole("link"),
+    before: (p) => stubLarge(p, { ledger: () => KEPT }),
+  },
+  {
+    name: "address being added up",
+    path: `/regtest/address/${LARGE}?ledger=adding`,
+    ready: (p) => p.getByRole("region", { name: "Adding up this address for the first time" }),
+    before: (p) => stubLarge(p, { ledger: () => ({ state: "seeding", seconds: 95 }) }),
   },
 ];
 

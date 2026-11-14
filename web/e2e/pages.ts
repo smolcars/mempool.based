@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import { chain, stubRetargets } from "./fixtures";
-import { LARGE, stubLarge } from "./large-address";
+import { KEPT, LARGE, stubLarge } from "./large-address";
 
 const ACINQ = "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f";
 const recorded = (name: string): unknown =>
@@ -47,6 +47,15 @@ export const PAGES: { path: string; stub?: (page: Page) => Promise<void> }[] = [
   { path: `/regtest/tx/${chain.txs.cpfp_child}` },
   { path: `/regtest/address/${chain.addresses.p2tr}` },
   { path: `/regtest/address/${LARGE}`, stub: (page) => stubLarge(page) },
+  // Kept by the server's ledger, and being added up (docs/API.md, "Very large addresses").
+  {
+    path: `/regtest/address/${LARGE}?ledger=kept`,
+    stub: (page) => stubLarge(page, { ledger: () => KEPT }),
+  },
+  {
+    path: `/regtest/address/${LARGE}?ledger=adding`,
+    stub: (page) => stubLarge(page, { ledger: () => ({ state: "seeding", seconds: 95 }) }),
+  },
   { path: "/regtest/mining", stub: stubRetargets },
   { path: "/regtest/mining/pool/unknown" },
   { path: "/regtest/mempool" },

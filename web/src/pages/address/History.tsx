@@ -61,6 +61,8 @@ const NOTHING_LATER: Later = { txs: [], full: true, fresh: new Set() };
 
 export function History(props: {
   address: string;
+  /** Asks nothing for the unspent outputs yet: the page has not learned whether it keeps them. */
+  held?: boolean;
   stats: ApiResource<AddressStats>;
   first: ApiResource<Transaction[]>;
   retryFirst: () => void;
@@ -186,7 +188,8 @@ export function History(props: {
   // Once opened, stays open: the memo stops reading the view after it first turns true.
   const opened = createMemo((was?: boolean) => was === true || view() === "unspent");
   const statsKnown = () => props.stats.state !== "unresolved" && props.stats.state !== "pending";
-  const wantUtxos = () => opened() && statsKnown() && statsFailure() !== "too-large";
+  const wantUtxos = () =>
+    props.held !== true && opened() && statsKnown() && statsFailure() !== "too-large";
   const [utxos, { refetch: refetchUtxos }] = createApi<Utxo[]>(
     () => wantUtxos() && `${path}/utxo`,
     {

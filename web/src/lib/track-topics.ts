@@ -51,7 +51,9 @@ export type TxMessage =
 export type AddressMessage =
   | { type: "watching"; status: string | null }
   | { type: "unavailable" }
-  | { type: "refused"; reason: string };
+  | { type: "refused"; reason: string }
+  /** The server's own ledger keeps it, exact at `height`; a new height means a block changed it. */
+  | { type: "ledger"; height: number };
 
 const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 export const isTxid = (v: unknown): v is string =>
@@ -166,6 +168,9 @@ export function addressTopic(address: string): Topic<AddressMessage> {
       }
       if (m["state"] === "unavailable") return { type: "unavailable" };
       if (m["state"] === "refused") return { type: "refused", reason: reasonOf(m["reason"]) };
+      if (m["state"] === "ledger" && isCount(m["height"])) {
+        return { type: "ledger", height: m["height"] };
+      }
       return undefined;
     },
   };

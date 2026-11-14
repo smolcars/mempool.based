@@ -11,7 +11,7 @@ import {
   untrack,
 } from "solid-js";
 import { HashFull } from "../../components/Hash";
-import { busyRetrying, createApi, createRequest } from "../../lib/api";
+import { busyRetrying, createApi, createRequest, fetchApp } from "../../lib/api";
 import { fetchConfig } from "../../lib/config";
 import { type LiveStatus, useLiveStatus, useTopic } from "../../lib/live";
 import type { AddressStats, Transaction } from "../../lib/esplora";
@@ -24,6 +24,8 @@ import { refusal } from "./address";
 import { BalanceChart } from "./BalanceChart";
 import { History } from "./History";
 import { LargeAddress } from "./Large";
+import { FAILED_POLL_MS, LEDGER_POLL_MS, readLedger, waiting } from "./ledger";
+import { AddingUp, KeptAddress } from "./Kept";
 import { Notice, settled } from "./parts";
 import { Totals } from "./Totals";
 import "./AddressPage.css";
@@ -141,8 +143,46 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       was === true || waited() || (stats.state !== "unresolved" && stats.state !== "pending"),
   );
   const tooLarge = () => stats.state === "errored" && refusal(stats.error) === "too-large";
+  // What the server's own ledger says of it (docs/API.md, "Very large addresses"): asked once the
+  // totals have answered, from memory and the store only, and again while it is being added up.
+  // Asked again once the totals settle: a slow answer may have taught the server it is large.
+  const statsSettled = () => stats.state !== "unresolved" && stats.state !== "pending";
+  const [ledgerAnswer, { refetch: refetchLedger }] = createRequest(
+    () => statsAnswered() && `${network()} ${statsSettled() ? "settled" : "waited"}`,
+    (_, signal) => fetchApp<unknown>(untrack(network), `${path}/ledger`, { signal, fresh: true }),
+  );
+  const ledger = createMemo(() => readLedger(ledgerAnswer.latest));
+  const ledgerAnswered = () =>
+    ledgerAnswer.state !== "unresolved" && ledgerAnswer.state !== "pending";
+  const kept = () => {
+    const l = ledger();
+    return l.state === "tracked" ? l : undefined;
+  };
+  // Too large for the node to answer at once, or answered by it too slowly: the large page.
+  const large = () =>
+    tooLarge() || (stats.state === "errored" && ledger().state !== "none" && !kept());
+  // While a seed waits or runs, every few seconds; after one failed, now and then, since the
+  // server tries again only when it is asked after its pause.
+  let lastAsk = Date.now();
+  const askLedger = () => {
+    if (document.hidden || ledgerAnswer.loading) return;
+    const l = ledger();
+    const due = waiting(l) || (l.state === "failed" && Date.now() - lastAsk >= FAILED_POLL_MS);
+    if (!due) return;
+    lastAsk = Date.now();
+    refetchLedger();
+  };
+  const ledgerTimer = setInterval(askLedger, LEDGER_POLL_MS);
+  onCleanup(() => clearInterval(ledgerTimer));
+  // Added up meanwhile: the totals now come from the ledger.
+  createEffect(
+    () => kept() !== undefined,
+    (isKept, was) => {
+      if (isKept && was === false) refetchStats();
+    },
+  );
   const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(
-    () => statsAnswered() && !tooLarge() && `${path}/txs`,
+    () => statsAnswered() && ledgerAnswered() && !kept() && !large() && `${path}/txs`,
     { fresh: true },
   );
   let refreshHistory = () => {
@@ -201,6 +241,15 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
   useTopic(addressTopic(address), {
     message: (m) => {
       setWatch(m);
+      // A block changed what the ledger keeps, or it began keeping it.
+      if (m.type === "ledger") {
+        if (started) {
+          refetchLedger();
+          refetchStats();
+        }
+        ask();
+        return;
+      }
       if (m.type !== "watching") {
         ask();
         return;
@@ -233,9 +282,26 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       <Match when={pageRefusal() === "wrong-network" && props.found}>
         {(f) => <WrongNetwork found={f()} network={network()} />}
       </Match>
-      {/* What the node says about an address above its cap, and its unconfirmed transactions. */}
-      <Match when={tooLarge()}>
-        <LargeAddress address={props.address} />
+      {/* An address the server keeps its own totals for: they come at once. */}
+      <Match when={kept()}>
+        {(k) => (
+          <>
+            <LiveLine watch={watch()} socket={socket()} />
+            <KeptAddress address={props.address} ledger={k()} stats={stats} retry={retryAll} />
+          </>
+        )}
+      </Match>
+      {/* What the node says about an address above its cap, its unconfirmed transactions, and
+          whether the server is adding it up. */}
+      <Match when={large()}>
+        <LargeAddress
+          address={props.address}
+          note={
+            waiting(ledger()) || ledger().state === "failed" ? (
+              <AddingUp ledger={ledger()} />
+            ) : undefined
+          }
+        />
       </Match>
       <Match when={true}>
         <LiveLine watch={watch()} socket={socket()} />
@@ -255,6 +321,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
         />
         <History
           address={props.address}
+          held={!ledgerAnswered()}
           stats={stats}
           first={first}
           retryFirst={() => refetchFirst()}
@@ -278,7 +345,7 @@ function LiveLine(props: { watch: AddressMessage | undefined; socket: LiveStatus
     if (props.socket !== "live") {
       return "The live connection dropped. This page catches up by itself when it is back.";
     }
-    if (w.type === "watching") return "";
+    if (w.type === "watching" || w.type === "ledger") return "";
     if (w.type === "unavailable") {
       return "The server has lost touch with its node. This page catches up by itself when it is back.";
     }
