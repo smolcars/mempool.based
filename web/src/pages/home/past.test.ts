@@ -239,8 +239,10 @@ describe("the strip's past, loaded", () => {
   it("keeps no page asked for before a deep reorg", async () => {
     let answer: (r: Response) => void = () => undefined;
     reply = () => Response.json([]);
-    vi.stubGlobal("fetch", async (url: string) => {
+    const asks: (RequestCache | undefined)[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       requests.push(url);
+      asks.push(init?.cache);
       return new Promise<Response>((resolve) => {
         answer = resolve;
       });
@@ -256,6 +258,12 @@ describe("the strip's past, loaded", () => {
     answer(Response.json(chain(975, 989)));
     await vi.waitFor(() => expect(requests.length).toBeGreaterThan(2));
     expect(s.past.block(980)).toBeUndefined();
+    // Asked again past the browser's cache, which can still hold the old branch for its second;
+    // and an answer still of the old branch is refused: its 991 is not the parent of the new 992.
+    expect(asks.at(-1)).toBe("no-cache");
+    answer(Response.json(chain(987, 1001)));
+    await vi.waitFor(() => expect(s.past.failure(991)).toBeDefined());
+    expect(s.past.block(991)).toBeUndefined();
     s.dispose();
   });
 

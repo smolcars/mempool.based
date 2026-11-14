@@ -223,9 +223,11 @@ export function createPastBlocks(
   });
 
   async function load({ top, missing }: PageAsk, signal: AbortSignal): Promise<Block[]> {
+    // After a deep reorg the browser may still hold a page of the old branch for its second.
+    const ask = { signal, fresh: chain > 0 };
     if (useV1) {
       try {
-        const list = parse(await fetchApi<unknown>(network, `/v1/blocks/${top}`, { signal }));
+        const list = parse(await fetchApi<unknown>(network, `/v1/blocks/${top}`, ask));
         if (list.some((b) => b.height === missing)) return list;
         // Cut short where the server's block table ends (a fresh install): the node has the rest.
       } catch (e) {
@@ -236,7 +238,7 @@ export function createPastBlocks(
       }
     }
     // The node's pages hold ten, so they are asked for from the highest block still missing.
-    return parse(await fetchApi<unknown>(network, `/blocks/${missing}`, { signal }));
+    return parse(await fetchApi<unknown>(network, `/blocks/${missing}`, ask));
   }
 
   /**
@@ -279,6 +281,21 @@ export function createPastBlocks(
         }
         const tip = untrack(live)?.[0]?.height ?? Number.POSITIVE_INFINITY;
         const lowest = untrack(live)?.at(-1)?.height ?? Number.POSITIVE_INFINITY;
+        // A page that does not chain onto the blocks kept above it is another branch's.
+        if (
+          list.some(
+            (b) => blocks.has(b.height + 1) && blocks.get(b.height + 1)?.previousblockhash !== b.id,
+          )
+        ) {
+          failed.set(
+            pageOf(start),
+            new ApiError(503, "The chain changed while these blocks were asked for."),
+          );
+          busy = false;
+          changed();
+          step();
+          return;
+        }
         // The live list's blocks are newer news than any page.
         for (const b of list) if (b.height < lowest && b.height <= tip) blocks.set(b.height, b);
         if (!blocks.has(start)) {
