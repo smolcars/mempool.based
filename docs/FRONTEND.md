@@ -648,6 +648,7 @@ Write browser tests so they hold in every engine:
 - **Read a screenshot at the device's scale.** Desktop Safari has two device pixels per CSS pixel and the iPhone three: divide by the ratio, never assume 1 (`grid.e2e.ts`).
 - **CSP violations are reported by the page,** through `securitypolicyviolation`, since each engine words its console message differently. In WebKit, every Playwright screenshot adds a style the policy refuses, reported against the document rather than an element; the fixture names that one and drops it. `csp.e2e.ts` proves a style of the site's still fails its test, screenshot or not.
 - **A test that depends on width checks it** (`page.viewportSize()`), as the home page's test does for the note a phone hides.
+- **Wait for the page's frames, not a clock.** WebKit at phone width on a busy runner went over 3 s without a frame after a resize, so a check that gave the page 3 s to fit its tables failed. `tablesFit` (`e2e/rows.ts`) waits until two frames pass with no resize of what the tables watch, then checks once.
 - **Phone screenshots for a UI change come from WebKit** as an iPhone, besides Chromium: the owner's first device is a phone.
 
 ### Other systems' fonts

@@ -63,8 +63,9 @@ function smallTargets(page: Page, scope: string, scroll = true): Promise<string[
           continue;
         }
         // A phone's flow card: three lines, one control on each; its address and where it was
-        // spent are also in the inspector its details button opens, each a target of its own.
-        if (c.closest(".tx-flow__item") && !c.matches(".tx-flow__open, .tx-flow__more")) continue;
+        // spent are also in the inspector its details button opens, each a target of its own. So
+        // their size is meant, but no neighbour may cover them.
+        const small = c.closest(".tx-flow__item") && !c.matches(".tx-flow__open, .tx-flow__more");
         // A pop-up closes on a scroll, and it opened in sight.
         if (move) c.scrollIntoView({ block: "center", inline: "center" });
         const r = c.getBoundingClientRect();
@@ -76,6 +77,21 @@ function smallTargets(page: Page, scope: string, scroll = true): Promise<string[
         if (!reaches(c, x, y)) {
           const over = document.elementFromPoint(x, y);
           out.push(`${said(c)} is under ${over ? said(over) : "nothing"} at its centre`);
+          continue;
+        }
+        if (small) {
+          // Its edges too: a neighbour's target can reach over part of it and miss its centre.
+          for (const [ex, ey] of [
+            [x, r.top + 1],
+            [x, r.bottom - 1],
+            [r.left + 1, y],
+            [r.right - 1, y],
+          ] as const) {
+            if (reaches(c, ex, ey)) continue;
+            const over = document.elementFromPoint(ex, ey);
+            out.push(`${said(c)} is partly under ${over ? said(over) : "nothing"}`);
+            break;
+          }
           continue;
         }
         // How far a tap still reaches it each way from its centre, and what a tap past that finds.

@@ -372,6 +372,12 @@
   .tx-flow__col--out .tx-flow__meta {
     justify-content: flex-end;
   }
+  /* A card's three lines hold a control each (docs/DESIGN.md "Touch"): a thumb-high address would
+     reach over the details button above it and "Spent" below. */
+  .tx-flow__item .tap-line {
+    padding-block: 0;
+    margin-block: 0;
+  }
   /* A 24 px target (WCAG 2.2) without making the line taller than the meta line itself. */
   .tx-flow__spent {
     display: inline-flex;
