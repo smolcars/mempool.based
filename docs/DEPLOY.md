@@ -2,7 +2,7 @@
 
 The operator's guide: how to put the explorer beside an rbitcoin node, behind TLS, and keep it running and upgraded. Read it top to bottom the first time. Settings are listed once, in [`CONFIG.md`](CONFIG.md); this guide links there instead of repeating them.
 
-What you run is one image, `ghcr.io/smolcars/rbitcoin-space`, holding the server and the built frontend, and [`deploy/compose.yml`](../deploy/compose.yml), which runs it beside rbitcoin v0.9.2. Every command below was run as written, on Docker 29.8 with Compose v5.5, against a regtest node; the [mainnet values](#run-it-beside-the-node) are what differs.
+What you run is one image, `ghcr.io/smolcars/rbitcoin-space`, holding the server and the built frontend, and [`deploy/compose.yml`](../deploy/compose.yml), which runs it beside rbitcoin v0.9.2. Every command below was run as written, on Docker 29.8 with Compose v5.5, against a regtest node; the [mainnet values](#run-it-beside-the-node) are what differs. The exceptions say so where they stand: what needs a Cloudflare account, and what the first public deployment, on 2026-11-14, observed on its own host.
 
 ## What you need
 
@@ -28,7 +28,7 @@ Linux with Docker Engine and the Compose plugin, on amd64 or arm64. The node nee
 | Memory | 251 MB resident, [measured](#one-day-on-mainnet) for mainnet, signet and testnet4 together with the mempool engine on each and [Lightning](#lightning) on mainnet, without visitors. [`LIGHTNING.md`](LIGHTNING.md#measured-in-the-server) measured Lightning at 250 to 330 MB more, by the process's physical footprint, a larger measure than resident memory; how much of the 251 MB it was is not known. More with open WebSockets (64 MB at the peak with 5,000, in a load test, [`WS.md`](WS.md)) and as the block summaries and kept answers fill, up to `BLOCK_SUMMARY_CACHE_MB` and `ANSWER_CACHE_MB` (32 MB each) per network |
 | CPU | About 6% of one core, measured for the same server. 8% with 5,000 WebSockets open, in a load test |
 | Disk | Measured after the full backfill: 547 MB for mainnet's store, 133 MB for signet's, 72 MB for testnet4's, and 35 MB for the Lightning graph ([the data directory](#the-data-directory)). Growth from there, estimated: about 150 MB a year on mainnet, nearly all of it audits. The log was 6.6 MB a day; it is capped at 256 KiB a second, so at worst it grows 22.6 GB a day ([`LOGGING.md`](LOGGING.md#for-operators)). The compose file's `local` driver keeps 100 MB of it, but a host that keeps the log another way must rotate it or lower `LOG_MAX_BYTES_PER_SEC` |
-| Network | Nothing published but the node's P2P port and, through the proxy, 443 |
+| Network | Nothing published but the node's P2P port and, through the proxy, 443. [Behind a Cloudflare Tunnel](#behind-a-cloudflare-tunnel), only P2P |
 
 ### One day on mainnet
 
@@ -114,6 +114,36 @@ with `server.env` holding the six `MAINNET_*` variables ([`CONFIG.md`](CONFIG.md
 - **Every node call crosses it.** With the mempool engine on, the server reads 120 to 200 MB a minute of RPC answers on mainnet, more as the mempool grows ([`CONFIG.md`](CONFIG.md#the-live-mempool)): 7 to 12 GB an hour between the two hosts, measured. The backfill's old blocks are mostly round trips, so it runs slower over a network ([`STORE.md`](STORE.md#backfill)).
 - **No bulk routes.** rbitcoin's `/internal/*` routes are only on its unix socket. Today the server calls none of them, so nothing is lost yet; a later release may use them when they are there.
 
+### The node in another compose project
+
+When the host already runs rbitcoin in a compose project of its own, add the server to that project instead of running a second node. This is how the first public deployment ran, on 2026-11-14: one server beside three existing nodes (mainnet, signet, testnet4), in their project. Copy the `server` service from [`compose.yml`](../deploy/compose.yml) into that project's file, with its hardening and volume, and change what reaches the node:
+
+```yaml
+services:
+  server:
+    # ...the server service and its hardening from deploy/compose.yml, then:
+    env_file: rbitcoin-space.env
+    # The group id of each node's socket; nodes from one image share one.
+    group_add: ["<socket gid>"]
+    depends_on: [<node services>]
+    volumes:
+      - server-data:/data
+      # Each node's Esplora socket directory, read-only.
+      - <mainnet node's socket directory>:/run/mainnet:ro
+      - <signet node's socket directory>:/run/signet:ro
+      - <testnet4 node's socket directory>:/run/testnet4:ro
+volumes:
+  server-data:
+```
+
+- **Esplora over the node's unix socket.** Mount the directory holding the node's socket read-only and give `{NET}_ESPLORA_URL` the socket's absolute path inside the server, such as `/run/mainnet/esplora.sock`. The server connects to the socket as a member of its group: put each socket's group id in `group_add` (`stat -c %g <socket>` on the host, where the directory is a bind mount).
+- **RPC and Electrum by service name,** on the project's network: `MAINNET_RPC_HOST=<node service>`, `MAINNET_ELECTRUM_ADDR=<node service>:<port>`. Neither is published.
+- **The RPC user and password come from the node's cookie file** (`user:password`): copy them into the server's env file as `{NET}_RPC_USER` and `{NET}_RPC_PASSWORD`. If the node's cookie changes, copy it again and run `docker compose up -d --no-deps --force-recreate server`; until then the server logs `rpc_auth_failed`.
+- **One server serves every network** with each network's six variables ([`CONFIG.md`](CONFIG.md#networks)); each node's socket gets a mount of its own.
+- **Leave the nodes alone when you touch the server:** `docker compose up -d --no-deps server`. Without `--no-deps`, compose also starts, and may recreate, every service the server depends on ([upgrading](#upgrading)).
+
+The deployment observed this working with all three networks. The YAML above was not run as written: its paths and names are the host's.
+
 ### Try it on regtest first
 
 The same compose file runs a private regtest chain, which is a safe way to try every step of this guide. In the shell where you made `$pass` above, replace the node's lines and **every** `MAINNET_*` line in `.env` with regtest ones. A `MAINNET_*` line left behind points the explorer's mainnet at the regtest node, which the server reports as `rpc_wrong_network` ([below](#when-it-goes-wrong)), writing nothing to `mainnet.sqlite` meanwhile:
@@ -171,7 +201,7 @@ The compose file adds no health check of its own and restarts on exit, not on he
 
 ## TLS and the reverse proxy
 
-Put a reverse proxy on the host in front of `127.0.0.1:8080`. Three things matter, and each is easy to get wrong:
+Put a reverse proxy on the host in front of `127.0.0.1:8080`, [one in a container](#a-proxy-in-a-container), or [a Cloudflare Tunnel](#behind-a-cloudflare-tunnel). Three things matter, and each is easy to get wrong:
 
 1. **Compress `/api` and `/app` answers in the proxy.** The server does not compress what it computes; only the frontend's files come precompressed. Uncompressed, a list of blocks is about four times larger on the wire.
 2. **Tell the server who the client is**, or every visitor shares the proxy's rate limits. The server reads the client's address from a header only when you name the header and the proxy's address ([below](#client-addresses)); until then it ignores the header, so a client cannot choose its own address ([`SECURITY.md`](SECURITY.md) rule 7).
@@ -241,6 +271,7 @@ How the address is found, `X-Forwarded-For` and chains of proxies are in [`CONFI
 - Docker may give the network another subnet when it is recreated, after `docker compose down`, and then every visitor shares the new gateway's allowance. Check the gateway again after one, and watch for `proxy_header_ignored`.
 - A proxy in a container arrives from its own container address, not the gateway: [below](#a-proxy-in-a-container).
 - Anything on the host that connects to the published port comes from the same gateway and is trusted like the proxy. That is why the port stays on loopback: the host is part of the proxy's trust. Never trust a range that clients can connect from.
+- **A published port may not pass on anyone's address.** Observed on 2026-11-14 on a Linux host (Docker Engine 28, Ubuntu 24.04) with the server's port published on specific host addresses: **every** connection to it reached the server from the compose network's gateway, from clients on the LAN, from clients over a VPN interface, and from a reverse proxy on another machine forwarding to the port. Why was not found. On a Mac (OrbStack, Docker Engine 29.8.2) we tested the same on 2026-11-14: a connection from the host and one from a container on another network both arrived from the gateway. On such a host, all clients of the port share one allowance, and a proxy forwarding to it cannot be told apart from a direct client. **Never trust the gateway when the port is reachable from anywhere but this host:** anyone who can reach the port could then choose their address with the header. Leave the gateway untrusted, so that every client through the port shares one allowance (what the deployment did), or run every public proxy as a container on the `edge` network ([below](#a-proxy-in-a-container), or [a tunnel](#behind-a-cloudflare-tunnel)) and trust only its pinned address. To see which host you have: with `LOG_CLIENT_ADDR=true`, load a page from another machine and read the `client` of its `http_request`; the gateway there means the port hides addresses. A proxy that sends a forwarding header to an untrusted port is also named by `proxy_header_ignored`, its `peer` the gateway.
 
 ### A proxy in a container
 
@@ -281,7 +312,90 @@ Tested on 2026-11-13 with Caddy 2.11.9, plain HTTP in place of a certificate, an
 - The pinned address held when the proxy was recreated, and after `docker compose down`, another network created, and `up`. Without the pin, recreating the proxy happened to keep its address, but `down`, another network and `up` moved it to another subnet, as described above.
 - Responses were compressed (`zstd`) and `/regtest/app/ws` upgraded (`101`) through it.
 
-Not tested: how the published port passes the visitor's address to Caddy. Docker on Linux keeps an outside client's address (the deployment rehearsal checked it for a proxy on the host); Docker Desktop, used for this test, may not, which is why the visitors were containers. Nor IPv6 visitors to an IPv4 network, whom Docker may forward through its own userland proxy, so that Caddy would see the gateway for each of them.
+Not tested: how the published ports 80 and 443 pass the visitor's address to Caddy. They may not: on the host [above](#client-addresses) every connection to a published port arrived from the gateway, and Caddy would then write the gateway into `X-Real-IP` for every visitor, so all would share one allowance (none could choose another's address). Check it as above: the server's `client` must be your own address, not the `edge` gateway `172.30.111.1`. The test above used containers as visitors for that reason. Nor IPv6 visitors to an IPv4 network, whom Docker may forward through its own userland proxy, with the same effect. [A tunnel](#behind-a-cloudflare-tunnel) publishes no port and has neither problem.
+
+### Behind a Cloudflare Tunnel
+
+`cloudflared` runs as a container beside the server and dials out to Cloudflare; Cloudflare's edge holds the certificate for your hostname and sends each request down that connection. Nothing is published on the host and no port is opened on the router, so neither [published-port caution](#client-addresses) applies. The first public deployment ran this way on 2026-11-14, with a locally managed tunnel and the free plan.
+
+**The trade:** Cloudflare terminates TLS. It sees every page, block, transaction and address a visitor looks up, and the visitor's address, and it could change what it serves. A proxy of your own sees the same and nobody else does, but needs a published port.
+
+**You need** a Cloudflare account, and your domain's DNS hosted at Cloudflare: add the domain there and change its nameservers at the registrar. The registration stays where it is.
+
+**Create the tunnel** on any machine with [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and a browser, not necessarily the server:
+
+```sh
+cloudflared tunnel login                                    # writes ~/.cloudflared/cert.pem
+cloudflared tunnel create explorer                          # prints the tunnel's id, writes ~/.cloudflared/<id>.json
+cloudflared tunnel route dns explorer explorer.example.com
+cloudflared tunnel route dns explorer www.explorer.example.com   # only if you serve a www name too
+```
+
+`<id>.json` is the tunnel's credentials file: whoever holds it can run the tunnel and answer for your hostname. Move it to the server's host, next to `compose.yml`, readable by the container's user (65532) alone:
+
+```sh
+mkdir -p cloudflared
+mv <id>.json cloudflared/credentials.json
+sudo chown 65532:65532 cloudflared/credentials.json && sudo chmod 400 cloudflared/credentials.json
+```
+
+`cert.pem` is the account's login for managing tunnels, not needed to run one: leave it off the server.
+
+**Write `cloudflared/config.yml`:**
+
+```yaml
+# The id `cloudflared tunnel create` printed (not a secret), and the credentials file.
+tunnel: <id>
+credentials-file: /etc/cloudflared/credentials.json
+ingress:
+  # One rule per hostname routed to the tunnel, each to the server on the edge network.
+  - hostname: explorer.example.com
+    service: http://server:8080
+  - hostname: www.explorer.example.com
+    service: http://server:8080
+  # Any other hostname. cloudflared refuses a config whose last rule is not a catch-all.
+  - service: http_status:404
+```
+
+`cloudflared` passes the browser's `Host` through unchanged, which the WebSocket origin check needs ([point 3](#tls-and-the-reverse-proxy)). Check the file without an account:
+
+```sh
+docker compose -f compose.yml -f compose.tunnel.yml run --rm --no-deps tunnel \
+  tunnel --config /etc/cloudflared/config.yml ingress validate             # OK
+```
+
+**Tell the server** in `.env`:
+
+```sh
+TRUSTED_PROXY_HEADER=X-Forwarded-For
+TRUSTED_PROXIES=172.30.111.2
+```
+
+and start everything with [`deploy/compose.tunnel.yml`](../deploy/compose.tunnel.yml), which adds the tunnel on the pinned `edge` network as [`compose.proxy.yml`](#a-proxy-in-a-container) adds Caddy, with the same hardening and the image pinned by digest, and removes the server's published port:
+
+```sh
+docker compose -f compose.yml -f compose.tunnel.yml up -d
+```
+
+Every later command needs both `-f` flags. Use this file or `compose.proxy.yml`, not both: they pin the same address. Then, in Cloudflare's dashboard, switch on **Always Use HTTPS** (SSL/TLS, Edge Certificates): until then `http://` answers `200`, with the page in the clear ([point 3](#tls-and-the-reverse-proxy)).
+
+**Which header.** `X-Forwarded-For` is the one to use, because it is the one checked. Cloudflare appends the visitor's address to whatever `X-Forwarded-For` the client sent; the server walks the header from the right and takes the first address that is not a trusted proxy, Cloudflare's entry, so a client's own header is harmless ([`CONFIG.md`](CONFIG.md#client-addresses)). It also keeps working if you later put a proxy of your own between the tunnel and the server: list both in `TRUSTED_PROXIES`. `CF-Connecting-IP`, which Cloudflare sets to the visitor's address alone, would work as well with the same `TRUSTED_PROXIES`; nobody has tried it here.
+
+**Check the addresses** as the deployment did: with `LOG_CLIENT_ADDR=true`, load the site and compare the `client` of your request in the server's log with the `ip=` line of `https://explorer.example.com/cdn-cgi/trace`, Cloudflare's own view of you, from the same browser. An IPv4 address must be equal; an IPv6 one is logged as its `/64` ([`CONFIG.md`](CONFIG.md#logging)), so the first four groups must match. Then remove `LOG_CLIENT_ADDR`.
+
+Observed in the deployment on 2026-11-14, free plan, with nothing configured in Cloudflare but the tunnel, its DNS records and Always Use HTTPS:
+
+| | Observed |
+|---|---|
+| Client addresses | `X-Forwarded-For` with the tunnel's pinned address trusted: each visitor keyed by their own public address, as `/cdn-cgi/trace` reported it |
+| Compression | `/api` JSON arrived `content-encoding: br`: [point 1](#tls-and-the-reverse-proxy) is met with no setting |
+| Caching | API answers were not cached (`cf-cache-status: DYNAMIC`); the frontend's immutable files were |
+| WebSockets | `/app/ws` and `/api/v1/ws` upgraded (`101`) |
+| HTTPS | `http://` answered `200` until Always Use HTTPS was on |
+
+Not observed: whether Cloudflare's bot protection challenges script clients of `/api`; how long Cloudflare keeps an idle WebSocket open (the server pings a socket quiet for half of `WS_IDLE_TIMEOUT_SECS`, checked every quarter of it, so 30 to 45 s by default: an idle limit of at least `WS_IDLE_TIMEOUT_SECS` is enough, as for [any other proxy](#any-other-proxy)); a request body near 1 MB, as a large broadcast sends.
+
+Tested here on 2026-11-14, without a Cloudflare account: `docker compose -f compose.yml -f compose.tunnel.yml config -q` with `.env.example` (the [release workflow](CI.md#releases) runs it too); and in the container that file defines, read-only with no capabilities, `cloudflared` 2026.11.0 accepted the config above (`ingress validate`), matched both hostnames to the server and any other to `404` (`ingress rule`), and refused the config without its last rule. The deployment ran an equivalent service, not this file; nobody has run this file against a live tunnel.
 
 ### Check it
 
@@ -296,7 +410,7 @@ curl -s -o /dev/null --max-time 3 -w '%{http_code}\n' --http1.1 \
   https://explorer.example.com/app/ws                      # 101: the WebSocket upgrades
 ```
 
-The second prints `101` and then waits until `--max-time`, because the socket stays open. A `403` there means the proxy changed `Host` ([below](#when-it-goes-wrong)).
+The second prints `101` and then waits until `--max-time`, because the socket stays open. A `403` there means the proxy changed `Host` ([below](#when-it-goes-wrong)). Behind Cloudflare, put `br` in `Accept-Encoding`: the deployment's answers came `br`.
 
 ## The data directory
 
@@ -333,6 +447,35 @@ docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/backup":/backup:ro 
 docker compose start server
 ```
 
+**Seed it from another instance** to skip the backfill: about 18 hours for mainnet's block totals ([measured](#one-day-on-mainnet)), and the audits, mempool history and replacements the other instance recorded come along, which no backfill rebuilds. Worth it when you move the explorer to a new host, or start a second one, with an instance that has caught up. On the instance you copy from, beside its compose file, take each network's file with SQLite's backup, and the Lightning graph without its node key:
+
+```sh
+mkdir -p seed
+for net in mainnet signet testnet4; do
+  docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/seed":/seed alpine:3 \
+    sh -c "apk add --no-cache sqlite >/dev/null && sqlite3 -readonly /data/$net.sqlite '.backup /seed/$net.sqlite'"
+done
+docker run --rm -v rbitcoin-space_server-data:/data:ro -v "$PWD/seed":/seed alpine:3 \
+  sh -c 'mkdir -p /seed/lightning/mainnet && cp -p /data/lightning/mainnet/graph /data/lightning/mainnet/verified /seed/lightning/mainnet/'
+```
+
+Copy `seed/` to the new host and, before the server's first start there, into its volume, owned by the image's user:
+
+```sh
+docker compose up --no-start                # creates the volume
+docker run --rm -v rbitcoin-space_server-data:/data -v "$PWD/seed":/seed:ro alpine:3 \
+  sh -c 'cp -Rp /seed/. /data/ && chown -R 65532:65532 /data'
+docker compose up -d
+```
+
+- List only the networks you run, and leave out the Lightning line without Lightning. The volume is `<project>_server-data` in [another compose project](#the-node-in-another-compose-project).
+- `cp -p` keeps the graph's modification time, which records when it was last caught up.
+- The node key (`node_key`) stays behind: it is the old instance's identity to the Lightning nodes it dials, and the new one makes its own on first start.
+- Each file records its chain, so a file from another network's node is refused (`store_open_failed`, [below](#when-it-goes-wrong)). A file from a newer release is refused too; one from an older release is migrated forward ([upgrading](#upgrading)).
+- It worked: `block_backfill_progress` with `totals_done` and `rates_done` both `true` in the first second means there is nothing to backfill.
+
+Observed in the deployment on 2026-11-14: the three networks' files and the graph, copied this way into the new volume, were accepted, and the first `block_backfill_progress` already had both `true`. We ran the commands above on 2026-11-14 with small stand-in files: the copies opened, passed `integrity_check`, kept the graph's time and were owned by 65532.
+
 ## The first start
 
 On its first start with an empty store the server runs the **backfill**: it fills the block table from the node, newest blocks first, with every block's totals and the last year's fee rates. The table is its progress, so it resumes where it stopped after any restart.
@@ -344,6 +487,14 @@ On its first start with an empty store the server runs the **backfill**: it fill
 - **Progress** is a `block_backfill_progress` line every minute while it writes rows, and a last one when it has caught up: `rows` and `rated` against `tip`. A line without them means the count timed out; the next one that has them shows the real change.
 
 Meanwhile the site works: blocks, transactions and addresses come from the node, the newest 100 rows follow the tip from the start, and mining charts and lists cover the rows filled so far, saying where their history starts. The mempool chart starts empty and fills a minute at a time; block audits start with the first block the server watches arrive.
+
+## After a restart
+
+Every later start finds its store and graph and needs no backfill, but a few things take a moment. Observed in the deployment on 2026-11-14:
+
+- **Fee routes** answer `503` `not ready yet; retry` for some seconds, until the first fee answer is computed. `fees_fallback_started` with `warming_up` follows every start, and the first `fees_summary`, a minute in, names the `source` being served. What each route answers while warming up is in [`API.md`](API.md).
+- **The Lightning pages** take up to a minute, in three steps: `lightning_started` with `graph` `loaded` (the graph read from disk, `load_ms`), `lightning_synced` with `from_disk` (caught up with its peers), then `lightning_index_built`, from which the node, channel and search routes answer and `/readyz` `lightning` turns from `syncing` to `synced`. A restart [measured](#one-day-on-mainnet) on 2026-11-13 loaded the graph in 62 ms and synced in 20 s.
+- **Everything else** answers as soon as the node does: `/readyz` is `200` once each network's RPC check and Electrum connection have succeeded.
 
 ## Watching it
 
@@ -396,6 +547,16 @@ echo "SERVER_IMAGE=ghcr.io/smolcars/rbitcoin-space@sha256:<digest>" >> .env
 ```
 
 `docker buildx imagetools inspect ghcr.io/smolcars/rbitcoin-space:master` prints the same digest, and the `org.opencontainers.image.revision` label names the commit. The compose file and `.env.example` come from a checkout of that commit. Moving between a `master` image and a release is an upgrade like any other: back up first, since the store's migrations are one-way (below).
+
+**Following `master`.** A release is still the default. If you choose to run ahead of releases, move from one `master` image to the next the same way each time: back up, put the new digest in `SERVER_IMAGE`, then replace the server alone and check that the new commit runs:
+
+```sh
+docker compose pull server
+docker compose up -d --no-deps server
+curl -s https://explorer.example.com/healthz           # revision: the commit of the image you pinned
+```
+
+`--no-deps` keeps compose from starting, or recreating, the services the server depends on. It matters most where the node is in the [same project](#the-node-in-another-compose-project): a node recreated by accident stops for its flush and restarts. The deployment updated this way on 2026-11-14.
 
 **Migrations run by themselves and are one-way.** A new release may add tables to the store; it applies them at start, each once, and logs a `store_migration_applied` line for each. An older release refuses a store a newer one has migrated: `store_open_failed`, and that network runs without a store. So **back up before upgrading**.
 
@@ -489,11 +650,13 @@ The server serves it under `/signet` ([`ARCHITECTURE.md`](ARCHITECTURE.md#networ
 From [`SECURITY.md`](SECURITY.md), for the operator:
 
 - [ ] The node's RPC, Esplora and Electrum are reachable by the server only: on the compose network and the socket, or a private network. Only P2P is published.
-- [ ] The server's port is on loopback (`HTTP_PUBLISH` unchanged) and reached only through the proxy, or, with the [proxy in a container](#a-proxy-in-a-container), not published at all.
-- [ ] The site is served over HTTPS, and HTTP redirects to it.
+- [ ] The server's port is on loopback (`HTTP_PUBLISH` unchanged) and reached only through the proxy, or, with the [proxy in a container](#a-proxy-in-a-container) or [a tunnel](#behind-a-cloudflare-tunnel), not published at all.
+- [ ] The site is served over HTTPS, and HTTP redirects to it. Behind Cloudflare, Always Use HTTPS is on: `curl -sI http://explorer.example.com/` must not answer `200`.
 - [ ] `TRUSTED_PROXY_HEADER` and `TRUSTED_PROXIES` are set only once the proxy overwrites the header, `TRUSTED_PROXIES` names the proxy's address and nothing clients can reach, and the [check](#client-addresses) showed your own address.
+- [ ] The compose network's gateway is not in `TRUSTED_PROXIES` if the server's port is published beyond loopback: a published port can bring every client from the gateway ([client addresses](#client-addresses)).
 - [ ] `LOG_CLIENT_ADDR` is off, unless you mean to keep a record of who looked at what.
 - [ ] `.env` and `rpc.cookie` are readable by their owners only, and the password is long and random.
+- [ ] Behind a tunnel: `cloudflared/credentials.json` is mode `400`, owned by 65532, and nowhere else but your backups; `cert.pem` from `cloudflared tunnel login` is not on the server.
 - [ ] The limits are at their defaults or raised for a stated reason; none is switched off (none can be).
 - [ ] `BROADCAST_ENABLED=false` if you do not want the site to relay transactions.
 - [ ] The image is pinned to a version, and you watch the releases for security fixes.
