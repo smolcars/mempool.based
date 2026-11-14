@@ -266,22 +266,67 @@ test("on a touch screen no field is small enough to zoom into, and a tap leaves 
   await touch.close();
 });
 
+/** The theme colours and colour scheme the page gives the browser's own chrome. */
+const chrome = (page: Page) =>
+  page.evaluate(() => ({
+    theme: [...document.querySelectorAll('meta[name="theme-color"]')].map((m) =>
+      m.getAttribute("content"),
+    ),
+    scheme: document.querySelector('meta[name="color-scheme"]')?.getAttribute("content"),
+  }));
+
 // Safari kept its toolbar in the system's colour over a page toggled the other way.
 test("the browser's chrome takes the colour of the scheme on screen, not only the system's", async ({
   page,
 }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/regtest/");
-  const chrome = () =>
-    page.evaluate(() => ({
-      theme: [...document.querySelectorAll('meta[name="theme-color"]')].map((m) =>
-        m.getAttribute("content"),
-      ),
-      scheme: document.querySelector('meta[name="color-scheme"]')?.getAttribute("content"),
-    }));
-  await expect.poll(chrome).toStrictEqual({ theme: ["#121518"], scheme: "dark" });
+  await expect.poll(() => chrome(page)).toStrictEqual({ theme: ["#121518"], scheme: "dark" });
   await page.getByRole("button", { name: "Switch to light theme" }).click();
-  await expect.poll(chrome).toStrictEqual({ theme: ["#f4f6f7"], scheme: "light" });
+  await expect.poll(() => chrome(page)).toStrictEqual({ theme: ["#f4f6f7"], scheme: "light" });
+});
+
+// WebKit runs the app's script before a stylesheet linked after it has loaded: the chrome took
+// the light colour over a dark page whenever the stylesheet came later than the script.
+test("the browser's chrome is right when the stylesheet comes after the script", async ({
+  page,
+  browserName,
+}) => {
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/\/assets\/[^/]+\.css$/, async (route) => {
+    await held;
+    await route.continue();
+  });
+  // Whether the app's module has run: its script's load event, before any of the page's code.
+  await page.addInitScript(() => {
+    document.addEventListener(
+      "load",
+      (e) => {
+        if (e.target instanceof HTMLScriptElement && e.target.type === "module") {
+          Object.assign(window, { moduleRan: true });
+        }
+      },
+      true,
+    );
+  });
+  await page.emulateMedia({ colorScheme: "dark" });
+  // Chromium and Firefox run the module only once the stylesheet is in. WebKit runs it first: the
+  // stylesheet is held until it has, and until the page's one-second wait for its font has run out
+  // on the page's own clock, after which the page draws whatever it has.
+  const webkit = browserName === "webkit";
+  if (webkit) await page.clock.install();
+  const loaded = page.goto("/regtest/");
+  if (webkit) {
+    await expect.poll(() => page.evaluate(() => "moduleRan" in window)).toBe(true);
+    await page.clock.runFor(1500);
+  }
+  release?.();
+  if (webkit) await page.clock.resume();
+  await loaded;
+  await expect.poll(() => chrome(page)).toStrictEqual({ theme: ["#121518"], scheme: "dark" });
 });
 
 // At 150% page zoom a phone is about 268 px wide: the search shrank to "Se" and the sections touched.

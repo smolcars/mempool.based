@@ -191,12 +191,20 @@ export async function copyNotesClear(page: Page, label: string) {
         out.push(`"${name}": a copy control whose value this check does not know`);
         continue;
       }
-      b.click();
-      let note: HTMLElement | null = null;
-      for (let i = 0; i < 30 && !note; i++) {
-        await frame();
-        note = b.querySelector<HTMLElement>(".copy__note");
-      }
+      // Caught as it is put in, and measured then: it shows for 1.4 s, which a slow frame (the
+      // first after a change of faces, on CI's runner) can outlast between two looks.
+      let watch: MutationObserver | undefined;
+      const note = await new Promise<HTMLElement | null>((resolve) => {
+        watch = new MutationObserver(() => {
+          const n = b.querySelector<HTMLElement>(".copy__note");
+          if (n) resolve(n);
+        });
+        watch.observe(b, { childList: true, subtree: true });
+        // A ceiling for a note that never comes, so the report names it; not a measurement.
+        setTimeout(() => resolve(null), 10_000);
+        b.click();
+      });
+      watch?.disconnect();
       count += 1;
       if (!note) {
         out.push(`"${name}": no note showed`);

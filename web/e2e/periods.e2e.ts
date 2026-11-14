@@ -104,16 +104,18 @@ async function faults(page: Page, chart: RegExp): Promise<string[]> {
   });
 }
 
-test("every chart's periods are one row, its time axis on the first screen of its panel", async ({
-  page,
-}) => {
-  await serve(page, {
-    ...mainnet(),
-    "statistics/24h": gappyDay(),
-    "statistics/all": recorded("statistics-1w"),
-  });
-  const found: string[] = [];
-  for (const { path, charts } of PAGES) {
+// A test a page: all four in one outran its time in WebKit at a phone's pixel density on a slow
+// runner.
+for (const { path, charts } of PAGES) {
+  test(`every chart's periods are one row, its time axis on the first screen of its panel: ${path}`, async ({
+    page,
+  }) => {
+    await serve(page, {
+      ...mainnet(),
+      "statistics/24h": gappyDay(),
+      "statistics/all": recorded("statistics-1w"),
+    });
+    const found: string[] = [];
     for (const size of SIZES) {
       await page.setViewportSize(size);
       await page.goto(path);
@@ -135,6 +137,6 @@ test("every chart's periods are one row, its time axis on the first screen of it
           found.push(...(await faults(page, chart)).map((f) => `${where}: ${f}`));
       }
     }
-  }
-  expect(found).toStrictEqual([]);
-});
+    expect(found).toStrictEqual([]);
+  });
+}
