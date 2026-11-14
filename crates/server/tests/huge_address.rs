@@ -252,14 +252,19 @@ async fn the_app_says_how_large_the_node_said_an_address_is_without_asking_it() 
         503
     );
     assert_eq!(
-        get(&addr, &format!("/api/address/{RESHAPED}/txs")).await.error,
+        get(&addr, &format!("/api/address/{RESHAPED}/txs"))
+            .await
+            .error,
         TOO_LARGE.1
     );
     let r = get(&addr, &size(RESHAPED)).await;
     assert_eq!((r.status, r.error.as_str()), UNKNOWN);
 
     // An address the node totals has no size to give.
-    assert_eq!(get(&addr, &format!("/api/address/{SMALL}")).await.status, 200);
+    assert_eq!(
+        get(&addr, &format!("/api/address/{SMALL}")).await.status,
+        200
+    );
     let r = get(&addr, &size(SMALL)).await;
     assert_eq!((r.status, r.error.as_str()), UNKNOWN);
 

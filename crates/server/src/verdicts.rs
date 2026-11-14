@@ -37,7 +37,10 @@ pub async fn size_route(
         .api
         .verdicts
         .size(script, Instant::now())
-        .ok_or(crate::ApiError::new(StatusCode::NOT_FOUND, "size not known"))?;
+        .ok_or(crate::ApiError::new(
+            StatusCode::NOT_FOUND,
+            "size not known",
+        ))?;
     let body = serde_json::json!({ "creates": size.creates, "cap": size.cap });
     let mut res = (StatusCode::OK, Json(body)).into_response();
     res.headers_mut()
@@ -173,7 +176,10 @@ mod tests {
             v.check(script(1), first_page(), now),
             Some(Verdict::TooLarge(None))
         );
-        assert_eq!(v.check(script(1), later, now), Some(Verdict::TooLarge(None)));
+        assert_eq!(
+            v.check(script(1), later, now),
+            Some(Verdict::TooLarge(None))
+        );
         v.learn(script(2), first_page(), Verdict::Slow, now);
         assert_eq!(v.check(script(2), first_page(), now), Some(Verdict::Slow));
         assert_eq!(v.check(script(2), later, now), None);

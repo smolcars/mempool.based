@@ -11,17 +11,9 @@ import { groupDigits, MISSING } from "../../lib/format";
 import { paths } from "../../lib/network";
 import { useNetwork } from "../../lib/page";
 import { arrivals, netChange, readSize, txFeeRate } from "./address";
+import { MEMPOOL_ROWS, POLL_MS } from "./poll";
 import { Skeleton, settled, UnconfirmedMark } from "./parts";
 import { Stat } from "./Totals";
-
-/**
- * How often the unconfirmed list is asked again while the page is in view. The node refuses to
- * watch these addresses, so there is no live signal; each ask is the node's sub-millisecond
- * mempool lookup for one script (docs/API.md, "Very large addresses").
- */
-export const POLL_MS = 10_000;
-/** The node lists at most this many unconfirmed transactions for one address. */
-export const MEMPOOL_ROWS = 50;
 
 const plural = (n: number, one: string, many: string) =>
   `${groupDigits(n)} ${n === 1 ? one : many}`;
@@ -110,10 +102,10 @@ export function LargeAddress(props: { address: string }) {
               sub="outputs paid to it, as counted by the node"
             />
             <Stat
-              label="This server totals"
+              label="This server's limit"
               ready={size() !== undefined}
               value={<span class="num">{groupDigits(size()?.cap ?? 0)}</span>}
-              sub="outputs per address at most"
+              sub="outputs per address"
             />
           </Show>
           <Stat
@@ -138,16 +130,12 @@ export function LargeAddress(props: { address: string }) {
           />
         </dl>
         <p class="address-unshown">
-          <Show
-            when={size()}
-            fallback="Its balance, sent and received amounts, unspent outputs and confirmed transactions are not shown: it has more history than this server's node adds up."
-          >
-            {(s) =>
-              `Its balance, sent and received amounts, unspent outputs and confirmed transactions are not shown: this server's node adds them up only for addresses of up to ${groupDigits(s().cap)} outputs.`
-            }
+          Its balance, unspent outputs and confirmed transactions are not shown.{" "}
+          <Show when={size()} fallback="It has more history than this server's node adds up,">
+            {(s) => `The node adds up addresses of up to ${groupDigits(s().cap)} outputs only,`}
           </Show>{" "}
-          Even its newest page of confirmed history would keep the node busy for tens of seconds or
-          more.
+          and reading even its newest confirmed transactions would keep the node busy for tens of
+          seconds or more.
         </p>
       </section>
 

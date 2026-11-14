@@ -90,7 +90,8 @@
   /* An address above the node's cap: its count of outputs leads, the cap and the unconfirmed
      change follow, and what is not shown closes the panel. */
   .address-stats--large {
-    grid-template-columns: minmax(min-content, auto) repeat(2, minmax(min-content, 1fr));
+    grid-template-columns: repeat(3, max-content);
+    column-gap: var(--space-8);
   }
   .address-unshown {
     max-width: 48rem;
@@ -99,8 +100,7 @@
     font-size: var(--text-sm);
   }
   .address-stats + .address-unshown {
-    padding-top: var(--space-4);
-    border-top: 1px solid var(--color-line);
+    margin-top: var(--space-5);
   }
   .section__meta .address-live {
     margin-top: 0;

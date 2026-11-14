@@ -626,7 +626,7 @@ describe("address page", () => {
     await until(() => expect(el.querySelector(`a[href="/tx/${txid(7)}"]`)).not.toBeNull());
     expect(text(el)).toContain("1 transaction");
     // What is not shown, and why, once; no advice to look elsewhere, no tabs, no alarm.
-    expect(text(el)).toContain(`adds them up only for addresses of up to 10${NNBSP}000 outputs`);
+    expect(text(el)).toContain(`The node adds up addresses of up to 10${NNBSP}000 outputs only`);
     for (const gone of ["another explorer", "Totals are not available", "Reload"]) {
       expect(text(el)).not.toContain(gone);
     }
@@ -648,7 +648,7 @@ describe("address page", () => {
     const el = open(`/address/${ME}`);
     await until(() => expect(text(el)).toContain("Nothing waiting to confirm"));
     await until(() =>
-      expect(text(el)).toContain("it has more history than this server's node adds up"),
+      expect(text(el)).toContain("It has more history than this server's node adds up"),
     );
     expect(text(el)).not.toContain("Received");
     expect(el.querySelector(".skeleton")).toBeNull();

@@ -148,7 +148,10 @@ mod tests {
             })
         );
         // Surrounding whitespace is the transport's, not the message's.
-        assert!(size("  scripthash join exceeds --max-sh-creates (10001 creates, cap 10000)\n").is_some());
+        assert!(
+            size("  scripthash join exceeds --max-sh-creates (10001 creates, cap 10000)\n")
+                .is_some()
+        );
         for changed in [
             "",
             "scripthash join exceeds --max-sh-creates",
