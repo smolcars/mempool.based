@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { chain, expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 test("a confirmed transaction names every output type and links where the money went", async ({
@@ -162,25 +163,30 @@ test("a parent shows the rate its child lifts it to, and links the child", async
 });
 
 // Widening a page from a phone's width once left the flow with the tall box it was drawn at,
-// a screen of empty space, until a reload. However the width was reached, the flow is the same.
-test("the flow is as tall after a widening as after a reload", async ({ page }) => {
+// a screen of empty space, until a reload; in WebKit the ribbons' own viewBox held it there. However
+// the width was reached, the flow is the same: the widened page is compared with a fresh one.
+test("the flow is as tall after a widening as after a reload", async ({ page, context }) => {
+  const open = async (p: Page) => {
+    // Whether each output is spent changes its card, so both pages wait for that answer.
+    const spends = p.waitForResponse((r) => r.url().endsWith("/outspends"));
+    await p.goto(`/regtest/tx/${chain.txs.script_types}`);
+    await spends;
+    await expect(p.getByRole("list", { name: "Outputs" })).toBeVisible();
+  };
+  const height = async (p: Page) => (await p.locator(".tx-flow").boundingBox())?.height ?? 0;
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`/regtest/tx/${chain.txs.script_types}`);
-  const flow = page.locator(".tx-flow");
-  await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
+  await open(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  // Let the resize observer redraw, then settle.
-  await expect.poll(async () => (await flow.boundingBox())?.width ?? 0).toBeGreaterThan(600);
-  await page.waitForTimeout(300);
-  const widened = (await flow.boundingBox())?.height ?? 0;
-  await page.reload();
-  await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
-  await page.waitForTimeout(300);
-  const reloaded = (await flow.boundingBox())?.height ?? 0;
-  expect(
-    Math.abs(widened - reloaded),
-    `${widened} after widening, ${reloaded} after reload`,
-  ).toBeLessThan(2);
+  const fresh = await context.newPage();
+  await fresh.setViewportSize({ width: 1440, height: 900 });
+  await open(fresh);
+  // Each redraws on its own frames: wait until they agree, which a held box never does.
+  await expect
+    .poll(async () => {
+      const [widened, reloaded] = [await height(page), await height(fresh)];
+      return { widened, reloaded, apart: Math.abs(widened - reloaded) < 2 };
+    })
+    .toMatchObject({ apart: true });
 });
 
 test("a confirmed transaction opens with its status, amount, fee and block", async ({ page }) => {

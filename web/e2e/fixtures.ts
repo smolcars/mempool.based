@@ -24,6 +24,8 @@ export const PROJECTION_LAG_MS = 6_000;
 
 // How the page names a CSP violation caused by Playwright itself rather than the site.
 const PLAYWRIGHT_STYLE = "Playwright's own style, refused by the CSP:";
+/** What each document logs as it starts (`noConsoleErrors`). */
+const DOCUMENT_START = "e2e: document started";
 
 // Tests this worker has started, for their client addresses.
 let started = 0;
@@ -150,7 +152,7 @@ export const test = base.extend<{
   // Runs around every test: a console error, an uncaught exception or a CSP violation on any
   // page of the test fails it, and so does a page or static file the server's limits refused.
   noConsoleErrors: [
-    async ({ context, consoleErrorsAllowed }, use) => {
+    async ({ context, consoleErrorsAllowed, baseURL }, use) => {
       const errors: string[] = [];
       const refused = new Set<string>();
       // Each engine words a CSP violation differently, so the page reports every violation itself,
@@ -168,11 +170,43 @@ export const test = base.extend<{
           );
         });
       }, PLAYWRIGHT_STYLE);
-      context.on("console", (m) => {
-        // A failed load's text does not name the resource; its location does.
-        if (m.type() === "error") errors.push(`${m.text()} ${m.location().url}`.trimEnd());
+      // WebKit on Linux reports each of our own fetches that leaving a page cut off, and each the
+      // page starts while it unloads, as an error of its own ("Fetch API cannot load … due to
+      // access control checks"), though the page caught it. From a page's navigation request,
+      // errors in that wording are held, and dropped once its next document starts. A navigation
+      // that keeps the page (no content, or aborted) starts none: what it held counts, at the next
+      // navigation or at the end of the test.
+      await context.addInitScript((start) => {
+        // oxlint-disable-next-line no-console -- the console is how the test hears of it
+        console.debug(start);
+      }, DOCUMENT_START);
+      const leaving = new Map<Page, string[]>();
+      const host = baseURL ? new URL(baseURL).host : "";
+      const report = (page: Page | null, error: string, text: string) => {
+        const held = page ? leaving.get(page) : undefined;
+        const cutOff = text.includes("due to access control checks") && text.includes(host);
+        (held && cutOff ? held : errors).push(error);
+      };
+      context.on("request", (r) => {
+        const page = r.frame().page();
+        if (!r.isNavigationRequest() || r.frame() !== page.mainFrame()) return;
+        // A redirect is the same navigation. Any other means the last one kept the page, if it
+        // still holds anything: what it held counts.
+        const held = leaving.get(page);
+        if (held && r.redirectedFrom()) return;
+        errors.push(...(held ?? []));
+        leaving.set(page, []);
       });
-      context.on("weberror", (e) => errors.push(`uncaught: ${e.error().message}`));
+      context.on("console", (m) => {
+        const page = m.page();
+        if (m.type() === "debug" && m.text() === DOCUMENT_START && page) leaving.delete(page);
+        // A failed load's text does not name the resource; its location does.
+        if (m.type() === "error")
+          report(page, `${m.text()} ${m.location().url}`.trimEnd(), m.text());
+      });
+      context.on("weberror", (e) => {
+        report(e.page(), `uncaught: ${e.error().message}`, e.error().message);
+      });
       context.on("response", (r) => {
         const path = new URL(r.url()).pathname;
         if ((r.status() !== 429 && r.status() !== 503) || HANDLED.test(path)) return;
@@ -185,6 +219,7 @@ export const test = base.extend<{
         refused.add(why);
       });
       await use(undefined);
+      for (const held of leaving.values()) errors.push(...held);
       expect([...refused], "pages and static files refused by the server's limits").toEqual([]);
       // WebKit also logs each of Playwright's own refused styles in its usual words: drop as many.
       let playwright = errors.filter((e) => e.startsWith(PLAYWRIGHT_STYLE)).length;

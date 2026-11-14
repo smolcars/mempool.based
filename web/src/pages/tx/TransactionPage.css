@@ -448,13 +448,13 @@
       color: var(--color-accent);
     }
   }
-  /* Sized by its row, never by its own viewBox: without size containment the box it was last
-     drawn at fed back into the row's height, so a page widened from a phone kept a tall empty
-     region until reload. */
+  /* Sized by its row, never by its own viewBox: the box it was last drawn at fed back into the
+     row's height, so a page widened from a phone kept a tall empty region until reload. Size
+     containment stops that in Chromium and Firefox; WebKit still sizes an auto height from the
+     viewBox's ratio, so the height is not auto. */
   .tx-flow__ribbons {
-    align-self: stretch;
     width: 100%;
-    height: auto;
+    height: 0;
     min-height: 100%;
     contain: size;
     overflow: visible;

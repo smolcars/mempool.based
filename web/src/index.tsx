@@ -39,7 +39,18 @@ if (root) {
   const timeout = new Promise<[]>((resolve) => {
     setTimeout(() => resolve([]), FONT_WAIT_MS);
   });
-  void Promise.race([font, timeout]).then((faces) => {
+  // WebKit runs this module before a stylesheet linked after it has loaded, and the build links
+  // ours after it: the tokens read below (the fallback fonts, the theme colour) would be empty.
+  const styled = [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')].map(
+    (link) =>
+      link.sheet
+        ? undefined
+        : new Promise((resolve) => {
+            link.addEventListener("load", resolve, { once: true });
+            link.addEventListener("error", resolve, { once: true });
+          }),
+  );
+  void Promise.all([Promise.race([font, timeout]), ...styled]).then(([faces]) => {
     if (!faces.some((f) => f.status === "loaded")) useFallbackFonts();
     // The browser restores scroll on back and forward, as it did before the router could.
     const Router = createRouter({ routes, scrollRestoration: false });

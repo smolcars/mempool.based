@@ -172,19 +172,20 @@ for (const width of [320, 390]) {
   });
 }
 
-// On a desktop too, each "Copied" clears the value it copied (at a phone's widths: above).
-test("every copy control's confirmation stays clear of its value on a desktop", async ({
-  page,
-}) => {
-  await lightning(page);
-  await esplora(page);
-  await recordCopies(page);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  for (const path of PAGES.filter((p) => COPY_PAGE.test(p))) {
+// On a desktop too, each "Copied" clears the value it copied (at a phone's widths: above). A test
+// a page: five in one outran its time in WebKit at a phone's pixel density on CI's runner.
+for (const path of PAGES.filter((p) => COPY_PAGE.test(p))) {
+  test(`every copy control's confirmation stays clear of its value on a desktop: ${path}`, async ({
+    page,
+  }) => {
+    await lightning(page);
+    await esplora(page);
+    await recordCopies(page);
+    await page.setViewportSize({ width: 1280, height: 900 });
     await load(page, path);
     await copyNotesClear(page, `${path} on a desktop`);
-  }
-});
+  });
+}
 
 // One exact amount open at a time, and a scroll closes it (Safari never focused the button, so
 // closing on blur left them open, two at once). A press elsewhere is the test below.
