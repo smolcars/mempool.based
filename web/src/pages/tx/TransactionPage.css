@@ -106,6 +106,8 @@
     display: none;
   }
   .tx-timeline.tx-timeline--line .tx-step__marker {
+    /* A tight line would otherwise squeeze the ring into an oval. */
+    flex: none;
     width: 18px;
     height: 18px;
     border-width: 1.5px;
@@ -155,16 +157,23 @@
   .tx-step__marker {
     grid-column: 1;
     position: relative;
-    display: grid;
-    place-items: center;
+    display: block;
     width: 28px;
     height: 28px;
     border: 2px solid var(--color-line-strong);
     border-radius: 50%;
     background: var(--color-bg);
     color: var(--color-text-muted);
+    /* Our own face, not the reader's: a system font's "1" can sit over half a pixel to one side. */
+    font-family: var(--font-mono);
     font-size: var(--text-sm);
     font-weight: var(--weight-bold);
+    /* The digit's own height, cap to baseline, centred in the ring: a line box (the line form's
+       18 px line in its 15 px ring) sat low, by how far the font's ascent and descent differ. */
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+    text-align: center;
+    align-content: center;
   }
   .tx-step__title {
     grid-column: 1 / -1;
@@ -308,10 +317,8 @@
   }
   .tx-flow__col--in .tx-flow__item {
     justify-items: start;
-    border-right: 3px solid var(--color-line-strong);
   }
   .tx-flow__col--out .tx-flow__item {
-    border-left: 3px solid var(--color-line-strong);
     justify-items: end;
     text-align: right;
   }
@@ -474,13 +481,13 @@
   }
   .tx-ribbon {
     fill: var(--color-line-strong);
-    fill-opacity: 0.45;
+    fill-opacity: 0.32;
     transition:
       fill var(--dur-quick) var(--ease-out),
       fill-opacity var(--dur-quick) var(--ease-out);
   }
   .tx-ribbon--more {
-    fill-opacity: 0.25;
+    fill-opacity: 0.2;
   }
   .tx-ribbon--fee {
     fill: var(--swatch);
@@ -490,8 +497,11 @@
     fill: var(--color-accent);
     fill-opacity: 0.8;
   }
+  /* The transaction: a slim capsule the value passes through, drawn over the ribbons' meeting. */
   .tx-flow__trunk {
-    fill: var(--color-text);
+    fill: var(--color-surface);
+    stroke: var(--color-line-strong);
+    stroke-width: 1.5;
   }
 
   /* ---- Inspector: one input or output in full ---- */
