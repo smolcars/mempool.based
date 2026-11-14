@@ -348,7 +348,7 @@ pub async fn node_spans(store: &Store, node: [u8; 33]) -> Result<Vec<Span>, Erro
 /// of the index the live graph cannot give. One pass over the table.
 pub async fn past(store: &Store) -> Result<Past, Error> {
     store
-        .read(Read::Lightning, move |sql| {
+        .read(Read::LightningIndex, move |sql| {
             let start: Option<i64> = sql
                 .prepare("SELECT min(time) FROM ln_statistics")?
                 .query_row([], |r| r.get(0))?;
@@ -391,7 +391,7 @@ pub async fn unfunded(
     limit: usize,
 ) -> Result<Vec<(u64, BlockHash)>, Error> {
     store
-        .read(Read::Lightning, move |sql| {
+        .read(Read::LightningFunding, move |sql| {
             Ok(sql
                 .prepare(
                     "SELECT scid, open_hash FROM ln_channels WHERE open_txid IS NULL AND scid > ?1 \

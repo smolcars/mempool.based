@@ -272,3 +272,41 @@ async fn a_node_on_another_chain_gets_nothing_written_and_the_right_one_does() {
     store.write(|_| Ok(())).await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A read the store refuses, whichever task made it and whether or not that task drops the
+/// error, is logged with which read and SQLite's error kind and message, and so is its recovery.
+#[tokio::test]
+async fn a_failing_store_read_is_logged_with_its_read_and_kind_then_its_recovery() {
+    use engine::store::Read;
+    let dir = std::env::temp_dir().join(format!("rbitcoin-space-read-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = rpc(Arc::new(AtomicBool::new(false)), "regtest").await;
+    let (_, store) = start_stored(port, &dir).await;
+    let gone = store
+        .read(Read::LightningIndex, |sql| {
+            Ok(sql
+                .prepare("SELECT count(*) FROM gone")?
+                .query_row([], |r| r.get::<_, i64>(0))?)
+        })
+        .await;
+    assert!(gone.is_err());
+    let failed =
+        logged(|v| v["event"] == "store_read_failed" && v["read"] == "lightning_index").await;
+    assert_eq!(
+        (&failed["network"], &failed["error"], &failed["failures"]),
+        (&"regtest".into(), &"other".into(), &1.into())
+    );
+    assert_eq!(failed["sqlite"], "no such table: gone");
+    store
+        .read(Read::LightningIndex, |sql| {
+            Ok(sql
+                .prepare("SELECT 1")?
+                .query_row([], |r| r.get::<_, i64>(0))?)
+        })
+        .await
+        .unwrap();
+    let recovered =
+        logged(|v| v["event"] == "store_read_recovered" && v["read"] == "lightning_index").await;
+    assert_eq!(recovered["failures"], 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

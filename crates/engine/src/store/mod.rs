@@ -11,7 +11,7 @@ mod tests;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -102,10 +102,18 @@ pub enum Read {
     Replacements,
     /// The fee score's samples and blocks, read once at start.
     FeeScore,
+    /// The Lightning routes' reads.
     Lightning,
+    /// The grouped read of every channel that the Lightning index is built with.
+    LightningIndex,
+    /// The background walk of channels whose funding txid is still to be asked.
+    LightningFunding,
     /// The rows that show which chain a file from before `chain` was written for.
     Chain,
 }
+
+/// How many kinds of [`Read`] there are: one failure count each.
+const READS: usize = Read::Chain as usize + 1;
 
 impl Read {
     pub fn label(self) -> &'static str {
@@ -120,6 +128,8 @@ impl Read {
             Self::Replacements => "replacements",
             Self::FeeScore => "fee_score",
             Self::Lightning => "lightning",
+            Self::LightningIndex => "lightning_index",
+            Self::LightningFunding => "lightning_funding",
             Self::Chain => "chain",
         }
     }
@@ -145,6 +155,18 @@ pub enum Event<'a> {
     },
     /// A write committed after `failures` in a row had failed.
     WriteRecovered { failures: u32 },
+    /// A read of kind `read` failed in SQLite or panicked, at the 1st, 2nd, 4th… failure of that
+    /// kind in a row. `kind` is from [`failure_kind`], or `panicked`; `detail` is SQLite's own
+    /// message (empty for a panic), for the log and never for a client. A timeout is
+    /// [`Event::ReadTimedOut`] instead.
+    ReadFailed {
+        read: Read,
+        kind: &'static str,
+        detail: &'a str,
+        failures: u32,
+    },
+    /// A read of kind `read` worked after `failures` in a row had failed.
+    ReadRecovered { read: Read, failures: u32 },
 }
 
 /// What the writer last saw, for a status page: [`Store::write_health`].
@@ -310,6 +332,21 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl Error {
+    /// A fixed label for an event: [`failure_kind`] for SQLite's errors (`constraint` for a
+    /// constraint), else `full`, `closed`, `timed_out`, `panicked` or `held`.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Sql(e) => failure_kind(e).unwrap_or("constraint"),
+            Self::Full => "full",
+            Self::Closed => "closed",
+            Self::TimedOut => "timed_out",
+            Self::Panicked => "panicked",
+            Self::Held => "held",
+        }
+    }
+}
+
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
         Self::Sql(e)
@@ -379,6 +416,8 @@ pub struct Store {
     health: Arc<Mutex<WriteHealth>>,
     writer: JoinHandle<()>,
     readers: Arc<Readers>,
+    /// Failed reads in a row, per [`Read`], for [`Event::ReadFailed`].
+    read_failures: Arc<[AtomicU32; READS]>,
     options: Options,
     versions: Arc<Versions>,
     /// Tests: reads of this kind time out at once.
@@ -441,6 +480,7 @@ impl Store {
 
         let mut conn = Connection::open(&path).map_err(corrupt)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
+        temp_in_memory(&conn)?;
         // WAL: readers never block the writer and the writer never blocks readers.
         let mode: String = conn
             .pragma_update_and_check(None, "journal_mode", "wal", |r| r.get(0))
@@ -539,6 +579,7 @@ impl Store {
                 &path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
+            temp_in_memory(&reader)?;
             reader.pragma_update(None, "query_only", true)?;
             reader.busy_timeout(BUSY_TIMEOUT)?;
             idle.push(reader);
@@ -580,6 +621,7 @@ impl Store {
             health,
             writer,
             readers,
+            read_failures: Arc::default(),
             options,
             versions,
             #[cfg(test)]
@@ -773,6 +815,7 @@ impl Store {
             .map_err(|_| Error::Closed)?;
         let mut conn = self.readers.take().ok_or(Error::Closed)?;
         let readers = self.readers.clone();
+        let failures = self.read_failures.clone();
         let (limit, observer) = (self.options.read_time_limit, self.options.observer.clone());
         let task = tokio::task::spawn_blocking(move || {
             // The deadline is enforced on this thread, whether or not anyone still awaits the
@@ -799,6 +842,7 @@ impl Store {
                 observer(&Event::ReadTimedOut { read, limit });
                 return Err(Error::TimedOut);
             }
+            record_read(&failures, read, &result, &observer);
             result
         });
         task.await.unwrap_or(Err(Error::Panicked))
@@ -858,6 +902,47 @@ where
         let _ = tx.send(result);
     });
     (job, rx)
+}
+
+/// Keeps SQLite's temporary data (sorts, groupings, transient indexes, statement journals) in
+/// memory, so no query needs a writable temporary directory: the image has none
+/// (docs/STORE.md, "Temporary data").
+fn temp_in_memory(conn: &Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "temp_store", "memory")
+}
+
+/// Counts a read's failures in a row for its kind, and reports them at the 1st, 2nd, 4th…, then
+/// the recovery. A timeout has its own event and leaves the count alone.
+fn record_read<T>(
+    failures: &[AtomicU32; READS],
+    read: Read,
+    result: &Result<T, Error>,
+    observer: &Observer,
+) {
+    let Some(count) = failures.get(read as usize) else {
+        return;
+    };
+    let (kind, detail) = match result {
+        Ok(_) => {
+            let failures = count.swap(0, Ordering::Relaxed);
+            if failures > 0 {
+                observer(&Event::ReadRecovered { read, failures });
+            }
+            return;
+        }
+        Err(Error::Sql(e)) => (failure_kind(e).unwrap_or("other"), e.to_string()),
+        Err(Error::Panicked) => ("panicked", String::new()),
+        Err(_) => return,
+    };
+    let failures = count.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    if failures.is_power_of_two() {
+        observer(&Event::ReadFailed {
+            read,
+            kind,
+            detail: &detail,
+            failures,
+        });
+    }
 }
 
 /// Keeps [`WriteHealth`] and reports failures at the 1st, 2nd, 4th… in a row, then the recovery.

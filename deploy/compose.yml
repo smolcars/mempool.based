@@ -3,6 +3,7 @@
 name: rbitcoin-space
 
 x-hardened: &hardened
+  # Nothing writable but each service's volumes: no tmpfs, the server needs no /tmp.
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]

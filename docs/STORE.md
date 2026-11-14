@@ -41,6 +41,7 @@ let fees: Option<i64> = store.read(Read::Blocks, move |sql| {
 - **The gate.** With `Options::genesis` set, as the server sets it, writes wait until the caller opens the gate, and stop whenever it closes it ([`chain`](#chain)). `try_write` waits for the gate too; it fails at once only on a full queue. Reads are never held. Without `genesis` (tests, tools) the gate is open from the start.
 - **A queued write cannot be cancelled.** Dropping the future of a `write` that is already queued does not stop it; it still commits.
 - **Failing writes are counted.** A write SQLite refuses (anything but a constraint, which is the caller's logic) is classified by its code, `disk_full`, `read_only`, `corrupt`, `busy`, `io` or `other` (`store::failure_kind`), and reported as `Event::WriteFailed` with SQLite's message at the 1st, 2nd, 4th… failure in a row, then `Event::WriteRecovered` at the next commit. `write_health()` says when a write last committed and how many have failed since, for `/readyz` ([`DEPLOY.md`](DEPLOY.md#health)). The writes themselves are each caller's to retry or drop. Tested with a full disk simulated by `max_page_count` (SQLite answers `SQLITE_FULL`, as for a full disk) and a read-only connection.
+- **Failing reads are reported too.** A read SQLite refuses, or whose closure panics, is reported as `Event::ReadFailed` with its `Read`, the same classification (`panicked` for a panic) and SQLite's message at the 1st, 2nd, 4th… failure of that kind of read in a row, then `Event::ReadRecovered` at the next that works (`store_read_failed`, `store_read_recovered`). So a caller that drops a read's error (a page that falls back to the node, a background task that tries again later) still leaves a line: the 2026-11-14 deployment's Lightning index failed every 30 s for hours and said nothing. A timeout is `Event::ReadTimedOut` and is not counted here. Tested with a read of a missing table and a panicking read.
 - **Errors stay inside.** A store error can contain SQL text. Never send it to a client ([`SECURITY.md`](SECURITY.md) rule 17): answer `500` and report it.
 - **Closing.** `close().await` lets queued writes finish, then closes the file. Dropping the store does the same in the background.
 
@@ -498,12 +499,44 @@ The Lightning network's totals over time: channels, nodes, capacity, fee policie
 | writer | `journal_size_limit=64 MiB` | The WAL is truncated back to this after a checkpoint, so one bulk insert does not leave a huge file behind |
 | writer | `foreign_keys=ON` | SQLite ignores `REFERENCES` without it |
 | writer | `recursive_triggers=ON` | Delete triggers fire for the rows `INSERT OR REPLACE` removes, so the block table's [totals](#totals) hear of every row that leaves |
+| every | `temp_store=MEMORY` | No query needs a writable temporary directory: the image has none ([Temporary data](#temporary-data)) |
 | every | `busy_timeout=5 s` | Only another process takes locks (a backup with the `sqlite3` tool); wait for it instead of failing |
 | readers | `query_only=ON`, opened `SQLITE_OPEN_READ_ONLY` | Two independent guards against a write from a request handler |
 
 Cache size and the auto-checkpoint interval stay at SQLite's defaults (2 MiB, 1,000 pages); see the measurements below for why.
 
 Opening also runs `PRAGMA quick_check`: a file that is not a database, or whose pages are damaged, is refused with `OpenError::Corrupt` naming the file. It takes about 0.2 s on a million-row file.
+
+## Temporary data
+
+SQLite keeps transient data apart from the database: the sorter of a `GROUP BY`, `ORDER BY` or `DISTINCT` that no index serves, a materialised subquery, a transient index, and the statement journal of a write that changes many rows inside a transaction. By default it holds these in memory until they pass about 2 MB (the page cache) or, for a statement journal, 64 KB, then spills them to a file in the first writable temporary directory it finds (`SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp`, `/tmp`, the working directory). The image has none: its root is read-only and only `/data` is writable ([`DEPLOY.md`](DEPLOY.md#reference-the-image)). So every query whose transient data passed the threshold failed with `disk I/O error`, and only at mainnet's size: on 2026-11-14 the first deployment's Lightning index was never built, because its grouped read of 36,000 channels spilled, while signet's 1,065 fitted.
+
+**Every connection sets `temp_store=MEMORY`**, the writer and each reader, so transient data never leaves memory and the store needs nothing writable but its own directory. The alternatives: pointing SQLite at the data directory takes an environment variable read once per process (`SQLITE_TMPDIR`), so the binary would still depend on how it is started (the pragma that did it, `temp_store_directory`, is deprecated and process-wide too); a writable `/tmp` in the container is configuration every deployment must remember, and the failure it guards against is silent. The cost is memory, and only for the statements below, while they run.
+
+**What it costs**, measured on 2026-11-14 with `dev/bigstore/bigstore.py`'s store (975,000 block rows with their totals, 40,000 channels among 15,000 nodes, a year of mempool and Lightning history, a year of audits, the fee score's 30 days, 10,000 replacements; 361 MB), each statement alone in the `sqlite3` 3.49 shell in a Linux container with a read-only root and no `/tmp`, as the server's user. Peak is SQLite's own allocator at its highest, page cache included (about 0.2 MB for an empty statement). Every distinct statement the test suite prepares (454) went through `EXPLAIN QUERY PLAN` on that store; these are the ones that sort, group, deduplicate, materialise or build an index at a size that grows with the data:
+
+| Statement (where) | Rows it groups or sorts at this size | No temporary directory, before | Peak after | Peak with `/tmp` |
+|---|---|---|---|---|
+| Every node's oldest funding and closes, for the Lightning index (`lightning::past`) | 80,000 (two per channel) | `disk I/O error` | 7.3 MB, 45 ms | 4.3 MB |
+| Mempool history over all of it (`history::series`, `1y` and longer) | 20,900 | `disk I/O error` | 4.7 MB | 4.4 MB |
+| The block series from the totals, by 18 heights over the whole chain (`totals::periods`) | 54,000 | `disk I/O error` | 4.6 MB | 4.3 MB |
+| Block periods, pool counts and pool weeks by scan over the whole chain (`periods_scan`, `pool_counts_scan`, `pool_weeks_scan`): only while an old file's totals are being filled ([Filling the totals](#filling-the-totals)); afterwards a scan covers fewer than 2,016 heights | 975,000 | `disk I/O error` | 78 MB (periods), 33 MB (pools), under 0.5 s | 4.4 MB |
+| The same scans over 2,015 heights, the most they cover once the totals are filled | 2,015 | works | 1.0 MB | 1.0 MB |
+| A backfill write of 10,000 new rows and their totals (`blocks` insert, then `settle`; measured as one `INSERT … SELECT`) | 80,000 `totals_dirty` rows | `disk I/O error` | 34 MB | 4.1 MB |
+| The pool attribution's write of 10,000 heights (`reattribute`), as the server runs it | 160,000 `totals_dirty` rows | `disk I/O error` in the server ([below](#proving-it)) | works in the server; not measured alone | |
+| Audits per pool over a year (`pool_health`), the block-totals pool sums, a node's closed channels for the node with the most (7,669), the fee blocks, the Lightning statistics series, a mempool-history roll-up of 8 days of minutes, a totals fill step | 4,500 to 52,000 | works | 0.3 to 3.9 MB | 0.3 to 3.7 MB |
+
+So at mainnet's size a read costs at most about 8 MB more than before, and a write about 34 MB, except the whole-chain scans of a file whose totals are still being filled: up to 78 MB for one read, under the read time limit, once per old file. At most `Options::readers` (4) reads and one write run at once. Everything else the server runs is an indexed lookup or a range read in index order that needs no transient data.
+
+### Proving it
+
+The release workflow runs the image as [`deploy/compose.yml`](../deploy/compose.yml) hardens it (read-only root, no capabilities, no writable `/tmp`) against that store, with a stand-in node that answers only `getblockchaininfo` so the gate opens: the pool attribution rewrites all 975,000 rows, then 146 routes that answer from the store must answer `200` and no store read or write may fail ([`CI.md`](CI.md#releases)). Locally, with an image built:
+
+```sh
+python3 -I dev/bigstore/hardened.py rbitcoin-space   # about 30 s on an Apple M4
+```
+
+Against the image from before the fix it fails at the attribution's first write (`store_write_failed`, `io`, `disk I/O error`), and the mempool history's `1y`, `2y`, `3y` and `all` answered `500`; with the fix all 146 answer `200`. The Lightning index needs a synced gossip peer, which no test here has: its read is the first row of the table, proven in the shell, and the index task's failures are tested in `crates/server/src/lightning/index.rs`.
 
 ## Backup and recovery
 

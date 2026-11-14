@@ -13,8 +13,8 @@ use engine::blocks::{
 use engine::store::{self, Store};
 use logging::events::{
     BlockBackfillProgress, BlockRowsFailed, BlockRowsFollowed, BlockRowsRecovered,
-    BlockRowsReorged, StoreMigrationApplied, StoreOpenFailed, StoreReadTimedOut, StoreSlowWrite,
-    StoreWriteFailed, StoreWriteRecovered,
+    BlockRowsReorged, StoreMigrationApplied, StoreOpenFailed, StoreReadFailed, StoreReadRecovered,
+    StoreReadTimedOut, StoreSlowWrite, StoreWriteFailed, StoreWriteRecovered,
 };
 use node::esplora::Esplora;
 use node::rpc::{Limits, Rpc};
@@ -91,6 +91,25 @@ impl BlockTable {
                 network,
                 failures: *failures,
             }),
+            store::Event::ReadFailed {
+                read,
+                kind,
+                detail,
+                failures,
+            } => logging::emit(&StoreReadFailed {
+                network,
+                read: read.label(),
+                error: kind,
+                sqlite: detail,
+                failures: *failures,
+            }),
+            store::Event::ReadRecovered { read, failures } => {
+                logging::emit(&StoreReadRecovered {
+                    network,
+                    read: read.label(),
+                    failures: *failures,
+                });
+            }
         };
         let options = store::Options {
             observer: Arc::new(observer),

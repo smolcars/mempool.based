@@ -30,6 +30,10 @@ const SYNCING: ApiError = ApiError::new(
     StatusCode::SERVICE_UNAVAILABLE,
     "lightning graph is still syncing; retry",
 );
+const NO_INDEX: ApiError = ApiError::new(
+    StatusCode::SERVICE_UNAVAILABLE,
+    "lightning graph is synced but cannot be indexed; retry later",
+);
 const NO_NODE: ApiError = ApiError::new(StatusCode::NOT_FOUND, "node not found");
 const NO_CHANNEL: ApiError = ApiError::new(StatusCode::NOT_FOUND, "channel not found");
 const BAD_KEY: ApiError = ApiError::bad_request("invalid public key: 66 hex digits");
@@ -94,7 +98,8 @@ type Answer = Result<Response, ApiError>;
 /// The index, the Lightning side and the store, or why a route cannot answer yet.
 fn graph(ctx: &NetworkContext) -> Result<(Arc<Index>, &Lightning, &Arc<Store>), ApiError> {
     let (l, store) = enabled(ctx)?;
-    Ok((l.index().ok_or(SYNCING)?, l, store))
+    let unindexed = || if l.index_failing() { NO_INDEX } else { SYNCING };
+    Ok((l.index().ok_or_else(unindexed)?, l, store))
 }
 
 // Parameters: each parsed into its type before any work.

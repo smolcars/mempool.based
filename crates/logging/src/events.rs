@@ -711,6 +711,30 @@ pub struct StoreReadTimedOut {
 }
 event!(StoreReadTimedOut, "store_read_timed_out", Warn);
 
+/// A read failed in SQLite or panicked: at the 1st, 2nd, 4th, 8th… failure of that read in a
+/// row, whichever task asked.
+#[derive(Debug, Serialize)]
+pub struct StoreReadFailed<'a> {
+    pub network: &'static str,
+    /// Which read: a fixed label from the store's `Read`.
+    pub read: &'static str,
+    /// `disk_full`, `read_only`, `corrupt`, `busy`, `io`, `other` or `panicked`.
+    pub error: &'static str,
+    /// SQLite's own message, empty for a panic. Operator-only: never in an answer.
+    pub sqlite: &'a str,
+    pub failures: u32,
+}
+event!(StoreReadFailed<'a>, "store_read_failed", Warn);
+
+/// A read worked after `failures` of the same read in a row had failed.
+#[derive(Debug, Serialize)]
+pub struct StoreReadRecovered {
+    pub network: &'static str,
+    pub read: &'static str,
+    pub failures: u32,
+}
+event!(StoreReadRecovered, "store_read_recovered", Info, keep);
+
 /// The newest rows of the block table were checked against a new tip. Debug: once per block.
 #[derive(Debug, Serialize)]
 pub struct BlockRowsFollowed {
@@ -1342,6 +1366,18 @@ pub struct LightningIndexBuilt {
 }
 event!(LightningIndexBuilt, "lightning_index_built", Info);
 
+/// The index could not be built: at the 1st, 2nd, 4th, 8th… failure in a row.
+#[derive(Debug, Serialize)]
+pub struct LightningIndexFailed {
+    pub network: &'static str,
+    /// `past` (the store's read of every channel) or `build`.
+    pub stage: &'static str,
+    /// The store's error label for `past`; `panicked` for `build`.
+    pub error: &'static str,
+    pub failures: u32,
+}
+event!(LightningIndexFailed, "lightning_index_failed", Warn);
+
 /// A funding-txid request to the node failed; retried after a backoff. At the 1st, 2nd, 4th…
 /// failure in a row.
 #[derive(Debug, Serialize)]
@@ -1854,6 +1890,18 @@ mod tests {
                 read: "block_counts",
                 limit_ms: 2000,
             }),
+            both(&StoreReadFailed {
+                network: n,
+                read: "lightning_index",
+                error: "io",
+                sqlite: "disk I/O error",
+                failures: 2,
+            }),
+            both(&StoreReadRecovered {
+                network: n,
+                read: "lightning_index",
+                failures: 3,
+            }),
             both(&BlockRowsFollowed {
                 network: n,
                 tip: 9,
@@ -2197,6 +2245,12 @@ mod tests {
                 copy_ms: 12.0,
                 longest_hold_ms: 0.4,
                 duration_ms: 40.0,
+            }),
+            both(&LightningIndexFailed {
+                network: n,
+                stage: "past",
+                error: "io",
+                failures: 4,
             }),
             both(&LightningFundingFailed {
                 network: n,

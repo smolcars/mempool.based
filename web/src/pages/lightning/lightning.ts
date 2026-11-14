@@ -10,6 +10,8 @@ export interface Status {
   state: State;
   peers_configured?: number;
   peers_connected?: number | null;
+  /** The peer's graph is synced: with `state` `failed`, the server could not index it yet. */
+  synced?: boolean | null;
   channels?: number | null;
   nodes?: number | null;
   validation?: {

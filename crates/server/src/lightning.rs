@@ -94,6 +94,8 @@ pub struct Lightning {
     live: Mutex<Option<Point>>,
     /// The last index build, microseconds, and funding txids learned since start.
     index_ms: AtomicU64,
+    /// Rounds of the index task in a row that failed (`index::round`).
+    index_failures: AtomicU32,
     funded: AtomicU64,
 }
 
@@ -123,6 +125,7 @@ impl Lightning {
             index: RwLock::new(None),
             live: Mutex::new(None),
             index_ms: AtomicU64::new(0),
+            index_failures: AtomicU32::new(0),
             funded: AtomicU64::new(0),
         }
     }
@@ -139,11 +142,17 @@ impl Lightning {
     }
 
     /// `off` is never returned here: a network without Lightning has no [`Lightning`].
-    /// `starting`, `syncing`, `synced`, `failed` or `stopped`.
+    /// `starting`, `syncing`, `synced`, `failed` or `stopped`. `synced` once the routes can
+    /// answer: the graph is synced and indexed. A synced graph whose first index is still being
+    /// built is `syncing`, and one whose index cannot be built is `failed` until a build works.
     pub fn state(&self) -> &'static str {
         match self.phase() {
             Phase::Starting => "starting",
-            Phase::Running(s) if s.borrow().synced => "synced",
+            Phase::Running(s) if s.borrow().synced => match self.index() {
+                Some(_) => "synced",
+                None if self.index_failing() => "failed",
+                None => "syncing",
+            },
             Phase::Running(_) => "syncing",
             Phase::Failed => "failed",
             Phase::Stopped => "stopped",
@@ -163,6 +172,11 @@ impl Lightning {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Whether the index task's latest rounds failed ([`index::round`]).
+    pub(crate) fn index_failing(&self) -> bool {
+        self.index_failures.load(Ordering::Relaxed) > 0
     }
 
     /// Replaces the index. The server's own task calls it; tests use it to serve a graph they
