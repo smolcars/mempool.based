@@ -12,8 +12,15 @@ export interface LedgerTx {
   time: number;
 }
 
-export type LedgerHistory = "none" | "taking" | "whole" | "refused" | "dropped";
-const HISTORIES: readonly LedgerHistory[] = ["none", "taking", "whole", "refused", "dropped"];
+export type LedgerHistory = "none" | "taking" | "whole" | "refused" | "dropped" | "too_large";
+const HISTORIES: readonly LedgerHistory[] = [
+  "none",
+  "taking",
+  "whole",
+  "refused",
+  "dropped",
+  "too_large",
+];
 
 export interface LedgerPoint {
   height: number;
@@ -36,6 +43,8 @@ export type Ledger =
       /** Where the address's whole history stands: kept whole, its list being or to be taken,
        * refused by the node, or dropped to keep the server's store within its bound. */
       history: LedgerHistory;
+      /** For a history dropped lately: Unix seconds from which it is taken again when viewed. */
+      historyAgain: number | null;
       txs: LedgerTx[];
       points: LedgerPoint[];
     }
@@ -107,7 +116,9 @@ export function readLedger(v: unknown): Ledger {
       }
       // Anything else reads as not kept whole: the page then shows the newest transactions.
       const history = HISTORIES.find((h) => h === r["history"]) ?? "none";
-      return { state: "tracked", at, seeded, window, filling, history, txs, points };
+      const again = r["history_again"];
+      const historyAgain = count(again) ? again : null;
+      return { state: "tracked", at, seeded, window, filling, history, historyAgain, txs, points };
     }
     case "queued": {
       return count(r["position"]) ? { state: "queued", position: r["position"] } : NONE;
@@ -137,6 +148,23 @@ export const LEDGER_POLL_MS = 3000;
 
 /** After a seed failed, the page asks again this often: the server tries again when asked. */
 export const FAILED_POLL_MS = 60_000;
+
+/**
+ * While a kept address's page is open, it asks again this often: the server takes (or takes
+ * again) its whole history only while it is viewed, and never drops a history viewed in the last
+ * 30 minutes (docs/API.md, "Very large addresses").
+ */
+export const KEPT_POLL_MS = 300_000;
+
+/**
+ * Whether the page asks for the ledger again now, `sinceAsk` ms after it last did: every few
+ * seconds while a seed waits or runs, now and then after one failed, and every
+ * {@link KEPT_POLL_MS} while the address is kept, so the server knows it is still viewed.
+ */
+export const asksAgain = (l: Ledger, sinceAsk: number): boolean =>
+  waiting(l) ||
+  (l.state === "failed" && sinceAsk >= FAILED_POLL_MS) ||
+  (l.state === "tracked" && sinceAsk >= KEPT_POLL_MS);
 
 /** Whether the page should keep asking: the seed is waiting or running. */
 export const waiting = (l: Ledger): boolean =>

@@ -395,6 +395,26 @@ struct Server {
     _dir: Option<Dir>,
 }
 
+impl Server {
+    /// Says, in the store as another process would, that `a` was last viewed long ago: it may
+    /// then be dropped for the bound.
+    async fn viewed_long_ago(&self, a: &Address) {
+        let dir = self._dir.as_ref().unwrap().0.clone();
+        let sh = ScriptHash::from_script(&a.script_pubkey()).to_byte_array();
+        let other =
+            engine::store::Store::open(&dir, "regtest", engine::store::Options::default()).unwrap();
+        other
+            .write(move |sql| {
+                sql.prepare("UPDATE ledger_scripts SET viewed = 0 WHERE sh = ?1")?
+                    .execute(engine::store::params![sh])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        other.close().await;
+    }
+}
+
 struct Dir(std::path::PathBuf);
 
 impl Drop for Dir {
@@ -668,16 +688,19 @@ async fn a_kept_address_takes_its_whole_history_once_and_a_refused_one_takes_the
         ledger(&s, 1, &refused).await["history"] == "refused"
     })
     .await;
-    // The refused one takes the newest page instead; the whole one never needs it.
+    // The refused one takes the newest page instead; the whole one needs none (it may have
+    // taken it before a reader viewed it, as any kept address does).
     wait_for("filled", || async {
         ledger(&s, 1, &refused).await["filling"] == false
     })
     .await;
     assert_eq!(ledger(&s, 1, &whole).await["filling"], false);
-    let pages = s.node.pages();
     let refused_sh = ScriptHash::from_script(&refused.script_pubkey()).to_string();
-    assert_eq!(pages.len(), 1, "{pages:?}");
-    assert!(pages[0].contains(&refused_sh), "{pages:?}");
+    assert!(
+        s.node.pages().iter().any(|p| p.contains(&refused_sh)),
+        "{:?}",
+        s.node.pages()
+    );
     // Each list asked once; more blocks or readers do not ask again.
     assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 2);
     for _ in 0..3 {
@@ -1125,7 +1148,9 @@ async fn followers_hear_when_a_whole_history_is_dropped_for_anothers() {
     // Anything still on its way (the notice that its history is whole may come just after the
     // subscription) is read now, so what follows is heard only for what follows.
     while ws.next(Duration::from_millis(500)).await.is_some() {}
-    // Another address takes its history, and the bound lets the first one's go.
+    // Another address takes its history, and the bound lets the first one's go once nobody has
+    // viewed it lately.
+    s.viewed_long_ago(&a).await;
     get(&s.addr, 2, &format!("/regtest/api/address/{b}")).await;
     wait_for("b whole", || async {
         ledger(&s, 2, &b).await["history"] == "whole"
@@ -1196,4 +1221,60 @@ async fn followers_hear_when_an_address_with_a_whole_history_is_dropped_for_anot
     }
     // Asked now, A is no longer kept (asking queues it again, which would tell its followers too).
     assert_ne!(ledger(&s, 1, &a).await["state"], "tracked");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kept_address_nobody_views_takes_no_list_until_one_does() {
+    let s = start(true, &[]).await;
+    let a = address(54);
+    s.node.set(&a, Kind::Large { ms: 0 });
+    let sh = ScriptHash::from_script(&a.script_pubkey()).to_string();
+    s.node.lists.lock().unwrap().insert(sh.clone(), 50);
+    // Kept from an answer, as discovery's are, with nobody on its page: its newest page is taken
+    // as before, its whole list is not.
+    assert_eq!(
+        get(&s.addr, 1, &format!("/regtest/api/address/{a}"))
+            .await
+            .status,
+        200
+    );
+    wait_for("its page fill", || async {
+        s.node.pages().iter().any(|p| p.contains(&sh))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 0);
+    // A reader opens it: its whole list is taken.
+    wait_for("whole", || async {
+        ledger(&s, 1, &a).await["history"] == "whole"
+    })
+    .await;
+    assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_history_a_reader_is_viewing_is_not_dropped_for_another() {
+    // Room for one of the two histories.
+    let s = start(true, &[("LEDGER_MAX_HISTORY_ROWS", "80")]).await;
+    let (a, b) = (address(55), address(56));
+    for x in [&a, &b] {
+        s.node.set(x, Kind::Large { ms: 0 });
+        let sh = ScriptHash::from_script(&x.script_pubkey()).to_string();
+        s.node.lists.lock().unwrap().insert(sh, 50);
+    }
+    get(&s.addr, 1, &format!("/regtest/api/address/{a}")).await;
+    wait_for("a whole", || async {
+        ledger(&s, 1, &a).await["history"] == "whole"
+    })
+    .await;
+    // B is viewed too, but A was viewed moments ago: B waits, and the node is not asked for it.
+    get(&s.addr, 2, &format!("/regtest/api/address/{b}")).await;
+    wait_for("b kept", || async {
+        ledger(&s, 2, &b).await["state"] == "tracked"
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(ledger(&s, 2, &b).await["history"], "none");
+    assert_eq!(ledger(&s, 1, &a).await["history"], "whole");
+    assert_eq!(s.node.list_calls.load(Ordering::SeqCst), 1);
 }

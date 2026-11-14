@@ -192,5 +192,19 @@ The explorer keeps every transaction id of a kept large address itself ([`STORE.
 | 125,717 | 2.0 s, 1.7 s, 11.9 MB | 1.8 s | 10.2 MB |
 | 1,908,560, the largest found | 18.5 s, 16.0 s, 181.3 MB | 14.0 s | 10.3 MB |
 
-The largest took 55.9 s when its list was measured before, so the time depends on the node's caches. About 95 bytes of answer a row. The store took the rows as fast as they came: about 2.5 s for 1.9 million once the first arrived. **Mainnet: not measured.** Its largest address has 3,665,660 creates and more transactions; an rbitcoin developer reports its whole history in 45 s from cold caches on another machine. The node holds the whole answer before it writes the first byte, and must write it within its Electrum idle timeout (120 s by default); the explorer reads at its store's pace, measured above at about 2.5 s for two million rows, while holding at most three batches. The orchestrator measures the node's memory during the first real fetch on mainnet.
+The largest took 55.9 s when its list was measured before, so the time depends on the node's caches. About 95 bytes of answer a row. The store took the rows as fast as they came: about 2.5 s for 1.9 million once the first arrived. The node holds the whole answer before it writes the first byte, and must write it within its Electrum idle timeout (120 s by default); the explorer reads at its store's pace, measured above at about 2.5 s for two million rows, while holding at most three batches.
+
+**Measured on mainnet** (2026-11-14, by the orchestrator, during the first real lists on the live site: the owner's node with its cap raised, its anonymous memory sampled every 2 s from its cgroup over a baseline of 1.7 GB). Times are `ledger_history`'s, from the explorer's side.
+
+| Transactions | Time | Node memory peak |
+|---|---|---|
+| 3,700,928, the largest address | 120.6 s | 7.0 GB (about +5.3 GB), back to 1.7 GB after |
+| 2,722,990 | 27.2 s | |
+| 1,438,042 | 23.4 s | |
+| 1,285,256 | 171.6 s | 3.5 GB (about +1.8 GB) |
+| 487,665 | 64.9 s | |
+| 323,540 | 8.8 s | |
+| smaller ones | 1.3 to 5.6 s | |
+
+None failed. Time follows how the address's transactions lie across the chain more than their number (1.3 million took longer than 2.7 million), and the node's memory grows with the answer it holds. The first ten lists held 10.18 million rows, past the default bound of 10 million, and the explorer's mainnet store was 1.04 GB after them. Paging the largest address from the store: a `/txs/chain` page in about 1 s (the first page's transactions come to 3.8 MB), a `/txs/summary` page in 0.2 s, five pages deep the same. Its first page holds the same blocks as another explorer's; 17 of its 25 txids are the same, and the rest differ because the order inside a block differs (ours is the node's, [above](#the-whole-history-of-a-large-address)).
 
