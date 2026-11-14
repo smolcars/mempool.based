@@ -186,24 +186,22 @@ const layerStyle = (l: ChartLayer | undefined, k: number) => {
 /** A layer with a colour of its own rather than a shade. */
 const filled = (l: ChartLayer | undefined) => l?.fee !== undefined || l?.pool !== undefined;
 
-/** Measures tick labels; `null` where the document has no canvas (unit tests). */
-let ruler: CanvasRenderingContext2D | null | undefined;
-
 /**
- * How wide the widest of `labels` draws in the tick labels' font (Chart.css `.chart__label`: the
- * chart's family at `--text-xs`), in px. Every digit is measured as a 0: the labels' digits are
- * tabular, each as wide as the widest.
+ * How wide the widest of `labels` draws as a tick label, in px: set in a hidden label beside the
+ * plot, so the page's own fonts measure it (a canvas's `system-ui` is another face in Firefox).
  */
 function labelWidth(labels: readonly string[], el: Element | undefined): number {
-  ruler ??= document.createElement("canvas").getContext("2d");
-  if (!ruler || !el || labels.length === 0) return 0;
-  const style = getComputedStyle(el);
-  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-  const xs = style.getPropertyValue("--text-xs").trim();
-  const size = Number.parseFloat(xs) * (xs.endsWith("rem") ? rem : 1);
-  ruler.font = `${size}px ${style.fontFamily}`;
-  const measure = ruler;
-  return Math.max(...labels.map((l) => measure.measureText(l.replaceAll(/\d/g, "0")).width));
+  if (!el || labels.length === 0) return 0;
+  const ruler = document.createElement("span");
+  ruler.className = "chart__label chart__ruler";
+  el.append(ruler);
+  let widest = 0;
+  for (const label of labels) {
+    ruler.textContent = label;
+    widest = Math.max(widest, ruler.getBoundingClientRect().width);
+  }
+  ruler.remove();
+  return widest;
 }
 
 interface AxisFrame {

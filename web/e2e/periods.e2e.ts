@@ -88,10 +88,15 @@ async function faults(page: Page, chart: RegExp): Promise<string[]> {
     if (fold > screen) {
       out.push(`the time axis ends ${Math.round(fold)} px into a ${screen} px screen`);
     }
-    const drawn = el.querySelector("svg")?.getBoundingClientRect();
-    for (const label of el.querySelectorAll("svg text")) {
-      const r = label.getBoundingClientRect();
-      if (drawn && (r.left < drawn.left - 1 || r.right > drawn.right + 1)) {
+    // Where each label's text runs, from its own position and length: Firefox's boxes for SVG text
+    // reach 3 px past the glyphs on each side.
+    const width = el.querySelector("svg")?.getBoundingClientRect().width ?? 0;
+    for (const label of el.querySelectorAll<SVGTextElement>("svg text")) {
+      const length = label.getComputedTextLength();
+      const anchor = label.getAttribute("text-anchor");
+      const x = Number(label.getAttribute("x"));
+      const start = anchor === "end" ? x - length : anchor === "middle" ? x - length / 2 : x;
+      if (start < -0.5 || start + length > width + 0.5) {
         out.push(`"${label.textContent ?? ""}" runs off the plot`);
       }
     }
