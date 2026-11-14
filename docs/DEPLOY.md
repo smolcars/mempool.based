@@ -381,7 +381,7 @@ Every later command needs both `-f` flags. Use this file or `compose.proxy.yml`,
 
 **Which header.** `X-Forwarded-For` is the one to use, because it is the one checked. Cloudflare appends the visitor's address to whatever `X-Forwarded-For` the client sent; the server walks the header from the right and takes the first address that is not a trusted proxy, Cloudflare's entry, so a client's own header is harmless ([`CONFIG.md`](CONFIG.md#client-addresses)). It also keeps working if you later put a proxy of your own between the tunnel and the server: list both in `TRUSTED_PROXIES`. `CF-Connecting-IP`, which Cloudflare sets to the visitor's address alone, would work as well with the same `TRUSTED_PROXIES`; nobody has tried it here.
 
-**Check the addresses** as the deployment did: with `LOG_CLIENT_ADDR=true`, load the site and compare the `client` of your request in the server's log with the `ip=` line of `https://explorer.example.com/cdn-cgi/trace`, Cloudflare's own view of you, from the same browser. They must be equal. Then remove `LOG_CLIENT_ADDR`.
+**Check the addresses** as the deployment did: with `LOG_CLIENT_ADDR=true`, load the site and compare the `client` of your request in the server's log with the `ip=` line of `https://explorer.example.com/cdn-cgi/trace`, Cloudflare's own view of you, from the same browser. An IPv4 address must be equal; an IPv6 one is logged as its `/64` ([`CONFIG.md`](CONFIG.md#logging)), so the first four groups must match. Then remove `LOG_CLIENT_ADDR`.
 
 Observed in the deployment on 2026-11-14, free plan, with nothing configured in Cloudflare but the tunnel, its DNS records and Always Use HTTPS:
 
@@ -393,7 +393,7 @@ Observed in the deployment on 2026-11-14, free plan, with nothing configured in 
 | WebSockets | `/app/ws` and `/api/v1/ws` upgraded (`101`) |
 | HTTPS | `http://` answered `200` until Always Use HTTPS was on |
 
-Not observed: whether Cloudflare's bot protection challenges script clients of `/api`; how long Cloudflare keeps an idle WebSocket open (the server pings a quiet socket every 30 s, `WS_IDLE_TIMEOUT_SECS`, so any limit above that is enough); a request body near 1 MB, as a large broadcast sends.
+Not observed: whether Cloudflare's bot protection challenges script clients of `/api`; how long Cloudflare keeps an idle WebSocket open (the server pings a socket quiet for half of `WS_IDLE_TIMEOUT_SECS`, checked every quarter of it, so 30 to 45 s by default: an idle limit of at least `WS_IDLE_TIMEOUT_SECS` is enough, as for [any other proxy](#any-other-proxy)); a request body near 1 MB, as a large broadcast sends.
 
 Tested here on 2026-11-14, without a Cloudflare account: `docker compose -f compose.yml -f compose.tunnel.yml config -q` with `.env.example` (the [release workflow](CI.md#releases) runs it too); and in the container that file defines, read-only with no capabilities, `cloudflared` 2026.11.0 accepted the config above (`ingress validate`), matched both hostnames to the server and any other to `404` (`ingress rule`), and refused the config without its last rule. The deployment ran an equivalent service, not this file; nobody has run this file against a live tunnel.
 
