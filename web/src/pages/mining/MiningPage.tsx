@@ -111,7 +111,7 @@ function PeriodPicker(props: { period: Period }) {
           {(p) => (
             <li>
               <Link
-                class="mining-periods__item"
+                class="mining-periods__item tap"
                 href={paths.mining(p.id)}
                 aria-current={p.id === props.period.id ? "page" : "false"}
               >

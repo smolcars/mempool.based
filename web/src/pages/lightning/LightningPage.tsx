@@ -131,7 +131,9 @@ function Overview(props: { network: Network }) {
                   by="channels"
                 />
                 <p class="ln-more">
-                  <Link href={paths.lightningRankings("age")}>The oldest nodes</Link>
+                  <Link class="tap" href={paths.lightningRankings("age")}>
+                    The oldest nodes
+                  </Link>
                 </p>
               </section>
             </div>

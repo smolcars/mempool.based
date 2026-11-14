@@ -227,21 +227,21 @@ function ProjectedView(props: { index: number }) {
             fallback={
               <Show when={tip()} fallback={<span class="projected-skel" aria-hidden="true" />}>
                 {(t) => (
-                  <Link href={paths.block(t().hash)} rel="prev">
+                  <Link class="tap" href={paths.block(t().hash)} rel="prev">
                     ← Newest mined: <span class="num">{groupDigits(t().height)}</span>
                   </Link>
                 )}
               </Show>
             }
           >
-            <Link href={paths.projected(index)} rel="prev">
+            <Link class="tap" href={paths.projected(index)} rel="prev">
               ← {positionName(index - 1)}
             </Link>
           </Show>
         </span>
         <Show when={!isRest}>
           <span class="projected-pager__next">
-            <Link href={paths.projected(index + 2)} rel="next">
+            <Link class="tap" href={paths.projected(index + 2)} rel="next">
               {positionName(index + 1)}
               {" →"}
             </Link>

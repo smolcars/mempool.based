@@ -133,7 +133,9 @@ export function Where(props: { position: Position | null; live: boolean; reserve
                   <span class="tx-lane__now">Now</span>
                 </div>
                 <p class="tx-where__place">
-                  <Link href={paths.projected(words().page)}>{words().where}</Link>
+                  <Link class="tap" href={paths.projected(words().page)}>
+                    {words().where}
+                  </Link>
                   <span class="tx-where__projected">, projected</span>
                 </p>
                 <p class="tx-where__text tx-where__text--figures">{words().ahead}</p>

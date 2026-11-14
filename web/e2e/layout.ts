@@ -98,6 +98,23 @@ export function layoutFaults(page: Page): Promise<string[]> {
         .every((part) => whole.includes(part));
     };
 
+    // Whether what follows a text's "…" (a short form's end) reaches past `hard`.
+    const endCut = (node: Text, hard: Box) => {
+      const text = node.textContent ?? "";
+      const at = text.lastIndexOf("…");
+      if (at === -1 || at === text.length - 1) return false;
+      const end = document.createRange();
+      end.setStart(node, at + 1);
+      end.setEnd(node, text.length);
+      return [...end.getClientRects()].some(
+        (r) =>
+          r.left < hard.l - 1 ||
+          r.right > hard.r + 1 ||
+          r.top < hard.t - 1 ||
+          r.bottom > hard.b + 1,
+      );
+    };
+
     // Every line of text on the page as drawn: what of it is in sight, and whether it was cut.
     const lines: { el: Element; node: Text; box: Box }[] = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -126,6 +143,10 @@ export function layoutFaults(page: Page): Promise<string[]> {
           box.l < hard.l - 1 || box.r > hard.r + 1 || box.t < hard.t - 1 || box.b > hard.b + 1;
         if (cut && !inTitle(el, node.textContent ?? "")) {
           out.push(`"${said(node.textContent ?? "")}" is cut (${name(el)})`);
+        } else if (cut && endCut(node, hard)) {
+          // Its whole is in a title, but a short form ("mwLW3XD…UAuat") is already as short as it
+          // gets: it fits whole, or gives way before its "…", never losing its last characters.
+          out.push(`"${said(node.textContent ?? "")}" loses its end (${name(el)})`);
         }
         lines.push({ el, node, box: seen });
       }

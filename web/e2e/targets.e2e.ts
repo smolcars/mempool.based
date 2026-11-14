@@ -1,0 +1,132 @@
+// Every control a finger can use is a thumb's target (docs/DESIGN.md "Touch"): on every page type,
+// at a phone's widths on a touch screen, each offers at least 44 by 44 px that a tap there reaches,
+// measured by what the browser finds under the finger, so a neighbour drawn over it takes its share
+// away. Pop-ups are opened and their controls measured too.
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { PAGES } from "./pages";
+
+// A touch screen: `(pointer: coarse)` gives the controls their targets. Firefox has no mobile
+// emulation, only touch.
+test.use({
+  hasTouch: true,
+  ...(process.env["E2E_ENGINE"] === "firefox" ? {} : { isMobile: true }),
+  // Each width is a resize of one loaded page (as in fonts.e2e.ts).
+  consoleErrorsAllowed: [/status of (429|503)|due to access control checks/],
+});
+
+/** The least a target measures each way, `--touch`. */
+const TOUCH = 44;
+
+/**
+ * Every control in `scope` that is in sight and smaller than a thumb, in words, each scrolled to
+ * the middle of the window first unless `scroll` is false. The exceptions the design means
+ * (docs/DESIGN.md "Touch") are listed in the walk.
+ */
+function smallTargets(page: Page, scope: string, scroll = true): Promise<string[]> {
+  return page.evaluate(
+    ({ within, touch, move }) => {
+      const CONTROL =
+        "a[href], button, summary, input, select, textarea, [role='slider'], [role='tab']";
+      const out: string[] = [];
+      const said = (el: Element) => {
+        const t = (el.getAttribute("aria-label") ?? el.textContent ?? "")
+          .replaceAll(/\s+/g, " ")
+          .trim();
+        const what = t.length > 30 ? `${t.slice(0, 29)}…` : t;
+        return `${el.tagName.toLowerCase()}${el.classList.length > 0 ? `.${[...el.classList].join(".")}` : ""} "${what}"`;
+      };
+      // The control a tap at a point reaches; a link to the same place counts as the same target
+      // (a list's row opens the item its first cell's link opens).
+      const reaches = (c: Element, x: number, y: number) => {
+        const hit = document.elementFromPoint(x, y)?.closest(CONTROL);
+        if (!hit) return false;
+        if (hit === c) return true;
+        return (
+          c instanceof HTMLAnchorElement && hit instanceof HTMLAnchorElement && hit.href === c.href
+        );
+      };
+      const controls = document.querySelectorAll(`:is(${within}) :is(${CONTROL})`);
+      for (const c of controls) {
+        if (!c.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue;
+        // Hidden from screen readers too: a list row's own link, the row's target, which its
+        // cells' links sit on.
+        if (c.closest(".visually-hidden, [inert], [aria-hidden='true']")) continue;
+        if (c.matches(":disabled") || getComputedStyle(c).pointerEvents === "none") continue;
+        // A link in a sentence: words beside it in its own line of text.
+        if (
+          getComputedStyle(c).display === "inline" &&
+          [...(c.parentElement?.childNodes ?? [])].some(
+            (n) => n instanceof Text && /\w/.test(n.data),
+          )
+        ) {
+          continue;
+        }
+        // A phone's flow card: three lines, one control on each; its address and where it was
+        // spent are also in the inspector its details button opens, each a target of its own.
+        if (c.closest(".tx-flow__item") && !c.matches(".tx-flow__open, .tx-flow__more")) continue;
+        // A pop-up closes on a scroll, and it opened in sight.
+        if (move) c.scrollIntoView({ block: "center", inline: "center" });
+        const r = c.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        // Out of sight wherever the page scrolls: the skip link until it has focus.
+        if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+        if (!reaches(c, x, y)) {
+          const over = document.elementFromPoint(x, y);
+          out.push(`${said(c)} is under ${over ? said(over) : "nothing"} at its centre`);
+          continue;
+        }
+        // How far a tap still reaches it each way from its centre, and what a tap past that finds.
+        const stops: string[] = [];
+        const reach = (dx: number, dy: number) => {
+          let n = 0;
+          while (n < touch && reaches(c, x + dx * (n + 1), y + dy * (n + 1))) n++;
+          if (n < touch) {
+            const past = document.elementFromPoint(x + dx * (n + 1), y + dy * (n + 1));
+            stops.push(past ? said(past) : "the window's edge");
+          }
+          return n;
+        };
+        // The centre's own pixel, and a pixel's grace for a box at a fraction of one.
+        const w = reach(-1, 0) + reach(1, 0) + 2;
+        const h = reach(0, -1) + reach(0, 1) + 2;
+        if (w < touch || h < touch) {
+          out.push(`${said(c)} is ${w} × ${h} px, stopped by ${[...new Set(stops)].join(", ")}`);
+        }
+      }
+      if (move) window.scrollTo(0, 0);
+      return out;
+    },
+    { within: scope, touch: TOUCH, move: scroll },
+  );
+}
+
+for (const { path, stub } of PAGES) {
+  test(`${path}: every control is a thumb's target at a phone's widths`, async ({ page }) => {
+    await stub?.(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.locator("main [aria-busy='true'], main .skel")).toHaveCount(0, {
+      timeout: 15_000,
+    });
+    const faults: string[] = [];
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const f of await smallTargets(page, "body")) faults.push(`${width} px: ${f}`);
+    }
+    // An exact amount's pop-up, where the page has one.
+    const exact = page.locator("main button[data-exact]").first();
+    if ((await exact.count()) > 0) {
+      await exact.scrollIntoViewIfNeeded();
+      await exact.tap();
+      await expect(page.locator(".exact:not([hidden])")).toBeVisible();
+      for (const f of await smallTargets(page, ".exact:not([hidden])", false)) {
+        faults.push(`its exact amount: ${f}`);
+      }
+    }
+    expect(faults).toStrictEqual([]);
+  });
+}

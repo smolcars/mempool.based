@@ -789,7 +789,11 @@ function Body(props: {
     const p = mempool()?.position;
     if (p) {
       const at = place(p, network());
-      return <Link href={paths.projected(at.page)}>{at.where}</Link>;
+      return (
+        <Link class="tap" href={paths.projected(at.page)}>
+          {at.where}
+        </Link>
+      );
     }
     return statusWord() ? (steps()[1]?.title ?? "") : "";
   };
@@ -871,7 +875,10 @@ function Body(props: {
                 <dt>Block</dt>
                 <dd>
                   <span class="tx-summary__value">
-                    <Link href={paths.block(st().block_hash ?? st().block_height ?? "")}>
+                    <Link
+                      class="tap"
+                      href={paths.block(st().block_hash ?? st().block_height ?? "")}
+                    >
                       <span class="visually-hidden">block </span>
                       <span class="num">{groupDigits(st().block_height ?? Number.NaN)}</span>
                     </Link>

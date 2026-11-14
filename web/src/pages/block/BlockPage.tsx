@@ -416,7 +416,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                   fallback={<span class="muted">Genesis block</span>}
                 >
                   {(prev) => (
-                    <Link href={paths.block(prev())} rel="prev">
+                    <Link class="tap" href={paths.block(prev())} rel="prev">
                       ← Previous: <span class="num">{groupDigits(blk().height - 1)}</span>
                     </Link>
                   )}
@@ -432,7 +432,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                 </Match>
                 <Match when={s()?.next_best}>
                   {(next) => (
-                    <Link href={paths.block(next())} rel="next">
+                    <Link class="tap" href={paths.block(next())} rel="next">
                       Next: <span class="num">{groupDigits((height() ?? 0) + 1)}</span>
                       {"\u202F→"}
                     </Link>
@@ -512,7 +512,7 @@ function BlockView(props: { hash?: string | undefined; height?: number | undefin
                       >
                         {(m) => (
                           <Link
-                            class="block-fact__line"
+                            class="block-fact__line tap-line"
                             href={paths.pool(m().slug)}
                             title={m().name}
                           >

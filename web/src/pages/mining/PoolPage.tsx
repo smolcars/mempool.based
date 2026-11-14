@@ -72,7 +72,9 @@ function Pool(props: { network: Network; slug: string }) {
   return (
     <div class="wrap mining">
       <p class="mining-back">
-        <Link href={paths.mining()}>Mining</Link>
+        <Link class="tap" href={paths.mining()}>
+          Mining
+        </Link>
       </p>
       <Show
         when={stats.error() === undefined || s()}

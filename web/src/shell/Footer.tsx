@@ -7,7 +7,11 @@ export function Footer(props: { version: Accessor<string | undefined> }) {
       <div class="site-footer__inner">
         <p>rbitcoin.space, a block explorer for rbitcoin.</p>
         <p>
-          <a href="https://github.com/smolcars/rbitcoin-space" rel="noopener noreferrer">
+          <a
+            class="tap"
+            href="https://github.com/smolcars/rbitcoin-space"
+            rel="noopener noreferrer"
+          >
             Source code
           </a>
           {/* Last on the page, so its late arrival moves nothing. */}

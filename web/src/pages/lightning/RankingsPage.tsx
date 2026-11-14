@@ -30,7 +30,7 @@ export default function RankingsPage() {
               {(r) => (
                 <li>
                   <Link
-                    class="ln-picker__item"
+                    class="ln-picker__item tap"
                     href={paths.lightningRankings(r.id)}
                     aria-current={r.id === by().id ? "page" : "false"}
                   >

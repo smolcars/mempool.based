@@ -154,6 +154,27 @@
       transparent
     );
   }
+  /* A thumb's target round a small control on a touch screen, drawn nowhere and moving nothing:
+     an invisible box at least --touch each way, centred on it (docs/DESIGN.md "Touch"). */
+  @media (pointer: coarse) {
+    .tap {
+      position: relative;
+    }
+    .tap::before {
+      content: "";
+      position: absolute;
+      inset: min(0px, 50% - var(--touch) / 2);
+    }
+    /* A line of text that cuts itself (an ellipsis) would cut that box too: its own padding reaches
+       past the line instead, a thumb high, over the words beside it. */
+    .tap-line {
+      position: relative;
+      /* A height it is given (a 24 px link) stays its line's, the padding outside it. */
+      box-sizing: content-box;
+      padding-block: calc((var(--touch) - 1lh) / 2);
+      margin-block: calc((var(--touch) - 1lh) / -2);
+    }
+  }
   .visually-hidden {
     position: absolute;
     width: 1px;

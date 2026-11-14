@@ -65,6 +65,8 @@
   }
   /* A total in magnitude, the exact amount a tap away: drawn as the figure, not as a button. */
   .address-total {
+    /* Its target reaches past its line, over the figures' labels, not under them. */
+    position: relative;
     display: inline-flex;
     align-items: center;
     min-height: var(--touch);
