@@ -1,7 +1,7 @@
 // The Lightning routes' answers (docs/API.md "Lightning"), checks on their shape, and what the
 // pages say about them. Pure. Aliases are gossip, chosen by whoever runs the node (SECURITY.md
 // rule 14): they reach the page only as text, through cleanAlias.
-import { formatMoment } from "../../components/chart/scale";
+import { cap, recentMoment, share } from "../mempool/history";
 import { formatBtcShort, groupDigits, MISSING } from "../../lib/format";
 
 export type State = "off" | "starting" | "syncing" | "synced" | "failed" | "stopped";
@@ -560,17 +560,17 @@ export function dataFrom(s: Series): number | undefined {
 }
 
 /**
- * What the series covers, in a sentence; undefined when it holds the whole period. History
- * starts when this server's peer first synced, which is said, not hidden. (The answer's `sampled`
- * leaves out the ten minutes still running, so it is quoted only for gaps inside the period.)
+ * What the series covers, in one short line, as the mempool history says it; undefined when it
+ * holds the whole period. History starts when this server's peer first synced, which is said, not
+ * hidden. (The answer's `sampled` leaves out the ten minutes still running, so it is quoted only
+ * for gaps inside the period.)
  */
-export function coverageSentence(s: Series, words: string): string | undefined {
+export function coverageSentence(s: Series, now = Date.now() / 1000): string | undefined {
   if (s.first === null || s.points.length === 0) return undefined;
-  if (s.interval === "all" || s.first > s.from) {
-    return `This server has recorded the network since ${formatMoment(s.first)}, every ten minutes while its Lightning peer runs: the chart starts there.`;
-  }
+  if (s.interval === "all") return `Recorded since ${recentMoment(s.first, now)}.`;
+  if (s.first > s.from) return `Recorded from ${recentMoment(s.first, now)}.`;
   if (s.complete) return undefined;
-  return `This view holds ${count(s.sampled, "ten-minute snapshot")} of the ${groupDigits(s.slots)} in ${words}. The gaps are times this server was not recording.`;
+  return `${cap(share(s.sampled, s.slots))} recorded, with gaps while this server was off.`;
 }
 
 // A node's fee rates.

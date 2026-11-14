@@ -1,20 +1,11 @@
 // The mempool over time: its size by fee band and what flowed through it, from the server's
 // history (docs/FRONTEND.md "Mempool history", docs/DESIGN.md "Mempool history").
 import { useSearchParams } from "@solidjs/router";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  lazy,
-  Loading as Pending,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, lazy, Loading as Pending, onSettled, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { formatSi } from "../../components/chart/scale";
 import { Link } from "../../components/Link";
-import { scrollCue } from "../../components/scrollCue";
+import { Periods } from "../../components/Periods";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty, ErrorState, Loading } from "../../components/States";
 import { ApiError, createRequest, fetchApp } from "../../lib/api";
@@ -102,8 +93,10 @@ function MempoolHistory(props: { network: Network }) {
     <div class="wrap mempool">
       <header class="mempool-head">
         <h1>Mempool history</h1>
-        <IntervalPicker
-          interval={interval()}
+        <Periods
+          choices={INTERVALS}
+          current={interval().id}
+          href={paths.mempool}
           fitted={
             search["interval"] === undefined &&
             answer() !== undefined &&
@@ -134,65 +127,6 @@ function MempoolHistory(props: { network: Network }) {
       </Show>
       <RecentReplacements network={props.network} />
     </div>
-  );
-}
-
-/**
- * The periods. A view fitted to what is recorded has its own choice, "Recorded", and is the one
- * marked current: a period's name always means its whole width, never a narrower view.
- */
-function IntervalPicker(props: { interval: Interval; fitted: boolean }) {
-  let list: HTMLUListElement | undefined;
-  // The chosen period in sight on a phone's one row, even when it is far along it: whenever the
-  // choice changes, and when the browser brings the page back from its cache (Back, in Safari,
-  // restored the row's old scroll with the chosen period out of sight).
-  const reveal = () => {
-    const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
-    if (list && current) list.scrollLeft = current.offsetLeft - list.clientWidth / 2;
-  };
-  createEffect(
-    () => [props.interval.id, props.fitted] as const,
-    () => {
-      requestAnimationFrame(reveal);
-    },
-  );
-  onSettled(() => {
-    reveal();
-    window.addEventListener("pageshow", reveal);
-    return () => window.removeEventListener("pageshow", reveal);
-  });
-  return (
-    <nav class="mempool-intervals" aria-label="Period">
-      <ul
-        ref={(el) => {
-          list = el;
-          scrollCue(el);
-        }}
-      >
-        <Show when={props.fitted}>
-          <li class="mempool-intervals__recorded">
-            <Link class="mempool-intervals__item" href={paths.mempool()} aria-current="page">
-              Recorded
-              <span class="visually-hidden">: since this server began recording</span>
-            </Link>
-          </li>
-        </Show>
-        <For each={INTERVALS}>
-          {(p) => (
-            <li>
-              <Link
-                class="mempool-intervals__item"
-                href={paths.mempool(p.id)}
-                aria-current={!props.fitted && p.id === props.interval.id ? "page" : "false"}
-              >
-                {p.label}
-                <span class="visually-hidden">: {p.words}</span>
-              </Link>
-            </li>
-          )}
-        </For>
-      </ul>
-    </nav>
   );
 }
 

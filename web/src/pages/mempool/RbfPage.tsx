@@ -17,6 +17,7 @@ import { type Network, paths } from "../../lib/network";
 import { useNetwork, usePageTitle } from "../../lib/page";
 import { createReplacements, formatStood, type Story, type TreeTx } from "../../lib/replacements";
 import { MinedStatus } from "./Status";
+import "../../components/Periods.css";
 import "./MempoolPage.css";
 import "./RbfPage.css";
 
@@ -71,11 +72,11 @@ function Rbf(props: { network: Network }) {
       </nav>
       <header class="mempool-head">
         <h1>Replacements</h1>
-        <nav class="mempool-intervals" aria-label="Which replacements">
+        <nav class="periods" aria-label="Which replacements">
           <ul>
             <li>
               <Link
-                class="mempool-intervals__item"
+                class="periods__item"
                 href={paths.rbf()}
                 aria-current={full() ? "false" : "page"}
               >
@@ -84,7 +85,7 @@ function Rbf(props: { network: Network }) {
             </li>
             <li>
               <Link
-                class="mempool-intervals__item"
+                class="periods__item"
                 href={paths.rbf(true)}
                 aria-current={full() ? "page" : "false"}
               >

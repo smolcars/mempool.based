@@ -112,7 +112,7 @@ describe("mempool history page", () => {
     expect(text(el)).toMatch(/Recorded since 12 Nov( 2026)?, 15:00 UTC\./);
     expect(text(el)).not.toContain("No data stored");
     // The choice marked is "Recorded", not "24 h", which means the whole day.
-    expect(el.querySelector(".mempool-intervals [aria-current=page]")?.textContent).toBe(
+    expect(el.querySelector(".periods [aria-current=page]")?.textContent).toBe(
       "Recorded: since this server began recording",
     );
   });

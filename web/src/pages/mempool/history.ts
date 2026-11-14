@@ -110,7 +110,7 @@ export function isHistory(v: unknown): v is History {
 }
 
 /** A share of the period, never rounded up to whole: `15%`, `under 1%`, `99%`. */
-function share(part: number, whole: number): string {
+export function share(part: number, whole: number): string {
   if (whole <= 0) return "0%";
   const pct = (part / whole) * 100;
   if (pct > 0 && pct < 1) return "under 1%";
@@ -123,7 +123,7 @@ function share(part: number, whole: number): string {
  * only the minutes since then), so a short history is not mistaken for a quiet mempool. One line
  * on a phone, so the chart below it is on the first screen.
  */
-const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+export const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 /** A moment without its year when the year is this one: the line must fit a phone in one. */
 export const recentMoment = (t: number, now = Date.now() / 1000) => {
   const m = formatMoment(t);

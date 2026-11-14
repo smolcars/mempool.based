@@ -426,12 +426,13 @@ export function rewardFigures(r: RewardStats): {
 
 /**
  * What a reply's coverage says about the period asked for, as a sentence; undefined when the
- * data covers it. "Data from 3 Oct 2026 onward: …".
+ * data covers it. "Data from 3 Oct 2026 onward.".
  */
 export function coverageNote(c: Coverage | undefined, p: Period): string | undefined {
   if (!c || c.complete) return undefined;
   if (c.fromTime === undefined) return `No blocks are stored for ${p.words} yet.`;
-  return `Data from ${formatDay(c.fromTime)} onward. This server is still filling in its history, so ${p.words} is not all here yet.`;
+  // One short line, so the chart under it is on a phone's first screen; the hatch shows the rest.
+  return `Data from ${formatDay(c.fromTime)} onward.`;
 }
 
 const NOTES: Record<Network, string | undefined> = {
