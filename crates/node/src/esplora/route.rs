@@ -26,6 +26,15 @@ impl ScriptHash {
         bytes.reverse();
         Self(bytes)
     }
+
+    /// The 32 bytes in the order shown.
+    pub fn to_byte_array(self) -> [u8; 32] {
+        self.0
+    }
+
+    pub fn from_byte_array(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 impl FromStr for ScriptHash {

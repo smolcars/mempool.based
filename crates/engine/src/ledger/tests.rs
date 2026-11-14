@@ -1,0 +1,1077 @@
+// The regtest test prints what it checked, as its proof.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::print_stdout
+)]
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use bitcoin::hashes::{Hash, sha256d};
+use bitcoin::{Amount, ScriptBuf};
+use node::rpc::model::{PrevoutIn, PrevoutOut, PrevoutTx, ScriptHexText};
+
+use super::*;
+use crate::store::Options as StoreOptions;
+
+/// A store in a fresh temporary directory, removed when dropped. `reopen` stands for a restart.
+struct Temp {
+    dir: PathBuf,
+    store: Option<Store>,
+}
+
+impl Temp {
+    fn new() -> Self {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "rbitcoin-space-ledger-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir, "regtest", StoreOptions::default()).unwrap();
+        Self {
+            dir,
+            store: Some(store),
+        }
+    }
+
+    fn store(&self) -> &Store {
+        self.store.as_ref().unwrap()
+    }
+
+    async fn reopen(&mut self) {
+        if let Some(s) = self.store.take() {
+            s.close().await;
+        }
+        self.store = Some(Store::open(&self.dir, "regtest", StoreOptions::default()).unwrap());
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        drop(self.store.take());
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A deterministic generator, so a failing run can be replayed.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+/// Scripts: the first `TRACKABLE` may be tracked, the rest never are.
+const TRACKABLE: usize = 5;
+const SCRIPTS: usize = 8;
+
+fn hex(i: usize) -> String {
+    format!("0014{:040x}", i + 1)
+}
+
+fn script(i: usize) -> ScriptBuf {
+    ScriptBuf::from_hex(&hex(i)).unwrap()
+}
+
+fn sh(i: usize) -> ScriptHash {
+    ScriptHash::from_script(&script(i))
+}
+
+fn out(i: usize, sats: u64) -> PrevoutOut {
+    PrevoutOut {
+        value: Amount::from_sat(sats),
+        script_pub_key: ScriptHexText { hex: hex(i) },
+    }
+}
+
+type Hook = Box<dyn FnOnce(&Fake) + Send>;
+
+/// A chain the tests rewrite at will, and the node's answers computed from it by plain counting.
+struct Fake {
+    chain: Mutex<Vec<PrevoutBlock>>,
+    /// Every block ever made, by hash: the node still serves a block that left the chain.
+    all: Mutex<Vec<PrevoutBlock>>,
+    calls: AtomicUsize,
+    refuse: Mutex<HashSet<String>>,
+    variant: AtomicUsize,
+    /// Run once, inside the next `totals` call: the chain moving while a seed is under way.
+    during_totals: Mutex<Option<Hook>>,
+}
+
+impl Fake {
+    fn new(blocks: u32, rng: &mut Rng) -> Self {
+        let f = Self {
+            chain: Mutex::new(Vec::new()),
+            all: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+            refuse: Mutex::new(HashSet::new()),
+            variant: AtomicUsize::new(0),
+            during_totals: Mutex::new(None),
+        };
+        // Genesis pays nobody we track, as on every real chain.
+        f.push_txs(Vec::new());
+        for _ in 1..blocks {
+            f.push(rng);
+        }
+        f
+    }
+
+    fn tip(&self) -> u32 {
+        u32::try_from(self.chain.lock().unwrap().len()).unwrap() - 1
+    }
+
+    /// A new block on the tip, with up to six random transactions.
+    fn push(&self, rng: &mut Rng) {
+        let n = rng.below(7);
+        let txs = (0..n)
+            .map(|_| {
+                let vin = (0..rng.below(3))
+                    .map(|_| PrevoutIn {
+                        prevout: Some(out(
+                            usize::try_from(rng.below(SCRIPTS as u64)).unwrap(),
+                            1 + rng.below(1_000_000),
+                        )),
+                    })
+                    .collect();
+                let vout = (0..1 + rng.below(3))
+                    .map(|_| {
+                        out(
+                            usize::try_from(rng.below(SCRIPTS as u64)).unwrap(),
+                            1 + rng.below(1_000_000),
+                        )
+                    })
+                    .collect();
+                (vin, vout)
+            })
+            .collect();
+        self.push_txs(txs);
+    }
+
+    fn push_txs(&self, txs: Vec<(Vec<PrevoutIn>, Vec<PrevoutOut>)>) {
+        let variant = self.variant.fetch_add(1, Ordering::SeqCst);
+        let mut chain = self.chain.lock().unwrap();
+        let height = u32::try_from(chain.len()).unwrap();
+        let hash = BlockHash::from_byte_array(
+            sha256d::Hash::hash(format!("block {height} {variant}").as_bytes()).to_byte_array(),
+        );
+        // The coinbase pays the script past every other, never tracked.
+        let mut tx = vec![PrevoutTx {
+            txid: Txid::from_byte_array(
+                sha256d::Hash::hash(format!("cb {height} {variant}").as_bytes()).to_byte_array(),
+            ),
+            vin: vec![PrevoutIn { prevout: None }],
+            vout: vec![out(SCRIPTS, 50)],
+        }];
+        for (i, (vin, vout)) in txs.into_iter().enumerate() {
+            tx.push(PrevoutTx {
+                txid: Txid::from_byte_array(
+                    sha256d::Hash::hash(format!("tx {height} {variant} {i}").as_bytes())
+                        .to_byte_array(),
+                ),
+                vin,
+                vout,
+            });
+        }
+        let block = PrevoutBlock {
+            hash,
+            height,
+            time: 1_700_000_000 + height * 600,
+            previousblockhash: chain.last().map(|b| b.hash),
+            tx,
+        };
+        self.all.lock().unwrap().push(block.clone());
+        chain.push(block);
+    }
+
+    /// Takes the top `depth` blocks off the chain.
+    fn pop(&self, depth: u32) {
+        let mut chain = self.chain.lock().unwrap();
+        let keep = chain.len() - depth as usize;
+        chain.truncate(keep);
+    }
+
+    /// The node's totals for script `i` at `height`, by counting.
+    fn oracle(&self, i: usize, height: u32) -> Totals {
+        let chain = self.chain.lock().unwrap();
+        let h = hex(i);
+        let mut t = Totals::default();
+        for b in chain.iter().take(height as usize + 1) {
+            for tx in &b.tx {
+                let mut touched = false;
+                for p in tx.vin.iter().filter_map(|i| i.prevout.as_ref()) {
+                    if p.script_pub_key.hex == h {
+                        t.spent_count += 1;
+                        t.spent_sum += p.value.to_sat();
+                        touched = true;
+                    }
+                }
+                for o in &tx.vout {
+                    if o.script_pub_key.hex == h {
+                        t.funded_count += 1;
+                        t.funded_sum += o.value.to_sat();
+                        touched = true;
+                    }
+                }
+                t.tx_count += u64::from(touched);
+            }
+        }
+        t
+    }
+
+    /// The node's history of script `i` at `height`, newest first.
+    fn history(&self, i: usize, height: u32) -> Vec<TxRow> {
+        let chain = self.chain.lock().unwrap();
+        let h = hex(i);
+        let mut rows = Vec::new();
+        for b in chain.iter().take(height as usize + 1) {
+            for (pos, tx) in b.tx.iter().enumerate() {
+                let spent: i64 = tx
+                    .vin
+                    .iter()
+                    .filter_map(|i| i.prevout.as_ref())
+                    .filter(|p| p.script_pub_key.hex == h)
+                    .map(|p| i64::try_from(p.value.to_sat()).unwrap())
+                    .sum();
+                let funded: i64 = tx
+                    .vout
+                    .iter()
+                    .filter(|o| o.script_pub_key.hex == h)
+                    .map(|o| i64::try_from(o.value.to_sat()).unwrap())
+                    .sum();
+                let touched = tx
+                    .vin
+                    .iter()
+                    .filter_map(|i| i.prevout.as_ref())
+                    .any(|p| p.script_pub_key.hex == h)
+                    || tx.vout.iter().any(|o| o.script_pub_key.hex == h);
+                if touched {
+                    rows.push(TxRow {
+                        txid: tx.txid,
+                        height: b.height,
+                        position: u32::try_from(pos).unwrap(),
+                        value: funded - spent,
+                        time: b.time,
+                    });
+                }
+            }
+        }
+        rows.reverse();
+        rows
+    }
+
+    fn height_of(&self, hash: BlockHash) -> Option<u32> {
+        let chain = self.chain.lock().unwrap();
+        chain.iter().find(|b| b.hash == hash).map(|b| b.height)
+    }
+}
+
+impl Source for Fake {
+    async fn height(&self) -> Result<u32, SourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.tip())
+    }
+
+    async fn at(&self, height: u32) -> Result<Option<At>, SourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let chain = self.chain.lock().unwrap();
+        Ok(chain.get(height as usize).map(|b| At {
+            height,
+            hash: b.hash,
+            time: b.time,
+        }))
+    }
+
+    async fn block(&self, hash: BlockHash) -> Result<PrevoutBlock, SourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let all = self.all.lock().unwrap();
+        all.iter()
+            .find(|b| b.hash == hash)
+            .cloned()
+            .ok_or_else(|| SourceError::Failed("no such block".into()))
+    }
+
+    async fn totals(
+        &self,
+        script: &Script,
+        at: BlockHash,
+    ) -> Result<Result<Totals, Option<ScriptSize>>, SourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let i = (0..SCRIPTS)
+            .find(|i| script == self::script(*i).as_script())
+            .unwrap();
+        if self.refuse.lock().unwrap().contains(&hex(i)) {
+            return Ok(Err(Some(ScriptSize {
+                creates: 20_000,
+                cap: 10_000,
+            })));
+        }
+        let height = self
+            .height_of(at)
+            .ok_or_else(|| SourceError::Failed("not on the chain".into()))?;
+        let t = self.oracle(i, height);
+        let hook = self.during_totals.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook(self);
+        }
+        Ok(Ok(t))
+    }
+
+    async fn page(&self, script: &Script, at: BlockHash) -> Result<Vec<TxSummary>, SourceError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let i = (0..SCRIPTS)
+            .find(|i| script == self::script(*i).as_script())
+            .unwrap();
+        let height = self
+            .height_of(at)
+            .ok_or_else(|| SourceError::Failed("not on the chain".into()))?;
+        // The node lists a block's rows in an order of its own: reversed here.
+        let mut rows = self.history(i, height);
+        rows.sort_by(|a, b| b.height.cmp(&a.height).then(a.position.cmp(&b.position)));
+        Ok(rows
+            .into_iter()
+            .take(25)
+            .map(|r| TxSummary {
+                txid: r.txid,
+                value: r.value,
+                height: r.height,
+                time: u64::from(r.time),
+                tx_position: Some(r.position),
+            })
+            .collect())
+    }
+}
+
+use node::esplora::model::TxSummary;
+
+/// Every tracked script against the oracle at the ledger's tip: totals, the tip itself, the
+/// newest transactions as an exact prefix of the history, and the chart's last point.
+async fn check(store: &Store, fake: &Fake, label: &str) {
+    for i in 0..TRACKABLE {
+        let Some(v) = view(store, sh(i)).await.unwrap() else {
+            continue;
+        };
+        let at = v.tracked.at;
+        let chain_at = fake.chain.lock().unwrap()[at.height as usize].hash;
+        assert_eq!(at.hash, chain_at, "{label}: script {i}: tip off the chain");
+        assert_eq!(
+            v.tracked.totals,
+            fake.oracle(i, at.height),
+            "{label}: script {i} at {}",
+            at.height
+        );
+        let history = fake.history(i, at.height);
+        assert!(v.txs.len() <= WINDOW, "{label}");
+        assert_eq!(
+            v.txs,
+            history[..v.txs.len()],
+            "{label}: script {i}: rows not the newest history"
+        );
+        let last = v.points.last().unwrap();
+        assert_eq!(last.balance, v.tracked.totals.balance(), "{label}: point");
+        assert!(last.height <= at.height, "{label}");
+        for p in &v.points {
+            assert!(
+                p.height >= v.tracked.seeded_height,
+                "{label}: point before tracking"
+            );
+            assert_eq!(
+                p.balance,
+                fake.oracle(i, p.height).balance(),
+                "{label}: script {i}: point at {}",
+                p.height
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn seeded_scripts_follow_the_chain_through_random_reorgs_and_restarts() {
+    for seed_value in [1_u64, 7, 42, 99] {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ seed_value);
+        let fake = Fake::new(30, &mut rng);
+        let mut t = Temp::new();
+        for step in 0..250 {
+            match rng.below(100) {
+                0..60 => fake.push(&mut rng),
+                60..70 => {
+                    let depth = 1 + u32::try_from(rng.below(4)).unwrap();
+                    fake.pop(depth);
+                    for _ in 0..depth + u32::try_from(rng.below(2)).unwrap() {
+                        fake.push(&mut rng);
+                    }
+                }
+                70..85 => {
+                    let i = usize::try_from(rng.below(TRACKABLE as u64)).unwrap();
+                    let page = rng.below(2) == 0;
+                    match seed(t.store(), &fake, &script(i), page, TRACKABLE, step).await {
+                        Ok(_) | Err(Error::Moved) => {}
+                        Err(e) => panic!("seed: {e}"),
+                    }
+                }
+                85..90 => t.reopen().await,
+                _ => {}
+            }
+            follow(t.store(), &fake).await.unwrap();
+            check(t.store(), &fake, &format!("seed {seed_value} step {step}")).await;
+        }
+        assert!(count(t.store()).await.unwrap() > 0);
+    }
+}
+
+#[tokio::test]
+async fn with_nothing_tracked_the_node_is_not_asked() {
+    let mut rng = Rng(5);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    let f = follow(t.store(), &fake).await.unwrap();
+    assert_eq!(f, Followed::default());
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_seed_catches_up_with_blocks_that_came_while_the_node_added_up() {
+    let mut rng = Rng(11);
+    let fake = Fake::new(20, &mut rng);
+    let t = Temp::new();
+    seed(t.store(), &fake, &script(0), true, 10, 0)
+        .await
+        .unwrap();
+    follow(t.store(), &fake).await.unwrap();
+    // Two blocks arrive and are followed before script 1 is seeded.
+    let store = t.store();
+    let mut r2 = Rng(12);
+    fake.push(&mut r2);
+    let funded = vec![(vec![], vec![out(1, 777)])];
+    fake.push_txs(funded);
+    follow(store, &fake).await.unwrap();
+    // Anchored one block below the ledger's tip: that block is applied to script 1 alone.
+    let seeded = seed(store, &fake, &script(1), true, 10, 0).await.unwrap();
+    assert!(matches!(seeded, Seeded::Tracked { page: true, .. }));
+    check(store, &fake, "after the catch-up").await;
+    let v = view(store, sh(1)).await.unwrap().unwrap();
+    assert_eq!(v.tracked.at.height, fake.tip());
+    assert_eq!(v.txs.first().unwrap().value, 777);
+}
+
+#[tokio::test]
+async fn a_tip_that_moves_during_the_seed_is_caught_up_in_the_same_seed() {
+    let mut rng = Rng(21);
+    let fake = Fake::new(20, &mut rng);
+    let t = Temp::new();
+    seed(t.store(), &fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    follow(t.store(), &fake).await.unwrap();
+    let store = t.store();
+    // The block lands and is followed while the node adds script 1 up.
+    *fake.during_totals.lock().unwrap() = Some(Box::new(|f: &Fake| {
+        f.push_txs(vec![(vec![], vec![out(1, 5)])]);
+    }));
+    let one = script(1);
+    let pending = seed(store, &fake, &one, false, 10, 0);
+    tokio::pin!(pending);
+    let seeded = loop {
+        tokio::select! {
+            s = &mut pending => break s.unwrap(),
+            () = tokio::task::yield_now() => { follow(store, &fake).await.unwrap(); }
+        }
+    };
+    assert!(matches!(seeded, Seeded::Tracked { .. }));
+    follow(store, &fake).await.unwrap();
+    check(store, &fake, "moved during the seed").await;
+}
+
+#[tokio::test]
+async fn a_script_seeded_at_a_block_that_leaves_the_chain_is_dropped() {
+    let mut rng = Rng(31);
+    let fake = Fake::new(20, &mut rng);
+    let t = Temp::new();
+    seed(t.store(), &fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        fake.push(&mut rng);
+    }
+    follow(t.store(), &fake).await.unwrap();
+    seed(t.store(), &fake, &script(1), false, 10, 0)
+        .await
+        .unwrap();
+    let seeded_at = tracked(t.store(), sh(1))
+        .await
+        .unwrap()
+        .unwrap()
+        .seeded_height;
+    // A reorg two blocks deep takes the block script 1 was pinned to.
+    fake.pop(fake.tip() - seeded_at + 1);
+    fake.push(&mut rng);
+    fake.push(&mut rng);
+    fake.push(&mut rng);
+    let f = follow(t.store(), &fake).await.unwrap();
+    assert_eq!(f.dropped, 1);
+    assert!(f.changed.contains(&sh(1)));
+    assert!(tracked(t.store(), sh(1)).await.unwrap().is_none());
+    assert!(tracked(t.store(), sh(0)).await.unwrap().is_some());
+    check(t.store(), &fake, "after the reorg").await;
+}
+
+#[tokio::test]
+async fn a_reorg_deeper_than_the_undo_depth_drops_everything() {
+    let mut rng = Rng(41);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    seed(t.store(), &fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    for _ in 0..UNDO_DEPTH + 5 {
+        fake.push(&mut rng);
+    }
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "before").await;
+    fake.pop(UNDO_DEPTH + 2);
+    for _ in 0..UNDO_DEPTH + 3 {
+        fake.push(&mut rng);
+    }
+    let f = follow(t.store(), &fake).await.unwrap();
+    assert!(f.reset);
+    assert_eq!(f.tip, None);
+    assert_eq!(count(t.store()).await.unwrap(), 0);
+    // Seeded again, it is exact.
+    seed(t.store(), &fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "seeded again").await;
+}
+
+/// The node with a seed of another script run inside the next block read: between `follow`
+/// reading the block and writing it.
+struct SeedDuringBlock {
+    fake: Arc<Fake>,
+    store: Arc<Store>,
+    next: Mutex<Option<usize>>,
+}
+
+impl Source for SeedDuringBlock {
+    async fn height(&self) -> Result<u32, SourceError> {
+        self.fake.height().await
+    }
+    async fn at(&self, height: u32) -> Result<Option<At>, SourceError> {
+        self.fake.at(height).await
+    }
+    async fn block(&self, hash: BlockHash) -> Result<PrevoutBlock, SourceError> {
+        let next = self.next.lock().unwrap().take();
+        if let Some(i) = next {
+            let s = seed(&self.store, &*self.fake, &script(i), false, 10, 0)
+                .await
+                .unwrap();
+            assert!(matches!(s, Seeded::Tracked { .. }));
+        }
+        self.fake.block(hash).await
+    }
+    async fn totals(
+        &self,
+        script: &Script,
+        at: BlockHash,
+    ) -> Result<Result<Totals, Option<ScriptSize>>, SourceError> {
+        self.fake.totals(script, at).await
+    }
+    async fn page(&self, script: &Script, at: BlockHash) -> Result<Vec<TxSummary>, SourceError> {
+        self.fake.page(script, at).await
+    }
+}
+
+#[tokio::test]
+async fn a_script_seeded_while_a_block_is_read_gets_that_block() {
+    let mut rng = Rng(81);
+    let fake = Arc::new(Fake::new(10, &mut rng));
+    let mut dir = Temp::new();
+    let store = Arc::new(dir.store.take().unwrap());
+    seed(&store, &*fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    follow(&store, &*fake).await.unwrap();
+    // The next block pays script 1, which is seeded after that block is read, before it is written.
+    fake.push_txs(vec![(vec![], vec![out(1, 4_321)])]);
+    let source = SeedDuringBlock {
+        fake: Arc::clone(&fake),
+        store: Arc::clone(&store),
+        next: Mutex::new(Some(1)),
+    };
+    follow(&store, &source).await.unwrap();
+    check(&store, &fake, "seeded during a block").await;
+    let v = view(&store, sh(1)).await.unwrap().unwrap();
+    assert_eq!(v.tracked.at.height, fake.tip());
+    assert_eq!(v.txs.first().map(|r| r.value), Some(4_321));
+}
+
+/// The node with a reorg to a shorter chain, followed, inside the next totals call: the ledger's
+/// tip falls below the seed's anchor while the seed waits for the node.
+struct ShortenDuringTotals {
+    fake: Arc<Fake>,
+    store: Arc<Store>,
+    by: Mutex<Option<u32>>,
+}
+
+impl Source for ShortenDuringTotals {
+    async fn height(&self) -> Result<u32, SourceError> {
+        self.fake.height().await
+    }
+    async fn at(&self, height: u32) -> Result<Option<At>, SourceError> {
+        self.fake.at(height).await
+    }
+    async fn block(&self, hash: BlockHash) -> Result<PrevoutBlock, SourceError> {
+        self.fake.block(hash).await
+    }
+    async fn totals(
+        &self,
+        script: &Script,
+        at: BlockHash,
+    ) -> Result<Result<Totals, Option<ScriptSize>>, SourceError> {
+        let t = self.fake.totals(script, at).await;
+        let by = self.by.lock().unwrap().take();
+        if let Some(by) = by {
+            self.fake.pop(by);
+            follow(&self.store, &*self.fake).await.unwrap();
+        }
+        t
+    }
+    async fn page(&self, script: &Script, at: BlockHash) -> Result<Vec<TxSummary>, SourceError> {
+        self.fake.page(script, at).await
+    }
+}
+
+#[tokio::test]
+async fn a_seed_whose_anchor_is_undone_below_the_tip_is_moved_not_a_panic() {
+    let mut rng = Rng(111);
+    let fake = Arc::new(Fake::new(20, &mut rng));
+    let mut dir = Temp::new();
+    let store = Arc::new(dir.store.take().unwrap());
+    seed(&store, &*fake, &script(0), false, 10, 0)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        fake.push(&mut rng);
+    }
+    follow(&store, &*fake).await.unwrap();
+    // Anchored one below the tip; three blocks leave while the node adds it up.
+    let source = ShortenDuringTotals {
+        fake: Arc::clone(&fake),
+        store: Arc::clone(&store),
+        by: Mutex::new(Some(3)),
+    };
+    let r = seed(&store, &source, &script(1), false, 10, 0).await;
+    assert!(matches!(r, Err(Error::Moved)), "{r:?}");
+    assert!(tracked(&store, sh(1)).await.unwrap().is_none());
+    check(&store, &fake, "after the shortening").await;
+}
+
+#[tokio::test]
+async fn reorgs_up_to_the_undo_depth_are_undone_and_deeper_ones_reset() {
+    for (depth, reset) in [
+        (UNDO_DEPTH - 1, false),
+        (UNDO_DEPTH, false),
+        (UNDO_DEPTH + 1, true),
+    ] {
+        let mut rng = Rng(91 + u64::from(depth));
+        let fake = Fake::new(10, &mut rng);
+        let t = Temp::new();
+        seed(t.store(), &fake, &script(0), false, 10, 0)
+            .await
+            .unwrap();
+        for _ in 0..UNDO_DEPTH + 20 {
+            fake.push(&mut rng);
+        }
+        follow(t.store(), &fake).await.unwrap();
+        fake.pop(depth);
+        for _ in 0..=depth {
+            fake.push(&mut rng);
+        }
+        let f = follow(t.store(), &fake).await.unwrap();
+        assert_eq!(f.reset, reset, "depth {depth}");
+        if !reset {
+            assert_eq!(f.undone, depth);
+        }
+        check(t.store(), &fake, &format!("depth {depth}")).await;
+    }
+}
+
+#[tokio::test]
+async fn a_refused_seed_tracks_nothing() {
+    let mut rng = Rng(51);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    fake.refuse.lock().unwrap().insert(hex(2));
+    let s = seed(t.store(), &fake, &script(2), true, 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        s,
+        Seeded::Refused(Some(ScriptSize {
+            creates: 20_000,
+            cap: 10_000
+        }))
+    );
+    assert_eq!(count(t.store()).await.unwrap(), 0);
+    assert!(matches!(
+        seed(t.store(), &fake, &script(3), false, 10, 0)
+            .await
+            .unwrap(),
+        Seeded::Tracked { .. }
+    ));
+    assert_eq!(
+        seed(t.store(), &fake, &script(3), false, 10, 0)
+            .await
+            .unwrap(),
+        Seeded::Already
+    );
+}
+
+#[tokio::test]
+async fn a_full_ledger_drops_the_least_recently_viewed() {
+    let mut rng = Rng(61);
+    let fake = Fake::new(10, &mut rng);
+    let t = Temp::new();
+    for (i, now) in [(0, 100), (1, 200)] {
+        seed(t.store(), &fake, &script(i), false, 2, now)
+            .await
+            .unwrap();
+    }
+    // Script 0 was viewed after script 1 was seeded: 1 is now the least recent.
+    touch(t.store(), sh(0), 300).await.unwrap();
+    let s = seed(t.store(), &fake, &script(2), false, 2, 400)
+        .await
+        .unwrap();
+    assert!(matches!(s, Seeded::Tracked { evicted: 1, .. }));
+    assert!(tracked(t.store(), sh(1)).await.unwrap().is_none());
+    assert!(tracked(t.store(), sh(0)).await.unwrap().is_some());
+    assert!(tracked(t.store(), sh(2)).await.unwrap().is_some());
+    fake.push(&mut rng);
+    follow(t.store(), &fake).await.unwrap();
+    check(t.store(), &fake, "after eviction").await;
+}
+
+#[tokio::test]
+async fn the_newest_rows_stay_at_the_window_even_from_one_block() {
+    let mut rng = Rng(71);
+    let fake = Fake::new(5, &mut rng);
+    let t = Temp::new();
+    seed(t.store(), &fake, &script(0), true, 10, 0)
+        .await
+        .unwrap();
+    // 150 transactions paying it in one block, then 150 spending from it in the next.
+    fake.push_txs((0..150).map(|_| (vec![], vec![out(0, 10)])).collect());
+    fake.push_txs(
+        (0..150)
+            .map(|_| {
+                (
+                    vec![PrevoutIn {
+                        prevout: Some(out(0, 10)),
+                    }],
+                    vec![out(5, 9)],
+                )
+            })
+            .collect(),
+    );
+    follow(t.store(), &fake).await.unwrap();
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert_eq!(v.txs.len(), WINDOW);
+    check(t.store(), &fake, "window").await;
+    fake.push_txs((0..300).map(|_| (vec![], vec![out(0, 1)])).collect());
+    follow(t.store(), &fake).await.unwrap();
+    let v = view(t.store(), sh(0)).await.unwrap().unwrap();
+    assert_eq!(v.txs.len(), WINDOW);
+    assert!(v.txs.iter().all(|r| r.height == fake.tip()));
+    check(t.store(), &fake, "one big block").await;
+}
+
+/// A malformed node answer is an error, never a panic or a wrong total.
+#[test]
+fn totals_out_of_range_are_refused() {
+    let block = PrevoutBlock {
+        hash: BlockHash::all_zeros(),
+        height: 1,
+        time: 0,
+        previousblockhash: None,
+        tx: vec![PrevoutTx {
+            txid: Txid::all_zeros(),
+            vin: vec![],
+            vout: vec![
+                PrevoutOut {
+                    value: Amount::from_sat(u64::MAX),
+                    script_pub_key: ScriptHexText { hex: hex(0) },
+                },
+                PrevoutOut {
+                    value: Amount::from_sat(1),
+                    script_pub_key: ScriptHexText {
+                        hex: hex(0).to_ascii_uppercase(),
+                    },
+                },
+            ],
+        }],
+    };
+    let map = HashMap::from([(hex(0), sh(0))]);
+    assert!(matches!(effects(&block, &map), Err(Error::OutOfRange)));
+}
+
+// Against a real rbitcoin on regtest (docs/REGTEST.md), the property above with the node's own
+// totals as the oracle:
+//   REGTEST_PROJECT=<name> dev/regtest/regtest.py scenario
+//   eval "$(REGTEST_PROJECT=<name> dev/regtest/regtest.py env | sed 's/^/export /')"
+//   REGTEST_PROJECT=<name> cargo test -p engine -- --ignored --nocapture ledger::tests::regtest
+mod regtest {
+    use super::*;
+    use node::esplora::{Esplora, ScriptRef};
+    use node::rpc::{Limits, Rpc};
+    use std::time::Duration;
+
+    fn regtest(args: &[&str]) -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let out = std::process::Command::new("python3")
+            .arg(root.join("dev/regtest/regtest.py"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
+    fn var(k: &str) -> String {
+        std::env::var(k).unwrap()
+    }
+
+    fn source() -> NodeSource {
+        let limits = Limits {
+            timeout: Duration::from_secs(60),
+            max_concurrent: 1,
+            ..Limits::default()
+        };
+        NodeSource {
+            rpc: Rpc::with_limits(
+                &var("REGTEST_RPC_HOST"),
+                var("REGTEST_RPC_PORT").parse().unwrap(),
+                &var("REGTEST_RPC_USER"),
+                &var("REGTEST_RPC_PASSWORD"),
+                limits,
+            )
+            .unwrap(),
+            esplora: Esplora::new(&var("REGTEST_ESPLORA_URL")).unwrap(),
+        }
+    }
+
+    fn rpc_call(method: &str, params: serde_json::Value) {
+        let url = format!(
+            "http://{}:{}/",
+            var("REGTEST_RPC_HOST"),
+            var("REGTEST_RPC_PORT")
+        );
+        let body =
+            serde_json::json!({"jsonrpc": "1.0", "id": 1, "method": method, "params": params})
+                .to_string();
+        let out = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-u",
+                &format!(
+                    "{}:{}",
+                    var("REGTEST_RPC_USER"),
+                    var("REGTEST_RPC_PASSWORD")
+                ),
+                "-d",
+                &body,
+                &url,
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains(r#""error":null"#), "{method}: {text}");
+    }
+
+    /// Every tracked script against the node at the ledger's tip: totals, and the newest
+    /// transactions as an exact prefix of the node's own history pages.
+    async fn check_node(store: &Store, node: &NodeSource, scripts: &[ScriptBuf], label: &str) {
+        let mut checked = 0;
+        for s in scripts {
+            let Some(v) = view(store, ScriptHash::from_script(s)).await.unwrap() else {
+                continue;
+            };
+            let at = v.tracked.at;
+            assert_eq!(
+                node.at(at.height).await.unwrap().map(|a| a.hash),
+                Some(at.hash),
+                "{label}: the ledger's tip is not the node's"
+            );
+            let r = ScriptRef::ScriptHash(ScriptHash::from_script(s));
+            let stats = node
+                .esplora
+                .script_stats(r.clone(), Some(at.hash))
+                .await
+                .unwrap();
+            assert_eq!(stats.tip.map(|t| t.hash), Some(at.hash));
+            assert_eq!(
+                v.tracked.totals,
+                Totals::from(stats.value.chain_stats),
+                "{label}: {s:?} at {}",
+                at.height
+            );
+            // Pages until one reaches below the window's oldest block, then in block order: the
+            // node lists a block's rows in an order of its own.
+            let floor = v.txs.last().map_or(u32::MAX, |r| r.height);
+            let mut history: Vec<TxRow> = Vec::new();
+            let mut last = None;
+            while !v.txs.is_empty() && history.last().is_none_or(|r| r.height >= floor) {
+                let page = node
+                    .esplora
+                    .script_txs_summary(r.clone(), last, Some(at.hash))
+                    .await
+                    .unwrap()
+                    .value;
+                let Some(l) = page.last() else { break };
+                last = Some(l.txid);
+                history.extend(page.into_iter().map(|p| TxRow {
+                    txid: p.txid,
+                    height: p.height,
+                    position: p.tx_position.unwrap(),
+                    value: p.value,
+                    time: u32::try_from(p.time).unwrap(),
+                }));
+            }
+            history.sort_unstable_by_key(|r| std::cmp::Reverse((r.height, r.position)));
+            assert_eq!(v.txs, history[..v.txs.len()], "{label}: rows");
+            assert_eq!(v.points.last().unwrap().balance, v.tracked.totals.balance());
+            checked += 1;
+        }
+        println!("{label}: {checked} scripts equal the node's totals and history");
+    }
+
+    fn mine(n: u32) {
+        regtest(&["mine", &n.to_string()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "regtest: needs a node from dev/regtest (see the comment above)"]
+    async fn the_ledger_equals_the_node_across_reorgs_restarts_and_downtime() {
+        let node = source();
+        // The scenario's addresses (docs/REGTEST.md).
+        let addr = |k: &str| {
+            match k {
+                "miner" => "bcrt1qft5p2uhsdcdc3l2ua4ap5qqfg4pjaqlp250x7us7a8qqhrxrxfsqseac85",
+                "p2wpkh" => "bcrt1qw5puevk8wgy5t9d2qjg6frpfmesuqnnpx95u7s",
+                "p2tr" => "bcrt1pz9ml8p3h96z9hlvz0esm3uwdq9pxssmykz209jrg57znrdvx5y0shy3atk",
+                _ => "2ND8PB9RrfCaAcjfjP1Y6nAgFd9zWHYX4DN",
+            }
+            .to_owned()
+        };
+        let script_of = |a: &str| {
+            a.parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                .unwrap()
+                .require_network(bitcoin::Network::Regtest)
+                .unwrap()
+                .script_pubkey()
+        };
+        let scripts: Vec<ScriptBuf> = ["miner", "p2wpkh", "p2tr", "p2sh"]
+            .iter()
+            .map(|k| script_of(&addr(k)))
+            .collect();
+        let mut t = Temp::new();
+
+        // Seeded at the node's tip, with the history page.
+        for s in &scripts[..2] {
+            let r = seed(t.store(), &node, s, true, 10, 0).await.unwrap();
+            assert!(matches!(r, Seeded::Tracked { page: true, .. }), "{r:?}");
+        }
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "seeded").await;
+
+        // Payments in and out (the miner script pays, its change comes back), two blocks.
+        regtest(&["send", &addr("p2wpkh"), "150000"]);
+        regtest(&["send", &addr("p2tr"), "250000"]);
+        mine(1);
+        regtest(&["send", &addr("p2wpkh"), "50000"]);
+        mine(1);
+        let f = follow(t.store(), &node).await.unwrap();
+        assert_eq!(f.applied, 2);
+        check_node(t.store(), &node, &scripts, "two blocks").await;
+
+        // A third script joins with the ledger already running: its catch-up block is applied
+        // to it alone.
+        let r = seed(t.store(), &node, &scripts[2], true, 10, 0)
+            .await
+            .unwrap();
+        assert!(matches!(r, Seeded::Tracked { .. }));
+        check_node(t.store(), &node, &scripts, "joined").await;
+
+        // A reorg three blocks deep, with the payments in the blocks that leave.
+        regtest(&["send", &addr("p2wpkh"), "70000"]);
+        regtest(&["send", &addr("p2tr"), "80000"]);
+        mine(3);
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "before the reorg").await;
+        let height = node.height().await.unwrap();
+        let fork = node.at(height - 2).await.unwrap().unwrap();
+        rpc_call(
+            "invalidateblock",
+            serde_json::json!([fork.hash.to_string()]),
+        );
+        for _ in 0..4 {
+            rpc_call("generateblock", serde_json::json!(["raw(51)", []]));
+        }
+        let f = follow(t.store(), &node).await.unwrap();
+        assert_eq!((f.undone, f.applied), (3, 4), "{f:?}");
+        check_node(t.store(), &node, &scripts, "after the reorg").await;
+        // The payments return from the mempool in the next block.
+        mine(1);
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "payments mined again").await;
+
+        // A restart mid-way: the store closes with blocks unfollowed, and opens again.
+        regtest(&["send", &addr("p2sh"), "90000"]);
+        mine(1);
+        t.reopen().await;
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "after a restart").await;
+
+        // Down while blocks came and a reorg happened: caught up from the store on the way back.
+        let store = t.store.take().unwrap();
+        store.close().await;
+        // The ledger's own tip leaves the chain, with the two blocks it had applied below it.
+        let height = node.height().await.unwrap();
+        let fork = node.at(height - 1).await.unwrap().unwrap();
+        rpc_call(
+            "invalidateblock",
+            serde_json::json!([fork.hash.to_string()]),
+        );
+        regtest(&["send", &addr("p2wpkh"), "11000"]);
+        regtest(&["send", &addr("p2tr"), "12000"]);
+        mine(4);
+        t.store = Some(Store::open(&t.dir, "regtest", StoreOptions::default()).unwrap());
+        let f = follow(t.store(), &node).await.unwrap();
+        assert_eq!((f.undone, f.applied), (2, 4), "{f:?}");
+        check_node(t.store(), &node, &scripts, "caught up after downtime").await;
+        // And the fourth, seeded last, from the same state.
+        seed(t.store(), &node, &scripts[3], true, 10, 0)
+            .await
+            .unwrap();
+        mine(1);
+        follow(t.store(), &node).await.unwrap();
+        check_node(t.store(), &node, &scripts, "all four").await;
+    }
+}

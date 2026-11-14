@@ -110,10 +110,12 @@ pub enum Read {
     LightningFunding,
     /// The rows that show which chain a file from before `chain` was written for.
     Chain,
+    /// The address ledger's totals, rows and chart.
+    Ledger,
 }
 
 /// How many kinds of [`Read`] there are: one failure count each.
-const READS: usize = Read::Chain as usize + 1;
+const READS: usize = Read::Ledger as usize + 1;
 
 impl Read {
     pub fn label(self) -> &'static str {
@@ -131,6 +133,7 @@ impl Read {
             Self::LightningIndex => "lightning_index",
             Self::LightningFunding => "lightning_funding",
             Self::Chain => "chain",
+            Self::Ledger => "ledger",
         }
     }
 }

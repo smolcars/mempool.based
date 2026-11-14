@@ -80,6 +80,7 @@ Inside a migration: no `BEGIN` or `COMMIT` (it already runs in a transaction; th
 | `totals_dirty` | `0010_block_totals.sql` | The buckets a write has touched; always empty once it commits | Yes |
 | `totals_pending` | `0010_block_totals.sql` | One row while rows from before the totals are still being totalled ([Filling](#filling-the-totals)) | Yes |
 | [`fee_samples`, `fee_blocks`](#fee_samples-and-fee_blocks) | `0011_fee_score.sql` | What the fee recommendations served every 30 s, and every block's clearing rate: the score the server keeps of itself | No: observed live, lost with the file |
+| [`ledger_*`](#ledger) | `0013_ledger.sql` | Running totals, newest transactions and a balance chart for a bounded set of very large addresses, kept from each block | Yes: each script is seeded again from the node |
 
 ### Fee bands
 
@@ -489,6 +490,20 @@ The Lightning network's totals over time: channels, nodes, capacity, fee policie
 **Reading.** `lightning::series(store, interval, now)`: the intervals of `history::Interval`, with no step finer than ten minutes, so `2h` has 12 points and `24h` 144; the coverage counts ten-minute slots. `lightning::latest(store)`: the newest row.
 
 **Rebuildable:** no. It was observed live.
+
+### ledger
+
+Running totals for a bounded set of very large addresses, whose totals the node refuses above its `--max-sh-creates` or takes seconds to give ([`RBITCOIN.md`](RBITCOIN.md#address-history-cost)). The code is `crates/engine/src/ledger/`. **Not wired into the server yet:** nothing is tracked and the server asks the node nothing for it.
+
+- **Seeded once.** `ledger::seed` asks the node for the script's totals pinned with `?asof=` to a block the ledger holds (one below its tip, since the address index can trail the tip; below the node's tip when nothing is tracked), and optionally the newest history page at the same block. Blocks the ledger applied after that block are read again and applied to the new script alone, in the same write, which commits only if the ledger's tip has not moved. The node's size refusal is `Seeded::Refused`.
+- **Kept from blocks.** `ledger::follow` reads each new block once with `getblock` verbosity 3 (every output's and every spent output's script and value) and applies it to every tracked script in one write: funded count and sum per output paying the script, spent count and sum per input spending one of its outputs, one transaction for either. All scripts are exact at one block, the highest row of `ledger_chain`. With nothing tracked it asks the node nothing.
+- **Reorgs.** The last 100 blocks applied (`ledger_chain`) and what each did to each script it touched (`ledger_undo`) are kept. A block that left the best chain is subtracted, its rows and chart points removed; a script seeded at or above it is dropped, to be seeded again. A reorg deeper than 100 blocks drops every script.
+- **Newest transactions:** at most 200 per script (`ledger_txs`), always an exact newest-first prefix of the script's history in block order. The node lists a block's rows in an order of its own, so the seed's page leaves out its oldest block when the page is full.
+- **Chart:** the balance at the last block that changed it, one point per 144 heights (`ledger_points`).
+- **Bounds.** `seed` takes the most scripts to track; past it, the least recently viewed (`viewed`, set by `ledger::touch`) is dropped.
+- **Exactness.** After any sequence of connects, disconnects, restarts and catch-up after downtime, a script's totals equal the node's `/address/:a?asof=<tip>` and its newest transactions equal the node's own history. Tested with a fake chain and an independent oracle over random reorgs and restarts, and against a real rbitcoin v0.9.2 on regtest (`cargo test -p engine -- --ignored ledger::tests::regtest`, see the comment in `tests.rs`).
+
+**Cost**, measured on signet on 2026-11-14 with `NET=SIGNET cargo run --release -p engine --example ledger_cost` (read-only): `getblock` verbosity 3 averaged 115 ms and 1.4 MB a block over 20 blocks (8 to 238 ms, 37 KB to 4.8 MB). Following, beyond that read: 0.5 ms with nothing tracked (no node call), 26 ms a block with 1 script and 31 ms with the 1,000 most active scripts of 144 blocks, mostly four small RPC lookups. **Storage**, from SQLite's `dbstat`: a busy script holding a full window takes about 29 KB of `ledger_txs`, 12 KB of `ledger_undo` and about 60 bytes a day of chart; the 1,000 most active signet scripts took 3.7 MB after 144 blocks.
 
 ## Pragmas
 

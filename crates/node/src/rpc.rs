@@ -27,8 +27,8 @@ use tokio::sync::Semaphore;
 use crate::http::{self, Endpoint, Transport};
 use model::{
     Block, BlockHeader, BlockStats, BlockTemplate, BlockTotals, BlockchainInfo, ChainTip,
-    ChunkPoint, Cluster, MempoolEntry, MempoolInfo, MiningInfo, NetworkInfo, PrevoutSpend,
-    RawMempool, SmartFee,
+    ChunkPoint, Cluster, MempoolEntry, MempoolInfo, MiningInfo, NetworkInfo, PrevoutBlock,
+    PrevoutSpend, RawMempool, SmartFee,
 };
 
 /// Longest node error message we keep.
@@ -309,6 +309,18 @@ impl Rpc {
     /// full mainnet block. Unknown hash: `Rpc { code: -5 }`.
     pub async fn block(&self, hash: BlockHash) -> Result<Block, Error> {
         self.call("getblock", (hash, 2)).await
+    }
+
+    /// `getblock` with verbosity 3: every output and every input's spent output, with values and
+    /// scripts ([`PrevoutBlock`]). Larger than verbosity 2 (604 KB for a 156-transaction signet
+    /// block). Unknown hash: `Rpc { code: -5 }`.
+    pub async fn block_with_prevouts(&self, hash: BlockHash) -> Result<PrevoutBlock, Error> {
+        self.call("getblock", (hash, 3)).await
+    }
+
+    /// `getblockhash`. Past the tip: `Rpc { code: -8 }`.
+    pub async fn block_hash(&self, height: u32) -> Result<BlockHash, Error> {
+        self.call("getblockhash", [height]).await
     }
 
     /// `getblockstats` with every stat. Past the tip: `Rpc { code: -8 }`.

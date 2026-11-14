@@ -1,0 +1,500 @@
+//! SQL for the ledger tables. Every statement is a literal; values are bound (SECURITY.md rule 12).
+
+use std::collections::HashMap;
+
+use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, ScriptBuf, Txid};
+use node::esplora::ScriptHash;
+use rusqlite::types::Type;
+
+use node::rpc::model::PrevoutBlock;
+
+use super::{At, Effect, POINT_SPAN, Point, Totals, Tracked, TxRow, UNDO_DEPTH, View, WINDOW};
+use crate::store::{Error, OptionalExtension, Sql, SqlError, params};
+
+fn sh_bytes(sh: ScriptHash) -> [u8; 32] {
+    sh.to_byte_array()
+}
+
+fn blob32(r: &rusqlite::Row<'_>, i: usize) -> Result<[u8; 32], SqlError> {
+    let b: Vec<u8> = r.get(i)?;
+    <[u8; 32]>::try_from(b.as_slice())
+        .map_err(|e| SqlError::FromSqlConversionFailure(i, Type::Blob, Box::new(e)))
+}
+
+fn int<T: TryFrom<i64>>(r: &rusqlite::Row<'_>, i: usize) -> Result<T, SqlError>
+where
+    T::Error: std::error::Error + Send + Sync + 'static,
+{
+    let v: i64 = r.get(i)?;
+    T::try_from(v).map_err(|e| SqlError::FromSqlConversionFailure(i, Type::Integer, Box::new(e)))
+}
+
+/// A `u64` as SQLite's `i64`: totals stay far below `i64::MAX` (21 million BTC is 2.1e15 sats).
+fn sql_int(v: u64) -> Result<i64, Error> {
+    i64::try_from(v).map_err(|_| Error::Sql(SqlError::IntegralValueOutOfRange(0, 0)))
+}
+
+/// The ledger's tip, or `None` when nothing is tracked.
+pub fn tip(sql: &Sql<'_>) -> Result<Option<At>, Error> {
+    Ok(sql
+        .prepare(concat!(
+            "SELECT height, hash, time FROM ledger_chain ",
+            "WHERE EXISTS (SELECT 1 FROM ledger_scripts) ORDER BY height DESC LIMIT 1"
+        ))?
+        .query_row([], at)
+        .optional()?)
+}
+
+fn at(r: &rusqlite::Row<'_>) -> Result<At, SqlError> {
+    Ok(At {
+        height: int(r, 0)?,
+        hash: BlockHash::from_byte_array(blob32(r, 1)?),
+        time: int(r, 2)?,
+    })
+}
+
+pub fn chain_at(sql: &Sql<'_>, height: u32) -> Result<Option<At>, Error> {
+    Ok(sql
+        .prepare("SELECT height, hash, time FROM ledger_chain WHERE height = ?1")?
+        .query_row(params![height], at)
+        .optional()?)
+}
+
+/// The chain's rows from `from` to `to`, lowest first.
+pub fn chain(sql: &Sql<'_>, from: u32, to: u32) -> Result<Vec<At>, Error> {
+    let mut stmt = sql.prepare(
+        "SELECT height, hash, time FROM ledger_chain WHERE height BETWEEN ?1 AND ?2 ORDER BY height",
+    )?;
+    let rows = stmt.query_map(params![from, to], at)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn scripts(sql: &Sql<'_>) -> Result<Vec<(ScriptHash, ScriptBuf)>, Error> {
+    let mut stmt = sql.prepare("SELECT sh, script FROM ledger_scripts")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            ScriptHash::from_byte_array(blob32(r, 0)?),
+            ScriptBuf::from_bytes(r.get(1)?),
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn count(sql: &Sql<'_>) -> Result<usize, Error> {
+    Ok(sql
+        .prepare("SELECT count(*) FROM ledger_scripts")?
+        .query_row([], |r| int(r, 0))?)
+}
+
+pub fn is_tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<bool, Error> {
+    Ok(sql
+        .prepare("SELECT 1 FROM ledger_scripts WHERE sh = ?1")?
+        .query_row(params![sh_bytes(sh)], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+/// The script's totals with the tip they are exact at, in one statement so both come from one
+/// committed state.
+pub fn tracked(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<Tracked>, Error> {
+    Ok(sql
+        .prepare(concat!(
+            "SELECT s.funded_count, s.funded_sum, s.spent_count, s.spent_sum, s.tx_count, ",
+            "s.seeded_height, s.seeded_time, c.height, c.hash, c.time ",
+            "FROM ledger_scripts s, ",
+            "(SELECT height, hash, time FROM ledger_chain ORDER BY height DESC LIMIT 1) c ",
+            "WHERE s.sh = ?1"
+        ))?
+        .query_row(params![sh_bytes(sh)], |r| {
+            Ok(Tracked {
+                totals: Totals {
+                    funded_count: int(r, 0)?,
+                    funded_sum: int(r, 1)?,
+                    spent_count: int(r, 2)?,
+                    spent_sum: int(r, 3)?,
+                    tx_count: int(r, 4)?,
+                },
+                seeded_height: int(r, 5)?,
+                seeded_time: int(r, 6)?,
+                at: At {
+                    height: int(r, 7)?,
+                    hash: BlockHash::from_byte_array(blob32(r, 8)?),
+                    time: int(r, 9)?,
+                },
+            })
+        })
+        .optional()?)
+}
+
+/// Totals, newest transactions and chart, from one snapshot.
+pub fn view(sql: &Sql<'_>, sh: ScriptHash) -> Result<Option<View>, Error> {
+    sql.prepare("BEGIN")?.execute([])?;
+    let read = (|| {
+        let Some(tracked) = tracked(sql, sh)? else {
+            return Ok(None);
+        };
+        let mut stmt = sql.prepare(concat!(
+            "SELECT txid, height, position, value, time FROM ledger_txs WHERE sh = ?1 ",
+            "ORDER BY height DESC, position DESC"
+        ))?;
+        let txs = stmt
+            .query_map(params![sh_bytes(sh)], |r| {
+                Ok(TxRow {
+                    txid: Txid::from_byte_array(blob32(r, 0)?),
+                    height: int(r, 1)?,
+                    position: int(r, 2)?,
+                    value: r.get(3)?,
+                    time: int(r, 4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut stmt = sql.prepare(
+            "SELECT height, time, balance FROM ledger_points WHERE sh = ?1 ORDER BY height",
+        )?;
+        let points = stmt
+            .query_map(params![sh_bytes(sh)], |r| {
+                Ok(Point {
+                    height: int(r, 0)?,
+                    time: int(r, 1)?,
+                    balance: r.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(Some(View {
+            tracked,
+            txs,
+            points,
+        }))
+    })();
+    sql.prepare("COMMIT")?.execute([])?;
+    read
+}
+
+pub fn touch(sql: &Sql<'_>, sh: ScriptHash, now: u64) -> Result<(), Error> {
+    sql.prepare("UPDATE ledger_scripts SET viewed = ?2 WHERE sh = ?1")?
+        .execute(params![sh_bytes(sh), sql_int(now)?])?;
+    Ok(())
+}
+
+/// Adds `d` to a script's totals; `sign` -1 subtracts it.
+fn add_totals(sql: &Sql<'_>, sh: ScriptHash, d: &Totals, sign: i64) -> Result<(), Error> {
+    sql.prepare(concat!(
+        "UPDATE ledger_scripts SET funded_count = funded_count + ?2 * ?7, ",
+        "funded_sum = funded_sum + ?3 * ?7, spent_count = spent_count + ?4 * ?7, ",
+        "spent_sum = spent_sum + ?5 * ?7, tx_count = tx_count + ?6 * ?7 WHERE sh = ?1"
+    ))?
+    .execute(params![
+        sh_bytes(sh),
+        sql_int(d.funded_count)?,
+        sql_int(d.funded_sum)?,
+        sql_int(d.spent_count)?,
+        sql_int(d.spent_sum)?,
+        sql_int(d.tx_count)?,
+        sign
+    ])?;
+    Ok(())
+}
+
+fn insert_rows(sql: &Sql<'_>, sh: ScriptHash, rows: &[TxRow]) -> Result<(), Error> {
+    let mut insert = sql.prepare(concat!(
+        "INSERT OR REPLACE INTO ledger_txs (sh, height, position, txid, value, time) ",
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+    ))?;
+    for r in rows {
+        insert.execute(params![
+            sh_bytes(sh),
+            r.height,
+            r.position,
+            r.txid.to_byte_array(),
+            r.value,
+            r.time
+        ])?;
+    }
+    // Keep the newest WINDOW: drop every row older than the WINDOW-th newest.
+    sql.prepare(concat!(
+        "DELETE FROM ledger_txs WHERE sh = ?1 AND (height, position) < (",
+        "SELECT height, position FROM ledger_txs WHERE sh = ?1 ",
+        "ORDER BY height DESC, position DESC LIMIT 1 OFFSET ?2)"
+    ))?
+    .execute(params![sh_bytes(sh), WINDOW as i64 - 1])?;
+    Ok(())
+}
+
+/// The script's balance as of `at`, as the chart's point for `at`'s span.
+fn point(sql: &Sql<'_>, sh: ScriptHash, at: At) -> Result<(), Error> {
+    sql.prepare(concat!(
+        "INSERT INTO ledger_points (sh, span, height, time, balance) ",
+        "SELECT sh, ?2, ?3, ?4, funded_sum - spent_sum FROM ledger_scripts WHERE sh = ?1 ",
+        "ON CONFLICT (sh, span) DO UPDATE SET height = excluded.height, time = excluded.time, ",
+        "balance = excluded.balance"
+    ))?
+    .execute(params![
+        sh_bytes(sh),
+        at.height / POINT_SPAN,
+        at.height,
+        at.time
+    ])?;
+    Ok(())
+}
+
+/// One block's effects on one script: totals, undo record, rows, chart.
+fn apply_one(sql: &Sql<'_>, sh: ScriptHash, at: At, e: &Effect) -> Result<(), Error> {
+    add_totals(sql, sh, &e.totals, 1)?;
+    sql.prepare(concat!(
+        "INSERT OR REPLACE INTO ledger_undo (sh, height, funded_count, funded_sum, spent_count, ",
+        "spent_sum, tx_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+    ))?
+    .execute(params![
+        sh_bytes(sh),
+        at.height,
+        sql_int(e.totals.funded_count)?,
+        sql_int(e.totals.funded_sum)?,
+        sql_int(e.totals.spent_count)?,
+        sql_int(e.totals.spent_sum)?,
+        sql_int(e.totals.tx_count)?
+    ])?;
+    insert_rows(sql, sh, &e.rows)?;
+    point(sql, sh, at)
+}
+
+/// Drops what is older than [`UNDO_DEPTH`] below `height`.
+fn prune(sql: &Sql<'_>, height: u32) -> Result<(), Error> {
+    // The chain keeps the floor too: undoing the last undoable block needs its parent.
+    let floor = height.saturating_sub(UNDO_DEPTH);
+    sql.prepare("DELETE FROM ledger_chain WHERE height < ?1")?
+        .execute(params![floor])?;
+    sql.prepare("DELETE FROM ledger_undo WHERE height <= ?1")?
+        .execute(params![floor])?;
+    Ok(())
+}
+
+/// What [`apply`] did.
+pub enum Applied {
+    /// The scripts the block touched.
+    Done(Vec<ScriptHash>),
+    /// The ledger's tip is no longer the block's parent; nothing written.
+    Moved,
+    /// A total would not fit; nothing written.
+    OutOfRange,
+}
+
+/// Applies `block`, child of `tip`, to every tracked script it touched, matched against the
+/// scripts tracked now, in this write.
+pub fn apply(sql: &Sql<'_>, tip: At, block: &PrevoutBlock) -> Result<Applied, Error> {
+    if self::tip(sql)? != Some(tip) {
+        return Ok(Applied::Moved);
+    }
+    let map: HashMap<String, ScriptHash> = scripts(sql)?
+        .into_iter()
+        .map(|(sh, script)| (script.to_hex_string(), sh))
+        .collect();
+    let Ok(effects) = super::effects(block, &map) else {
+        return Ok(Applied::OutOfRange);
+    };
+    let at = At {
+        height: block.height,
+        hash: block.hash,
+        time: block.time,
+    };
+    for (sh, e) in &effects {
+        apply_one(sql, *sh, at, e)?;
+    }
+    sql.prepare("INSERT OR REPLACE INTO ledger_chain (height, hash, time) VALUES (?1, ?2, ?3)")?
+        .execute(params![at.height, at.hash.to_byte_array(), at.time])?;
+    prune(sql, at.height)?;
+    Ok(Applied::Done(effects.into_keys().collect()))
+}
+
+/// What [`undo`] did.
+pub struct Undone {
+    pub touched: Vec<ScriptHash>,
+    pub dropped: usize,
+    pub reset: bool,
+}
+
+/// Undoes the ledger's tip block `tip`. `None`, writing nothing, when the tip is no longer `tip`.
+/// Scripts seeded at or above it are dropped: their totals are for a block that left the chain.
+/// When no block is left below it, the reorg is deeper than the ledger can undo, and every script
+/// is dropped.
+pub fn undo(sql: &Sql<'_>, tip: At) -> Result<Option<Undone>, Error> {
+    if self::tip(sql)? != Some(tip) {
+        return Ok(None);
+    }
+    let h = tip.height;
+    let parent = chain_at(sql, h.saturating_sub(1))?.filter(|_| h > 0);
+    let Some(parent) = parent else {
+        let touched = scripts(sql)?.into_iter().map(|(sh, _)| sh).collect();
+        for table in [
+            "DELETE FROM ledger_scripts",
+            "DELETE FROM ledger_chain",
+            "DELETE FROM ledger_undo",
+            "DELETE FROM ledger_txs",
+            "DELETE FROM ledger_points",
+        ] {
+            sql.prepare(table)?.execute([])?;
+        }
+        return Ok(Some(Undone {
+            touched,
+            dropped: 0,
+            reset: true,
+        }));
+    };
+    let mut stmt = sql.prepare(concat!(
+        "SELECT sh, funded_count, funded_sum, spent_count, spent_sum, tx_count FROM ledger_undo ",
+        "WHERE height = ?1"
+    ))?;
+    let undo: Vec<(ScriptHash, Totals)> = stmt
+        .query_map(params![h], |r| {
+            Ok((
+                ScriptHash::from_byte_array(blob32(r, 0)?),
+                Totals {
+                    funded_count: int(r, 1)?,
+                    funded_sum: int(r, 2)?,
+                    spent_count: int(r, 3)?,
+                    spent_sum: int(r, 4)?,
+                    tx_count: int(r, 5)?,
+                },
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    let mut touched = Vec::with_capacity(undo.len());
+    for (sh, d) in &undo {
+        add_totals(sql, *sh, d, -1)?;
+        touched.push(*sh);
+    }
+    sql.prepare("DELETE FROM ledger_undo WHERE height = ?1")?
+        .execute(params![h])?;
+    sql.prepare("DELETE FROM ledger_txs WHERE height >= ?1")?
+        .execute(params![h])?;
+    // A script whose point is dropped gets one at the parent: its balance there is the one it now
+    // holds, and a point dropped may have stood for the whole span.
+    let mut stmt = sql.prepare("SELECT DISTINCT sh FROM ledger_points WHERE height >= ?1")?;
+    let pointed: Vec<ScriptHash> = stmt
+        .query_map(params![h], |r| {
+            Ok(ScriptHash::from_byte_array(blob32(r, 0)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    sql.prepare("DELETE FROM ledger_points WHERE height >= ?1")?
+        .execute(params![h])?;
+    for sh in pointed.iter().chain(&touched) {
+        point(sql, *sh, parent)?;
+    }
+    let mut stmt = sql.prepare("SELECT sh FROM ledger_scripts WHERE seeded_height >= ?1")?;
+    let gone: Vec<ScriptHash> = stmt
+        .query_map(params![h], |r| {
+            Ok(ScriptHash::from_byte_array(blob32(r, 0)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    for sh in &gone {
+        delete(sql, *sh)?;
+        touched.push(*sh);
+    }
+    sql.prepare("DELETE FROM ledger_chain WHERE height = ?1")?
+        .execute(params![h])?;
+    Ok(Some(Undone {
+        touched,
+        dropped: gone.len(),
+        reset: false,
+    }))
+}
+
+/// Drops one script and its rows; the chain too once nothing is tracked.
+fn delete(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
+    delete_rows(sql, sh)?;
+    if count(sql)? == 0 {
+        sql.prepare("DELETE FROM ledger_chain")?.execute([])?;
+    }
+    Ok(())
+}
+
+/// Drops one script and its rows, keeping the chain.
+fn delete_rows(sql: &Sql<'_>, sh: ScriptHash) -> Result<(), Error> {
+    for stmt in [
+        "DELETE FROM ledger_scripts WHERE sh = ?1",
+        "DELETE FROM ledger_undo WHERE sh = ?1",
+        "DELETE FROM ledger_txs WHERE sh = ?1",
+        "DELETE FROM ledger_points WHERE sh = ?1",
+    ] {
+        sql.prepare(stmt)?.execute(params![sh_bytes(sh)])?;
+    }
+    Ok(())
+}
+
+/// A script to start tracking: its totals at `anchor`, the node's newest rows there, and what each
+/// block the ledger applied after `anchor` did to it.
+pub struct NewScript {
+    pub sh: ScriptHash,
+    pub script: ScriptBuf,
+    pub totals: Totals,
+    pub anchor: At,
+    pub rows: Vec<TxRow>,
+    pub since: Vec<(At, Effect)>,
+    pub now: u64,
+}
+
+/// Inserts `new` if the ledger's tip is still `tip`, dropping the least recently viewed scripts
+/// first while `max_scripts` are tracked. `Some(dropped)`, or `None` writing nothing when the tip
+/// moved.
+pub fn insert(
+    sql: &Sql<'_>,
+    tip: Option<At>,
+    new: &NewScript,
+    max_scripts: usize,
+) -> Result<Option<usize>, Error> {
+    if self::tip(sql)? != tip {
+        return Ok(None);
+    }
+    if is_tracked(sql, new.sh)? {
+        return Ok(Some(0));
+    }
+    let mut evicted = 0;
+    while count(sql)? >= max_scripts.max(1) {
+        let oldest: Option<[u8; 32]> = sql
+            .prepare("SELECT sh FROM ledger_scripts ORDER BY viewed, sh LIMIT 1")?
+            .query_row([], |r| blob32(r, 0))
+            .optional()?;
+        let Some(oldest) = oldest else { break };
+        // The chain stays: `new` was read against it.
+        delete_rows(sql, ScriptHash::from_byte_array(oldest))?;
+        evicted += 1;
+    }
+    if tip.is_none() {
+        sql.prepare("DELETE FROM ledger_chain")?.execute([])?;
+        sql.prepare("INSERT INTO ledger_chain (height, hash, time) VALUES (?1, ?2, ?3)")?
+            .execute(params![
+                new.anchor.height,
+                new.anchor.hash.to_byte_array(),
+                new.anchor.time
+            ])?;
+    }
+    let t = &new.totals;
+    sql.prepare(concat!(
+        "INSERT INTO ledger_scripts (sh, script, funded_count, funded_sum, spent_count, ",
+        "spent_sum, tx_count, seeded_height, seeded_time, viewed) ",
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+    ))?
+    .execute(params![
+        sh_bytes(new.sh),
+        new.script.as_bytes(),
+        sql_int(t.funded_count)?,
+        sql_int(t.funded_sum)?,
+        sql_int(t.spent_count)?,
+        sql_int(t.spent_sum)?,
+        sql_int(t.tx_count)?,
+        new.anchor.height,
+        new.anchor.time,
+        sql_int(new.now)?
+    ])?;
+    insert_rows(sql, new.sh, &new.rows)?;
+    point(sql, new.sh, new.anchor)?;
+    for (at, e) in &new.since {
+        if e.totals != Totals::default() {
+            apply_one(sql, new.sh, *at, e)?;
+        }
+    }
+    Ok(Some(evicted))
+}
