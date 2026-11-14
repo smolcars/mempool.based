@@ -76,6 +76,9 @@ const FILL_RETRY_MAX: Duration = Duration::from_secs(24 * 3600);
 /// A whole history the node refused is asked again after this long: the operator may have raised
 /// its cap. A refusal costs the node milliseconds.
 const HISTORY_REFUSED_FOR: Duration = Duration::from_secs(24 * 3600);
+/// Failed whole lists after which a kept address takes the newest page before its seed instead,
+/// while its list is still tried now and then. A refused list counts as this many.
+const LIST_TRIES: u32 = 2;
 /// Discovery: candidates taken from each block, size checks an hour, and how long a checked
 /// script is not checked again.
 pub const PER_BLOCK: usize = 3;
@@ -402,7 +405,20 @@ impl Seeds {
         let job = match self.readers.pop_front() {
             Some(j) => Some(j),
             None => {
-                if let Some(sh) = due_in(&self.unfilled, now) {
+                // A fill waits for the whole list while it may still come; after two failed
+                // lists the page fill goes ahead.
+                let listing = |sh: &ScriptHash| {
+                    self.unhistoried
+                        .get(sh)
+                        .is_some_and(|(fails, _)| *fails < LIST_TRIES)
+                };
+                let fills: HashMap<ScriptHash, (u32, Instant)> = self
+                    .unfilled
+                    .iter()
+                    .filter(|(sh, _)| !listing(sh))
+                    .map(|(sh, v)| (*sh, *v))
+                    .collect();
+                if let Some(sh) = due_in(&fills, now) {
                     return Some(Work::Fill(sh));
                 }
                 if let Some(sh) = due_in(&self.unhistoried, now) {
@@ -507,6 +523,9 @@ pub struct Ledger {
     verdicts: Arc<Verdicts>,
     track: Arc<Tracking>,
     tracked: RwLock<HashSet<ScriptHash>>,
+    /// The scripts whose whole history the store held at the last reload, and the ledger's tip
+    /// height then.
+    wholes: Mutex<(HashSet<ScriptHash>, u32)>,
     seeds: Mutex<Seeds>,
     wake: Notify,
 }
@@ -566,6 +585,7 @@ impl Ledger {
             verdicts,
             track,
             tracked: RwLock::default(),
+            wholes: Mutex::default(),
             seeds: Mutex::default(),
             wake: Notify::new(),
         })
@@ -597,17 +617,38 @@ impl Ledger {
             *self.tracked.write().unwrap_or_else(PoisonError::into_inner) =
                 rows.into_iter().map(|(sh, _)| sh).collect();
         }
-        if let Ok(kept) = book::unfilled(&self.store).await {
-            self.seeds().set_unfilled(&kept, Instant::now());
-            if !kept.is_empty() {
-                self.wake.notify_one();
-            }
+        // Both read before either is set: a fill is decided from the lists together.
+        let (Ok(unfilled), Ok(unlisted)) = (
+            book::unfilled(&self.store).await,
+            book::unhistoried(&self.store).await,
+        ) else {
+            return;
+        };
+        let unlisted: Vec<ScriptHash> = unlisted.into_iter().map(|(sh, _)| sh).collect();
+        {
+            let now = Instant::now();
+            let mut s = self.seeds();
+            s.set_unfilled(&unfilled, now);
+            s.set_unhistoried(&unlisted, now);
         }
-        if let Ok(kept) = book::unhistoried(&self.store).await {
-            let kept: Vec<ScriptHash> = kept.into_iter().map(|(sh, _)| sh).collect();
-            self.seeds().set_unhistoried(&kept, Instant::now());
-            if !kept.is_empty() {
-                self.wake.notify_one();
+        if !unfilled.is_empty() || !unlisted.is_empty() {
+            self.wake.notify_one();
+        }
+        // A history dropped (for the bound, by another's list, a reorg, or with its address when
+        // the ledger made room for another) leaves its page paging a history that is gone: its
+        // followers hear the address changed, and ask again.
+        if let Ok((now, tip)) = book::wholes(&self.store).await {
+            let now: HashSet<ScriptHash> = now.into_iter().collect();
+            let (left, height) = {
+                let mut was = self.wholes.lock().unwrap_or_else(PoisonError::into_inner);
+                let left: Vec<ScriptHash> = was.0.difference(&now).copied().collect();
+                let height = tip.map_or(was.1, |t| t.height);
+                *was = (now, height);
+                (left, height)
+            };
+            for sh in left {
+                self.track
+                    .ledger_changed(node::electrum::ScriptHash(sh.to_byte_array()), height);
             }
         }
     }
@@ -891,6 +932,8 @@ impl Ledger {
                 let mut s = self.seeds();
                 let e = s.unhistoried.entry(sh).or_insert((0, started));
                 e.1 = Instant::now() + HISTORY_REFUSED_FOR;
+                // No list will come while the node's cap is in force: the page may be taken.
+                e.0 = e.0.max(LIST_TRIES);
                 ("refused", 0, 0, 0)
             }
             Ok(book::Historied::TooLarge) => {
@@ -1235,7 +1278,8 @@ fn tracked_json(v: &book::View) -> Value {
         "at": { "height": t.at.height, "hash": t.at.hash.to_string(), "time": t.at.time },
         "seeded": { "height": t.seeded_height, "time": t.seeded_time },
         "window": book::WINDOW,
-        "filling": !t.filled,
+        // A whole history holds the transactions from before `seeded`: nothing is to come.
+        "filling": !t.filled && !matches!(t.history, book::History::Whole { .. }),
         "history": match t.history {
             book::History::None => "none",
             book::History::Taking => "taking",
@@ -1606,5 +1650,23 @@ mod tests {
         // Taken: the store no longer lists it, and it is never offered again.
         s.set_unhistoried(&[], later);
         assert!(s.next(later + FILL_RETRY_MAX).is_none());
+    }
+
+    #[test]
+    fn a_fill_waits_for_the_whole_list_until_it_has_failed_twice() {
+        let mut s = Seeds::default();
+        let now = Instant::now();
+        let sh = ScriptHash::from_script(&script(9));
+        s.set_unfilled(&[sh], now);
+        s.set_unhistoried(&[sh], now);
+        // The list goes first; the page waits for it.
+        assert!(matches!(s.next(now), Some(Work::History(_))));
+        assert_eq!(backoff(&mut s.unhistoried, sh, now), 1);
+        assert!(s.next(now).is_none());
+        let later = now + FAILED_FOR;
+        assert!(matches!(s.next(later), Some(Work::History(_))));
+        assert_eq!(backoff(&mut s.unhistoried, sh, later), 2);
+        // Failed twice: the page is taken meanwhile.
+        assert!(matches!(s.next(later), Some(Work::Fill(f)) if f == sh));
     }
 }

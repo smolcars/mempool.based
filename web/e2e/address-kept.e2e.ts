@@ -44,7 +44,9 @@ test("a kept address shows its totals, newest transactions and balance at once",
   await expect(txs.locator("tbody tr")).toHaveCount(3);
   await expect(txs.locator("tbody tr").first()).toContainText("0def111d");
   await expect(txs.locator("tbody tr").nth(1)).toContainText(/[−-]12\.34567890/);
-  await expect(page.getByText(/keeps at most the newest 200 confirmed transactions/)).toBeVisible();
+  await expect(
+    page.getByText(/Until then it shows its newest 200 confirmed transactions/),
+  ).toBeVisible();
   await expect(page.getByText(/are added once its node has listed them/)).toHaveCount(0);
   // A block opens on this network; a phone drops the block column.
   if ((page.viewportSize()?.width ?? 0) > 640) {

@@ -181,8 +181,14 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
       if (isKept && was === false) refetchStats();
     },
   );
+  // Every transaction of a kept address once the server keeps its whole history: its confirmed
+  // pages, since its unconfirmed ones are listed apart.
+  const whole = () => kept()?.history === "whole";
   const [first, { refetch: refetchFirst }] = createApi<Transaction[]>(
-    () => statsAnswered() && ledgerAnswered() && !kept() && !large() && `${path}/txs`,
+    () =>
+      statsAnswered() &&
+      ledgerAnswered() &&
+      (whole() ? `${path}/txs/chain` : !kept() && !large() && `${path}/txs`),
     { fresh: true },
   );
   let refreshHistory = () => {
@@ -246,6 +252,7 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
         if (started) {
           refetchLedger();
           refetchStats();
+          if (whole()) refetchFirst();
         }
         ask();
         return;
@@ -287,7 +294,24 @@ function AddressBody(props: { address: string; found: Recognised | null }) {
         {(k) => (
           <>
             <LiveLine watch={watch()} socket={socket()} />
-            <KeptAddress address={props.address} ledger={k()} stats={stats} retry={retryAll} />
+            <KeptAddress
+              address={props.address}
+              ledger={k()}
+              stats={stats}
+              retry={retryAll}
+              whole={
+                <History
+                  address={props.address}
+                  stats={stats}
+                  first={first}
+                  retryFirst={() => refetchFirst()}
+                  onRefresh={(fn) => {
+                    refreshHistory = fn;
+                  }}
+                  kept
+                />
+              }
+            />
           </>
         )}
       </Match>

@@ -16,6 +16,7 @@ import { Link } from "../../components/Link";
 import { SectionHeader } from "../../components/SectionHeader";
 import { Empty } from "../../components/States";
 import { TimeAgo } from "../../components/Time";
+import type { JSX } from "@solidjs/web";
 import type { ApiResource } from "../../lib/api";
 import { useNow } from "../../lib/clock";
 import type { AddressStats } from "../../lib/esplora";
@@ -51,14 +52,17 @@ const date = (unix: number) =>
 
 /**
  * An address the server keeps its own running totals for (docs/API.md, "Very large addresses"):
- * its totals from the page's usual request, which the server answers from them, then its newest
- * transactions and its balance since the server began keeping it, and its unconfirmed ones.
+ * its totals from the page's usual request, which the server answers from them, then its
+ * transactions (all of them once the server keeps its whole history, `whole`, otherwise the
+ * newest it keeps) and its balance since the server began keeping it, and its unconfirmed ones.
  */
 export function KeptAddress(props: {
   address: string;
   ledger: Tracked;
   stats: ApiResource<AddressStats>;
   retry: () => void;
+  /** Every confirmed transaction, paged, while the server keeps the whole history. */
+  whole: JSX.Element;
 }) {
   const pool = useUnconfirmed(props.address);
   return (
@@ -70,7 +74,12 @@ export function KeptAddress(props: {
         shows them at once. They are exact at block {groupDigits(props.ledger.at.height)}.
       </p>
       <KeptChart ledger={props.ledger} />
-      <KeptTransactions ledger={props.ledger} />
+      <Show
+        when={props.ledger.history === "whole"}
+        fallback={<KeptTransactions ledger={props.ledger} />}
+      >
+        {props.whole}
+      </Show>
       <UnconfirmedTransactions address={props.address} pool={pool} />
     </>
   );
@@ -196,8 +205,7 @@ function KeptTransactions(props: { ledger: Tracked }) {
             </div>
           </Show>
           <p class="address-unshown">
-            This server keeps at most the newest {groupDigits(props.ledger.window)} confirmed
-            transactions of this address, not its older history or its unspent outputs.
+            <Unshown ledger={props.ledger} />
             <Show when={props.ledger.filling}>
               {" "}
               Those from before block {groupDigits(props.ledger.seeded.height)}, when it began
@@ -207,6 +215,28 @@ function KeptTransactions(props: { ledger: Tracked }) {
         </Match>
       </Switch>
     </section>
+  );
+}
+
+/** Why the list stops at the newest transactions, by where the address's whole history stands. */
+function Unshown(props: { ledger: Tracked }) {
+  const newest = () => `its newest ${groupDigits(props.ledger.window)} confirmed transactions`;
+  return (
+    <Switch>
+      <Match when={props.ledger.history === "refused"}>
+        Its node declines to list this address's whole history, so this server keeps only {newest()}
+        , not its older history or its unspent outputs.
+      </Match>
+      <Match when={props.ledger.history === "dropped"}>
+        This server keeps whole histories only up to a set size, and this address's does not fit
+        beside the others, so it keeps only {newest()}, not its older history or its unspent
+        outputs.
+      </Match>
+      <Match when={true}>
+        This server is getting this address's whole history from its node, once. Until then it shows{" "}
+        {newest()}. Its unspent outputs are not kept.
+      </Match>
+    </Switch>
   );
 }
 

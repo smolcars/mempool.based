@@ -785,6 +785,13 @@ pub async fn history<S: Source>(
 /// Drops the least recently viewed scripts' histories while all of them together hold more than
 /// `max_rows`: following blocks makes them grow. How many were dropped.
 pub async fn bound(store: &Store, max_rows: u64) -> Result<usize, store::Error> {
+    // Read first: the writer is shared, and the bound is checked after every round of blocks.
+    if !store
+        .read(Read::Ledger, move |sql| db::history_over(sql, max_rows))
+        .await?
+    {
+        return Ok(0);
+    }
     store
         .write(move |sql| db::history_bound(sql, None, max_rows))
         .await
@@ -815,9 +822,17 @@ pub async fn history_page(
         .await
 }
 
+/// The kept scripts whose whole history is kept, and the ledger's tip (`None` with nothing kept).
+pub async fn wholes(store: &Store) -> Result<(Vec<ScriptHash>, Option<At>), store::Error> {
+    store.read(Read::Ledger, db::wholes).await
+}
+
 /// After a restart: a history that was being taken is dropped, to be taken again.
 pub async fn history_restarted(store: &Store) -> Result<(), store::Error> {
-    store.write(db::history_restarted).await
+    if store.read(Read::Ledger, db::taking_any).await? {
+        store.write(db::history_restarted).await?;
+    }
+    Ok(())
 }
 
 /// Rows in a page of the node's history (Esplora's page size).

@@ -567,9 +567,11 @@ pub fn insert(
     Ok(Some(evicted))
 }
 
-/// The scripts still to be filled.
+/// The scripts still to be filled: not filled, and their whole history not kept.
 pub fn unfilled(sql: &Sql<'_>) -> Result<Vec<ScriptHash>, Error> {
-    let mut stmt = sql.prepare("SELECT sh FROM ledger_scripts WHERE filled = 0")?;
+    // A whole history (or one being taken) holds every transaction: the page reads it instead.
+    let mut stmt =
+        sql.prepare("SELECT sh FROM ledger_scripts WHERE filled = 0 AND history NOT IN (1, 2)")?;
     let rows = stmt.query_map([], |r| Ok(ScriptHash::from_byte_array(blob32(r, 0)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -994,4 +996,28 @@ pub fn history_page(
     })();
     sql.prepare("COMMIT")?.execute([])?;
     read
+}
+
+/// Whether the histories held or being taken count more than `max_rows`.
+pub fn history_over(sql: &Sql<'_>, max_rows: u64) -> Result<bool, Error> {
+    let n: i64 = sql
+        .prepare("SELECT coalesce(sum(tx_count), 0) FROM ledger_scripts WHERE history IN (1, 2)")?
+        .query_row([], |r| r.get(0))?;
+    Ok(u64::try_from(n).unwrap_or(u64::MAX) > max_rows)
+}
+
+/// Whether any history is marked as being taken.
+pub fn taking_any(sql: &Sql<'_>) -> Result<bool, Error> {
+    Ok(sql
+        .prepare("SELECT 1 FROM ledger_scripts WHERE history = 1 LIMIT 1")?
+        .query_row([], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+/// The scripts whose whole history is kept, and the ledger's tip.
+pub fn wholes(sql: &Sql<'_>) -> Result<(Vec<ScriptHash>, Option<At>), Error> {
+    let mut stmt = sql.prepare("SELECT sh FROM ledger_scripts WHERE history = 2")?;
+    let rows = stmt.query_map([], |r| Ok(ScriptHash::from_byte_array(blob32(r, 0)?)))?;
+    Ok((rows.collect::<Result<_, _>>()?, tip(sql)?))
 }
