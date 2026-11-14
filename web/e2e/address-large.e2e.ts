@@ -28,27 +28,36 @@ test("leads with the node's count and cap, then says what is not shown", async (
 
 test("a new unconfirmed transaction appears without a reload", async ({ page }) => {
   let txids: string[] = [chain.txs.payment];
-  const asks: number[] = [];
-  page.on("request", (r) => {
-    if (r.url().endsWith(`/address/${LARGE}/txs/mempool`)) asks.push(Date.now());
+  // The page's clock stands still but when the test moves it, a poll at a time, instead of
+  // waiting out real polls.
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
+  // When each ask leaves, by the page's own clock.
+  await page.addInitScript(() => {
+    const asks: number[] = [];
+    (window as unknown as { asks: number[] }).asks = asks;
+    const fetch = window.fetch;
+    window.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/txs/mempool")) asks.push(Date.now());
+      return fetch(input, init);
+    };
   });
   await stubLarge(page, { mempool: () => txids });
   await page.goto(`/regtest/address/${LARGE}`);
   const pool = page.getByRole("table", { name: /^Unconfirmed transactions of this address/ });
   await expect(pool.getByRole("link", { name: /^0def111d/ })).toBeVisible();
   txids = [chain.txs.cpfp_child, chain.txs.payment];
-  await expect(pool.getByRole("link", { name: /^ad853f87/ })).toBeVisible({
-    timeout: POLL_MS + 5000,
-  });
+  await page.clock.runFor(POLL_MS);
+  await expect(pool.getByRole("link", { name: /^ad853f87/ })).toBeVisible();
   await expect(pool.locator("tbody tr").first()).toContainText("ad853f87");
   // It confirmed: it leaves the list, and the page says nothing is waiting.
   txids = [];
-  await expect(page.getByText("Nothing waiting to confirm")).toBeVisible({
-    timeout: POLL_MS + 5000,
-  });
+  await page.clock.runFor(POLL_MS);
+  await expect(page.getByText("Nothing waiting to confirm")).toBeVisible();
   // One ask a poll, no faster.
-  const gaps = asks.slice(1).map((t, i) => t - (asks[i] ?? t));
-  for (const gap of gaps) expect(gap).toBeGreaterThan(POLL_MS - 1000);
+  const asks = await page.evaluate(() => (window as unknown as { asks: number[] }).asks);
+  expect(asks.slice(1).map((t, i) => t - (asks[i] ?? t))).toStrictEqual([POLL_MS, POLL_MS]);
 });
 
 test("without the node's count, it says what it can and leaves no bar waiting", async ({
@@ -63,6 +72,8 @@ test("without the node's count, it says what it can and leaves no bar waiting", 
 
 test("a failed check says so and keeps the list, then recovers by itself", async ({ page }) => {
   let fail = false;
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now() + 1000);
   await stubLarge(page, { mempool: () => [chain.txs.payment] });
   await page.route(new RegExp(`/regtest/api/address/${LARGE}/txs/mempool$`), (route) =>
     fail
@@ -73,10 +84,10 @@ test("a failed check says so and keeps the list, then recovers by itself", async
   const pool = page.getByRole("table", { name: /^Unconfirmed transactions of this address/ });
   await expect(pool.getByRole("link", { name: /^0def111d/ })).toBeVisible();
   fail = true;
-  await expect(page.getByText("The last check failed")).toBeVisible({ timeout: POLL_MS + 5000 });
+  await page.clock.runFor(POLL_MS);
+  await expect(page.getByText("The last check failed")).toBeVisible();
   await expect(pool.getByRole("link", { name: /^0def111d/ })).toBeVisible();
   fail = false;
-  await expect(page.getByText("The last check failed")).toHaveCount(0, {
-    timeout: POLL_MS + 5000,
-  });
+  await page.clock.runFor(POLL_MS);
+  await expect(page.getByText("The last check failed")).toHaveCount(0);
 });
