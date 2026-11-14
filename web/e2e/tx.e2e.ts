@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { chain, expect, PROJECTION_LAG_MS, test } from "./fixtures";
 
 test("a confirmed transaction names every output type and links where the money went", async ({
@@ -69,8 +69,9 @@ const replacement =
 const originalTxid = "7a2656b2d1c4d3f88f49db20d27a2428d9171705d49691d9d413c72721e61687";
 
 test.describe("transactions the node no longer has", () => {
-  // A 404 from the API is the answer these pages expect, not an error.
-  test.use({ consoleErrorsAllowed: [/status of 404/] });
+  // A 404 from the API is the answer these pages expect, not an error. Four device pixels to a
+  // CSS pixel, so the replaced version's steps can be measured to a quarter of one.
+  test.use({ consoleErrorsAllowed: [/status of 404/], deviceScaleFactor: 4 });
 
   test("a transaction that was replaced is not found, with the reason it may be missing", async ({
     page,
@@ -109,6 +110,8 @@ test.describe("transactions the node no longer has", () => {
     await expect(notice).toContainText("paying 5.00 sat/vB where this one paid 1.00 sat/vB");
     await expect(page.getByText("No: it was replaced")).toBeVisible();
     await expect(page.getByRole("list", { name: "Outputs" })).toBeVisible();
+    // The full steps, struck through and dashed, keep their numbers in the middle too.
+    expect(await stepsOffCentre(page, "a replaced version")).toEqual([]);
 
     // Opened later, the node no longer has it, and the server still says what happened.
     await page.reload();
@@ -230,4 +233,111 @@ test("copy and expand are a thumb's target each, apart from the address they sit
     expand.x + expand.width <= address.x + 1 ||
     address.x + address.width <= expand.x + 1;
   expect(apart).toBe(true);
+});
+
+/**
+ * How far a step's digit sits from the middle of its ring, in CSS pixels: the centre of the
+ * digit's drawn pixels against the centre of the ring, from a screenshot of the page.
+ */
+async function digitOffset(page: Page, marker: Locator): Promise<{ dx: number; dy: number }> {
+  await marker.scrollIntoViewIfNeeded();
+  const box = await marker.boundingBox();
+  if (!box) throw new Error("a step's marker is not on the page");
+  // Whole CSS pixels, so the screenshot's pixels map exactly onto the page's.
+  const clip = {
+    x: Math.floor(box.x) - 2,
+    y: Math.floor(box.y) - 2,
+    width: Math.ceil(box.width) + 5,
+    height: Math.ceil(box.height) + 5,
+  };
+  const png = await page.screenshot({ clip, animations: "disabled" });
+  const style = await marker.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { border: Number.parseFloat(s.borderTopWidth), ink: s.color, ground: s.backgroundColor };
+  });
+  return page.evaluate(
+    async ({ b64, ring, centre, dpr }) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.codePointAt(0) ?? 0);
+      // A bitmap from a blob: no image URL, so the page's CSP has nothing to refuse.
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const g = canvas.getContext("2d");
+      if (!g) throw new Error("no 2D canvas");
+      g.drawImage(bitmap, 0, 0);
+      const { data, width, height } = g.getImageData(0, 0, bitmap.width, bitmap.height);
+      const rgb = (css: string) => (css.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      const ink = rgb(ring.ink);
+      const ground = rgb(ring.ground);
+      const far = (k: number, c: number[]) =>
+        Math.abs((data[k] ?? 0) - (c[0] ?? 0)) +
+        Math.abs((data[k + 1] ?? 0) - (c[1] ?? 0)) +
+        Math.abs((data[k + 2] ?? 0) - (c[2] ?? 0));
+      const [cx, cy, r] = [centre.x * dpr, centre.y * dpr, (centre.r - ring.border - 1) * dpr];
+      let [x0, x1, y0, y1] = [Infinity, -Infinity, Infinity, -Infinity];
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          // Inside the ring only, and nearer the digit's colour than the ground's.
+          if ((x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 > r * r) continue;
+          const k = (y * width + x) * 4;
+          if (far(k, ground) <= far(k, ink)) continue;
+          [x0, x1, y0, y1] = [Math.min(x0, x), Math.max(x1, x), Math.min(y0, y), Math.max(y1, y)];
+        }
+      }
+      return { dx: ((x0 + x1 + 1) / 2 - cx) / dpr, dy: ((y0 + y1 + 1) / 2 - cy) / dpr };
+    },
+    {
+      b64: png.toString("base64"),
+      ring: style,
+      centre: {
+        x: box.x + box.width / 2 - clip.x,
+        y: box.y + box.height / 2 - clip.y,
+        r: Math.min(box.width, box.height) / 2,
+      },
+      dpr: await page.evaluate(() => devicePixelRatio),
+    },
+  );
+}
+
+/** Each status step whose number is more than half a pixel from its ring's middle, at two widths. */
+async function stepsOffCentre(page: Page, name: string): Promise<string[]> {
+  const off: string[] = [];
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const markers = page.getByRole("list", { name: "Status" }).locator(".tx-step__marker");
+    await expect(markers).toHaveCount(3);
+    for (const [i, marker] of (await markers.all()).entries()) {
+      const box = await marker.boundingBox();
+      const where = `step ${i + 1} of ${name} at ${width} px`;
+      if (Math.abs((box?.width ?? 0) - (box?.height ?? 1)) > 0.1) off.push(`${where}: not round`);
+      // Chromium draws text on whole pixels and the ring where layout puts it, so a step between
+      // pixels can look half a pixel out whatever its CSS: the ring is set on whole pixels.
+      await marker.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const style = (el as HTMLElement).style;
+        style.left = `${Math.floor(r.left) - r.left}px`;
+        style.top = `${Math.floor(r.top) - r.top}px`;
+      });
+      const { dx, dy } = await digitOffset(page, marker);
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) off.push(`${where}: off by ${dx}, ${dy}`);
+    }
+  }
+  return off;
+}
+
+test.describe("the status steps", () => {
+  // Four device pixels to a CSS pixel, so a quarter-pixel shift shows.
+  test.use({ deviceScaleFactor: 4 });
+
+  test("every step's number sits in the middle of its ring", async ({ page, request }) => {
+    const tip = await (await request.get("/regtest/api/blocks/tip/hash")).text();
+    const coinbase = await (await request.get(`/regtest/api/block/${tip}/txid/0`)).text();
+    // Confirmed, a fresh coinbase ("Spendable") and one waiting: the steps on one line. The full
+    // steps are checked where a transaction is replaced.
+    const off: string[] = [];
+    for (const txid of [chain.txs.script_types, coinbase, chain.txs.payment]) {
+      await page.goto(`/regtest/tx/${txid}`);
+      off.push(...(await stepsOffCentre(page, txid.slice(0, 8))));
+    }
+    expect(off).toEqual([]);
+  });
 });

@@ -107,7 +107,12 @@ export function Flow(props: {
     const H = box.height;
     if (W === 0 || H === 0) return;
     const total = Math.max(totalIn(props.tx), totalOut(props.tx) + fee(), 1);
-    const T = Math.min(H * 0.8, 96);
+    // The whole value is at most four fifths of the smallest card, so every ribbon meets its card
+    // inside the card's edge, never past its corners.
+    const cards = [...inCol.children, ...outCol.children].map(
+      (el) => el.getBoundingClientRect().height,
+    );
+    const T = Math.min(H * 0.8, 96, Math.min(...cards) * 0.8);
     const mid = W / 2;
     const thicknesses = (col: HTMLUListElement) =>
       ([...col.children] as HTMLElement[]).map((el) =>
@@ -322,9 +327,9 @@ export function Flow(props: {
         <rect
           class="tx-flow__trunk"
           x={trunk().x - 3}
-          y={trunk().y - 4}
+          y={trunk().y - 3}
           width={6}
-          height={trunk().h + 8}
+          height={trunk().h + 6}
           rx={3}
         />
       </svg>
